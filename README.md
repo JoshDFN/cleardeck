@@ -58,7 +58,7 @@ ClearDeck is a fully decentralized Texas Hold'em poker application running entir
 
 ---
 
-## What Makes This Special
+## Architecture
 
 ### 100% On-Chain
 - **Frontend**: Served from IC canisters (no AWS, no servers)
