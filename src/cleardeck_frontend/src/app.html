@@ -6,38 +6,11 @@
 	<link rel="icon" href="%sveltekit.assets%/favicon.ico" />
 	<meta name="viewport" content="width=device-width" />
 	<title>ClearDeck - Provably Fair Poker</title>
-	<style>
-		/* Hide browser warning by default - only show if app fails to load after 3 seconds */
-		.browser-warning {
-			display: none;
-			padding: 12px 20px;
-			background: #fef3c7;
-			color: #92400e;
-			text-align: center;
-			font-family: system-ui, -apple-system, sans-serif;
-			font-size: 14px;
-		}
-	</style>
 	%sveltekit.head%
 </head>
 
 <body data-sveltekit-preload-data="hover">
-	<div class="browser-warning" id="browser-warning">
-		⚠️ If this page appears broken, try reloading. If the problem persists, try switching browsers; Chrome or
-		Firefox are recommended.
-	</div>
 	<div style="display: contents">%sveltekit.body%</div>
-	<script>
-		// Only show warning if app hasn't loaded after 5 seconds
-		setTimeout(function() {
-			var appLoaded = document.querySelector('[data-sveltekit-hydrated]') ||
-			                document.querySelector('.app') ||
-			                document.querySelector('#svelte');
-			if (!appLoaded) {
-				document.getElementById('browser-warning').style.display = 'block';
-			}
-		}, 5000);
-	</script>
 </body>
 
 </html>
