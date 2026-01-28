@@ -20,9 +20,7 @@ ClearDeck is a fully decentralized Texas Hold'em poker application running entir
 
 ## Live Demo
 
-**Play now:** https://kbhpl-riaaa-aaaaj-qor2a-cai.icp0.io/
-
-**GitHub:** https://github.com/JoshDFN/cleardeck
+**[Play Now](https://kbhpl-riaaa-aaaaj-qor2a-cai.icp0.io/)** | **[GitHub](https://github.com/JoshDFN/cleardeck)**
 
 ---
 
@@ -85,7 +83,7 @@ Every shuffle uses a commit-reveal scheme:
 
 | Canister | ID | Purpose |
 |----------|-----|---------|
-| Frontend | `kbhpl-riaaa-aaaaj-qor2a-cai` | SvelteKit web app |
+| Frontend | [`kbhpl-riaaa-aaaaj-qor2a-cai`](https://kbhpl-riaaa-aaaaj-qor2a-cai.icp0.io/) | SvelteKit web app |
 | Lobby | `kpfcd-kyaaa-aaaaj-qor3a-cai` | Table discovery |
 | History | `kggj7-4qaaa-aaaaj-qor2q-cai` | Permanent hand records |
 | Table 1 | `kieex-haaaa-aaaaj-qor3q-cai` | Heads-up 0.01/0.02 ICP |
@@ -568,10 +566,10 @@ MIT License
 
 ## Links
 
-- **Live App**: https://kbhpl-riaaa-aaaaj-qor2a-cai.icp0.io/
-- **GitHub**: https://github.com/JoshDFN/cleardeck
-- **Internet Computer**: https://internetcomputer.org/
-- **ckBTC**: https://internetcomputer.org/ckbtc
+- **Live App**: [kbhpl-riaaa-aaaaj-qor2a-cai.icp0.io](https://kbhpl-riaaa-aaaaj-qor2a-cai.icp0.io/)
+- **GitHub**: [github.com/JoshDFN/cleardeck](https://github.com/JoshDFN/cleardeck)
+- **Internet Computer**: [internetcomputer.org](https://internetcomputer.org/)
+- **ckBTC**: [internetcomputer.org/ckbtc](https://internetcomputer.org/ckbtc)
 
 ---
 
