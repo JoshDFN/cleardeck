@@ -519,17 +519,13 @@ fn post_upgrade() {
     let state = match restore_result {
         Ok((s,)) => s,
         Err(e) => {
-            ic_cdk::println!("CRITICAL: Failed to restore state from stable memory: {:?}", e);
-            // Initialize with empty state rather than panicking
-            PersistentState {
-                hands: Vec::new(),
-                hands_by_table: Vec::new(),
-                hands_by_player: Vec::new(),
-                player_stats: Vec::new(),
-                next_hand_id: 1,
-                authorized_tables: Vec::new(),
-                admin: None,
-            }
+            // FAIL LOUDLY - do NOT silently lose hand history!
+            // If this panics, the upgrade will be rejected and the old code will remain.
+            // This protects shuffle proofs and hand records from being lost.
+            panic!("CRITICAL: Failed to restore state from stable memory: {:?}. \
+                    Upgrade REJECTED to protect hand history. \
+                    If you used --mode reinstall, that DESTROYS ALL DATA. \
+                    Always use --mode upgrade for production canisters.", e);
         }
     };
 

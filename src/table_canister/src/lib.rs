@@ -59,6 +59,12 @@ const MAX_DEPOSIT_VERIFICATIONS_PER_MINUTE: u32 = 5;
 // Heartbeat rate limiting (2 per second max to prevent DoS)
 const MAX_HEARTBEATS_PER_SECOND: u32 = 2;
 
+// Cleanup thresholds to prevent unbounded memory growth
+const MAX_HAND_HISTORY_ENTRIES: usize = 100; // Keep last 100 hands in local history
+const MAX_SHOWN_CARDS_HANDS: usize = 10; // Track shown cards for last 10 hands
+const RATE_LIMIT_CLEANUP_AGE_NS: u64 = 60_000_000_000; // Clean up rate limit entries older than 1 minute
+const CLEANUP_INTERVAL_NS: u64 = 30_000_000_000; // Run cleanup every 30 seconds
+
 // ============================================================================
 // TYPES - Core poker data structures
 // ============================================================================
@@ -355,6 +361,8 @@ pub struct ActionRecord {
     pub timestamp: u64,
     #[serde(default)] // For backwards compatibility with old state
     pub phase: String, // "preflop", "flop", "turn", "river"
+    #[serde(default)] // For backwards compatibility - tracks actual amount for Call/AllIn
+    pub amount: u64,
 }
 
 /// A player's view of another player at the table
@@ -444,6 +452,8 @@ thread_local! {
     static DISPLAY_NAMES: RefCell<HashMap<Principal, String>> = RefCell::new(HashMap::new());
     // Heartbeat rate limiting: caller -> (last_time, count_in_window)
     static HEARTBEAT_RATE_LIMITS: RefCell<HashMap<Principal, (u64, u32)>> = RefCell::new(HashMap::new());
+    // Last cleanup timestamp to throttle cleanup operations
+    static LAST_CLEANUP: RefCell<u64> = RefCell::new(0);
 }
 
 // ============================================================================
@@ -497,6 +507,62 @@ fn check_rate_limit() -> Result<(), String> {
             Ok(())
         }
     })
+}
+
+/// Periodic cleanup of unbounded maps to prevent memory exhaustion.
+/// Called from check_timeouts to run at most once per CLEANUP_INTERVAL_NS.
+fn periodic_cleanup() {
+    let now = ic_cdk::api::time();
+
+    // Check if enough time has passed since last cleanup
+    let should_cleanup = LAST_CLEANUP.with(|l| {
+        let last = *l.borrow();
+        if now > last + CLEANUP_INTERVAL_NS {
+            *l.borrow_mut() = now;
+            true
+        } else {
+            false
+        }
+    });
+
+    if !should_cleanup {
+        return;
+    }
+
+    // Clean up rate limit maps - remove entries older than RATE_LIMIT_CLEANUP_AGE_NS
+    let cutoff = now.saturating_sub(RATE_LIMIT_CLEANUP_AGE_NS);
+
+    RATE_LIMITS.with(|r| {
+        r.borrow_mut().retain(|_, (last_time, _)| *last_time > cutoff);
+    });
+
+    HEARTBEAT_RATE_LIMITS.with(|r| {
+        r.borrow_mut().retain(|_, (last_time, _)| *last_time > cutoff);
+    });
+
+    DEPOSIT_RATE_LIMITS.with(|r| {
+        r.borrow_mut().retain(|_, (window_start, _)| *window_start > cutoff);
+    });
+
+    // Clean up SHOWN_CARDS - keep only recent hands
+    let current_hand = TABLE.with(|t| {
+        t.borrow().as_ref().map(|s| s.hand_number).unwrap_or(0)
+    });
+    if current_hand > MAX_SHOWN_CARDS_HANDS as u64 {
+        let min_hand = current_hand - MAX_SHOWN_CARDS_HANDS as u64;
+        SHOWN_CARDS.with(|s| {
+            s.borrow_mut().retain(|hand_num, _| *hand_num >= min_hand);
+        });
+    }
+
+    // Prune HAND_HISTORY to keep only recent entries
+    HAND_HISTORY.with(|h| {
+        let mut history = h.borrow_mut();
+        if history.len() > MAX_HAND_HISTORY_ENTRIES {
+            let excess = history.len() - MAX_HAND_HISTORY_ENTRIES;
+            history.drain(0..excess);
+        }
+    });
 }
 
 // ============================================================================
@@ -618,9 +684,10 @@ fn set_display_name(name: Option<String>) -> Result<(), String> {
             if trimmed.len() > 12 {
                 return Err("Name must be 12 characters or less".to_string());
             }
-            // Only allow alphanumeric and some safe symbols
-            if !trimmed.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == ' ') {
-                return Err("Name can only contain letters, numbers, spaces, underscores and hyphens".to_string());
+            // Only allow ASCII alphanumeric and some safe symbols
+            // Using is_ascii_* to prevent Unicode homoglyph attacks (e.g., Cyrillic 'а' looks like Latin 'a')
+            if !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == ' ') {
+                return Err("Name can only contain ASCII letters, numbers, spaces, underscores and hyphens".to_string());
             }
 
             DISPLAY_NAMES.with(|names| {
@@ -719,14 +786,14 @@ fn record_hand_to_history(state: &TableState, winners: &[Winner], went_to_showdo
     // Build action records with phase info
     let actions: Vec<HistoryActionRecord> = CURRENT_ACTIONS.with(|a| {
         a.borrow().iter().map(|action| {
-            // Convert action to history format
+            // Convert action to history format, using stored amount for Call/AllIn
             let hist_action = match &action.action {
                 PlayerAction::Fold => HistoryPlayerAction::Fold,
                 PlayerAction::Check => HistoryPlayerAction::Check,
-                PlayerAction::Call => HistoryPlayerAction::Call(0), // Amount not tracked in simple format
+                PlayerAction::Call => HistoryPlayerAction::Call(action.amount),
                 PlayerAction::Bet(amt) => HistoryPlayerAction::Bet(*amt),
                 PlayerAction::Raise(amt) => HistoryPlayerAction::Raise(*amt),
-                PlayerAction::AllIn => HistoryPlayerAction::AllIn(0),
+                PlayerAction::AllIn => HistoryPlayerAction::AllIn(action.amount),
             };
 
             HistoryActionRecord {
@@ -1371,14 +1438,18 @@ async fn verify_ckbtc_deposit(block_index: u64, caller: Principal, canister: Pri
         return Err("Invalid transaction amount".to_string());
     }
 
-    // Mark deposit as verified (prevent double-crediting)
+    // ATOMIC: Check if already verified AND mark as verified in one operation
+    // This prevents race conditions where two concurrent calls could both pass the check
     let already_verified = VERIFIED_DEPOSITS.with(|v| {
         let mut deposits = v.borrow_mut();
-        if deposits.contains_key(&block_index) {
-            true
-        } else {
-            deposits.insert(block_index, caller);
-            false
+        // use_entry pattern for atomic check-and-insert
+        use std::collections::hash_map::Entry;
+        match deposits.entry(block_index) {
+            Entry::Occupied(_) => true,  // Already verified
+            Entry::Vacant(e) => {
+                e.insert(caller);  // Mark as verified atomically
+                false
+            }
         }
     });
 
@@ -1710,12 +1781,12 @@ fn reload(amount: u64) -> Result<u64, String> {
         Ok(player.chips)
     });
 
-    // If the table operation failed, refund the escrow
+    // If the table operation failed, refund the escrow (with overflow protection)
     if result.is_err() {
         BALANCES.with(|b| {
             let mut balances = b.borrow_mut();
             let current = balances.get(&caller).copied().unwrap_or(0);
-            balances.insert(caller, current + deducted);
+            balances.insert(caller, current.saturating_add(deducted));
         });
     }
 
@@ -2280,50 +2351,41 @@ fn evaluate_five_cards(cards: &[Card]) -> HandRank {
     HandRank::HighCard(ranks)
 }
 
-fn check_straight(ranks: &[u8]) -> bool {
+/// Detects if ranks form a straight and returns the high card.
+/// Returns Some(high_card) if straight found, None otherwise.
+/// Handles wheel (A-2-3-4-5) as a special case with high card 5.
+fn detect_straight(ranks: &[u8]) -> Option<u8> {
     let mut sorted: Vec<u8> = ranks.to_vec();
     sorted.sort_by(|a, b| b.cmp(a));
     sorted.dedup();
 
     if sorted.len() < 5 {
-        return false;
+        return None;
     }
 
-    // Check for regular straight
+    // Check for wheel (A-2-3-4-5) first - it's the lowest straight
+    // Must check before regular straights since A-5-4-3-2 window won't match
+    if sorted.contains(&14) && sorted.contains(&5) && sorted.contains(&4)
+        && sorted.contains(&3) && sorted.contains(&2) {
+        return Some(5); // Wheel's high card is 5
+    }
+
+    // Check for regular straight (highest first)
     for window in sorted.windows(5) {
         if window[0] - window[4] == 4 {
-            return true;
+            return Some(window[0]);
         }
     }
 
-    // Check for wheel (A-2-3-4-5)
-    if sorted.contains(&14) && sorted.contains(&5) && sorted.contains(&4)
-        && sorted.contains(&3) && sorted.contains(&2) {
-        return true;
-    }
+    None
+}
 
-    false
+fn check_straight(ranks: &[u8]) -> bool {
+    detect_straight(ranks).is_some()
 }
 
 fn get_straight_high(ranks: &[u8]) -> u8 {
-    let mut sorted: Vec<u8> = ranks.to_vec();
-    sorted.sort_by(|a, b| b.cmp(a));
-    sorted.dedup();
-
-    // Check for wheel first
-    if sorted.contains(&14) && sorted.contains(&5) && sorted.contains(&4)
-        && sorted.contains(&3) && sorted.contains(&2) {
-        return 5; // Wheel's high card is 5
-    }
-
-    // Regular straight
-    for window in sorted.windows(5) {
-        if window[0] - window[4] == 4 {
-            return window[0];
-        }
-    }
-
-    0
+    detect_straight(ranks).unwrap_or(0)
 }
 
 // ============================================================================
@@ -2863,9 +2925,12 @@ fn player_action(action: PlayerAction) -> Result<(), String> {
                 }
             }
             PlayerAction::Check => {
-                // BB can check even if current_bet equals their posted blind
+                // Player can check if:
+                // 1. Their current bet matches the table's current bet (nothing to call)
+                // 2. It's BB's option and no one has raised above BB's posted amount
+                //    (handles short-stacked BB who posted less than config.big_blind)
                 let can_check = state.current_bet == player_current_bet
-                    || (is_bb_option && state.current_bet == state.config.big_blind);
+                    || (is_bb_option && state.current_bet <= player_current_bet);
 
                 if !can_check {
                     return Err("Cannot check, there's a bet to call".to_string());
@@ -3017,14 +3082,23 @@ fn player_action(action: PlayerAction) -> Result<(), String> {
             timestamp: now,
         });
 
-        // Record action with current phase
+        // Record action with current phase and amount
         let current_phase = phase_to_string(&state.phase);
+        let action_amount = match action.clone() {
+            PlayerAction::Fold | PlayerAction::Check => 0,
+            PlayerAction::Call => state.current_bet.saturating_sub(player_current_bet).min(player_chips),
+            PlayerAction::Bet(amt) | PlayerAction::Raise(amt) => amt,
+            PlayerAction::AllIn => state.players[player_seat].as_ref()
+                .map(|p| p.current_bet)
+                .unwrap_or(0),
+        };
         CURRENT_ACTIONS.with(|a| {
             a.borrow_mut().push(ActionRecord {
                 seat: player_seat as u8,
                 action: action.clone(),
                 timestamp: now,
                 phase: current_phase,
+                amount: action_amount,
             });
         });
 
@@ -3328,6 +3402,27 @@ fn calculate_side_pots(state: &mut TableState) {
         if let Some(last_pot) = state.side_pots.last_mut() {
             last_pot.amount = last_pot.amount.saturating_add(remaining);
         }
+    } else if total_side_pots > state.pot {
+        // SANITY CHECK: Side pots should never exceed total pot
+        // This indicates a bug - log it and cap to prevent creating chips from nothing
+        ic_cdk::println!("BUG: Side pots ({}) exceed total pot ({}). Capping to pot amount.",
+            total_side_pots, state.pot);
+        // Proportionally reduce all side pots to match total pot
+        if total_side_pots > 0 {
+            let ratio = state.pot as f64 / total_side_pots as f64;
+            let mut distributed: u64 = 0;
+            let pot_count = state.side_pots.len();
+            for (i, side_pot) in state.side_pots.iter_mut().enumerate() {
+                if i == pot_count - 1 {
+                    // Last pot gets remainder to avoid rounding errors
+                    side_pot.amount = state.pot.saturating_sub(distributed);
+                } else {
+                    let adjusted = (side_pot.amount as f64 * ratio) as u64;
+                    side_pot.amount = adjusted;
+                    distributed = distributed.saturating_add(adjusted);
+                }
+            }
+        }
     }
 }
 
@@ -3603,6 +3698,9 @@ pub enum TimeoutCheckResult {
 /// This should be called periodically or before each action
 #[ic_cdk::update]
 fn check_timeouts() -> TimeoutCheckResult {
+    // Run periodic cleanup of unbounded maps
+    periodic_cleanup();
+
     let now = ic_cdk::api::time();
     // Mark players as disconnected if no heartbeat for 30 seconds
     const DISCONNECT_TIMEOUT_NS: u64 = 30 * 1_000_000_000;
@@ -3717,6 +3815,7 @@ fn check_timeouts() -> TimeoutCheckResult {
                             action: PlayerAction::Fold,
                             timestamp: now,
                             phase: current_phase,
+                            amount: 0, // Fold has no amount
                         });
                     });
                 }
