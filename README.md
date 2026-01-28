@@ -18,9 +18,9 @@ ClearDeck is a fully decentralized Texas Hold'em poker application running entir
   <br/><em>Poker Table - Real-time gameplay with BTC stakes</em>
 </p>
 
-## Live Demo
+## Demo
 
-**[Play Now](https://kbhpl-riaaa-aaaaj-qor2a-cai.icp0.io/)** | **[GitHub](https://github.com/JoshDFN/cleardeck)**
+**[View Demo](https://kbhpl-riaaa-aaaaj-qor2a-cai.icp0.io/)** | **[GitHub](https://github.com/JoshDFN/cleardeck)**
 
 ---
 
@@ -557,7 +557,7 @@ MIT License
 
 ## Links
 
-- **Live App**: [kbhpl-riaaa-aaaaj-qor2a-cai.icp0.io](https://kbhpl-riaaa-aaaaj-qor2a-cai.icp0.io/)
+- **Demo**: [kbhpl-riaaa-aaaaj-qor2a-cai.icp0.io](https://kbhpl-riaaa-aaaaj-qor2a-cai.icp0.io/)
 - **GitHub**: [github.com/JoshDFN/cleardeck](https://github.com/JoshDFN/cleardeck)
 - **Internet Computer**: [internetcomputer.org](https://internetcomputer.org/)
 - **ckBTC**: [internetcomputer.org/ckbtc](https://internetcomputer.org/ckbtc)
