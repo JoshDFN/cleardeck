@@ -1315,6 +1315,92 @@ async fn deposit(amount: u64) -> Result<u64, String> {
     }
 }
 
+/// Deposit from an external wallet (like OISY) using ICRC-2 transfer_from
+/// The external wallet must first approve this canister to spend their tokens via icrc2_approve
+/// Then call this function with the external wallet's principal to pull the approved amount
+/// The balance is credited to the caller's account (not the external wallet)
+#[ic_cdk::update]
+async fn deposit_from_external(from_principal: Principal, amount: u64) -> Result<u64, String> {
+    let caller = ic_cdk::api::msg_caller();
+    let canister = canister_id();
+    let currency = get_table_currency();
+
+    if amount == 0 {
+        return Err("Amount must be greater than 0".to_string());
+    }
+
+    // Minimum deposit to cover potential fees (currency-aware)
+    let min_deposit = if currency == Currency::BTC { 1_000 } else { 20_000 }; // 1000 sats or 0.0002 ICP
+    if amount < min_deposit {
+        return Err(format!(
+            "Minimum deposit is {}",
+            currency.format_amount(min_deposit)
+        ));
+    }
+
+    let ledger_id = currency.ledger_canister();
+    let transfer_fee = currency.transfer_fee();
+
+    // Use the standard ICRC-2 types from icrc_ledger_types crate
+    // Transfer FROM the external wallet (which approved us) TO this canister
+    let transfer_from_args = TransferFromArgs {
+        spender_subaccount: None,
+        from: Account {
+            owner: from_principal, // The external wallet that approved us
+            subaccount: None,
+        },
+        to: Account {
+            owner: canister,
+            subaccount: None,
+        },
+        amount: Nat::from(amount),
+        fee: Some(Nat::from(transfer_fee)),
+        memo: None,
+        created_at_time: None,
+    };
+
+    // Use ic_cdk::call which properly handles Candid encoding/decoding
+    let transfer_result: Result<(Result<Nat, TransferFromError>,), _> =
+        ic_cdk::call(ledger_id, "icrc2_transfer_from", (transfer_from_args,)).await;
+
+    let transfer_result = match transfer_result {
+        Ok((result,)) => result,
+        Err((code, msg)) => return Err(format!("Failed to call ledger: {:?} - {}", code, msg)),
+    };
+
+    match transfer_result {
+        Ok(_block_index) => {
+            // Credit the caller's escrow balance (not the external wallet)
+            let new_balance = BALANCES.with(|b| {
+                let mut balances = b.borrow_mut();
+                let current = balances.get(&caller).copied().unwrap_or(0);
+                let new_balance = current.saturating_add(amount);
+                balances.insert(caller, new_balance);
+                new_balance
+            });
+
+            Ok(new_balance)
+        }
+        Err(e) => {
+            let symbol = currency.symbol();
+            match e {
+                TransferFromError::InsufficientAllowance { allowance } => {
+                    let allowance_u64: u64 = allowance.0.try_into().unwrap_or(0);
+                    Err(format!("Insufficient allowance from external wallet. Approved: {}, tried to deposit: {}. Please approve more {} from the external wallet.",
+                        currency.format_amount(allowance_u64),
+                        currency.format_amount(amount),
+                        symbol))
+                }
+                TransferFromError::InsufficientFunds { balance } => {
+                    let balance_u64: u64 = balance.0.try_into().unwrap_or(0);
+                    Err(format!("Insufficient {} in external wallet. Balance: {}", symbol, currency.format_amount(balance_u64)))
+                }
+                _ => Err(format!("{} transfer failed: {:?}", symbol, e))
+            }
+        }
+    }
+}
+
 /// Verify a ckBTC deposit using ICRC-3 get_transactions API
 async fn verify_ckbtc_deposit(block_index: u64, caller: Principal, canister: Principal) -> Result<u64, String> {
     let ledger_id = Principal::from_text(CKBTC_LEDGER_CANISTER).unwrap();

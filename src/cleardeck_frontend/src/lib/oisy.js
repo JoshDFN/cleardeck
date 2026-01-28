@@ -391,6 +391,13 @@ function createOisyStore() {
                     ? Principal.fromText(spender)
                     : spender;
 
+                logger.info('Calling wallet.icrc2Approve with:', {
+                    spenderOwner: spenderPrincipal.toString(),
+                    amount: amount.toString(),
+                    owner: typeof state.principal === 'string' ? state.principal : state.principal?.toString(),
+                    ledgerCanisterId: ICP_LEDGER_CANISTER,
+                });
+
                 const blockHeight = await wallet.icrc2Approve({
                     request: {
                         spender: {
@@ -407,6 +414,10 @@ function createOisyStore() {
                 });
 
                 logger.info('ICP approval successful, block height:', blockHeight);
+
+                if (!blockHeight && blockHeight !== 0n) {
+                    logger.warn('icrc2Approve returned without block height:', blockHeight);
+                }
 
                 // Refresh balances after approval
                 await this.refreshBalances();

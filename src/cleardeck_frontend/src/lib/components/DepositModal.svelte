@@ -449,16 +449,33 @@
         statusMessage = 'Approve the transaction in the OISY popup...';
 
         // Use OISY wallet for approval
-        if (isBTC) {
-          await oisy.approveCkbtc(approveAmount, tableCanisterId);
-        } else {
-          await oisy.approveIcp(approveAmount, tableCanisterId);
+        try {
+          console.log('Starting OISY approval for amount:', approveAmount.toString(), 'spender:', tableCanisterId);
+          if (isBTC) {
+            await oisy.approveCkbtc(approveAmount, tableCanisterId);
+          } else {
+            await oisy.approveIcp(approveAmount, tableCanisterId);
+          }
+          console.log('OISY approval completed successfully');
+        } catch (approvalError) {
+          console.error('OISY approval failed:', approvalError);
+          error = `Approval failed: ${approvalError.message}`;
+          processing = false;
+          statusMessage = '';
+          return;
         }
 
         statusMessage = `Transferring ${currencySymbol} to poker table...`;
 
-        // Now call deposit on the table canister
-        const depositResult = await tableActor.deposit(amountSmallest);
+        // Use deposit_from_external with the OISY principal
+        // This allows the table canister to pull funds from the OISY wallet (which made the approval)
+        // while crediting the balance to the caller's II account
+        const oisyPrincipal = typeof oisyState.principal === 'string'
+          ? Principal.fromText(oisyState.principal)
+          : oisyState.principal;
+
+        console.log('Calling deposit_from_external with OISY principal:', oisyPrincipal.toString(), 'amount:', amountSmallest.toString());
+        const depositResult = await tableActor.deposit_from_external(oisyPrincipal, amountSmallest);
 
         if ('Ok' in depositResult) {
           const newBalance = formatWithUnit(depositResult.Ok);
