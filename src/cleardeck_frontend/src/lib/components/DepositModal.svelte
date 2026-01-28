@@ -446,7 +446,7 @@
     try {
       // Handle OISY wallet deposits
       if (walletSource === 'oisy') {
-        statusMessage = 'Please approve the transaction in OISY wallet...';
+        statusMessage = 'Approve the transaction in the OISY popup...';
 
         // Use OISY wallet for approval
         if (isBTC) {
@@ -465,6 +465,8 @@
           success = `Deposited ${depositAmount} ${currencySymbol} from OISY! Table balance: ${newBalance}`;
           // Refresh OISY balances
           await oisy.refreshBalances();
+          // Auto-disconnect from OISY to close the popup
+          await oisy.disconnect();
           setTimeout(() => {
             onDepositSuccess?.();
             onClose();
@@ -708,6 +710,14 @@
             </span>
             <button class="disconnect-btn" onclick={disconnectOisyWallet}>Disconnect</button>
           </div>
+          <div class="oisy-popup-note">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="16" x2="12" y2="12"/>
+              <line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+            <span>Keep the OISY popup open. It will prompt you when you click Deposit.</span>
+          </div>
           <div class="balance-row">
             <span class="balance-label">Your OISY {isBTC ? 'ckBTC' : 'ICP'} Balance</span>
             <span class="balance-value oisy" class:loading={oisyState.loadingBalances} class:btc={isBTC}>
@@ -772,8 +782,10 @@
           </div>
         {/if}
       </div>
+    {/if}
 
-      {#if hasEnoughBalance && (walletSource === 'ii' || oisyState.isConnected)}
+    <!-- Deposit Form - Shown for both II and OISY when user has balance -->
+    {#if (!isBTC || depositMethod === 'ckbtc') && effectiveHasEnoughBalance && (walletSource === 'ii' || oisyState.isConnected)}
         <div class="form-section">
           <div class="label-row">
             <label for="deposit-amount">Deposit Amount</label>
@@ -898,44 +910,50 @@
           </svg>
           {#if isBTC}
             <p>
-              This transfers ckBTC from your wallet to your poker table balance.
+              This transfers ckBTC from your {walletSource === 'oisy' ? 'OISY' : 'Internet Identity'} wallet to your poker table balance.
               You can withdraw back to your wallet at any time.
             </p>
           {:else}
             <p>
-              This transfers ICP from your Internet Identity wallet to your poker table balance.
+              This transfers ICP from your {walletSource === 'oisy' ? 'OISY' : 'Internet Identity'} wallet to your poker table balance.
               You can withdraw back to your wallet at any time.
             </p>
           {/if}
         </div>
-      {:else if !loadingBalance}
+    {/if}
+
+    <!-- No balance help - only for II users without balance -->
+    {#if walletSource === 'ii' && (!isBTC || depositMethod === 'ckbtc') && !effectiveLoadingBalance && !effectiveHasEnoughBalance}
         <!-- No ckBTC balance - show help -->
-        <div class="deposit-info-section btc">
-          <h3>How to Get ckBTC</h3>
-          <p class="info-text">ckBTC is Bitcoin on ICP. You can get it by converting real BTC or buying on exchanges.</p>
-          <div class="funding-options">
-            <div class="option">
-              <strong>Switch to BTC tab above</strong>
-              <p>Deposit real Bitcoin directly - it will be converted to ckBTC automatically.</p>
+        <div class="deposit-info-section" class:btc={isBTC}>
+          <h3>How to Get {isBTC ? 'ckBTC' : 'ICP'}</h3>
+          {#if isBTC}
+            <p class="info-text">ckBTC is Bitcoin on ICP. You can get it by converting real BTC or buying on exchanges.</p>
+            <div class="funding-options">
+              <div class="option">
+                <strong>Switch to BTC tab above</strong>
+                <p>Deposit real Bitcoin directly - it will be converted to ckBTC automatically.</p>
+              </div>
+              <div class="option">
+                <strong>Or buy ckBTC</strong>
+                <p>Purchase ckBTC on ICP DEXs like ICPSwap or Sonic.</p>
+              </div>
             </div>
-            <div class="option">
-              <strong>Or buy ckBTC</strong>
-              <p>Purchase ckBTC on ICP DEXs like ICPSwap or Sonic.</p>
-            </div>
-          </div>
+          {:else}
+            <p class="info-text">Transfer ICP from an exchange or another wallet to your II account.</p>
+          {/if}
         </div>
         <div class="actions">
           <button class="btn-secondary" onclick={onClose}>
             Close
           </button>
-          <button class="btn-primary btc" onclick={loadWalletBalance}>
+          <button class="btn-primary" class:btc={isBTC} onclick={loadWalletBalance}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
             </svg>
             Refresh Balance
           </button>
         </div>
-      {/if}
     {/if}
 
     <!-- Native BTC Deposit Flow -->
@@ -2076,7 +2094,24 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    margin-bottom: 8px;
+  }
+
+  .oisy-popup-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: rgba(99, 102, 241, 0.1);
+    border-radius: 6px;
     margin-bottom: 12px;
+    font-size: 11px;
+    color: #a5b4fc;
+  }
+
+  .oisy-popup-note svg {
+    flex-shrink: 0;
+    opacity: 0.7;
   }
 
   .connected-badge {

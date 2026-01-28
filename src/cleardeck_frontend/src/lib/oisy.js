@@ -62,11 +62,13 @@ function createOisyStore() {
 
             try {
                 const url = isMainnet() ? OISY_MAINNET_URL : OISY_STAGING_URL;
+                const host = isMainnet() ? 'https://icp-api.io' : 'http://localhost:4943';
 
-                logger.info('Connecting to OISY wallet at:', url);
+                logger.info('Connecting to OISY wallet at:', url, 'with host:', host);
 
                 const wallet = await IcpWallet.connect({
                     url,
+                    host,
                     windowOptions: {
                         position: 'center',
                         width: 500,
@@ -95,9 +97,10 @@ function createOisyStore() {
 
                 currentWallet = wallet;
 
-                // Request permissions and get accounts
-                await wallet.requestPermissionsNotGranted();
+                // Get accounts - permissions should be granted during connect
+                logger.info('OISY wallet connected, fetching accounts...');
                 const accounts = await wallet.accounts();
+                logger.info('OISY accounts received:', accounts?.length || 0);
 
                 if (!accounts || accounts.length === 0) {
                     throw new Error('No accounts returned from OISY wallet');
@@ -164,11 +167,13 @@ function createOisyStore() {
 
             try {
                 const url = isMainnet() ? OISY_MAINNET_URL : OISY_STAGING_URL;
+                const host = isMainnet() ? 'https://icp-api.io' : 'http://localhost:4943';
 
-                logger.info('Connecting to OISY wallet (ICRC) at:', url);
+                logger.info('Connecting to OISY wallet (ICRC) at:', url, 'with host:', host);
 
                 const wallet = await IcrcWallet.connect({
                     url,
+                    host,
                     windowOptions: {
                         position: 'center',
                         width: 500,
@@ -197,8 +202,10 @@ function createOisyStore() {
 
                 currentWallet = wallet;
 
-                await wallet.requestPermissionsNotGranted();
+                // Get accounts - permissions should be granted during connect
+                logger.info('OISY wallet (ICRC) connected, fetching accounts...');
                 const accounts = await wallet.accounts();
+                logger.info('OISY (ICRC) accounts received:', accounts?.length || 0);
 
                 if (!accounts || accounts.length === 0) {
                     throw new Error('No accounts returned from OISY wallet');

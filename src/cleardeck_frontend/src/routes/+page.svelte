@@ -1071,7 +1071,7 @@
   /* Header */
   header {
     position: relative;
-    z-index: 10;
+    z-index: 50;
     display: flex;
     justify-content: space-between;
     align-items: center;

@@ -1,5 +1,6 @@
 <script>
   import { auth, wallet, formattedBalance } from '$lib/auth.js';
+  import { oisy, formatOisyBalance } from '$lib/oisy.js';
   import { onMount } from 'svelte';
   import { Principal } from '@dfinity/principal';
   import { Actor, HttpAgent } from '@dfinity/agent';
@@ -24,6 +25,10 @@
   let copiedBtcAddress = $state(false);
   let ckbtcBalance = $state(null);
   let loadingCkbtcBalance = $state(false);
+
+  // OISY wallet state
+  let oisyState = $state({ isConnected: false, isConnecting: false, icpBalance: null, ckbtcBalance: null, principal: null, error: null });
+  let copiedOisyPrincipal = $state(false);
 
   // ckBTC canister IDs (mainnet)
   const CKBTC_MINTER_CANISTER = 'mqygn-kiaaa-aaaar-qaadq-cai';
@@ -461,6 +466,7 @@
       }
     });
     const unsubWallet = wallet.subscribe(s => { walletState = s; });
+    const unsubOisy = oisy.subscribe(s => { oisyState = s; });
 
     // Initialize auth on mount
     auth.init();
@@ -468,8 +474,29 @@
     return () => {
       unsubAuth();
       unsubWallet();
+      unsubOisy();
     };
   });
+
+  // OISY wallet functions
+  async function connectOisy() {
+    try {
+      await oisy.connectForIcp();
+    } catch (e) {
+      logger.error('OISY connection failed:', e);
+    }
+  }
+
+  async function disconnectOisy() {
+    await oisy.disconnect();
+  }
+
+  function formatOisyPrincipal(principal) {
+    if (!principal) return '';
+    const str = typeof principal === 'string' ? principal : principal.toString();
+    if (str.length <= 16) return str;
+    return `${str.slice(0, 8)}...${str.slice(-4)}`;
+  }
 
   // Check if we're in local dev mode by checking hostname
   function isLocalDev() {
@@ -731,6 +758,81 @@
               <span class="btc-note">BTC deposits require 6 confirmations (~1 hour)</span>
             {/if}
           </div>
+
+          <!-- OISY Wallet Section -->
+          {#if isMainnet()}
+            <div class="dropdown-section oisy-section">
+              <span class="section-title oisy">OISY Wallet</span>
+              <span class="section-hint">Top up directly from OISY</span>
+
+              {#if oisyState.isConnected}
+                <div class="oisy-connected-info">
+                  <div class="oisy-status-row">
+                    <span class="oisy-connected-badge">
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                        <polyline points="20 6 9 17 4 12"/>
+                      </svg>
+                      Connected
+                    </span>
+                    <button class="oisy-disconnect-btn" onclick={disconnectOisy}>
+                      Disconnect
+                    </button>
+                  </div>
+                  <div class="oisy-principal-row">
+                    <span class="oisy-principal">{formatOisyPrincipal(oisyState.principal)}</span>
+                    <button
+                      class="copy-btn small oisy"
+                      onclick={() => {
+                        const p = typeof oisyState.principal === 'string' ? oisyState.principal : oisyState.principal?.toString();
+                        if (p) navigator.clipboard.writeText(p);
+                        copiedOisyPrincipal = true;
+                        setTimeout(() => copiedOisyPrincipal = false, 2000);
+                      }}
+                    >
+                      {copiedOisyPrincipal ? '✓' : 'Copy'}
+                    </button>
+                  </div>
+                  <div class="oisy-balances">
+                    <div class="oisy-balance-row">
+                      <span class="oisy-balance-label">ICP</span>
+                      <span class="oisy-balance-value">{formatOisyBalance(oisyState.icpBalance, 'ICP')}</span>
+                    </div>
+                    <div class="oisy-balance-row btc">
+                      <span class="oisy-balance-label">ckBTC</span>
+                      <span class="oisy-balance-value btc">{formatOisyBalance(oisyState.ckbtcBalance, 'BTC')}</span>
+                    </div>
+                  </div>
+                  <button class="oisy-refresh-btn" onclick={() => oisy.refreshBalances()} disabled={oisyState.loadingBalances}>
+                    {#if oisyState.loadingBalances}
+                      <span class="mini-spinner oisy"></span>
+                    {:else}
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M23 4v6h-6M1 20v-6h6"/>
+                        <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                      </svg>
+                    {/if}
+                    Refresh
+                  </button>
+                </div>
+              {:else}
+                <button class="oisy-connect-btn" onclick={connectOisy} disabled={oisyState.isConnecting}>
+                  {#if oisyState.isConnecting}
+                    <span class="mini-spinner oisy"></span>
+                    Connecting...
+                  {:else}
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="2" y="4" width="20" height="16" rx="2"/>
+                      <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                    Connect OISY Wallet
+                  {/if}
+                </button>
+                {#if oisyState.error}
+                  <span class="oisy-error">{oisyState.error}</span>
+                {/if}
+              {/if}
+            </div>
+          {/if}
 
           <hr />
           <button class="dropdown-btn logout" onclick={handleLogout}>
@@ -1253,5 +1355,204 @@
     width: 100%;
     height: 100%;
     border-radius: 50%;
+  }
+
+  /* OISY Wallet Styles */
+  .oisy-section {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(139, 92, 246, 0.04));
+    border: 1px solid rgba(99, 102, 241, 0.15);
+    border-radius: 8px;
+    padding: 12px !important;
+    margin-bottom: 0 !important;
+  }
+
+  .section-title.oisy {
+    color: #a5b4fc;
+  }
+
+  .oisy-connected-info {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .oisy-status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .oisy-connected-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    background: rgba(34, 197, 94, 0.15);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    border-radius: 12px;
+    color: #22c55e;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .oisy-disconnect-btn {
+    padding: 3px 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    color: #888;
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .oisy-disconnect-btn:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+  }
+
+  .oisy-principal-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .oisy-principal {
+    font-family: monospace;
+    font-size: 11px;
+    color: #a5b4fc;
+  }
+
+  .copy-btn.oisy {
+    background: rgba(99, 102, 241, 0.1);
+    border-color: rgba(99, 102, 241, 0.3);
+    color: #a5b4fc;
+  }
+
+  .copy-btn.oisy:hover {
+    background: rgba(99, 102, 241, 0.2);
+  }
+
+  .oisy-balances {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 6px;
+  }
+
+  .oisy-balance-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .oisy-balance-row.btc {
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    padding-top: 4px;
+    margin-top: 2px;
+  }
+
+  .oisy-balance-label {
+    color: #888;
+    font-size: 11px;
+  }
+
+  .oisy-balance-value {
+    color: #a5b4fc;
+    font-family: monospace;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .oisy-balance-value.btc {
+    color: #f7931a;
+  }
+
+  .oisy-refresh-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px;
+    font-size: 11px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #aaa;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .oisy-refresh-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+  }
+
+  .oisy-refresh-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .oisy-connect-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.2));
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 6px;
+    color: #a5b4fc;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .oisy-connect-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.3), rgba(139, 92, 246, 0.3));
+    border-color: rgba(99, 102, 241, 0.5);
+  }
+
+  .oisy-connect-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+
+  .oisy-error {
+    display: block;
+    margin-top: 6px;
+    padding: 6px 8px;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    border-radius: 4px;
+    color: #ef4444;
+    font-size: 10px;
+    text-align: center;
+  }
+
+  .mini-spinner {
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  .mini-spinner.oisy {
+    border-color: rgba(165, 180, 252, 0.3);
+    border-top-color: #a5b4fc;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 </style>
