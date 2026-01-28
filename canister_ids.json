@@ -1,0 +1,24 @@
+{
+  "btc_table_1": {
+    "ic": "qrhly-eaaaa-aaaaj-qousa-cai"
+  },
+  "btc_table_2": {},
+  "frontend": {
+    "ic": "kbhpl-riaaa-aaaaj-qor2a-cai"
+  },
+  "history": {
+    "ic": "kggj7-4qaaa-aaaaj-qor2q-cai"
+  },
+  "lobby": {
+    "ic": "kpfcd-kyaaa-aaaaj-qor3a-cai"
+  },
+  "table_1": {
+    "ic": "kieex-haaaa-aaaaj-qor3q-cai"
+  },
+  "table_2": {
+    "ic": "lfkaz-iiaaa-aaaaj-qor4a-cai"
+  },
+  "table_3": {
+    "ic": "lclgn-fqaaa-aaaaj-qor4q-cai"
+  }
+}

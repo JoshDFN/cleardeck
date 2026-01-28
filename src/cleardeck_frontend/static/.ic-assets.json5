@@ -1,0 +1,11 @@
+[
+    {
+        "match": "**/*",
+
+        // Disable security policy for beta - SvelteKit requires inline scripts
+        "security_policy": "disabled",
+
+        // Allow raw access for beta
+        "allow_raw_access": true
+    }
+]

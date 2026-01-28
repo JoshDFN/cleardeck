@@ -1,0 +1,86 @@
+type Currency = variant { ICP; BTC };
+type PlayerProfile = record {
+  "principal" : principal;
+  username : text;
+  created_at : nat64;
+  total_winnings : int64;
+  hands_played : nat64;
+};
+type Result = variant { Ok; Err : text };
+type Result_1 = variant { Ok : PlayerProfile; Err : text };
+type StakeLevel = variant { Low; VIP; High; Medium; Micro };
+type TableConfig = record {
+  small_blind : nat64;
+  time_bank_secs : nat64;
+  action_timeout_secs : nat64;
+  ante : nat64;
+  min_buy_in : nat64;
+  max_players : nat8;
+  big_blind : nat64;
+  max_buy_in : nat64;
+  currency : opt Currency;
+};
+type TableInfo = record {
+  id : nat64;
+  status : TableStatus;
+  player_count : nat8;
+  name : text;
+  canister_id : opt principal;
+  created_at : nat64;
+  created_by : principal;
+  config : TableConfig;
+  currency : opt Currency;
+};
+type TableStatus = variant { Paused; Closed; InProgress; WaitingForPlayers };
+service : () -> {
+  // Add an authorized table canister (admin only)
+  add_authorized_table : (principal) -> (Result);
+  // Get admin principal
+  get_admin : () -> (opt principal) query;
+  // Get all authorized tables
+  get_authorized_tables : () -> (vec principal) query;
+  // Get tables with available seats
+  get_available_tables : () -> (vec TableInfo) query;
+  // Get leaderboard (top players by winnings)
+  get_leaderboard : (nat64) -> (vec PlayerProfile) query;
+  // Get my profile
+  get_my_profile : () -> (opt PlayerProfile) query;
+  // Get player profile
+  get_player : (principal) -> (opt PlayerProfile) query;
+  // Get total stats
+  get_stats : () -> (nat64, nat64, nat64) query;
+  // Get a specific table
+  get_table : (nat64) -> (opt TableInfo) query;
+  // Get all active tables
+  get_tables : () -> (vec TableInfo) query;
+  // Get tables by currency
+  get_tables_by_currency : (Currency) -> (vec TableInfo) query;
+  // Get tables by stake level
+  get_tables_by_stake : (StakeLevel) -> (vec TableInfo) query;
+  // Add a single BTC heads-up table (admin only)
+  add_btc_headsup_table : (principal) -> (Result);
+  // Initialize 3 BTC tables (admin only)
+  init_btc_tables : (principal, principal, principal) -> (Result);
+  // Initialize default tables - call this after deploying table canisters
+  init_default_tables : (principal, principal) -> (Result);
+  // Initialize microstakes ICP tables
+  init_microstakes_tables : (principal, principal, principal) -> (Result);
+  // Check if tables are initialized
+  is_initialized : () -> (bool) query;
+  // Check if caller is admin
+  is_caller_admin : () -> (bool) query;
+  // Register or update player profile
+  register_player : (text) -> (Result_1);
+  // Remove an authorized table canister (admin only)
+  remove_authorized_table : (principal) -> (Result);
+  // Set admin - recovery function when no admin is set
+  set_admin : (principal) -> (Result);
+  // Update player count for a table (called by table canister)
+  // SECURITY: Only authorized table canisters or admin can update
+  update_player_count : (nat64, nat8) -> (Result);
+  // Update a table's name (admin only)
+  update_table_name : (nat64, text) -> (Result);
+  // Update player stats (called by table canister after hand completes)
+  // SECURITY: Only authorized table canisters or admin can update
+  update_player_stats : (principal, int64, nat64) -> (Result);
+}

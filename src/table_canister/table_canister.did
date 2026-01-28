@@ -1,0 +1,335 @@
+type ActionRecord = record {
+  action : PlayerAction;
+  seat : nat8;
+  timestamp : nat64;
+};
+type LastAction = variant {
+  Fold;
+  Check;
+  Call : record { amount : nat64 };
+  Bet : record { amount : nat64 };
+  Raise : record { amount : nat64 };
+  AllIn : record { amount : nat64 };
+  PostBlind : record { amount : nat64 };
+};
+type LastActionInfo = record {
+  seat : nat8;
+  action : LastAction;
+  timestamp : nat64;
+};
+type ActionTimer = record {
+  player_seat : nat8;
+  using_time_bank : bool;
+  expires_at : nat64;
+  started_at : nat64;
+};
+type Card = record { rank : Rank; suit : Suit };
+type GamePhase = variant {
+  Flop;
+  Turn;
+  River;
+  Showdown;
+  HandComplete;
+  WaitingForPlayers;
+  PreFlop;
+};
+type ShowdownPlayer = record {
+  seat : nat8;
+  "principal" : principal;
+  cards : opt record { Card; Card };
+  hand_rank : opt HandRank;
+  amount_won : nat64;
+};
+type HandHistory = record {
+  hand_number : nat64;
+  actions : vec ActionRecord;
+  community_cards : vec Card;
+  shuffle_proof : ShuffleProof;
+  winners : vec Winner;
+  showdown_players : vec ShowdownPlayer;
+};
+type HandRank = variant {
+  StraightFlush : nat8;
+  Straight : nat8;
+  Pair : record { nat8; blob };
+  FullHouse : record { nat8; nat8 };
+  TwoPair : record { nat8; nat8; nat8 };
+  HighCard : blob;
+  ThreeOfAKind : record { nat8; blob };
+  Flush : blob;
+  RoyalFlush;
+  FourOfAKind : record { nat8; nat8 };
+};
+type Player = record {
+  status : PlayerStatus;
+  timeout_count : nat8;
+  "principal" : principal;
+  is_sitting_out_next_hand : bool;
+  has_folded : bool;
+  chips : nat64;
+  seat : nat8;
+  hole_cards : opt record { Card; Card };
+  total_bet_this_hand : nat64;
+  current_bet : nat64;
+  has_acted_this_round : bool;
+  time_bank_remaining : nat64;
+  broke_at : opt nat64;
+  last_seen : nat64;
+  is_all_in : bool;
+};
+type PlayerAction = variant {
+  Bet : nat64;
+  Call;
+  Fold;
+  Raise : nat64;
+  AllIn;
+  Check;
+};
+type PlayerStatus = variant { SittingOut; Active; Disconnected };
+type PlayerView = record {
+  status : PlayerStatus;
+  is_self : bool;
+  "principal" : principal;
+  has_folded : bool;
+  chips : nat64;
+  seat : nat8;
+  hole_cards : opt record { Card; Card };
+  current_bet : nat64;
+  is_all_in : bool;
+  display_name : opt text;
+};
+type Rank = variant {
+  Ace;
+  Six;
+  Ten;
+  Two;
+  Eight;
+  Seven;
+  Five;
+  Four;
+  Jack;
+  King;
+  Nine;
+  Three;
+  Queen;
+};
+type Result = variant { Ok; Err : text };
+type Result_1 = variant { Ok : nat64; Err : text };
+type Result_2 = variant { Ok : TableState; Err : text };
+type Result_3 = variant { Ok : record { Card; Card }; Err : text };
+type Result_4 = variant { Ok : ShuffleProof; Err : text };
+type Result_5 = variant { Ok : TableConfig; Err : text };
+type ShuffleProof = record {
+  timestamp : nat64;
+  seed_hash : text;
+  revealed_seed : opt text;
+};
+type SidePot = record { eligible_players : blob; amount : nat64 };
+type Suit = variant { Diamonds; Hearts; Clubs; Spades };
+type Currency = variant { ICP; BTC };
+type TableConfig = record {
+  small_blind : nat64;
+  time_bank_secs : nat64;
+  action_timeout_secs : nat64;
+  ante : nat64;
+  min_buy_in : nat64;
+  max_players : nat8;
+  big_blind : nat64;
+  max_buy_in : nat64;
+  currency : Currency;
+};
+type TableState = record {
+  id : nat64;
+  pot : nat64;
+  min_raise : nat64;
+  bb_has_option : bool;
+  action_on : nat8;
+  action_timer : opt ActionTimer;
+  dealer_seat : nat8;
+  hand_number : nat64;
+  deck : vec Card;
+  big_blind_seat : nat8;
+  auto_deal_at : opt nat64;
+  players : vec opt Player;
+  current_bet : nat64;
+  last_aggressor : opt nat8;
+  deck_index : nat64;
+  community_cards : vec Card;
+  small_blind_seat : nat8;
+  first_hand : bool;
+  phase : GamePhase;
+  config : TableConfig;
+  side_pots : vec SidePot;
+  shuffle_proof : opt ShuffleProof;
+};
+type TableView = record {
+  id : nat64;
+  pot : nat64;
+  min_raise : nat64;
+  time_bank_remaining_secs : opt nat64;
+  action_on : nat8;
+  call_amount : nat64;
+  my_seat : opt nat8;
+  dealer_seat : nat8;
+  hand_number : nat64;
+  min_bet : nat64;
+  big_blind_seat : nat8;
+  can_check : bool;
+  last_hand_winners : vec Winner;
+  time_remaining_secs : opt nat64;
+  players : vec opt PlayerView;
+  current_bet : nat64;
+  community_cards : vec Card;
+  small_blind_seat : nat8;
+  using_time_bank : bool;
+  phase : GamePhase;
+  config : TableConfig;
+  side_pots : vec SidePot;
+  shuffle_proof : opt ShuffleProof;
+  is_my_turn : bool;
+  can_raise : bool;
+  last_action : opt LastActionInfo;
+};
+type TimeoutCheckResult = variant {
+  AutoDealReady;
+  PlayerTimedOut : nat8;
+  NoAction;
+};
+type Winner = record {
+  "principal" : principal;
+  hand_rank : opt HandRank;
+  cards : opt record { Card; Card };
+  seat : nat8;
+  amount : nat64;
+};
+// ckBTC minter types for BTC deposits
+type UtxoStatus = variant {
+  ValueTooSmall : Utxo;
+  Tainted : Utxo;
+  Checked : Utxo;
+  Minted : record { block_index : nat64; minted_amount : nat64; utxo : Utxo };
+};
+type Utxo = record {
+  outpoint : UtxoOutpoint;
+  value : nat64;
+  height : nat32;
+};
+type UtxoOutpoint = record {
+  txid : vec nat8;
+  vout : nat32;
+};
+service : (TableConfig) -> {
+  // Add a controller (controller only)
+  add_controller : (principal) -> (Result);
+  // Admin: Re-initialize the table (for recovery after upgrade issues)
+  admin_reinit_table : (TableConfig) -> (Result);
+  // Admin: Get balance for a specific player (controller only, read-only)
+  admin_get_balance : (principal) -> (Result_1) query;
+  // Admin: Restore balance for a player (TEMPORARY - for recovery only)
+  admin_restore_balance : (principal, nat64) -> (Result_1);
+  // Admin: Get all balances (for auditing/recovery)
+  // Returns (total_assigned, list of (principal, balance))
+  admin_get_all_balances : () -> (variant { Ok : record { nat64; vec record { principal; nat64 } }; Err : text }) query;
+  // Admin: Get total chips at table (seated players)
+  admin_get_table_chips : () -> (Result_1) query;
+  // Admin: Update table configuration (controller only, not during a hand)
+  admin_update_config : (TableConfig) -> (Result_5);
+  // Buy into the table using your escrow balance
+  buy_in : (nat8, nat64) -> (Result);
+  // Cash out and leave the table
+  cash_out : () -> (Result_1);
+  // Check for timeouts, auto-fold, and auto-deal
+  // This should be called periodically or before each action
+  check_timeouts : () -> (TimeoutCheckResult);
+  // Deposit ICP to your escrow balance using ICRC-2 transfer_from
+  // You must first approve this canister to spend your ICP via icrc2_approve
+  deposit : (nat64) -> (Result_1);
+  // DEV ONLY: Get free test chips for local development
+  // Disabled when dev_mode is false (production)
+  dev_faucet : (nat64) -> (Result_1);
+  // Check if a player voluntarily showed their cards this hand
+  did_player_show : (nat8) -> (bool) query;
+  get_action_timer : () -> (opt ActionTimer) query;
+  // Get your current escrow balance
+  get_balance : () -> (nat64) query;
+  get_community_cards : () -> (vec Card) query;
+  // Get all controllers
+  get_controllers : () -> (vec principal) query;
+  // Get the canister's account for deposits
+  get_deposit_address : () -> (text) query;
+  get_hand_history : (nat64) -> (opt HandHistory) query;
+  // Get the history canister ID
+  get_history_canister : () -> (opt principal) query;
+  // Get max players (for lobby display)
+  get_max_players : () -> (nat8) query;
+  get_my_cards : () -> (opt record { Card; Card }) query;
+  // Get current player count (for lobby display)
+  get_player_count : () -> (nat8) query;
+  get_pot : () -> (nat64) query;
+  // Get cards for a player who voluntarily showed them
+  get_shown_cards : (nat8) -> (opt record { Card; Card }) query;
+  get_shuffle_proof : () -> (opt ShuffleProof) query;
+  // Get the raw table state (admin/debug use - exposes all data)
+  // RESTRICTED: Only controllers can access this to prevent cheating
+  get_table_state : () -> (Result_2) query;
+  // Get the table view from the caller's perspective
+  // This properly hides opponent hole cards unless at showdown
+  get_table_view : () -> (opt TableView) query;
+  get_time_remaining : () -> (opt nat64) query;
+  // Player heartbeat to show they're connected
+  heartbeat : () -> (Result);
+  // Check if dev mode is enabled (always returns false now)
+  is_dev_mode : () -> (bool) query;
+  // Join table with minimum buy-in from escrow balance
+  // Requires sufficient ICP deposited first via notify_deposit
+  join_table : (nat8) -> (Result);
+  // Leave table and return chips to escrow balance
+  // If mid-hand, this acts as a fold - pot contributions stay in the pot
+  leave_table : () -> (Result_1);
+  // Verify and credit a deposit by checking the ledger transaction
+  // Players should first transfer ICP to the canister's account, then call this with the block index
+  notify_deposit : (nat64) -> (Result_1);
+  player_action : (PlayerAction) -> (Result);
+  // Reload chips from escrow (for players already seated who need more chips)
+  // Can only be done between hands, not during active play
+  reload : (nat64) -> (Result_1);
+  // Remove a controller (controller only)
+  remove_controller : (principal) -> (Result);
+  // Reset the table (controller only) - CAUTION: destroys all state
+  reset_table : (TableConfig) -> (Result);
+  // Set dev mode (controller only)
+  set_dev_mode : (bool) -> (Result);
+  // Set the history canister ID (controller only)
+  // Pass None to clear/disable history recording
+  set_history_canister : (opt principal) -> (Result);
+  // Voluntarily show your hole cards to the table
+  // Only allowed after you've folded or at the end of the hand
+  show_cards : () -> (Result_3);
+  // Sit back in
+  sit_in : () -> (Result);
+  // Sit out (voluntarily)
+  sit_out : () -> (Result);
+  // Request to sit out at the end of the current hand
+  sit_out_next_hand : () -> (Result);
+  start_new_hand : () -> (Result_4);
+  // Use time bank to extend action time
+  // Returns remaining time bank seconds
+  use_time_bank : () -> (Result_1);
+  verify_shuffle : (text, text) -> (bool) query;
+  // Withdraw your balance from the table
+  withdraw : (nat64) -> (Result_1);
+  // Get a BTC deposit address for native Bitcoin deposits
+  // Users can send real BTC to this address, then call update_btc_balance
+  // Only available for BTC tables
+  get_btc_deposit_address : () -> (variant { Ok : text; Err : text });
+  // Update BTC balance after sending Bitcoin to the deposit address
+  // Checks for new UTXOs and mints ckBTC if confirmed
+  // Only available for BTC tables
+  update_btc_balance : () -> (variant { Ok : vec UtxoStatus; Err : text });
+  // Set a custom display name (visible to all players)
+  // Name must be 1-12 characters, alphanumeric with some symbols allowed
+  // Pass null to clear the name
+  set_display_name : (opt text) -> (Result);
+  // Get a player's display name
+  get_display_name : (principal) -> (opt text) query;
+}

@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "src/lobby_canister",
+    "src/table_canister",
+    "src/history_canister",
+]
+resolver = "2"

@@ -1,0 +1,36 @@
+{
+  "name": "cleardeck_frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "setup": "npm i && dfx generate && dfx deploy",
+    "start": "vite --port 3000",
+    "prebuild": "dfx generate lobby && dfx generate table_1 && dfx generate table_2 && dfx generate table_3 && dfx generate history || true",
+    "build": "vite build",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "format": "prettier --write \"src/**/*.{json,js,jsx,ts,tsx,css,scss}\""
+  },
+  "dependencies": {
+    "@dfinity/agent": "^3.0.0",
+    "@dfinity/auth-client": "^3.4.3",
+    "@dfinity/candid": "^3.0.0",
+    "@dfinity/identity": "^3.4.3",
+    "@dfinity/ledger-icp": "^9.1.0",
+    "@dfinity/principal": "^3.0.0",
+    "@dfinity/utils": "^4.1.0",
+    "@noble/hashes": "^2.0.1"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.46.2",
+    "@sveltejs/vite-plugin-svelte": "^4.0.4",
+    "dotenv": "^16.3.1",
+    "sass": "^1.63.6",
+    "svelte": "^5.39.9",
+    "svelte-check": "^4.3.2",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.3",
+    "vite-plugin-environment": "^1.1.3"
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "canisters": {
+    "internet_identity": {
+      "type": "pull",
+      "id": "rdmx6-jaaaa-aaaaa-aaadq-cai"
+    },
+    "lobby": {
+      "candid": "src/lobby_canister/lobby_canister.did",
+      "declarations": {
+        "node_compatibility": true
+      },
+      "package": "lobby_canister",
+      "type": "rust"
+    },
+    "table_1": {
+      "candid": "src/table_canister/table_canister.did",
+      "declarations": {
+        "node_compatibility": true
+      },
+      "package": "table_canister",
+      "type": "rust",
+      "init_arg": "(record { small_blind = 1000000 : nat64; big_blind = 2000000 : nat64; min_buy_in = 200000000 : nat64; max_buy_in = 1000000000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })"
+    },
+    "table_2": {
+      "candid": "src/table_canister/table_canister.did",
+      "declarations": {
+        "node_compatibility": true
+      },
+      "package": "table_canister",
+      "type": "rust",
+      "init_arg": "(record { small_blind = 5000000 : nat64; big_blind = 10000000 : nat64; min_buy_in = 1000000000 : nat64; max_buy_in = 5000000000 : nat64; max_players = 6 : nat8; action_timeout_secs = 45 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })"
+    },
+    "table_3": {
+      "candid": "src/table_canister/table_canister.did",
+      "declarations": {
+        "node_compatibility": true
+      },
+      "package": "table_canister",
+      "type": "rust",
+      "init_arg": "(record { small_blind = 10000000 : nat64; big_blind = 20000000 : nat64; min_buy_in = 2000000000 : nat64; max_buy_in = 10000000000 : nat64; max_players = 9 : nat8; action_timeout_secs = 60 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })"
+    },
+    "btc_table_1": {
+      "candid": "src/table_canister/table_canister.did",
+      "declarations": {
+        "node_compatibility": true
+      },
+      "package": "table_canister",
+      "type": "rust",
+      "init_arg": "(record { small_blind = 100 : nat64; big_blind = 200 : nat64; min_buy_in = 10000 : nat64; max_buy_in = 100000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { BTC } })"
+    },
+    "history": {
+      "candid": "src/history_canister/history_canister.did",
+      "declarations": {
+        "node_compatibility": true
+      },
+      "package": "history_canister",
+      "type": "rust"
+    },
+    "frontend": {
+      "dependencies": [
+        "lobby",
+        "table_1",
+        "table_2",
+        "table_3",
+        "history"
+      ],
+      "source": [
+        "src/cleardeck_frontend/dist"
+      ],
+      "type": "assets",
+      "workspace": "cleardeck_frontend"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}
