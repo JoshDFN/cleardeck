@@ -1,5 +1,6 @@
 <script>
   import { auth } from '$lib/auth.js';
+  import { oisy, formatOisyBalance } from '$lib/oisy.js';
   import { Actor } from '@dfinity/agent';
   import { Principal } from '@dfinity/principal';
   import { onMount } from 'svelte';
@@ -14,6 +15,13 @@
     return unsub;
   });
 
+  // Subscribe to OISY wallet state
+  let oisyState = $state({ isConnected: false, isConnecting: false, icpBalance: null, ckbtcBalance: null });
+  $effect(() => {
+    const unsub = oisy.subscribe(s => { oisyState = s; });
+    return unsub;
+  });
+
   let depositAmount = $state('');
   let processing = $state(false);
   let error = $state(null);
@@ -24,6 +32,9 @@
   let copied = $state(false);
   let accountId = $state('');
   let copiedAddress = $state(false);
+
+  // Wallet source: 'ii' (Internet Identity) or 'oisy' (OISY Wallet)
+  let walletSource = $state('ii');
 
   // BTC-specific state
   let btcDepositAddress = $state('');
@@ -348,6 +359,46 @@
     return `~$${value.toFixed(2)}`;
   }
 
+  // Connect to OISY wallet
+  async function connectOisyWallet() {
+    error = null;
+    try {
+      if (isBTC) {
+        await oisy.connectForIcrc();
+      } else {
+        await oisy.connectForIcp();
+      }
+    } catch (e) {
+      error = e.message || 'Failed to connect OISY wallet';
+    }
+  }
+
+  // Disconnect OISY wallet
+  async function disconnectOisyWallet() {
+    await oisy.disconnect();
+    walletSource = 'ii';
+  }
+
+  // Get the effective wallet balance based on source
+  const effectiveWalletBalance = $derived.by(() => {
+    if (walletSource === 'oisy') {
+      return isBTC ? oisyState.ckbtcBalance : oisyState.icpBalance;
+    }
+    return walletBalance;
+  });
+
+  const effectiveLoadingBalance = $derived.by(() => {
+    if (walletSource === 'oisy') {
+      return oisyState.loadingBalances;
+    }
+    return loadingBalance;
+  });
+
+  const effectiveHasEnoughBalance = $derived.by(() => {
+    const bal = effectiveWalletBalance;
+    return bal !== null && bal > Number(minDeposit);
+  });
+
   onMount(() => {
     loadWalletBalance();
     loadPrices();
@@ -376,8 +427,9 @@
       return;
     }
 
-    if (walletBalance !== null && amountSmallest > BigInt(walletBalance)) {
-      error = `Insufficient balance. You have ${formatWithUnit(walletBalance)} in your wallet.`;
+    const currentBalance = effectiveWalletBalance;
+    if (currentBalance !== null && amountSmallest > BigInt(currentBalance)) {
+      error = `Insufficient balance. You have ${formatWithUnit(currentBalance)} in your wallet.`;
       return;
     }
 
@@ -388,99 +440,131 @@
 
     processing = true;
     error = null;
-    statusMessage = 'Requesting approval from your wallet...';
+
+    const approveAmount = amountSmallest + transferFee;
 
     try {
-      const agent = await auth.getAgent();
+      // Handle OISY wallet deposits
+      if (walletSource === 'oisy') {
+        statusMessage = 'Please approve the transaction in OISY wallet...';
 
-      const ledgerIdlFactory = ({ IDL }) => {
-        const Account = IDL.Record({
-          owner: IDL.Principal,
-          subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)),
-        });
-        const ApproveArgs = IDL.Record({
-          fee: IDL.Opt(IDL.Nat),
-          memo: IDL.Opt(IDL.Vec(IDL.Nat8)),
-          from_subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)),
-          created_at_time: IDL.Opt(IDL.Nat64),
-          amount: IDL.Nat,
-          expected_allowance: IDL.Opt(IDL.Nat),
-          expires_at: IDL.Opt(IDL.Nat64),
-          spender: Account,
-        });
-        const ApproveError = IDL.Variant({
-          GenericError: IDL.Record({ message: IDL.Text, error_code: IDL.Nat }),
-          TemporarilyUnavailable: IDL.Null,
-          Duplicate: IDL.Record({ duplicate_of: IDL.Nat }),
-          BadFee: IDL.Record({ expected_fee: IDL.Nat }),
-          AllowanceChanged: IDL.Record({ current_allowance: IDL.Nat }),
-          CreatedInFuture: IDL.Record({ ledger_time: IDL.Nat64 }),
-          TooOld: IDL.Null,
-          Expired: IDL.Record({ ledger_time: IDL.Nat64 }),
-          InsufficientFunds: IDL.Record({ balance: IDL.Nat }),
-        });
-        const ApproveResult = IDL.Variant({ Ok: IDL.Nat, Err: ApproveError });
-
-        return IDL.Service({
-          icrc2_approve: IDL.Func([ApproveArgs], [ApproveResult], []),
-        });
-      };
-
-      const ledgerActor = Actor.createActor(ledgerIdlFactory, {
-        agent,
-        canisterId: ledgerCanisterId,
-      });
-
-      const tableCanisterPrincipal = typeof tableCanisterId === 'string'
-        ? Principal.fromText(tableCanisterId)
-        : tableCanisterId;
-
-      const approveAmount = amountSmallest + transferFee;
-
-      const approveResult = await ledgerActor.icrc2_approve({
-        fee: [],
-        memo: [],
-        from_subaccount: [],
-        created_at_time: [],
-        amount: approveAmount,
-        expected_allowance: [],
-        expires_at: [],
-        spender: {
-          owner: tableCanisterPrincipal,
-          subaccount: [],
-        },
-      });
-
-      if ('Err' in approveResult) {
-        const errKey = Object.keys(approveResult.Err)[0];
-        const errVal = approveResult.Err[errKey];
-        if (errKey === 'InsufficientFunds') {
-          const balanceDisplay = formatWithUnit(errVal.balance);
-          const feeDisplay = isBTC ? '10 sats' : '0.0001 ICP';
-          error = `Insufficient funds. You have ${balanceDisplay} but need ${depositAmount} ${currencySymbol} plus ${feeDisplay} fee.`;
-        } else if (errKey === 'GenericError') {
-          error = errVal.message;
+        // Use OISY wallet for approval
+        if (isBTC) {
+          await oisy.approveCkbtc(approveAmount, tableCanisterId);
         } else {
-          error = `Approval failed: ${errKey}`;
+          await oisy.approveIcp(approveAmount, tableCanisterId);
         }
-        processing = false;
-        return;
-      }
 
-      statusMessage = `Transferring ${currencySymbol} to poker table...`;
+        statusMessage = `Transferring ${currencySymbol} to poker table...`;
 
-      const depositResult = await tableActor.deposit(amountSmallest);
+        // Now call deposit on the table canister
+        const depositResult = await tableActor.deposit(amountSmallest);
 
-      if ('Ok' in depositResult) {
-        const newBalance = formatWithUnit(depositResult.Ok);
-        success = `Deposited ${depositAmount} ${currencySymbol}! Table balance: ${newBalance}`;
-        loadWalletBalance();
-        setTimeout(() => {
-          onDepositSuccess?.();
-          onClose();
-        }, 2000);
-      } else if ('Err' in depositResult) {
-        error = depositResult.Err;
+        if ('Ok' in depositResult) {
+          const newBalance = formatWithUnit(depositResult.Ok);
+          success = `Deposited ${depositAmount} ${currencySymbol} from OISY! Table balance: ${newBalance}`;
+          // Refresh OISY balances
+          await oisy.refreshBalances();
+          setTimeout(() => {
+            onDepositSuccess?.();
+            onClose();
+          }, 2000);
+        } else if ('Err' in depositResult) {
+          error = depositResult.Err;
+        }
+      } else {
+        // Handle Internet Identity wallet deposits (existing flow)
+        statusMessage = 'Requesting approval from your wallet...';
+
+        const agent = await auth.getAgent();
+
+        const ledgerIdlFactory = ({ IDL }) => {
+          const Account = IDL.Record({
+            owner: IDL.Principal,
+            subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)),
+          });
+          const ApproveArgs = IDL.Record({
+            fee: IDL.Opt(IDL.Nat),
+            memo: IDL.Opt(IDL.Vec(IDL.Nat8)),
+            from_subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)),
+            created_at_time: IDL.Opt(IDL.Nat64),
+            amount: IDL.Nat,
+            expected_allowance: IDL.Opt(IDL.Nat),
+            expires_at: IDL.Opt(IDL.Nat64),
+            spender: Account,
+          });
+          const ApproveError = IDL.Variant({
+            GenericError: IDL.Record({ message: IDL.Text, error_code: IDL.Nat }),
+            TemporarilyUnavailable: IDL.Null,
+            Duplicate: IDL.Record({ duplicate_of: IDL.Nat }),
+            BadFee: IDL.Record({ expected_fee: IDL.Nat }),
+            AllowanceChanged: IDL.Record({ current_allowance: IDL.Nat }),
+            CreatedInFuture: IDL.Record({ ledger_time: IDL.Nat64 }),
+            TooOld: IDL.Null,
+            Expired: IDL.Record({ ledger_time: IDL.Nat64 }),
+            InsufficientFunds: IDL.Record({ balance: IDL.Nat }),
+          });
+          const ApproveResult = IDL.Variant({ Ok: IDL.Nat, Err: ApproveError });
+
+          return IDL.Service({
+            icrc2_approve: IDL.Func([ApproveArgs], [ApproveResult], []),
+          });
+        };
+
+        const ledgerActor = Actor.createActor(ledgerIdlFactory, {
+          agent,
+          canisterId: ledgerCanisterId,
+        });
+
+        const tableCanisterPrincipal = typeof tableCanisterId === 'string'
+          ? Principal.fromText(tableCanisterId)
+          : tableCanisterId;
+
+        const approveResult = await ledgerActor.icrc2_approve({
+          fee: [],
+          memo: [],
+          from_subaccount: [],
+          created_at_time: [],
+          amount: approveAmount,
+          expected_allowance: [],
+          expires_at: [],
+          spender: {
+            owner: tableCanisterPrincipal,
+            subaccount: [],
+          },
+        });
+
+        if ('Err' in approveResult) {
+          const errKey = Object.keys(approveResult.Err)[0];
+          const errVal = approveResult.Err[errKey];
+          if (errKey === 'InsufficientFunds') {
+            const balanceDisplay = formatWithUnit(errVal.balance);
+            const feeDisplay = isBTC ? '10 sats' : '0.0001 ICP';
+            error = `Insufficient funds. You have ${balanceDisplay} but need ${depositAmount} ${currencySymbol} plus ${feeDisplay} fee.`;
+          } else if (errKey === 'GenericError') {
+            error = errVal.message;
+          } else {
+            error = `Approval failed: ${errKey}`;
+          }
+          processing = false;
+          return;
+        }
+
+        statusMessage = `Transferring ${currencySymbol} to poker table...`;
+
+        const depositResult = await tableActor.deposit(amountSmallest);
+
+        if ('Ok' in depositResult) {
+          const newBalance = formatWithUnit(depositResult.Ok);
+          success = `Deposited ${depositAmount} ${currencySymbol}! Table balance: ${newBalance}`;
+          loadWalletBalance();
+          setTimeout(() => {
+            onDepositSuccess?.();
+            onClose();
+          }, 2000);
+        } else if ('Err' in depositResult) {
+          error = depositResult.Err;
+        }
       }
     } catch (e) {
       console.error('Deposit error:', e);
@@ -504,7 +588,8 @@
     }
   }
 
-  const hasEnoughBalance = $derived(walletBalance !== null && walletBalance > Number(minDeposit));
+  // Use effective balance (from II or OISY depending on walletSource)
+  const hasEnoughBalance = $derived(effectiveWalletBalance !== null && effectiveWalletBalance > Number(minDeposit));
 </script>
 
 <div class="modal-backdrop" onclick={onClose} onkeydown={(e) => e.key === 'Escape' && onClose()} role="button" tabindex="-1" aria-label="Close modal"></div>
@@ -550,8 +635,111 @@
       </div>
     {/if}
 
-    <!-- Wallet Balance Display (for ckBTC/ICP flow) -->
-    {#if !isBTC || depositMethod === 'ckbtc'}
+    <!-- Wallet Source Toggle (II vs OISY) -->
+    {#if (!isBTC || depositMethod === 'ckbtc')}
+      <div class="wallet-source-toggle">
+        <button
+          class:active={walletSource === 'ii'}
+          onclick={() => walletSource = 'ii'}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+          <span class="source-label">Internet Identity</span>
+          <span class="source-hint">Your II wallet</span>
+        </button>
+        <button
+          class:active={walletSource === 'oisy'}
+          onclick={() => walletSource = 'oisy'}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="4" width="20" height="16" rx="2"/>
+            <path d="M6 8h.01M6 12h.01M6 16h.01M10 8h8M10 12h8M10 16h8"/>
+          </svg>
+          <span class="source-label">OISY Wallet</span>
+          <span class="source-hint">Top up directly</span>
+        </button>
+      </div>
+    {/if}
+
+    <!-- OISY Wallet Connection Section -->
+    {#if walletSource === 'oisy' && (!isBTC || depositMethod === 'ckbtc')}
+      {#if !oisyState.isConnected}
+        <div class="oisy-connect-section" class:btc={isBTC}>
+          <div class="oisy-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="2" y="4" width="20" height="16" rx="2"/>
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M2 10h4M18 10h4M2 14h4M18 14h4"/>
+            </svg>
+          </div>
+          <h3>Connect OISY Wallet</h3>
+          <p>Top up your poker balance directly from OISY without transferring tokens first.</p>
+          <button
+            class="btn-connect-oisy"
+            class:btc={isBTC}
+            onclick={connectOisyWallet}
+            disabled={oisyState.isConnecting}
+          >
+            {#if oisyState.isConnecting}
+              <span class="spinner"></span>
+              Connecting...
+            {:else}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M13.8 12H3"/>
+              </svg>
+              Connect OISY Wallet
+            {/if}
+          </button>
+          {#if oisyState.error}
+            <div class="oisy-error">{oisyState.error}</div>
+          {/if}
+        </div>
+      {:else}
+        <!-- OISY Connected - Show Balance -->
+        <div class="balance-section oisy" class:btc={isBTC}>
+          <div class="oisy-connected-header">
+            <span class="connected-badge">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              OISY Connected
+            </span>
+            <button class="disconnect-btn" onclick={disconnectOisyWallet}>Disconnect</button>
+          </div>
+          <div class="balance-row">
+            <span class="balance-label">Your OISY {isBTC ? 'ckBTC' : 'ICP'} Balance</span>
+            <span class="balance-value oisy" class:loading={oisyState.loadingBalances} class:btc={isBTC}>
+              {#if oisyState.loadingBalances}
+                <span class="mini-spinner" class:btc={isBTC}></span>
+              {:else}
+                <span class="balance-crypto">{formatWithUnit(effectiveWalletBalance)}</span>
+                {#if effectiveWalletBalance && !priceLoading}
+                  <span class="usd-value">({formatUsd(getUsdValue(effectiveWalletBalance))})</span>
+                {/if}
+              {/if}
+            </span>
+          </div>
+          {#if !oisyState.loadingBalances && !hasEnoughBalance}
+            <div class="no-balance-warning oisy" class:btc={isBTC}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              <div class="warning-content">
+                <strong>No {isBTC ? 'ckBTC' : 'ICP'} in OISY wallet</strong>
+                <p>Add funds to your OISY wallet first, or switch to Internet Identity.</p>
+              </div>
+            </div>
+          {/if}
+        </div>
+      {/if}
+    {/if}
+
+    <!-- Wallet Balance Display (for ckBTC/ICP flow) - Only show for II -->
+    {#if walletSource === 'ii' && (!isBTC || depositMethod === 'ckbtc')}
       <div class="balance-section" class:btc={isBTC}>
         <div class="balance-row">
           <span class="balance-label">Your {isBTC ? 'ckBTC' : 'ICP'} Wallet Balance</span>
@@ -585,7 +773,7 @@
         {/if}
       </div>
 
-      {#if hasEnoughBalance}
+      {#if hasEnoughBalance && (walletSource === 'ii' || oisyState.isConnected)}
         <div class="form-section">
           <div class="label-row">
             <label for="deposit-amount">Deposit Amount</label>
@@ -1736,5 +1924,218 @@
 
   @keyframes spin {
     to { transform: rotate(360deg); }
+  }
+
+  /* Wallet Source Toggle */
+  .wallet-source-toggle {
+    display: flex;
+    gap: 8px;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 6px;
+    border-radius: 12px;
+  }
+
+  .wallet-source-toggle button {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 12px 16px;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: #888;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .wallet-source-toggle button svg {
+    opacity: 0.7;
+  }
+
+  .wallet-source-toggle .source-label {
+    font-weight: 600;
+  }
+
+  .wallet-source-toggle .source-hint {
+    font-size: 10px;
+    font-weight: 400;
+    opacity: 0.7;
+  }
+
+  .wallet-source-toggle button.active {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.2));
+    color: #a5b4fc;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+  }
+
+  .wallet-source-toggle button.active svg {
+    opacity: 1;
+    color: #a5b4fc;
+  }
+
+  .wallet-source-toggle button:hover:not(.active) {
+    background: rgba(255, 255, 255, 0.05);
+    color: #ccc;
+  }
+
+  /* OISY Connect Section */
+  .oisy-connect-section {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.05));
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+  }
+
+  .oisy-connect-section.btc {
+    background: linear-gradient(135deg, rgba(247, 147, 26, 0.1), rgba(180, 100, 20, 0.05));
+    border-color: rgba(247, 147, 26, 0.2);
+  }
+
+  .oisy-icon {
+    margin-bottom: 12px;
+    color: #a5b4fc;
+  }
+
+  .oisy-connect-section.btc .oisy-icon {
+    color: #f7931a;
+  }
+
+  .oisy-connect-section h3 {
+    margin: 0 0 8px 0;
+    font-size: 16px;
+    color: #fff;
+  }
+
+  .oisy-connect-section p {
+    margin: 0 0 16px 0;
+    font-size: 13px;
+    color: #888;
+    line-height: 1.5;
+  }
+
+  .btn-connect-oisy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 24px;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    border: none;
+    border-radius: 8px;
+    color: white;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn-connect-oisy.btc {
+    background: linear-gradient(135deg, #f7931a 0%, #c77700 100%);
+  }
+
+  .btn-connect-oisy:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+  }
+
+  .btn-connect-oisy.btc:hover:not(:disabled) {
+    box-shadow: 0 4px 15px rgba(247, 147, 26, 0.3);
+  }
+
+  .btn-connect-oisy:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+
+  .oisy-error {
+    margin-top: 12px;
+    padding: 10px;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 8px;
+    color: #ef4444;
+    font-size: 13px;
+  }
+
+  /* OISY Connected State */
+  .balance-section.oisy {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.05));
+    border: 1px solid rgba(99, 102, 241, 0.2);
+  }
+
+  .balance-section.oisy.btc {
+    background: linear-gradient(135deg, rgba(247, 147, 26, 0.1), rgba(180, 100, 20, 0.05));
+    border-color: rgba(247, 147, 26, 0.2);
+  }
+
+  .oisy-connected-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  .connected-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: rgba(34, 197, 94, 0.15);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    border-radius: 20px;
+    color: #22c55e;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .disconnect-btn {
+    padding: 4px 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: #888;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .disconnect-btn:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+  }
+
+  .balance-value.oisy {
+    color: #a5b4fc;
+  }
+
+  .balance-value.oisy.btc {
+    color: #f7931a;
+  }
+
+  .no-balance-warning.oisy {
+    background: rgba(99, 102, 241, 0.1);
+    border-color: rgba(99, 102, 241, 0.3);
+    color: #a5b4fc;
+  }
+
+  .no-balance-warning.oisy.btc {
+    background: rgba(247, 147, 26, 0.1);
+    border-color: rgba(247, 147, 26, 0.3);
+    color: #f7931a;
+  }
+
+  .no-balance-warning.oisy .warning-content p {
+    color: #818cf8;
+  }
+
+  .no-balance-warning.oisy.btc .warning-content p {
+    color: #d97706;
   }
 </style>
