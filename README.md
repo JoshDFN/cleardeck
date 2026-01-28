@@ -433,15 +433,6 @@ dfx ledger transfer <table-account-id> --amount 1.0 --network ic
 
 ## Known Issues
 
-**Resolved in latest version:**
-- ✅ Hand history phase tracking now works correctly
-- ✅ BB option resets properly on aggressive actions
-- ✅ Heartbeat endpoint has rate limiting
-- ✅ Pot remainder goes to first clockwise from dealer (correct poker rules)
-- ✅ Username registration race condition fixed
-- ✅ MAX withdraw button now withdraws full balance
-
-**Remaining known issues:**
 - Hand history may be lost during canister upgrades (stable memory limitations)
 - BTC deposits require 6 confirmations (~1 hour)
 - Large pots may have rounding issues (e8s precision)
