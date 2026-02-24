@@ -444,53 +444,75 @@
     const approveAmount = amountSmallest + transferFee;
 
     try {
-      // Handle OISY wallet deposits
+      // Handle OISY wallet deposits via secure subaccount-based deposit
       if (walletSource === 'oisy') {
-        statusMessage = 'Approve the transaction in the OISY popup...';
-
-        // Use OISY wallet for approval
         try {
-          console.log('Starting OISY approval for amount:', approveAmount.toString(), 'spender:', tableCanisterId);
-          if (isBTC) {
-            await oisy.approveCkbtc(approveAmount, tableCanisterId);
-          } else {
-            await oisy.approveIcp(approveAmount, tableCanisterId);
+          // Step 1: Get the user's unique deposit subaccount from the table canister
+          statusMessage = 'Getting your deposit address...';
+          const depositSubaccount = await tableActor.get_deposit_subaccount();
+
+          // Step 2: Transfer from OISY wallet directly to the canister's deposit subaccount
+          statusMessage = 'Approve the transfer in the OISY popup...';
+
+          const wallet = oisy.getWallet();
+
+          if (!wallet) {
+            error = 'OISY wallet not connected';
+            processing = false;
+            statusMessage = '';
+            return;
           }
-          console.log('OISY approval completed successfully');
-        } catch (approvalError) {
-          console.error('OISY approval failed:', approvalError);
-          error = `Approval failed: ${approvalError.message}`;
-          processing = false;
-          statusMessage = '';
-          return;
+
+          // Convert canister ID to Principal for transfer destination
+          const canisterPrincipal = typeof tableCanisterId === 'string'
+            ? Principal.fromText(tableCanisterId)
+            : tableCanisterId;
+
+          // Verify OISY wallet supports transfers
+          if (!wallet.transfer) {
+            error = `OISY wallet does not support direct transfers. Please transfer ${currencySymbol} to your Internet Identity wallet first, then deposit from there.`;
+            processing = false;
+            statusMessage = '';
+            return;
+          }
+
+          // Transfer to the deposit subaccount (ckBTC uses params, ICP uses request)
+          const destination = {
+            to: { owner: canisterPrincipal, subaccount: [depositSubaccount] },
+            amount: amountSmallest,
+          };
+
+          await wallet.transfer({
+            ...(isBTC ? { params: destination } : { request: destination }),
+            owner: oisyState.principal,
+            ledgerCanisterId: ledgerCanisterId,
+            options: { timeoutInMilliseconds: 300000 },
+          });
+
+          // Step 3: Claim the deposit (sweeps from subaccount to main balance)
+          statusMessage = `Claiming ${currencySymbol} deposit...`;
+          const claimResult = await tableActor.claim_external_deposit();
+
+          if ('Ok' in claimResult) {
+            const newBalance = formatWithUnit(claimResult.Ok);
+            success = `Deposited ${depositAmount} ${currencySymbol} from OISY! Table balance: ${newBalance}`;
+            await oisy.refreshBalances();
+            await oisy.disconnect();
+            setTimeout(() => {
+              onDepositSuccess?.();
+              onClose();
+            }, 2000);
+          } else if ('Err' in claimResult) {
+            error = claimResult.Err;
+          }
+        } catch (oisyError) {
+          console.error('OISY deposit failed:', oisyError);
+          error = `OISY deposit failed: ${oisyError.message || oisyError}`;
         }
 
-        statusMessage = `Transferring ${currencySymbol} to poker table...`;
-
-        // Use deposit_from_external with the OISY principal
-        // This allows the table canister to pull funds from the OISY wallet (which made the approval)
-        // while crediting the balance to the caller's II account
-        const oisyPrincipal = typeof oisyState.principal === 'string'
-          ? Principal.fromText(oisyState.principal)
-          : oisyState.principal;
-
-        console.log('Calling deposit_from_external with OISY principal:', oisyPrincipal.toString(), 'amount:', amountSmallest.toString());
-        const depositResult = await tableActor.deposit_from_external(oisyPrincipal, amountSmallest);
-
-        if ('Ok' in depositResult) {
-          const newBalance = formatWithUnit(depositResult.Ok);
-          success = `Deposited ${depositAmount} ${currencySymbol} from OISY! Table balance: ${newBalance}`;
-          // Refresh OISY balances
-          await oisy.refreshBalances();
-          // Auto-disconnect from OISY to close the popup
-          await oisy.disconnect();
-          setTimeout(() => {
-            onDepositSuccess?.();
-            onClose();
-          }, 2000);
-        } else if ('Err' in depositResult) {
-          error = depositResult.Err;
-        }
+        processing = false;
+        statusMessage = '';
+        return;
       } else {
         // Handle Internet Identity wallet deposits (existing flow)
         statusMessage = 'Requesting approval from your wallet...';
@@ -595,9 +617,10 @@
 
   function setMaxAmount() {
     const minRequired = Number(minDeposit);
-    if (walletBalance !== null && walletBalance > minRequired) {
+    const bal = effectiveWalletBalance;
+    if (bal !== null && bal > minRequired) {
       const feeBuffer = isBTC ? 20 : 20000;
-      const maxSmallest = Math.max(0, walletBalance - feeBuffer);
+      const maxSmallest = Math.max(0, bal - feeBuffer);
       if (isBTC && inputUnit === 'sats') {
         depositAmount = String(maxSmallest);
       } else {
@@ -925,17 +948,10 @@
             <line x1="12" y1="16" x2="12" y2="12"/>
             <line x1="12" y1="8" x2="12.01" y2="8"/>
           </svg>
-          {#if isBTC}
-            <p>
-              This transfers ckBTC from your {walletSource === 'oisy' ? 'OISY' : 'Internet Identity'} wallet to your poker table balance.
-              You can withdraw back to your wallet at any time.
-            </p>
-          {:else}
-            <p>
-              This transfers ICP from your {walletSource === 'oisy' ? 'OISY' : 'Internet Identity'} wallet to your poker table balance.
-              You can withdraw back to your wallet at any time.
-            </p>
-          {/if}
+          <p>
+            This transfers {isBTC ? 'ckBTC' : 'ICP'} from your {walletSource === 'oisy' ? 'OISY' : 'Internet Identity'} wallet to your poker table balance.
+            You can withdraw back to your wallet at any time.
+          </p>
         </div>
     {/if}
 

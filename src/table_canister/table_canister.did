@@ -225,8 +225,7 @@ service : (TableConfig) -> {
   admin_reinit_table : (TableConfig) -> (Result);
   // Admin: Get balance for a specific player (controller only, read-only)
   admin_get_balance : (principal) -> (Result_1) query;
-  // Admin: Restore balance for a player (TEMPORARY - for recovery only)
-  admin_restore_balance : (principal, nat64) -> (Result_1);
+  // REMOVED: admin_restore_balance - unnecessary attack surface
   // Admin: Get all balances (for auditing/recovery)
   // Returns (total_assigned, list of (principal, balance))
   admin_get_all_balances : () -> (variant { Ok : record { nat64; vec record { principal; nat64 } }; Err : text }) query;
@@ -244,10 +243,11 @@ service : (TableConfig) -> {
   // Deposit ICP to your escrow balance using ICRC-2 transfer_from
   // You must first approve this canister to spend your ICP via icrc2_approve
   deposit : (nat64) -> (Result_1);
-  // Deposit from an external wallet (like OISY) using ICRC-2 transfer_from
-  // The external wallet must first approve this canister, then pass their principal here
-  // Balance is credited to the caller's account (not the external wallet)
-  deposit_from_external : (principal, nat64) -> (Result_1);
+  // Claim funds sent to your unique deposit subaccount by an external wallet
+  // External wallets transfer to (canister_id, get_deposit_subaccount()), then call this to claim
+  claim_external_deposit : () -> (Result_1);
+  // Get your unique deposit subaccount for external wallet transfers
+  get_deposit_subaccount : () -> (vec nat8) query;
   // DEV ONLY: Get free test chips for local development
   // Disabled when dev_mode is false (production)
   dev_faucet : (nat64) -> (Result_1);

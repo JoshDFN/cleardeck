@@ -563,6 +563,49 @@ fn periodic_cleanup() {
             history.drain(0..excess);
         }
     });
+
+    // Cap VERIFIED_DEPOSITS to prevent unbounded memory growth
+    // Keep the most recent 10,000 entries (remove oldest by block index)
+    VERIFIED_DEPOSITS.with(|v| {
+        let mut deposits = v.borrow_mut();
+        if deposits.len() > 10_000 {
+            let mut keys: Vec<u64> = deposits.keys().copied().collect();
+            keys.sort();
+            let to_remove = deposits.len() - 10_000;
+            for key in keys.into_iter().take(to_remove) {
+                deposits.remove(&key);
+            }
+        }
+    });
+
+    // Prune DISPLAY_NAMES for principals with no balance and not seated
+    let seated_principals: Vec<Principal> = TABLE.with(|t| {
+        let table = t.borrow();
+        match table.as_ref() {
+            Some(state) => state.players.iter()
+                .filter_map(|p| p.as_ref().map(|p| p.principal))
+                .collect(),
+            None => Vec::new(),
+        }
+    });
+    DISPLAY_NAMES.with(|d| {
+        let mut names = d.borrow_mut();
+        if names.len() > 200 {
+            BALANCES.with(|b| {
+                let balances = b.borrow();
+                names.retain(|principal, _| {
+                    balances.get(principal).copied().unwrap_or(0) > 0
+                        || seated_principals.contains(principal)
+                });
+            });
+        }
+    });
+
+    // Prune LAST_WITHDRAWAL entries older than the cooldown period
+    LAST_WITHDRAWAL.with(|l| {
+        let mut withdrawals = l.borrow_mut();
+        withdrawals.retain(|_, &mut last_time| now < last_time + WITHDRAWAL_COOLDOWN_NS * 2);
+    });
 }
 
 // ============================================================================
@@ -966,16 +1009,14 @@ async fn transfer_tokens(to: Principal, amount: u64) -> Result<u64, String> {
     }
 }
 
-/// Legacy function for backwards compatibility - calls transfer_tokens
-async fn transfer_icp(to: Principal, amount: u64) -> Result<u64, String> {
-    transfer_tokens(to, amount).await
-}
-
 /// Verify and credit a deposit by checking the ledger transaction
 /// Players should first transfer ICP to the canister's account, then call this with the block index
 #[ic_cdk::update]
 async fn notify_deposit(block_index: u64) -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot deposit".to_string());
+    }
     let canister = canister_id();
     let now = ic_cdk::api::time();
 
@@ -1180,10 +1221,14 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
             return Err("Transfer was not to this canister".to_string());
         }
 
-        // Note: We can't verify the sender's principal from the account identifier
-        // because account identifiers are one-way hashes. We trust that if the
-        // transfer was sent to us and the caller is claiming it, that's valid.
-        // The deposit can only be claimed once due to VERIFIED_DEPOSITS check.
+        // Verify the sender is the caller by computing their expected account identifier.
+        // Account identifiers are deterministic: SHA224(domain || principal || subaccount).
+        let expected_from = compute_account_identifier(&caller, None);
+        let from_bytes: [u8; 32] = transfer.from.hash.clone().try_into()
+            .map_err(|_| "Invalid source account length".to_string())?;
+        if from_bytes != expected_from {
+            return Err("This transfer was not sent from your account. Only the sender can claim their deposit.".to_string());
+        }
 
         let amount = transfer.amount.e8s;
 
@@ -1207,21 +1252,13 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
     // Check if we got the block directly
     if !response.blocks.is_empty() {
         let block = &response.blocks[0];
-        if let Some(Operation::Transfer(ref transfer)) = block.transaction.operation {
-            match verify_and_credit(transfer) {
-                Ok(new_balance) => {
-                    clear_pending();
-                    return Ok(new_balance);
-                }
-                Err(e) => {
-                    clear_pending();
-                    return Err(e);
-                }
-            }
+        let result = if let Some(Operation::Transfer(ref transfer)) = block.transaction.operation {
+            verify_and_credit(transfer)
         } else {
-            clear_pending();
-            return Err("Transaction is not a transfer".to_string());
-        }
+            Err("Transaction is not a transfer".to_string())
+        };
+        clear_pending();
+        return result;
     }
 
     // Note: archived_blocks handling removed - blocks at 33M+ should not be archived yet
@@ -1237,6 +1274,9 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
 #[ic_cdk::update]
 async fn deposit(amount: u64) -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot deposit".to_string());
+    }
     let canister = canister_id();
     let currency = get_table_currency();
 
@@ -1315,90 +1355,100 @@ async fn deposit(amount: u64) -> Result<u64, String> {
     }
 }
 
-/// Deposit from an external wallet (like OISY) using ICRC-2 transfer_from
-/// The external wallet must first approve this canister to spend their tokens via icrc2_approve
-/// Then call this function with the external wallet's principal to pull the approved amount
-/// The balance is credited to the caller's account (not the external wallet)
+/// Deposit from an external wallet using subaccount-based deposit address
+/// Each user gets a unique deposit address: (canister_id, sha256(user_principal))
+/// The external wallet transfers directly to that address, then user calls this to claim.
+/// SECURITY: Only the owner of the subaccount (derived from caller's principal) can claim.
 #[ic_cdk::update]
-async fn deposit_from_external(from_principal: Principal, amount: u64) -> Result<u64, String> {
+async fn claim_external_deposit() -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot claim deposits".to_string());
+    }
     let canister = canister_id();
     let currency = get_table_currency();
-
-    if amount == 0 {
-        return Err("Amount must be greater than 0".to_string());
-    }
-
-    // Minimum deposit to cover potential fees (currency-aware)
-    let min_deposit = if currency == Currency::BTC { 1_000 } else { 20_000 }; // 1000 sats or 0.0002 ICP
-    if amount < min_deposit {
-        return Err(format!(
-            "Minimum deposit is {}",
-            currency.format_amount(min_deposit)
-        ));
-    }
-
     let ledger_id = currency.ledger_canister();
     let transfer_fee = currency.transfer_fee();
 
-    // Use the standard ICRC-2 types from icrc_ledger_types crate
-    // Transfer FROM the external wallet (which approved us) TO this canister
-    let transfer_from_args = TransferFromArgs {
-        spender_subaccount: None,
-        from: Account {
-            owner: from_principal, // The external wallet that approved us
-            subaccount: None,
-        },
+    // Compute the caller's unique deposit subaccount: sha256(principal)
+    let subaccount = compute_deposit_subaccount(&caller);
+
+    // Query the balance at the caller's deposit subaccount
+    let balance_result: Result<(Nat,), _> = ic_cdk::call(
+        ledger_id,
+        "icrc1_balance_of",
+        (Account {
+            owner: canister,
+            subaccount: Some(subaccount),
+        },),
+    ).await;
+
+    let balance: u64 = match balance_result {
+        Ok((bal,)) => bal.0.try_into().unwrap_or(0),
+        Err((code, msg)) => return Err(format!("Failed to query balance: {:?} - {}", code, msg)),
+    };
+
+    if balance <= transfer_fee {
+        return Err(format!(
+            "No claimable balance. Send {} to your deposit address first. Use get_deposit_subaccount() to get your address.",
+            currency.symbol()
+        ));
+    }
+
+    // Sweep: transfer from the deposit subaccount to the canister's main account
+    let sweep_amount = balance - transfer_fee; // Deduct fee for the internal transfer
+
+    let transfer_args = TransferArg {
+        from_subaccount: Some(subaccount),
         to: Account {
             owner: canister,
             subaccount: None,
         },
-        amount: Nat::from(amount),
+        amount: Nat::from(sweep_amount),
         fee: Some(Nat::from(transfer_fee)),
         memo: None,
         created_at_time: None,
     };
 
-    // Use ic_cdk::call which properly handles Candid encoding/decoding
-    let transfer_result: Result<(Result<Nat, TransferFromError>,), _> =
-        ic_cdk::call(ledger_id, "icrc2_transfer_from", (transfer_from_args,)).await;
+    let transfer_result: Result<(Result<Nat, TransferError>,), _> =
+        ic_cdk::call(ledger_id, "icrc1_transfer", (transfer_args,)).await;
 
     let transfer_result = match transfer_result {
         Ok((result,)) => result,
-        Err((code, msg)) => return Err(format!("Failed to call ledger: {:?} - {}", code, msg)),
+        Err((code, msg)) => return Err(format!("Failed to sweep deposit: {:?} - {}", code, msg)),
     };
 
     match transfer_result {
         Ok(_block_index) => {
-            // Credit the caller's escrow balance (not the external wallet)
+            // Credit the caller's escrow balance
             let new_balance = BALANCES.with(|b| {
                 let mut balances = b.borrow_mut();
                 let current = balances.get(&caller).copied().unwrap_or(0);
-                let new_balance = current.saturating_add(amount);
+                let new_balance = current.saturating_add(sweep_amount);
                 balances.insert(caller, new_balance);
                 new_balance
             });
 
             Ok(new_balance)
         }
-        Err(e) => {
-            let symbol = currency.symbol();
-            match e {
-                TransferFromError::InsufficientAllowance { allowance } => {
-                    let allowance_u64: u64 = allowance.0.try_into().unwrap_or(0);
-                    Err(format!("Insufficient allowance from external wallet. Approved: {}, tried to deposit: {}. Please approve more {} from the external wallet.",
-                        currency.format_amount(allowance_u64),
-                        currency.format_amount(amount),
-                        symbol))
-                }
-                TransferFromError::InsufficientFunds { balance } => {
-                    let balance_u64: u64 = balance.0.try_into().unwrap_or(0);
-                    Err(format!("Insufficient {} in external wallet. Balance: {}", symbol, currency.format_amount(balance_u64)))
-                }
-                _ => Err(format!("{} transfer failed: {:?}", symbol, e))
-            }
-        }
+        Err(e) => Err(format!("Sweep transfer failed: {:?}", e)),
     }
+}
+
+/// Get the caller's unique deposit subaccount address for external wallet deposits
+/// External wallets (OISY, NNS, etc.) should transfer to: (canister_id, this_subaccount)
+#[ic_cdk::query]
+fn get_deposit_subaccount() -> Vec<u8> {
+    let caller = ic_cdk::api::msg_caller();
+    compute_deposit_subaccount(&caller).to_vec()
+}
+
+/// Compute a unique deposit subaccount for a principal: sha256("cleardeck-deposit:" || principal_bytes)
+fn compute_deposit_subaccount(principal: &Principal) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"cleardeck-deposit:");
+    hasher.update(principal.as_slice());
+    hasher.finalize().into()
 }
 
 /// Verify a ckBTC deposit using ICRC-3 get_transactions API
@@ -1559,6 +1609,9 @@ async fn verify_ckbtc_deposit(block_index: u64, caller: Principal, canister: Pri
 #[ic_cdk::update]
 async fn withdraw(amount: u64) -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot withdraw".to_string());
+    }
     let now = ic_cdk::api::time();
     let currency = get_table_currency();
 
@@ -1639,7 +1692,7 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
     })?;
 
     // Transfer to player's wallet
-    let result = transfer_icp(caller, amount).await;
+    let result = transfer_tokens(caller, amount).await;
 
     // Clear pending state regardless of outcome
     PENDING_WITHDRAWALS.with(|p| {
@@ -1918,11 +1971,11 @@ fn cash_out() -> Result<u64, String> {
         Err("Not at table".to_string())
     })?;
 
-    // Return chips to escrow balance
+    // Return chips to escrow balance (with overflow protection)
     BALANCES.with(|b| {
         let mut balances = b.borrow_mut();
         let current = balances.get(&caller).copied().unwrap_or(0);
-        balances.insert(caller, current + chips);
+        balances.insert(caller, current.saturating_add(chips));
     });
 
     Ok(chips)
@@ -2027,20 +2080,9 @@ fn admin_get_balance(player: Principal) -> Result<u64, String> {
     })
 }
 
-/// Admin: Restore balance for a player (TEMPORARY - for recovery only)
-/// Controller only - ADDS to existing balance
-#[ic_cdk::update]
-fn admin_restore_balance(player: Principal, amount: u64) -> Result<u64, String> {
-    require_controller()?;
-
-    BALANCES.with(|b| {
-        let mut balances = b.borrow_mut();
-        let current = balances.get(&player).copied().unwrap_or(0);
-        let new_balance = current.saturating_add(amount);
-        balances.insert(player, new_balance);
-        Ok(new_balance)
-    })
-}
+// REMOVED: admin_restore_balance - unnecessary attack surface.
+// A compromised controller key could mint arbitrary balances and withdraw real funds.
+// If balance recovery is needed, redeploy with a migration in post_upgrade.
 
 /// Admin: Get all balances (for auditing/recovery)
 /// Returns (total_assigned, list of (principal, balance))
@@ -2052,7 +2094,7 @@ fn admin_get_all_balances() -> Result<(u64, Vec<(Principal, u64)>), String> {
     BALANCES.with(|b| {
         let balances = b.borrow();
         let list: Vec<(Principal, u64)> = balances.iter().map(|(k, v)| (*k, *v)).collect();
-        let total: u64 = balances.values().sum();
+        let total: u64 = balances.values().fold(0u64, |acc, &v| acc.saturating_add(v));
         Ok((total, list))
     })
 }
@@ -2071,7 +2113,7 @@ fn admin_get_table_chips() -> Result<u64, String> {
                 let total: u64 = state.players.iter()
                     .filter_map(|p| p.as_ref())
                     .map(|p| p.chips)
-                    .sum();
+                    .fold(0u64, |acc, v| acc.saturating_add(v));
                 Ok(total)
             }
             None => Ok(0)
@@ -2480,6 +2522,7 @@ fn get_straight_high(ranks: &[u8]) -> u8 {
 
 #[ic_cdk::update]
 async fn start_new_hand() -> Result<ShuffleProof, String> {
+    check_rate_limit()?;
     // SECURITY: Check all preconditions BEFORE calling raw_rand to prevent cycle drain
     // Any caller can call this, so we must validate everything first
     let precondition_check = TABLE.with(|t| {
@@ -2942,11 +2985,11 @@ fn leave_table() -> Result<u64, String> {
         Ok::<u64, String>(chips)
     })?;
 
-    // Return remaining chips to escrow balance
+    // Return remaining chips to escrow balance (with overflow protection)
     BALANCES.with(|b| {
         let mut balances = b.borrow_mut();
         let current = balances.get(&caller).copied().unwrap_or(0);
-        balances.insert(caller, current + chips);
+        balances.insert(caller, current.saturating_add(chips));
     });
 
     Ok(chips)
@@ -3642,7 +3685,8 @@ fn determine_winners(state: &mut TableState) {
 
         for (seat, rank, principal, cards) in winners.iter() {
             let amount = if *seat == remainder_seat { pot_share + remainder } else { pot_share };
-            *chips_awarded.entry(*seat).or_insert(0) += amount;
+            let entry = chips_awarded.entry(*seat).or_insert(0);
+            *entry = entry.saturating_add(amount);
 
             winner_list.push(Winner {
                 seat: *seat,
@@ -3691,11 +3735,12 @@ fn determine_winners(state: &mut TableState) {
 
             for (seat, rank, principal, cards) in pot_winners.iter() {
                 let amount = if *seat == remainder_seat { pot_share + remainder } else { pot_share };
-                *chips_awarded.entry(*seat).or_insert(0) += amount;
+                let entry = chips_awarded.entry(*seat).or_insert(0);
+                *entry = entry.saturating_add(amount);
 
                 // Only add to winner list once per player (aggregate amounts)
                 if let Some(existing) = winner_list.iter_mut().find(|w| w.seat == *seat) {
-                    existing.amount += amount;
+                    existing.amount = existing.amount.saturating_add(amount);
                 } else {
                     winner_list.push(Winner {
                         seat: *seat,
@@ -3839,7 +3884,8 @@ fn check_timeouts() -> TimeoutCheckResult {
                             if chips > 0 {
                                 BALANCES.with(|b| {
                                     let mut balances = b.borrow_mut();
-                                    *balances.entry(principal).or_insert(0) += chips;
+                                    let current = balances.entry(principal).or_insert(0);
+                                    *current = current.saturating_add(chips);
                                 });
                             }
                             // Remove player from seat
@@ -3885,7 +3931,7 @@ fn check_timeouts() -> TimeoutCheckResult {
                 // Auto-fold the player
                 if let Some(ref mut player) = state.players[seat as usize] {
                     player.has_folded = true;
-                    player.timeout_count += 1;
+                    player.timeout_count = player.timeout_count.saturating_add(1);
 
                     // Sit them out if too many timeouts
                     if player.timeout_count >= MAX_TIMEOUTS_BEFORE_SITOUT {
