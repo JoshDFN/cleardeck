@@ -126,7 +126,7 @@ type ShuffleProof = record {
 };
 type SidePot = record { eligible_players : blob; amount : nat64 };
 type Suit = variant { Diamonds; Hearts; Clubs; Spades };
-type Currency = variant { ICP; BTC };
+type Currency = variant { ICP; BTC; ETH };
 type TableConfig = record {
   small_blind : nat64;
   time_bank_secs : nat64;
@@ -201,6 +201,16 @@ type Winner = record {
   cards : opt record { Card; Card };
   seat : nat8;
   amount : nat64;
+};
+// Native ETH deposit types (threshold ECDSA + EVM RPC)
+type EthDepositInfo = record {
+  eth_address : text;
+  min_deposit_wei : text;
+};
+type SweepStatus = variant {
+  NoBalance;
+  InsufficientForGas : record { balance_wei : text; estimated_gas_wei : text };
+  Swept : record { tx_hash : text; amount_wei : text; gas_cost_wei : text };
 };
 // ckBTC minter types for BTC deposits
 type UtxoStatus = variant {
@@ -330,6 +340,15 @@ service : (TableConfig) -> {
   // Checks for new UTXOs and mints ckBTC if confirmed
   // Only available for BTC tables
   update_btc_balance : () -> (variant { Ok : vec UtxoStatus; Err : text });
+  // Get a unique Ethereum deposit address for native ETH deposits
+  // Users can send ETH to this address, then call sweep_eth_to_cketh
+  // Only available for ETH tables
+  get_eth_deposit_address : () -> (variant { Ok : EthDepositInfo; Err : text });
+  // Sweep deposited ETH to ckETH helper contract
+  // Checks balance, signs deposit(bytes32) tx via threshold ECDSA, submits to Ethereum
+  // After ~20 min, ckETH is minted to the caller's principal
+  // Only available for ETH tables
+  sweep_eth_to_cketh : () -> (variant { Ok : SweepStatus; Err : text });
   // Set a custom display name (visible to all players)
   // Name must be 1-12 characters, alphanumeric with some symbols allowed
   // Pass null to clear the name

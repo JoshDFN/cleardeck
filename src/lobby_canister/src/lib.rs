@@ -23,6 +23,7 @@ pub enum Currency {
     #[default]
     ICP,
     BTC,
+    ETH,
 }
 
 impl Currency {
@@ -31,6 +32,7 @@ impl Currency {
         match self {
             Currency::ICP => "ICP",
             Currency::BTC => "BTC",
+            Currency::ETH => "ETH",
         }
     }
 
@@ -39,6 +41,7 @@ impl Currency {
         match self {
             Currency::ICP => "e8s",
             Currency::BTC => "sats",
+            Currency::ETH => "wei",
         }
     }
 }
@@ -478,6 +481,55 @@ fn init_btc_tables(
             created_at: timestamp,
             created_by: caller,
             currency: Currency::BTC,
+        });
+    });
+
+    Ok(())
+}
+
+/// Add a single ETH heads-up table
+/// All values in wei (1 ETH = 1_000_000_000_000_000_000 wei)
+#[ic_cdk::update]
+fn add_eth_headsup_table(eth_table_canister: Principal) -> Result<(), String> {
+    let caller = ic_cdk::api::msg_caller();
+    let is_admin = ADMIN.with(|a| a.borrow().map(|admin| admin == caller).unwrap_or(false));
+
+    if !is_admin {
+        return Err("Only admin can add tables".to_string());
+    }
+
+    let timestamp = ic_cdk::api::time();
+
+    // Get next table ID (after existing tables)
+    let next_id = TABLES.with(|t| {
+        t.borrow().keys().max().map(|m| m + 1).unwrap_or(1)
+    });
+
+    TABLES.with(|tables| {
+        let mut tables = tables.borrow_mut();
+
+        // ETH Table: Heads Up - 0.0001/0.0002 ETH blinds (micro stakes)
+        // Buy-in: 0.01-0.1 ETH
+        tables.insert(next_id, TableInfo {
+            id: next_id,
+            canister_id: Some(eth_table_canister),
+            config: TableConfig {
+                small_blind: 100_000_000_000_000,       // 0.0001 ETH
+                big_blind: 200_000_000_000_000,         // 0.0002 ETH
+                min_buy_in: 10_000_000_000_000_000,     // 0.01 ETH
+                max_buy_in: 100_000_000_000_000_000,    // 0.1 ETH
+                max_players: 2,
+                ante: 0,
+                action_timeout_secs: 30,
+                time_bank_secs: 30,
+                currency: Currency::ETH,
+            },
+            name: "Heads Up - 0.0001/0.0002".to_string(),
+            player_count: 0,
+            status: TableStatus::WaitingForPlayers,
+            created_at: timestamp,
+            created_by: caller,
+            currency: Currency::ETH,
         });
     });
 

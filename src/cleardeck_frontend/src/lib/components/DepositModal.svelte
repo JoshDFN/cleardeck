@@ -8,6 +8,20 @@
 
   const { tableActor, tableCanisterId, onClose, onDepositSuccess, currency = 'ICP' } = $props();
 
+  // Currency-specific settings (must be before any $state that uses them)
+  const isBTC = currency === 'BTC';
+  const isETH = currency === 'ETH';
+  const currencySymbol = isBTC ? 'BTC' : isETH ? 'ETH' : 'ICP';
+  const unitName = isBTC ? 'sats' : isETH ? 'wei' : 'e8s';
+  const transferFee = isBTC ? 10n : isETH ? 2_000_000_000_000n : 10000n;
+  const minDeposit = isBTC ? 1000n : isETH ? 10_000_000_000_000n : 20000n;
+
+  // Ledger canister IDs
+  const ICP_LEDGER_CANISTER = 'ryjl3-tyaaa-aaaaa-aaaba-cai';
+  const CKBTC_LEDGER_CANISTER = 'mxzaz-hqaaa-aaaar-qaada-cai';
+  const CKETH_LEDGER_CANISTER = 'ss2fx-dyaaa-aaaar-qacoq-cai';
+  const ledgerCanisterId = isBTC ? CKBTC_LEDGER_CANISTER : isETH ? CKETH_LEDGER_CANISTER : ICP_LEDGER_CANISTER;
+
   // Subscribe to auth state to check if user is authenticated
   let authState = $state({ isAuthenticated: false });
   $effect(() => {
@@ -31,6 +45,7 @@
   let loadingBalance = $state(true);
   let copied = $state(false);
   let accountId = $state('');
+  let principalId = $state('');
   let copiedAddress = $state(false);
 
   // Wallet source: 'ii' (Internet Identity) or 'oisy' (OISY Wallet)
@@ -42,28 +57,36 @@
   let btcAddressError = $state(null);
   let updatingBtcBalance = $state(false);
   let btcUpdateResult = $state(null);
-  let depositMethod = $state('ckbtc'); // 'ckbtc' or 'btc' for BTC tables
+  let depositMethod = $state(isBTC ? 'ckbtc' : isETH ? 'cketh' : 'ckbtc');
   let inputUnit = $state('sats'); // 'sats' or 'btc' for BTC input mode
 
-  // Ledger canister IDs
-  const ICP_LEDGER_CANISTER = 'ryjl3-tyaaa-aaaaa-aaaba-cai';
-  const CKBTC_LEDGER_CANISTER = 'mxzaz-hqaaa-aaaar-qaada-cai';
+  // ETH native deposit state (threshold ECDSA derived address)
+  let ethDepositAddress = $state('');
+  let loadingEthAddress = $state(false);
+  let ethAddressError = $state(null);
+  let sweepingEth = $state(false);
+  let sweepResult = $state(null);
+  let copiedEthAddress = $state(false);
+  // ETH deposit check state (manual button + 2 min timeout)
+  let ethCheckInterval = $state(null);
+  let ethCheckActive = $state(false);
+  let ethCheckTimeout = $state(null);
+  // ETH sweep polling state (ckETH minting wait after sweep)
+  let ethSweepPolling = $state(false);
+  let ethSweepStartTime = $state(null);
+  let ethSweepElapsed = $state(0);
+  let ethSweepPollInterval = $state(null);
+  let ethSweepTimerInterval = $state(null);
+  let ethCkethArrived = $state(false);
+  let ethCkethAmount = $state(null);
+  let showWhyTheWait = $state(false);
 
   // Price state (fetched from CoinGecko)
   let icpPriceUsd = $state(null);
   let btcPriceUsd = $state(null);
+  let ethPriceUsd = $state(null);
   let priceLoading = $state(false);
   let priceError = $state(null);
-
-  // Get the correct ledger based on currency
-  const ledgerCanisterId = currency === 'BTC' ? CKBTC_LEDGER_CANISTER : ICP_LEDGER_CANISTER;
-
-  // Currency-specific settings
-  const isBTC = currency === 'BTC';
-  const currencySymbol = isBTC ? 'BTC' : 'ICP';
-  const unitName = isBTC ? 'sats' : 'e8s';
-  const transferFee = isBTC ? 10n : 10000n; // 10 sats vs 0.0001 ICP
-  const minDeposit = isBTC ? 1000n : 20000n; // 1000 sats vs 0.0002 ICP
 
   // CRC32 implementation
   function crc32(data) {
@@ -174,14 +197,134 @@
     }
   }
 
-  // Convert user input to smallest unit (sats or e8s)
+  // Load ETH deposit address from table canister (threshold ECDSA derived)
+  async function loadEthDepositAddress() {
+    if (!tableActor) return;
+    if (!authState.isAuthenticated) {
+      ethAddressError = 'Please log in with Internet Identity first';
+      return;
+    }
+    loadingEthAddress = true;
+    ethAddressError = null;
+    try {
+      const result = await tableActor.get_eth_deposit_address();
+      if ('Ok' in result) {
+        ethDepositAddress = result.Ok.eth_address;
+      } else if ('Err' in result) {
+        ethAddressError = result.Err;
+      }
+    } catch (e) {
+      console.error('Failed to get ETH deposit address:', e);
+      ethAddressError = e.message || 'Failed to get deposit address';
+    }
+    loadingEthAddress = false;
+  }
+
+  // Poll the ckETH ledger for arrival of minted ckETH
+  function startCkethPolling() {
+    ethSweepPolling = true;
+    ethSweepStartTime = Date.now();
+    ethSweepElapsed = 0;
+    ethCkethArrived = false;
+    ethCkethAmount = null;
+    showWhyTheWait = false;
+
+    // Update elapsed time every second
+    ethSweepTimerInterval = setInterval(() => {
+      ethSweepElapsed = Math.floor((Date.now() - ethSweepStartTime) / 1000);
+    }, 1000);
+
+    // Poll ckETH balance every 30 seconds
+    checkCkethBalance(); // immediate first check
+    ethSweepPollInterval = setInterval(checkCkethBalance, 30000);
+  }
+
+  function stopCkethPolling() {
+    if (ethSweepPollInterval) { clearInterval(ethSweepPollInterval); ethSweepPollInterval = null; }
+    if (ethSweepTimerInterval) { clearInterval(ethSweepTimerInterval); ethSweepTimerInterval = null; }
+    ethSweepPolling = false;
+  }
+
+  async function checkCkethBalance() {
+    try {
+      await loadWalletBalance();
+      // Check if balance increased (any non-zero balance means ckETH arrived)
+      if (walletBalance > 0) {
+        ethCkethArrived = true;
+        ethCkethAmount = walletBalance;
+        stopCkethPolling();
+      }
+    } catch (e) {
+      console.error('Failed to check ckETH balance:', e);
+    }
+  }
+
+  function formatElapsedTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }
+
+  // Manual check: poll every 15s for incoming ETH, stop after 2 minutes
+  function startEthDepositCheck() {
+    if (ethCheckActive) return;
+    ethCheckActive = true;
+    sweepResult = null;
+    error = null;
+
+    // Immediate first check
+    ethDepositCheck();
+    // Poll every 15 seconds
+    ethCheckInterval = setInterval(ethDepositCheck, 15000);
+    // Stop after 2 minutes
+    ethCheckTimeout = setTimeout(stopEthDepositCheck, 120000);
+  }
+
+  function stopEthDepositCheck() {
+    if (ethCheckInterval) { clearInterval(ethCheckInterval); ethCheckInterval = null; }
+    if (ethCheckTimeout) { clearTimeout(ethCheckTimeout); ethCheckTimeout = null; }
+    ethCheckActive = false;
+  }
+
+  async function ethDepositCheck() {
+    if (!tableActor || ethSweepPolling || ethCkethArrived) return;
+    try {
+      const result = await tableActor.sweep_eth_to_cketh();
+      if ('Ok' in result) {
+        const status = result.Ok;
+        if ('Swept' in status) {
+          const s = status.Swept;
+          const ethAmount = (Number(BigInt(s.amount_wei)) / 1e18).toFixed(6);
+          sweepResult = { type: 'success', message: `${ethAmount} ETH submitted to the ckETH minter` };
+          stopEthDepositCheck();
+          startCkethPolling();
+        } else if ('InsufficientForGas' in status) {
+          const bal = (Number(BigInt(status.InsufficientForGas.balance_wei)) / 1e18).toFixed(6);
+          sweepResult = { type: 'warning', message: `Only ${bal} ETH remaining. Send at least 0.005 ETH.` };
+          stopEthDepositCheck();
+        }
+        // NoBalance → keep polling silently
+      } else if ('Err' in result) {
+        sweepResult = { type: 'error', message: result.Err };
+        stopEthDepositCheck();
+      }
+    } catch (e) {
+      console.error('ETH deposit check failed:', e);
+      sweepResult = { type: 'error', message: e.message || String(e) };
+      stopEthDepositCheck();
+    }
+  }
+
+  // Convert user input to smallest unit (sats, wei, or e8s)
   function inputToSmallestUnit(amount) {
     if (isBTC) {
-      // For BTC, check the input unit mode
       if (inputUnit === 'sats') {
         return BigInt(Math.floor(Number(amount)));
       }
       return BigInt(Math.floor(Number(amount) * 100_000_000));
+    }
+    if (isETH) {
+      return BigInt(Math.floor(Number(amount) * 1_000_000_000_000_000_000));
     }
     return BigInt(Math.floor(Number(amount) * 100_000_000));
   }
@@ -196,6 +339,13 @@
       if (num >= 1000) return `${(num / 1000).toFixed(1)}K sats`;
       return `${num} sats`;
     }
+    if (isETH) {
+      const eth = num / 1_000_000_000_000_000_000;
+      if (eth >= 1) return `${eth.toFixed(4)} ETH`;
+      if (eth >= 0.0001) return `${eth.toFixed(6)} ETH`;
+      const gwei = num / 1_000_000_000;
+      return `${gwei.toFixed(2)} Gwei`;
+    }
     return (num / 100_000_000).toFixed(4);
   }
 
@@ -203,7 +353,7 @@
   function formatWithUnit(smallestUnit) {
     if (smallestUnit === null || smallestUnit === undefined) return '...';
     const formatted = formatBalance(smallestUnit);
-    if (!formatted.includes('BTC') && !formatted.includes('sats') && !formatted.includes('ICP')) {
+    if (!formatted.includes('BTC') && !formatted.includes('sats') && !formatted.includes('ICP') && !formatted.includes('ETH') && !formatted.includes('Gwei')) {
       return `${formatted} ${currencySymbol}`;
     }
     return formatted;
@@ -217,8 +367,12 @@
       const principal = await agent.getPrincipal();
 
       // Compute account ID for display (for ICP deposits)
-      if (!isBTC) {
+      if (!isBTC && !isETH) {
         accountId = computeAccountId(principal);
+      }
+      // Store principal for ETH deposit
+      if (isETH) {
+        principalId = principal.toText();
       }
 
       const ledgerIdlFactory = ({ IDL }) => {
@@ -320,7 +474,7 @@
     try {
       // CoinGecko simple price API - free tier, no API key needed
       const response = await fetch(
-        'https://api.coingecko.com/api/v3/simple/price?ids=internet-computer,bitcoin&vs_currencies=usd'
+        'https://api.coingecko.com/api/v3/simple/price?ids=internet-computer,bitcoin,ethereum&vs_currencies=usd'
       );
 
       if (response.ok) {
@@ -330,6 +484,9 @@
         }
         if (data['bitcoin']?.usd) {
           btcPriceUsd = data['bitcoin'].usd;
+        }
+        if (data['ethereum']?.usd) {
+          ethPriceUsd = data['ethereum'].usd;
         }
       } else {
         throw new Error('CoinGecko API error');
@@ -343,11 +500,13 @@
   }
 
   // Calculate USD value
-  function getUsdValue(sats) {
+  function getUsdValue(smallestUnit) {
     if (isBTC && btcPriceUsd) {
-      return (sats / 100_000_000) * btcPriceUsd;
-    } else if (!isBTC && icpPriceUsd) {
-      return (sats / 100_000_000) * icpPriceUsd;
+      return (smallestUnit / 100_000_000) * btcPriceUsd;
+    } else if (isETH && ethPriceUsd) {
+      return (smallestUnit / 1_000_000_000_000_000_000) * ethPriceUsd;
+    } else if (!isBTC && !isETH && icpPriceUsd) {
+      return (smallestUnit / 100_000_000) * icpPriceUsd;
     }
     return null;
   }
@@ -363,7 +522,7 @@
   async function connectOisyWallet() {
     error = null;
     try {
-      if (isBTC) {
+      if (isBTC || isETH) {
         await oisy.connectForIcrc();
       } else {
         await oisy.connectForIcp();
@@ -382,7 +541,7 @@
   // Get the effective wallet balance based on source
   const effectiveWalletBalance = $derived.by(() => {
     if (walletSource === 'oisy') {
-      return isBTC ? oisyState.ckbtcBalance : oisyState.icpBalance;
+      return isBTC ? oisyState.ckbtcBalance : isETH ? oisyState.ckethBalance : oisyState.icpBalance;
     }
     return walletBalance;
   });
@@ -400,11 +559,18 @@
   });
 
   onMount(() => {
-    loadWalletBalance();
-    loadPrices();
+    // Load balance and prices in parallel, don't block render
+    loadWalletBalance().catch(e => console.error('loadWalletBalance error:', e));
+    // Load prices in background - don't block UI
+    setTimeout(() => loadPrices().catch(e => console.error('loadPrices error:', e)), 100);
     if (isBTC) {
-      loadBtcDepositAddress();
+      loadBtcDepositAddress().catch(e => console.error('loadBtcDepositAddress error:', e));
     }
+    // Cleanup polling intervals on unmount
+    return () => {
+      stopEthDepositCheck();
+      stopCkethPolling();
+    };
   });
 
   function copyDepositAddress() {
@@ -422,7 +588,7 @@
     const amountSmallest = inputToSmallestUnit(depositAmount);
 
     if (amountSmallest < minDeposit) {
-      const minDisplay = isBTC ? '0.00001 BTC (1000 sats)' : '0.0002 ICP';
+      const minDisplay = isBTC ? '0.00001 BTC (1000 sats)' : isETH ? '0.00001 ETH' : '0.0002 ICP';
       error = `Minimum deposit is ${minDisplay}`;
       return;
     }
@@ -580,7 +746,7 @@
           const errVal = approveResult.Err[errKey];
           if (errKey === 'InsufficientFunds') {
             const balanceDisplay = formatWithUnit(errVal.balance);
-            const feeDisplay = isBTC ? '10 sats' : '0.0001 ICP';
+            const feeDisplay = isBTC ? '10 sats' : isETH ? '0.000002 ETH' : '0.0001 ICP';
             error = `Insufficient funds. You have ${balanceDisplay} but need ${depositAmount} ${currencySymbol} plus ${feeDisplay} fee.`;
           } else if (errKey === 'GenericError') {
             error = errVal.message;
@@ -619,10 +785,13 @@
     const minRequired = Number(minDeposit);
     const bal = effectiveWalletBalance;
     if (bal !== null && bal > minRequired) {
-      const feeBuffer = isBTC ? 20 : 20000;
+      const feeBuffer = isBTC ? 20 : isETH ? 4_000_000_000_000 : 20000;
       const maxSmallest = Math.max(0, bal - feeBuffer);
       if (isBTC && inputUnit === 'sats') {
         depositAmount = String(maxSmallest);
+      } else if (isETH) {
+        const maxDisplay = maxSmallest / 1_000_000_000_000_000_000;
+        depositAmount = maxDisplay.toFixed(8);
       } else {
         const maxDisplay = maxSmallest / 100_000_000;
         depositAmount = isBTC ? maxDisplay.toFixed(8) : maxDisplay.toFixed(4);
@@ -632,17 +801,27 @@
 
   // Use effective balance (from II or OISY depending on walletSource)
   const hasEnoughBalance = $derived(effectiveWalletBalance !== null && effectiveWalletBalance > Number(minDeposit));
+
+  // Whether we're in the token (ckBTC/ckETH/ICP) deposit flow vs native (BTC/ETH) flow
+  const showTokenFlow = $derived(
+    (!isBTC || depositMethod === 'ckbtc') && (!isETH || depositMethod === 'cketh')
+  );
 </script>
 
 <div class="modal-backdrop" onclick={onClose} onkeydown={(e) => e.key === 'Escape' && onClose()} role="button" tabindex="-1" aria-label="Close modal"></div>
 
-<div class="modal-content" class:btc-modal={isBTC} role="dialog" aria-labelledby="deposit-modal-title">
+<div class="modal-content" class:btc-modal={isBTC} class:eth-modal={isETH} role="dialog" aria-labelledby="deposit-modal-title">
   <div class="modal-header">
     <h2 id="deposit-modal-title">
       {#if isBTC}
         <svg width="20" height="20" viewBox="0 0 64 64">
           <path fill="#f7931a" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
           <path fill="#fff" d="M46.11 27.441c.636-4.258-2.606-6.547-7.039-8.074l1.438-5.768-3.51-.875-1.4 5.616c-.924-.23-1.872-.447-2.814-.662l1.41-5.653-3.509-.875-1.439 5.766c-.764-.174-1.514-.346-2.242-.527l.004-.018-4.842-1.209-.934 3.75s2.605.597 2.55.634c1.422.355 1.68 1.296 1.636 2.042l-1.638 6.571c.098.025.225.061.365.117l-.37-.092-2.297 9.205c-.174.432-.615 1.08-1.609.834.035.051-2.552-.637-2.552-.637l-1.743 4.019 4.57 1.139c.85.213 1.682.436 2.502.646l-1.453 5.834 3.507.875 1.44-5.772c.957.26 1.887.5 2.797.726l-1.434 5.745 3.511.875 1.453-5.823c5.987 1.133 10.49.676 12.384-4.739 1.527-4.36-.076-6.875-3.226-8.515 2.294-.529 4.022-2.038 4.483-5.155zM38.086 38.69c-1.085 4.36-8.426 2.003-10.806 1.412l1.928-7.729c2.38.594 10.012 1.77 8.878 6.317zm1.086-11.312c-.99 3.966-7.1 1.951-9.082 1.457l1.748-7.01c1.982.494 8.365 1.416 7.334 5.553z"/>
+        </svg>
+      {:else if isETH}
+        <svg width="20" height="20" viewBox="0 0 256 417">
+          <path fill="#627EEA" d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/>
+          <path fill="#627EEA" d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity=".6"/>
         </svg>
       {:else}
         <IcpLogo size={20} />
@@ -677,8 +856,33 @@
       </div>
     {/if}
 
+    <!-- ETH Deposit Method Toggle -->
+    {#if isETH}
+      <div class="deposit-method-toggle eth">
+        <button
+          class:active={depositMethod === 'cketh'}
+          onclick={() => depositMethod = 'cketh'}
+        >
+          <span class="method-icon">⚡</span>
+          I have ckETH
+          <span class="method-hint">Instant</span>
+        </button>
+        <button
+          class:active={depositMethod === 'eth'}
+          onclick={() => depositMethod = 'eth'}
+        >
+          <svg width="16" height="16" viewBox="0 0 256 417">
+            <path fill="currentColor" d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/>
+            <path fill="currentColor" d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity=".6"/>
+          </svg>
+          I have ETH
+          <span class="method-hint">~30 min</span>
+        </button>
+      </div>
+    {/if}
+
     <!-- Wallet Source Toggle (II vs OISY) -->
-    {#if (!isBTC || depositMethod === 'ckbtc')}
+    {#if showTokenFlow}
       <div class="wallet-source-toggle">
         <button
           class:active={walletSource === 'ii'}
@@ -706,9 +910,9 @@
     {/if}
 
     <!-- OISY Wallet Connection Section -->
-    {#if walletSource === 'oisy' && (!isBTC || depositMethod === 'ckbtc')}
+    {#if walletSource === 'oisy' && showTokenFlow}
       {#if !oisyState.isConnected}
-        <div class="oisy-connect-section" class:btc={isBTC}>
+        <div class="oisy-connect-section" class:btc={isBTC} class:eth={isETH}>
           <div class="oisy-icon">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <rect x="2" y="4" width="20" height="16" rx="2"/>
@@ -721,6 +925,7 @@
           <button
             class="btn-connect-oisy"
             class:btc={isBTC}
+            class:eth={isETH}
             onclick={connectOisyWallet}
             disabled={oisyState.isConnecting}
           >
@@ -740,7 +945,7 @@
         </div>
       {:else}
         <!-- OISY Connected - Show Balance -->
-        <div class="balance-section oisy" class:btc={isBTC}>
+        <div class="balance-section oisy" class:btc={isBTC} class:eth={isETH}>
           <div class="oisy-connected-header">
             <span class="connected-badge">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
@@ -759,10 +964,10 @@
             <span>Keep the OISY popup open. It will prompt you when you click Deposit.</span>
           </div>
           <div class="balance-row">
-            <span class="balance-label">Your OISY {isBTC ? 'ckBTC' : 'ICP'} Balance</span>
-            <span class="balance-value oisy" class:loading={oisyState.loadingBalances} class:btc={isBTC}>
+            <span class="balance-label">Your OISY {isBTC ? 'ckBTC' : isETH ? 'ckETH' : 'ICP'} Balance</span>
+            <span class="balance-value oisy" class:loading={oisyState.loadingBalances} class:btc={isBTC} class:eth={isETH}>
               {#if oisyState.loadingBalances}
-                <span class="mini-spinner" class:btc={isBTC}></span>
+                <span class="mini-spinner" class:btc={isBTC} class:eth={isETH}></span>
               {:else}
                 <span class="balance-crypto">{formatWithUnit(effectiveWalletBalance)}</span>
                 {#if effectiveWalletBalance && !priceLoading}
@@ -772,14 +977,14 @@
             </span>
           </div>
           {#if !oisyState.loadingBalances && !hasEnoughBalance}
-            <div class="no-balance-warning oisy" class:btc={isBTC}>
+            <div class="no-balance-warning oisy" class:btc={isBTC} class:eth={isETH}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10"/>
                 <line x1="12" y1="8" x2="12" y2="12"/>
                 <line x1="12" y1="16" x2="12.01" y2="16"/>
               </svg>
               <div class="warning-content">
-                <strong>No {isBTC ? 'ckBTC' : 'ICP'} in OISY wallet</strong>
+                <strong>No {isBTC ? 'ckBTC' : isETH ? 'ckETH' : 'ICP'} in OISY wallet</strong>
                 <p>Add funds to your OISY wallet first, or switch to Internet Identity.</p>
               </div>
             </div>
@@ -789,13 +994,13 @@
     {/if}
 
     <!-- Wallet Balance Display (for ckBTC/ICP flow) - Only show for II -->
-    {#if walletSource === 'ii' && (!isBTC || depositMethod === 'ckbtc')}
-      <div class="balance-section" class:btc={isBTC}>
+    {#if walletSource === 'ii' && showTokenFlow}
+      <div class="balance-section" class:btc={isBTC} class:eth={isETH}>
         <div class="balance-row">
-          <span class="balance-label">Your {isBTC ? 'ckBTC' : 'ICP'} Wallet Balance</span>
-          <span class="balance-value" class:loading={loadingBalance} class:btc={isBTC}>
+          <span class="balance-label">Your {isBTC ? 'ckBTC' : isETH ? 'ckETH' : 'ICP'} Wallet Balance</span>
+          <span class="balance-value" class:loading={loadingBalance} class:btc={isBTC} class:eth={isETH}>
             {#if loadingBalance}
-              <span class="mini-spinner" class:btc={isBTC}></span>
+              <span class="mini-spinner" class:btc={isBTC} class:eth={isETH}></span>
             {:else}
               <span class="balance-crypto">{formatWithUnit(walletBalance)}</span>
               {#if walletBalance && !priceLoading}
@@ -805,16 +1010,18 @@
           </span>
         </div>
         {#if !loadingBalance && !hasEnoughBalance}
-          <div class="no-balance-warning" class:btc={isBTC}>
+          <div class="no-balance-warning" class:btc={isBTC} class:eth={isETH}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="10"/>
               <line x1="12" y1="8" x2="12" y2="12"/>
               <line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
             <div class="warning-content">
-              <strong>No {isBTC ? 'ckBTC' : 'ICP'} in wallet</strong>
+              <strong>No {isBTC ? 'ckBTC' : isETH ? 'ckETH' : 'ICP'} in wallet</strong>
               {#if isBTC}
                 <p>Switch to "I have BTC" tab to deposit real Bitcoin, or get ckBTC from an exchange.</p>
+              {:else if isETH}
+                <p>Get ckETH by converting ETH through the NNS or buying on ICP DEXs like ICPSwap.</p>
               {:else}
                 <p>Transfer ICP from an exchange or another wallet to your II account first.</p>
               {/if}
@@ -825,7 +1032,7 @@
     {/if}
 
     <!-- Deposit Form - Shown for both II and OISY when user has balance -->
-    {#if (!isBTC || depositMethod === 'ckbtc') && effectiveHasEnoughBalance && (walletSource === 'ii' || oisyState.isConnected)}
+    {#if showTokenFlow && effectiveHasEnoughBalance && (walletSource === 'ii' || oisyState.isConnected)}
         <div class="form-section">
           <div class="label-row">
             <label for="deposit-amount">Deposit Amount</label>
@@ -846,14 +1053,14 @@
             <input
               id="deposit-amount"
               type="number"
-              step={isBTC ? (inputUnit === 'sats' ? "1" : "0.00000001") : "0.0001"}
-              min={isBTC ? (inputUnit === 'sats' ? "1000" : "0.00001") : "0.0002"}
-              placeholder={isBTC ? (inputUnit === 'sats' ? "5000" : "0.00000000") : "0.0000"}
+              step={isBTC ? (inputUnit === 'sats' ? "1" : "0.00000001") : isETH ? "0.000001" : "0.0001"}
+              min={isBTC ? (inputUnit === 'sats' ? "1000" : "0.00001") : isETH ? "0.00001" : "0.0002"}
+              placeholder={isBTC ? (inputUnit === 'sats' ? "5000" : "0.00000000") : isETH ? "0.000000" : "0.0000"}
               bind:value={depositAmount}
               disabled={processing}
             />
-            <span class="input-suffix" class:btc={isBTC}>{isBTC ? inputUnit : 'ICP'}</span>
-            <button class="max-btn" class:btc={isBTC} onclick={setMaxAmount} disabled={processing}>
+            <span class="input-suffix" class:btc={isBTC} class:eth={isETH}>{isBTC ? inputUnit : isETH ? 'ETH' : 'ICP'}</span>
+            <button class="max-btn" class:btc={isBTC} class:eth={isETH} onclick={setMaxAmount} disabled={processing}>
               MAX
             </button>
           </div>
@@ -868,10 +1075,11 @@
                   {/if}
                 {/if}
                 {#if !priceLoading}
-                  {@const amountSats = isBTC
+                  {@const amountSmallest = isBTC
                     ? (inputUnit === 'sats' ? Number(depositAmount) : Number(depositAmount) * 100_000_000)
+                    : isETH ? Number(depositAmount) * 1_000_000_000_000_000_000
                     : Number(depositAmount) * 100_000_000}
-                  {@const usdVal = getUsdValue(amountSats)}
+                  {@const usdVal = getUsdValue(amountSmallest)}
                   {#if usdVal !== null}
                     <span class="usd-preview">
                       <span class="usd-amount">{formatUsd(usdVal)}</span>
@@ -881,7 +1089,7 @@
               </div>
             </div>
           {/if}
-          <div class="minimum-notice" class:btc={isBTC}>
+          <div class="minimum-notice" class:btc={isBTC} class:eth={isETH}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="10"/>
               <line x1="12" y1="16" x2="12" y2="12"/>
@@ -889,6 +1097,8 @@
             </svg>
             {#if isBTC}
               <span><strong>Minimum: 1,000 sats</strong> (Fee: 10 sats)</span>
+            {:else if isETH}
+              <span><strong>Minimum: 0.00001 ETH</strong> (Fee: 0.000002 ETH)</span>
             {:else}
               <span><strong>Minimum deposit: 0.0002 ICP</strong> (Network fee: 0.0001 ICP)</span>
             {/if}
@@ -924,14 +1134,15 @@
         {/if}
 
         <div class="actions">
-          <button class="btn-secondary" onclick={onClose} disabled={processing}>
+          <button class="btn-secondary" onclick={onClose}>
             Cancel
           </button>
           <button
             class="btn-primary"
             class:btc={isBTC}
+            class:eth={isETH}
             onclick={handleDeposit}
-            disabled={processing || !depositAmount || Number(depositAmount) <= 0}
+            disabled={processing || !depositAmount || Number(depositAmount) <= 0 || walletBalance === 0 || walletBalance === null}
           >
             {#if processing}
               <span class="spinner"></span>
@@ -942,24 +1153,24 @@
           </button>
         </div>
 
-        <div class="info-box" class:btc={isBTC}>
+        <div class="info-box" class:btc={isBTC} class:eth={isETH}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/>
             <line x1="12" y1="16" x2="12" y2="12"/>
             <line x1="12" y1="8" x2="12.01" y2="8"/>
           </svg>
           <p>
-            This transfers {isBTC ? 'ckBTC' : 'ICP'} from your {walletSource === 'oisy' ? 'OISY' : 'Internet Identity'} wallet to your poker table balance.
+            This transfers {isBTC ? 'ckBTC' : isETH ? 'ckETH' : 'ICP'} from your {walletSource === 'oisy' ? 'OISY' : 'Internet Identity'} wallet to your poker table balance.
             You can withdraw back to your wallet at any time.
           </p>
         </div>
     {/if}
 
     <!-- No balance help - only for II users without balance -->
-    {#if walletSource === 'ii' && (!isBTC || depositMethod === 'ckbtc') && !effectiveLoadingBalance && !effectiveHasEnoughBalance}
-        <!-- No ckBTC balance - show help -->
-        <div class="deposit-info-section" class:btc={isBTC}>
-          <h3>How to Get {isBTC ? 'ckBTC' : 'ICP'}</h3>
+    {#if walletSource === 'ii' && showTokenFlow && !effectiveLoadingBalance && !effectiveHasEnoughBalance}
+        <!-- No balance - show help -->
+        <div class="deposit-info-section" class:btc={isBTC} class:eth={isETH}>
+          <h3>How to Get {isBTC ? 'ckBTC' : isETH ? 'ckETH' : 'ICP'}</h3>
           {#if isBTC}
             <p class="info-text">ckBTC is Bitcoin on ICP. You can get it by converting real BTC or buying on exchanges.</p>
             <div class="funding-options">
@@ -972,6 +1183,18 @@
                 <p>Purchase ckBTC on ICP DEXs like ICPSwap or Sonic.</p>
               </div>
             </div>
+          {:else if isETH}
+            <p class="info-text">ckETH is Ethereum on ICP. You can deposit real ETH or buy ckETH on exchanges.</p>
+            <div class="funding-options">
+              <div class="option">
+                <strong>Switch to "I have ETH" tab above</strong>
+                <p>Deposit real ETH directly - it will be converted to ckETH automatically.</p>
+              </div>
+              <div class="option">
+                <strong>Or buy ckETH</strong>
+                <p>Purchase ckETH on ICP DEXs like ICPSwap or Sonic.</p>
+              </div>
+            </div>
           {:else}
             <p class="info-text">Transfer ICP from an exchange or another wallet to your II account.</p>
           {/if}
@@ -980,7 +1203,7 @@
           <button class="btn-secondary" onclick={onClose}>
             Close
           </button>
-          <button class="btn-primary" class:btc={isBTC} onclick={loadWalletBalance}>
+          <button class="btn-primary" class:btc={isBTC} class:eth={isETH} onclick={loadWalletBalance}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
             </svg>
@@ -1117,8 +1340,244 @@
       </div>
     {/if}
 
+    <!-- Native ETH Deposit Flow -->
+    {#if isETH && depositMethod === 'eth'}
+      <div class="eth-deposit-section">
+        <div class="eth-deposit-header">
+          <h3>Deposit Ethereum</h3>
+          <p>Send ETH to your personal deposit address below. The app will automatically convert it to ckETH for use at the table.</p>
+        </div>
+
+        {#if loadingEthAddress}
+          <div class="loading-address">
+            <span class="spinner eth"></span>
+            Generating your ETH deposit address...
+          </div>
+        {:else if ethAddressError}
+          <div class="alert error">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            {ethAddressError}
+          </div>
+          <button class="btn-primary eth" onclick={loadEthDepositAddress}>Retry</button>
+        {:else if !ethDepositAddress}
+          <button class="btn-primary eth" onclick={loadEthDepositAddress}>
+            Show ETH Deposit Address
+          </button>
+        {:else}
+          <div class="btc-address-section">
+            <label>Your ETH Deposit Address</label>
+            <div class="btc-address-display">
+              <span class="btc-address eth">{ethDepositAddress}</span>
+              <button
+                class="copy-btn eth"
+                onclick={() => {
+                  navigator.clipboard.writeText(ethDepositAddress);
+                  copiedEthAddress = true;
+                  setTimeout(() => copiedEthAddress = false, 2000);
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                {copiedEthAddress ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+          </div>
+
+          <div class="eth-minimum-warning">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <div>
+              <strong>Minimum: 0.005 ETH</strong>
+              <span>A small gas fee (~0.002 ETH) is deducted to cover the Ethereum transaction</span>
+            </div>
+          </div>
+
+          <div class="eth-steps">
+            <div class="step">
+              <span class="step-num">1</span>
+              <span>Send ETH to the address above from any Ethereum wallet (MetaMask, Coinbase, etc.)</span>
+            </div>
+            <div class="step">
+              <span class="step-num">2</span>
+              <span>Click "Check for Deposit" — the app finds your ETH and converts it for use in the game (~20 min)</span>
+            </div>
+          </div>
+
+
+          {#if error}
+            <div class="alert error">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              {error}
+            </div>
+          {/if}
+
+          {#if sweepResult && !ethSweepPolling && !ethCkethArrived}
+            <div class="alert {sweepResult.type === 'success' ? 'success' : sweepResult.type === 'warning' ? 'error' : 'info'}">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                {#if sweepResult.type === 'success'}
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                  <polyline points="22 4 12 14.01 9 11.01"/>
+                {:else}
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="12" y1="8" x2="12" y2="12"/>
+                  <line x1="12" y1="16" x2="12.01" y2="16"/>
+                {/if}
+              </svg>
+              {sweepResult.message}
+            </div>
+          {/if}
+
+          <!-- ETH Sweep Progress Indicator -->
+          {#if ethSweepPolling}
+            <div class="eth-progress-section">
+              <div class="eth-progress-header">
+                <div class="eth-progress-icon">
+                  <span class="spinner eth"></span>
+                </div>
+                <div class="eth-progress-text">
+                  <strong>Converting your ETH...</strong>
+                  <span class="eth-progress-time">{formatElapsedTime(ethSweepElapsed)} elapsed (usually ~20 min)</span>
+                </div>
+              </div>
+
+              <div class="eth-progress-bar-container">
+                <div class="eth-progress-bar" style="width: {Math.min((ethSweepElapsed / 1200) * 100, 95)}%"></div>
+              </div>
+
+              <div class="eth-progress-steps">
+                <div class="eth-progress-step completed">
+                  <span class="step-dot completed"></span>
+                  <span>ETH sent to minter</span>
+                </div>
+                <div class="eth-progress-step active">
+                  <span class="step-dot active"></span>
+                  <span>Waiting for Ethereum finality</span>
+                </div>
+                <div class="eth-progress-step">
+                  <span class="step-dot"></span>
+                  <span>ETH available in your balance</span>
+                </div>
+              </div>
+
+              <button class="why-the-wait-link" onclick={() => showWhyTheWait = !showWhyTheWait}>
+                {showWhyTheWait ? 'Hide details' : 'Why the wait?'}
+              </button>
+
+              {#if showWhyTheWait}
+                <div class="why-the-wait-box">
+                  <p>Your ETH is being <strong>locked on Ethereum</strong> and a digital twin called <strong>ckETH</strong> is being minted on the Internet Computer. This is what enables you to play poker with your ETH using fast transactions and near-zero fees.</p>
+                  <p>Your ckETH is <strong>always backed 1:1</strong> by your native ETH. The app never custodies your funds - the entire process is handled by decentralized smart contracts. You can convert your ckETH back to native ETH at any time.</p>
+                </div>
+              {/if}
+            </div>
+          {/if}
+
+          <!-- ETH arrived -->
+          {#if ethCkethArrived}
+            <div class="eth-arrived-section">
+              <div class="alert success">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                  <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                Your ETH is ready! Your balance has been loaded.
+              </div>
+              <button
+                class="btn-primary eth"
+                onclick={() => { depositMethod = 'cketh'; loadWalletBalance(); }}
+              >
+                Continue to Deposit
+              </button>
+            </div>
+          {/if}
+
+          <!-- Actions (hide during ckETH polling/arrived) -->
+          {#if !ethSweepPolling && !ethCkethArrived}
+            <div class="actions">
+              <button class="btn-secondary" onclick={onClose}>
+                Close
+              </button>
+              <button
+                class="btn-primary eth"
+                onclick={startEthDepositCheck}
+                disabled={ethCheckActive}
+              >
+                {#if ethCheckActive}
+                  <span class="spinner"></span>
+                  Waiting for deposit...
+                {:else}
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                  </svg>
+                  Check for Deposit
+                {/if}
+              </button>
+            </div>
+          {/if}
+        {/if}
+      </div>
+    {/if}
+
+    <!-- ETH ckETH funding instructions when no balance (only in cketh mode) -->
+    {#if isETH && depositMethod === 'cketh' && !loadingBalance && !hasEnoughBalance}
+      <div class="deposit-address-section eth">
+        <h3>Your ckETH Deposit Address</h3>
+        <p class="address-hint">Send ckETH to this principal to fund your poker account:</p>
+        <div class="address-box">
+          <span class="address-value">{principalId}</span>
+        </div>
+        <button
+          class="copy-address-btn eth"
+          onclick={() => {
+            navigator.clipboard.writeText(principalId);
+            copiedAddress = true;
+            setTimeout(() => copiedAddress = false, 2000);
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          {copiedAddress ? 'Copied!' : 'Copy Address'}
+        </button>
+      </div>
+
+      <div class="how-to-fund">
+        <h3>How to get ckETH:</h3>
+        <ol>
+          <li>Convert ETH to ckETH via the NNS dapp (1:1 rate)</li>
+          <li>Or buy ckETH on ICP DEXs (ICPSwap, Sonic)</li>
+          <li>Send ckETH to the principal above, then click Refresh</li>
+        </ol>
+      </div>
+      <div class="actions">
+        <button class="btn-secondary" onclick={onClose}>
+          Close
+        </button>
+        <button class="btn-primary eth" onclick={loadWalletBalance}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          Refresh Balance
+        </button>
+      </div>
+    {/if}
+
     <!-- ICP funding instructions when no balance -->
-    {#if !isBTC && !loadingBalance && !hasEnoughBalance}
+    {#if !isBTC && !isETH && !loadingBalance && !hasEnoughBalance}
       <div class="deposit-address-section">
         <h3>Your Deposit Address</h3>
         <p class="address-hint">Send ICP to this address to fund your poker account:</p>
@@ -1879,6 +2338,25 @@
     transform: translateY(-1px);
   }
 
+  .deposit-address-section.eth {
+    background: linear-gradient(135deg, rgba(98, 126, 234, 0.1) 0%, rgba(50, 63, 117, 0.1) 100%);
+    border-color: rgba(98, 126, 234, 0.3);
+  }
+
+  .deposit-address-section.eth h3 {
+    color: #627EEA;
+  }
+
+  .copy-address-btn.eth {
+    background: rgba(98, 126, 234, 0.2);
+    border-color: rgba(98, 126, 234, 0.4);
+    color: #627EEA;
+  }
+
+  .copy-address-btn.eth:hover {
+    background: rgba(98, 126, 234, 0.3);
+  }
+
   .how-to-fund {
     background: rgba(0, 0, 0, 0.2);
     border-radius: 12px;
@@ -2205,5 +2683,455 @@
 
   .no-balance-warning.oisy.btc .warning-content p {
     color: #d97706;
+  }
+
+  /* ETH color variants */
+  .modal-content.eth-modal {
+    border-color: rgba(98, 126, 234, 0.3);
+  }
+
+  .balance-section.eth {
+    border-color: rgba(98, 126, 234, 0.2);
+    background: rgba(98, 126, 234, 0.03);
+  }
+
+  .balance-value.eth {
+    color: #627EEA;
+  }
+
+  .mini-spinner.eth {
+    border-color: rgba(98, 126, 234, 0.2);
+    border-top-color: #627EEA;
+  }
+
+  .input-suffix.eth {
+    color: #627EEA;
+  }
+
+  .max-btn.eth {
+    background: rgba(98, 126, 234, 0.1);
+    border-color: rgba(98, 126, 234, 0.3);
+    color: #627EEA;
+  }
+
+  .max-btn.eth:hover:not(:disabled) {
+    background: rgba(98, 126, 234, 0.2);
+  }
+
+  .minimum-notice.eth {
+    background: rgba(98, 126, 234, 0.05);
+    border-color: rgba(98, 126, 234, 0.15);
+  }
+
+  .minimum-notice.eth svg {
+    color: #627EEA;
+  }
+
+  .minimum-notice.eth strong {
+    color: #627EEA;
+  }
+
+  .btn-primary.eth {
+    background: linear-gradient(135deg, #627EEA 0%, #4A64C8 100%);
+  }
+
+  .btn-primary.eth:hover:not(:disabled) {
+    background: linear-gradient(135deg, #7B93F0 0%, #627EEA 100%);
+    box-shadow: 0 4px 15px rgba(98, 126, 234, 0.3);
+  }
+
+  .info-box.eth {
+    background: rgba(98, 126, 234, 0.05);
+    border-color: rgba(98, 126, 234, 0.15);
+  }
+
+  .deposit-info-section.eth {
+    border-color: rgba(98, 126, 234, 0.2);
+    background: rgba(98, 126, 234, 0.03);
+  }
+
+  .spinner.eth {
+    border-color: rgba(98, 126, 234, 0.3);
+    border-top-color: #627EEA;
+  }
+
+  .oisy-connect-section.eth {
+    border-color: rgba(98, 126, 234, 0.2);
+    background: rgba(98, 126, 234, 0.03);
+  }
+
+  .oisy-connect-section.eth .oisy-icon {
+    color: #627EEA;
+  }
+
+  .btn-connect-oisy.eth {
+    background: linear-gradient(135deg, #627EEA 0%, #4A64C8 100%);
+  }
+
+  .btn-connect-oisy.eth:hover:not(:disabled) {
+    background: linear-gradient(135deg, #7B93F0 0%, #627EEA 100%);
+    box-shadow: 0 4px 15px rgba(98, 126, 234, 0.3);
+  }
+
+  .balance-section.oisy.eth {
+    border-color: rgba(98, 126, 234, 0.2);
+    background: rgba(98, 126, 234, 0.03);
+  }
+
+  .balance-value.oisy.eth {
+    color: #627EEA;
+  }
+
+  .no-balance-warning.oisy.eth {
+    background: rgba(98, 126, 234, 0.05);
+    border-color: rgba(98, 126, 234, 0.2);
+  }
+
+  .no-balance-warning.oisy.eth .warning-content p {
+    color: #627EEA;
+  }
+
+  .no-balance-warning.eth {
+    background: rgba(98, 126, 234, 0.05);
+    border-color: rgba(98, 126, 234, 0.2);
+  }
+
+  /* ETH deposit method toggle */
+  .deposit-method-toggle.eth button.active {
+    background: rgba(98, 126, 234, 0.2);
+    border-color: rgba(98, 126, 234, 0.5);
+    color: #627EEA;
+  }
+
+  /* Native ETH Deposit Section */
+  .eth-deposit-section {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .eth-deposit-header h3 {
+    margin: 0;
+    font-size: 16px;
+    color: #627EEA;
+  }
+
+  .eth-deposit-header p {
+    margin: 8px 0 0;
+    font-size: 13px;
+    color: #888;
+    line-height: 1.5;
+  }
+
+  .eth-deposit-info {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .eth-address-box {
+    background: rgba(98, 126, 234, 0.05);
+    border: 1px solid rgba(98, 126, 234, 0.2);
+    border-radius: 12px;
+    padding: 16px;
+  }
+
+  .eth-address-box label {
+    display: block;
+    margin-bottom: 8px;
+    color: #627EEA;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+  }
+
+  .eth-address-box .address-display {
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 10px;
+  }
+
+  .eth-address-box .address-text {
+    font-family: monospace;
+    font-size: 11px;
+    color: #fff;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+
+  .copy-btn.eth {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    background: rgba(98, 126, 234, 0.15);
+    border: 1px solid rgba(98, 126, 234, 0.3);
+    color: #627EEA;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .copy-btn.eth:hover {
+    background: rgba(98, 126, 234, 0.25);
+  }
+
+  .eth-minimum-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px;
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    border-radius: 8px;
+    color: #f59e0b;
+    font-size: 13px;
+  }
+
+  .eth-minimum-warning svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: #f59e0b;
+  }
+
+  .eth-minimum-warning div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .eth-minimum-warning strong {
+    font-size: 13px;
+    color: #f59e0b;
+  }
+
+  .eth-minimum-warning span {
+    font-size: 11px;
+    color: #d97706;
+  }
+
+  .eth-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0;
+  }
+
+  .eth-steps .step {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px;
+    background: rgba(98, 126, 234, 0.03);
+    border-radius: 8px;
+    font-size: 13px;
+    color: #aaa;
+    line-height: 1.4;
+  }
+
+  .eth-steps .step-num {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 24px;
+    background: rgba(98, 126, 234, 0.2);
+    color: #627EEA;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .eth-steps code {
+    background: rgba(98, 126, 234, 0.15);
+    color: #627EEA;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: monospace;
+  }
+
+  /* ETH auto-sweep watching indicator */
+  .eth-watching-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: rgba(98, 126, 234, 0.08);
+    border: 1px solid rgba(98, 126, 234, 0.15);
+    border-radius: 8px;
+    color: #8B9CF7;
+    font-size: 13px;
+  }
+
+  .spinner.eth.small {
+    width: 14px;
+    height: 14px;
+    border-width: 2px;
+  }
+
+  /* ETH Progress Section (ckETH minting wait) */
+  .eth-progress-section {
+    background: linear-gradient(135deg, rgba(98, 126, 234, 0.1) 0%, rgba(50, 63, 117, 0.08) 100%);
+    border: 1px solid rgba(98, 126, 234, 0.25);
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .eth-progress-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .eth-progress-icon {
+    flex-shrink: 0;
+  }
+
+  .spinner.eth {
+    width: 24px;
+    height: 24px;
+    border: 3px solid rgba(98, 126, 234, 0.3);
+    border-top-color: #627EEA;
+  }
+
+  .eth-progress-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .eth-progress-text strong {
+    color: #fff;
+    font-size: 14px;
+  }
+
+  .eth-progress-time {
+    color: #888;
+    font-size: 12px;
+  }
+
+  .eth-progress-bar-container {
+    width: 100%;
+    height: 6px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .eth-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #627EEA, #8B9CF7);
+    border-radius: 3px;
+    transition: width 1s linear;
+  }
+
+  .eth-progress-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-left: 4px;
+  }
+
+  .eth-progress-step {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: #555;
+  }
+
+  .eth-progress-step.completed {
+    color: #4ade80;
+  }
+
+  .eth-progress-step.active {
+    color: #627EEA;
+  }
+
+  .step-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    border: 2px solid #444;
+    flex-shrink: 0;
+  }
+
+  .step-dot.completed {
+    background: #4ade80;
+    border-color: #4ade80;
+  }
+
+  .step-dot.active {
+    background: transparent;
+    border-color: #627EEA;
+    box-shadow: 0 0 6px rgba(98, 126, 234, 0.5);
+    animation: pulse-dot 1.5s ease-in-out infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { box-shadow: 0 0 4px rgba(98, 126, 234, 0.3); }
+    50% { box-shadow: 0 0 10px rgba(98, 126, 234, 0.7); }
+  }
+
+  .why-the-wait-link {
+    background: none;
+    border: none;
+    color: #627EEA;
+    font-size: 13px;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 0.2s;
+    align-self: flex-start;
+  }
+
+  .why-the-wait-link:hover {
+    color: #8B9CF7;
+  }
+
+  .why-the-wait-box {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(98, 126, 234, 0.15);
+    border-radius: 8px;
+    padding: 14px;
+  }
+
+  .why-the-wait-box p {
+    margin: 0 0 10px 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #999;
+  }
+
+  .why-the-wait-box p:last-child {
+    margin-bottom: 0;
+  }
+
+  .why-the-wait-box strong {
+    color: #ccc;
+  }
+
+  /* ETH Arrived Section */
+  .eth-arrived-section {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .eth-arrived-section .alert.success {
+    background: rgba(74, 222, 128, 0.12);
+    border-color: rgba(74, 222, 128, 0.3);
+    color: #4ade80;
   }
 </style>

@@ -1,24 +1,26 @@
 {
   "btc_table_1": {
-    "ic": "qrhly-eaaaa-aaaaj-qousa-cai"
+    "ic": "f6hqy-haaaa-aaaad-afzhq-cai"
   },
-  "btc_table_2": {},
+  "eth_table_1": {
+    "ic": "ghxrc-niaaa-aaaad-afzoa-cai"
+  },
   "frontend": {
-    "ic": "kbhpl-riaaa-aaaaj-qor2a-cai"
+    "ic": "hd26q-uiaaa-aaaad-afzia-cai"
   },
   "history": {
-    "ic": "kggj7-4qaaa-aaaaj-qor2q-cai"
+    "ic": "he3ye-zqaaa-aaaad-afziq-cai"
   },
   "lobby": {
-    "ic": "kpfcd-kyaaa-aaaaj-qor3a-cai"
+    "ic": "hnyty-pyaaa-aaaad-afzja-cai"
   },
   "table_1": {
-    "ic": "kieex-haaaa-aaaaj-qor3q-cai"
+    "ic": "hkzvm-caaaa-aaaad-afzjq-cai"
   },
   "table_2": {
-    "ic": "lfkaz-iiaaa-aaaaj-qor4a-cai"
+    "ic": "h76eb-diaaa-aaaad-afzka-cai"
   },
   "table_3": {
-    "ic": "lclgn-fqaaa-aaaaj-qor4q-cai"
+    "ic": "hy7cv-oqaaa-aaaad-afzkq-cai"
   }
 }

@@ -19,6 +19,14 @@ use std::collections::HashMap;
 use icrc_ledger_types::icrc1::account::Account;
 use icrc_ledger_types::icrc1::transfer::{TransferArg, TransferError};
 use icrc_ledger_types::icrc2::transfer_from::{TransferFromArgs, TransferFromError};
+// ETH deposit: threshold ECDSA + EVM RPC
+use k256::PublicKey as K256PublicKey;
+use k256::elliptic_curve::sec1::ToEncodedPoint;
+use k256::ecdsa::{RecoveryId, Signature as K256Signature, VerifyingKey};
+use sha3::Keccak256;
+use alloy_consensus::TxEip1559;
+use alloy_consensus::SignableTransaction;
+use alloy_primitives::{Address, Bytes, TxKind, U256};
 
 // ============================================================================
 // CONSTANTS
@@ -39,6 +47,10 @@ const ICP_TRANSFER_FEE: u64 = 10_000; // 0.0001 ICP
 const CKBTC_LEDGER_CANISTER: &str = "mxzaz-hqaaa-aaaar-qaada-cai";
 const CKBTC_TRANSFER_FEE: u64 = 10; // 10 satoshis
 
+// ckETH Ledger canister ID (mainnet)
+const CKETH_LEDGER_CANISTER: &str = "ss2fx-dyaaa-aaaar-qacoq-cai";
+const CKETH_TRANSFER_FEE: u64 = 2_000_000_000_000; // 0.000002 ETH (2000 Gwei)
+
 // Rate limiting
 const RATE_LIMIT_WINDOW_NS: u64 = 1_000_000_000; // 1 second
 const MAX_ACTIONS_PER_WINDOW: u32 = 10;
@@ -50,6 +62,10 @@ const ICP_MIN_WITHDRAWAL_AMOUNT: u64 = 100_000; // 0.001 ICP minimum (must cover
 // Withdrawal limits for BTC (in satoshis - 1 BTC = 100_000_000 satoshis)
 const BTC_MAX_WITHDRAWAL_PER_TX: u64 = 10_000_000; // 0.1 BTC max per withdrawal
 const BTC_MIN_WITHDRAWAL_AMOUNT: u64 = 11; // Just above 10 sat fee - receive at least 1 sat
+
+// Withdrawal limits for ETH (in wei - 1 ETH = 1_000_000_000_000_000_000 wei)
+const ETH_MAX_WITHDRAWAL_PER_TX: u64 = 1_000_000_000_000_000_000; // 1 ETH max per withdrawal
+const ETH_MIN_WITHDRAWAL_AMOUNT: u64 = 10_000_000_000_000; // 0.00001 ETH minimum (must cover fees)
 
 const WITHDRAWAL_COOLDOWN_NS: u64 = 60_000_000_000; // 60 second cooldown between withdrawals
 
@@ -75,6 +91,7 @@ pub enum Currency {
     #[default]
     ICP,  // Uses ICP ledger, amounts in e8s (1 ICP = 100_000_000 e8s)
     BTC,  // Uses ckBTC ledger, amounts in satoshis (1 BTC = 100_000_000 sats)
+    ETH,  // Uses ckETH ledger, amounts in wei (1 ETH = 1_000_000_000_000_000_000 wei)
 }
 
 impl Currency {
@@ -82,6 +99,7 @@ impl Currency {
         match self {
             Currency::ICP => Principal::from_text(ICP_LEDGER_CANISTER).unwrap(),
             Currency::BTC => Principal::from_text(CKBTC_LEDGER_CANISTER).unwrap(),
+            Currency::ETH => Principal::from_text(CKETH_LEDGER_CANISTER).unwrap(),
         }
     }
 
@@ -89,6 +107,7 @@ impl Currency {
         match self {
             Currency::ICP => ICP_TRANSFER_FEE,
             Currency::BTC => CKBTC_TRANSFER_FEE,
+            Currency::ETH => CKETH_TRANSFER_FEE,
         }
     }
 
@@ -96,6 +115,7 @@ impl Currency {
         match self {
             Currency::ICP => ICP_MIN_WITHDRAWAL_AMOUNT,
             Currency::BTC => BTC_MIN_WITHDRAWAL_AMOUNT,
+            Currency::ETH => ETH_MIN_WITHDRAWAL_AMOUNT,
         }
     }
 
@@ -103,6 +123,7 @@ impl Currency {
         match self {
             Currency::ICP => ICP_MAX_WITHDRAWAL_PER_TX,
             Currency::BTC => BTC_MAX_WITHDRAWAL_PER_TX,
+            Currency::ETH => ETH_MAX_WITHDRAWAL_PER_TX,
         }
     }
 
@@ -110,25 +131,39 @@ impl Currency {
         match self {
             Currency::ICP => "ICP",
             Currency::BTC => "BTC",
+            Currency::ETH => "ETH",
         }
     }
 
     pub fn decimals(&self) -> u8 {
-        8 // Both ICP and BTC use 8 decimals
+        match self {
+            Currency::ICP | Currency::BTC => 8,
+            Currency::ETH => 18,
+        }
     }
 
-    /// Format an amount in smallest units (e8s/satoshis) as a human-readable string
-    /// e.g., 200_000_000 ICP e8s -> "2.0 ICP"
-    /// e.g., 50_000 BTC satoshis -> "0.0005 BTC"
+    /// Format an amount in smallest units (e8s/satoshis/wei) as a human-readable string
     pub fn format_amount(&self, smallest_units: u64) -> String {
-        let decimal = smallest_units as f64 / 100_000_000.0;
         match self {
-            Currency::ICP => format!("{:.4} ICP", decimal),
+            Currency::ICP => {
+                let decimal = smallest_units as f64 / 100_000_000.0;
+                format!("{:.4} ICP", decimal)
+            }
             Currency::BTC => {
+                let decimal = smallest_units as f64 / 100_000_000.0;
                 if decimal >= 0.001 {
                     format!("{:.4} BTC", decimal)
                 } else {
                     format!("{} sats", smallest_units)
+                }
+            }
+            Currency::ETH => {
+                let decimal = smallest_units as f64 / 1_000_000_000_000_000_000.0;
+                if decimal >= 0.001 {
+                    format!("{:.6} ETH", decimal)
+                } else {
+                    let gwei = smallest_units as f64 / 1_000_000_000.0;
+                    format!("{:.2} Gwei", gwei)
                 }
             }
         }
@@ -1083,10 +1118,10 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
     let currency = get_table_currency();
     let ledger_id = currency.ledger_canister();
 
-    // For BTC (ckBTC), use different verification method
-    if currency == Currency::BTC {
+    // For BTC (ckBTC) and ETH (ckETH), use ICRC-3 verification method
+    if currency == Currency::BTC || currency == Currency::ETH {
         clear_pending();
-        return verify_ckbtc_deposit(block_index, caller, canister).await;
+        return verify_icrc_deposit(block_index, caller, canister, &currency).await;
     }
 
     // For ICP, use query_blocks (ICP ledger API)
@@ -1285,7 +1320,11 @@ async fn deposit(amount: u64) -> Result<u64, String> {
     }
 
     // Minimum deposit to cover potential fees (currency-aware)
-    let min_deposit = if currency == Currency::BTC { 1_000 } else { 20_000 }; // 1000 sats or 0.0002 ICP
+    let min_deposit = match currency {
+        Currency::BTC => 1_000,                    // 1000 sats
+        Currency::ETH => 10_000_000_000_000,       // 0.00001 ETH
+        Currency::ICP => 20_000,                   // 0.0002 ICP
+    };
     if amount < min_deposit {
         return Err(format!(
             "Minimum deposit is {}",
@@ -1451,9 +1490,9 @@ fn compute_deposit_subaccount(principal: &Principal) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Verify a ckBTC deposit using ICRC-3 get_transactions API
-async fn verify_ckbtc_deposit(block_index: u64, caller: Principal, canister: Principal) -> Result<u64, String> {
-    let ledger_id = Principal::from_text(CKBTC_LEDGER_CANISTER).unwrap();
+/// Verify a ckBTC/ckETH deposit using ICRC-3 get_transactions API
+async fn verify_icrc_deposit(block_index: u64, caller: Principal, canister: Principal, currency: &Currency) -> Result<u64, String> {
+    let ledger_id = currency.ledger_canister();
 
     // ICRC-3 types for get_transactions
     #[derive(CandidType, Deserialize, Debug)]
@@ -1543,9 +1582,9 @@ async fn verify_ckbtc_deposit(block_index: u64, caller: Principal, canister: Pri
     let response = match call_result {
         Ok(response) => match response.candid::<(GetTransactionsResponse,)>() {
             Ok((r,)) => r,
-            Err(e) => return Err(format!("Failed to decode ckBTC ledger response: {:?}", e)),
+            Err(e) => return Err(format!("Failed to decode {} ledger response: {:?}", currency.symbol(), e)),
         },
-        Err(e) => return Err(format!("Failed to query ckBTC ledger: {:?}", e)),
+        Err(e) => return Err(format!("Failed to query {} ledger: {:?}", currency.symbol(), e)),
     };
 
     if response.transactions.is_empty() {
@@ -4815,6 +4854,467 @@ async fn update_btc_balance() -> Result<Vec<UtxoStatus>, String> {
         },
         Err((code, msg)) => Err(format!("Failed to update balance: {:?} - {}", code, msg)),
     }
+}
+
+// ============================================================================
+// NATIVE ETH DEPOSIT - Threshold ECDSA + EVM RPC for ETH → ckETH conversion
+// ============================================================================
+//
+// Flow (mirrors BTC deposit):
+// 1. get_eth_deposit_address() → derives unique Ethereum address per user via threshold ECDSA
+// 2. User sends ETH to that address (simple ETH transfer, like BTC)
+// 3. sweep_eth_to_cketh() → canister checks ETH balance, signs deposit(bytes32) tx
+//    to ckETH helper contract, submits to Ethereum via EVM RPC
+// 4. ~20 min later, ckETH minter auto-mints ckETH to user's ICP principal
+// 5. User deposits ckETH to table via existing ICRC-2 approve flow
+
+// ckETH helper contract on Ethereum mainnet (for deposit(bytes32))
+const CKETH_HELPER_CONTRACT: &str = "7574eB42cA208A4f6960ECCAfDF186D627dCC175";
+// EVM RPC canister on ICP mainnet
+const EVM_RPC_CANISTER: &str = "7hfb6-caaaa-aaaar-qadga-cai";
+// Threshold ECDSA key name (mainnet production = key_1)
+const ECDSA_KEY_NAME: &str = "key_1";
+// Ethereum mainnet chain ID
+const ETH_CHAIN_ID: u64 = 1;
+// Gas limit for depositEth contract call (~33k actual, padded for safety)
+const DEPOSIT_ETH_GAS_LIMIT: u64 = 60_000;
+// Cycles to attach per EVM RPC call
+const EVM_RPC_CYCLES: u128 = 3_000_000_000;
+// Cycles for sign_with_ecdsa (key_1 on 34-node subnet)
+const ECDSA_SIGN_CYCLES: u128 = 26_153_846_153;
+
+// --- Threshold ECDSA types ---
+
+#[derive(CandidType, Deserialize)]
+struct EcdsaPublicKeyArgument {
+    canister_id: Option<Principal>,
+    derivation_path: Vec<Vec<u8>>,
+    key_id: EcdsaKeyId,
+}
+
+#[derive(CandidType, Deserialize)]
+struct EcdsaPublicKeyResponse {
+    public_key: Vec<u8>,
+    chain_code: Vec<u8>,
+}
+
+#[derive(CandidType, Deserialize)]
+struct SignWithEcdsaArgument {
+    message_hash: Vec<u8>,
+    derivation_path: Vec<Vec<u8>>,
+    key_id: EcdsaKeyId,
+}
+
+#[derive(CandidType, Deserialize)]
+struct SignWithEcdsaResponse {
+    signature: Vec<u8>,
+}
+
+#[derive(CandidType, Deserialize, Clone)]
+struct EcdsaKeyId {
+    curve: EcdsaCurve,
+    name: String,
+}
+
+#[derive(CandidType, Deserialize, Clone)]
+enum EcdsaCurve {
+    #[serde(rename = "secp256k1")]
+    Secp256k1,
+}
+
+// EVM RPC types from official crate
+use evm_rpc_types::{
+    RpcServices, EthMainnetService as EvmEthMainnetService,
+    MultiRpcResult,
+};
+
+// --- ETH deposit result types ---
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+struct EthDepositInfo {
+    eth_address: String,
+    min_deposit_wei: String,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+enum SweepStatus {
+    NoBalance,
+    InsufficientForGas { balance_wei: String, estimated_gas_wei: String },
+    Swept { tx_hash: String, amount_wei: String, gas_cost_wei: String },
+}
+
+// --- Helper functions ---
+
+fn eth_keccak256(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Keccak256::new();
+    hasher.update(data);
+    hasher.finalize().into()
+}
+
+fn derivation_path_for(user: &Principal) -> Vec<Vec<u8>> {
+    vec![
+        vec![1u8], // schema version
+        user.as_slice().to_vec(),
+    ]
+}
+
+fn ecdsa_key_id() -> EcdsaKeyId {
+    EcdsaKeyId {
+        curve: EcdsaCurve::Secp256k1,
+        name: ECDSA_KEY_NAME.to_string(),
+    }
+}
+
+/// Convert compressed SEC1 public key to Ethereum address
+fn pubkey_to_eth_address(pubkey_bytes: &[u8]) -> Result<String, String> {
+    let pub_key = K256PublicKey::from_sec1_bytes(pubkey_bytes)
+        .map_err(|e| format!("Invalid public key: {}", e))?;
+    let uncompressed = pub_key.to_encoded_point(false);
+    let hash = eth_keccak256(&uncompressed.as_bytes()[1..]); // skip 0x04 prefix
+    Ok(format!("0x{}", hex::encode(&hash[12..])))
+}
+
+/// Encode an ICP principal as bytes32 for the ckETH helper contract
+fn principal_to_bytes32(principal: &Principal) -> [u8; 32] {
+    let principal_bytes = principal.as_slice();
+    let mut bytes32 = [0u8; 32];
+    bytes32[0] = principal_bytes.len() as u8;
+    bytes32[1..1 + principal_bytes.len()].copy_from_slice(principal_bytes);
+    bytes32
+}
+
+/// Encode the deposit(bytes32) function call
+fn encode_deposit_calldata(principal: &Principal) -> Vec<u8> {
+    // Function selector: keccak256("deposit(bytes32)") first 4 bytes
+    let selector = &eth_keccak256(b"deposit(bytes32)")[..4];
+    let mut calldata = Vec::with_capacity(36);
+    calldata.extend_from_slice(selector);
+    calldata.extend_from_slice(&principal_to_bytes32(principal));
+    calldata
+}
+
+/// Determine y-parity of ECDSA signature for Ethereum
+fn y_parity(prehash: &[u8; 32], sig: &[u8; 64], pubkey: &[u8]) -> u64 {
+    let orig_key = VerifyingKey::from_sec1_bytes(pubkey)
+        .expect("failed to parse public key");
+    let signature = K256Signature::try_from(sig.as_slice())
+        .expect("failed to parse signature");
+    for parity in [false, true] {
+        let recid = RecoveryId::new(parity, false);
+        if let Ok(recovered) = VerifyingKey::recover_from_prehash(prehash, &signature, recid) {
+            if recovered == orig_key {
+                return parity as u64;
+            }
+        }
+    }
+    panic!("unable to determine y parity");
+}
+
+// --- ECDSA calls to management canister ---
+
+async fn get_ecdsa_public_key(user: &Principal) -> Result<Vec<u8>, String> {
+    let args = EcdsaPublicKeyArgument {
+        canister_id: None,
+        derivation_path: derivation_path_for(user),
+        key_id: ecdsa_key_id(),
+    };
+    let result: Result<(EcdsaPublicKeyResponse,), _> = ic_cdk::call(
+        Principal::management_canister(),
+        "ecdsa_public_key",
+        (args,),
+    ).await;
+    match result {
+        Ok((response,)) => Ok(response.public_key),
+        Err((code, msg)) => Err(format!("ecdsa_public_key failed: {:?} - {}", code, msg)),
+    }
+}
+
+async fn ecdsa_sign(message_hash: Vec<u8>, user: &Principal) -> Result<Vec<u8>, String> {
+    let args = SignWithEcdsaArgument {
+        message_hash,
+        derivation_path: derivation_path_for(user),
+        key_id: ecdsa_key_id(),
+    };
+
+    // sign_with_ecdsa requires cycles
+    let result: Result<(SignWithEcdsaResponse,), _> =
+        ic_cdk::api::call::call_with_payment128(
+            Principal::management_canister(),
+            "sign_with_ecdsa",
+            (args,),
+            ECDSA_SIGN_CYCLES,
+        ).await;
+
+    match result {
+        Ok((response,)) => Ok(response.signature),
+        Err((code, msg)) => Err(format!("sign_with_ecdsa failed: {:?} - {}", code, msg)),
+    }
+}
+
+// --- EVM RPC calls ---
+
+/// Make a raw JSON-RPC call to Ethereum via the EVM RPC canister (multi_request)
+async fn evm_rpc_request(json_rpc: &str) -> Result<String, String> {
+    let evm_rpc = Principal::from_text(EVM_RPC_CANISTER)
+        .map_err(|_| "Invalid EVM RPC canister ID".to_string())?;
+    let services = RpcServices::EthMainnet(Some(vec![EvmEthMainnetService::PublicNode]));
+    let config: Option<evm_rpc_types::RpcConfig> = None;
+    let json = json_rpc.to_string();
+
+    // Use ic_cdk::api::call::call_with_payment128 for proper tuple encoding
+    let result: Result<(MultiRpcResult<String>,), _> =
+        ic_cdk::api::call::call_with_payment128(
+            evm_rpc,
+            "multi_request",
+            (services, config, json),
+            EVM_RPC_CYCLES,
+        ).await;
+
+    match result {
+        Ok((MultiRpcResult::Consistent(Ok(response)),)) => Ok(response),
+        Ok((MultiRpcResult::Consistent(Err(err)),)) => Err(format!("RPC error: {:?}", err)),
+        Ok((MultiRpcResult::Inconsistent(results),)) => {
+            for (_, result) in results {
+                if let Ok(response) = result {
+                    return Ok(response);
+                }
+            }
+            Err("All RPC providers returned errors".to_string())
+        }
+        Err((code, msg)) => Err(format!("EVM RPC call failed: {:?} - {}", code, msg)),
+    }
+}
+
+/// Parse a hex quantity from JSON-RPC response (e.g., "0x1a2b3c")
+fn parse_json_rpc_hex_result(response: &str) -> Result<u128, String> {
+    // multi_request returns raw hex like "0x1a2b" or a JSON-RPC envelope
+    let hex_source = if response.starts_with('{') {
+        // JSON-RPC format: {"jsonrpc":"2.0","result":"0x...","id":1}
+        let parsed: serde_json::Value = serde_json::from_str(response)
+            .map_err(|e| format!("JSON parse error: {} (raw: {})", e, &response[..response.len().min(100)]))?;
+        parsed["result"].as_str()
+            .ok_or("Missing 'result' field in JSON-RPC response")?
+            .to_string()
+    } else {
+        // Raw hex format from multi_request: "0x1a2b"
+        response.to_string()
+    };
+    let hex_str = hex_source.strip_prefix("0x").unwrap_or(&hex_source);
+    if hex_str.is_empty() || hex_str == "0" {
+        return Ok(0);
+    }
+    u128::from_str_radix(hex_str, 16)
+        .map_err(|e| format!("Hex parse error: {}", e))
+}
+
+async fn get_eth_balance(address: &str) -> Result<u128, String> {
+    let json_rpc = format!(
+        r#"{{"jsonrpc":"2.0","method":"eth_getBalance","params":["{}","latest"],"id":1}}"#,
+        address
+    );
+    let response = evm_rpc_request(&json_rpc).await?;
+    parse_json_rpc_hex_result(&response)
+}
+
+async fn get_eth_nonce(address: &str) -> Result<u64, String> {
+    let json_rpc = format!(
+        r#"{{"jsonrpc":"2.0","method":"eth_getTransactionCount","params":["{}","latest"],"id":1}}"#,
+        address
+    );
+    let response = evm_rpc_request(&json_rpc).await?;
+    let nonce = parse_json_rpc_hex_result(&response)?;
+    Ok(nonce as u64)
+}
+
+async fn get_gas_prices() -> Result<(u128, u128), String> {
+    let json_rpc = r#"{"jsonrpc":"2.0","method":"eth_gasPrice","params":[],"id":1}"#;
+    let response = evm_rpc_request(json_rpc).await?;
+    let gas_price = parse_json_rpc_hex_result(&response)?;
+    // max_fee = 2x current gas price (buffer for price fluctuation)
+    // priority_fee = 1.5 Gwei (standard tip)
+    let priority_fee: u128 = 1_500_000_000; // 1.5 Gwei
+    let max_fee = gas_price * 2;
+    Ok((max_fee.max(priority_fee + 1), priority_fee))
+}
+
+async fn send_raw_transaction(signed_tx_hex: &str) -> Result<String, String> {
+    let json_rpc = format!(
+        r#"{{"jsonrpc":"2.0","method":"eth_sendRawTransaction","params":["{}"],"id":1}}"#,
+        signed_tx_hex
+    );
+    let response = evm_rpc_request(&json_rpc).await?;
+
+    // multi_request may return raw tx hash "0x..." or JSON-RPC envelope
+    if response.starts_with('{') {
+        let parsed: serde_json::Value = serde_json::from_str(&response)
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+        if let Some(error) = parsed.get("error") {
+            return Err(format!("Transaction rejected: {}", error));
+        }
+        let tx_hash = parsed["result"].as_str()
+            .ok_or("Missing tx hash in response")?;
+        Ok(tx_hash.to_string())
+    } else if response.starts_with("0x") {
+        // Raw tx hash from multi_request
+        Ok(response)
+    } else {
+        Err(format!("Unexpected sendRawTransaction response: {}", &response[..response.len().min(100)]))
+    }
+}
+
+// --- Transaction building and signing ---
+
+async fn build_and_sign_sweep_tx(
+    user: &Principal,
+    value_wei: u128,
+    nonce: u64,
+    max_fee_per_gas: u128,
+    max_priority_fee_per_gas: u128,
+    pubkey: &[u8],
+) -> Result<String, String> {
+    // Parse the helper contract address
+    let to_address: Address = CKETH_HELPER_CONTRACT.parse()
+        .map_err(|e| format!("Invalid helper contract address: {:?}", e))?;
+
+    // Encode deposit(bytes32) calldata with user's principal
+    let calldata = encode_deposit_calldata(user);
+
+    // Build EIP-1559 transaction
+    let tx = TxEip1559 {
+        chain_id: ETH_CHAIN_ID,
+        nonce,
+        gas_limit: DEPOSIT_ETH_GAS_LIMIT,
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+        to: TxKind::Call(to_address),
+        value: U256::from(value_wei),
+        access_list: Default::default(),
+        input: Bytes::from(calldata),
+    };
+
+    // Get the signing hash
+    let sig_hash = tx.signature_hash();
+    let sig_hash_bytes: [u8; 32] = sig_hash.into();
+
+    // Sign with threshold ECDSA
+    let signature_bytes = ecdsa_sign(sig_hash_bytes.to_vec(), user).await?;
+
+    // Determine y-parity
+    let mut sig_array = [0u8; 64];
+    sig_array.copy_from_slice(&signature_bytes[..64]);
+    let v = y_parity(&sig_hash_bytes, &sig_array, pubkey);
+
+    // Create the alloy Signature
+    let r = U256::from_be_slice(&signature_bytes[..32]);
+    let s = U256::from_be_slice(&signature_bytes[32..64]);
+    let signature = alloy_primitives::PrimitiveSignature::new(r, s, v != 0);
+
+    // Encode signed transaction using RLP
+    // EIP-1559 format: 0x02 || rlp([chain_id, nonce, max_priority_fee, max_fee, gas_limit, to, value, data, access_list, y_parity, r, s])
+    use alloy_rlp::Encodable as _;
+    let signed_tx = tx.into_signed(signature);
+    let mut rlp_buf = Vec::new();
+    signed_tx.rlp_encode(&mut rlp_buf);
+    // Prepend the EIP-1559 type byte
+    let mut encoded = Vec::with_capacity(1 + rlp_buf.len());
+    encoded.push(0x02);
+    encoded.extend_from_slice(&rlp_buf);
+
+    Ok(format!("0x{}", hex::encode(&encoded)))
+}
+
+// --- Public endpoints ---
+
+/// Get a unique Ethereum deposit address for the caller.
+/// The user can send native ETH to this address, then call sweep_eth_to_cketh()
+/// to convert it to ckETH. Only available for ETH tables.
+#[ic_cdk::update]
+async fn get_eth_deposit_address() -> Result<EthDepositInfo, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Please log in with Internet Identity first.".to_string());
+    }
+
+    let currency = get_table_currency();
+    if currency != Currency::ETH {
+        return Err("This function is only available for ETH tables.".to_string());
+    }
+
+    // Derive Ethereum address from caller's principal via threshold ECDSA
+    let pubkey = get_ecdsa_public_key(&caller).await?;
+    let eth_address = pubkey_to_eth_address(&pubkey)?;
+
+    // Minimum: enough to cover gas + have meaningful ckETH minted
+    // Gas cost ≈ 60k gas * ~30 Gwei = ~0.0018 ETH
+    // Minimum useful deposit: 0.005 ETH
+    let min_deposit_wei = "5000000000000000".to_string(); // 0.005 ETH
+
+    Ok(EthDepositInfo {
+        eth_address,
+        min_deposit_wei,
+    })
+}
+
+/// Sweep deposited ETH from user's derived address to the ckETH helper contract.
+/// This checks the ETH balance, estimates gas, signs a deposit(bytes32) transaction,
+/// and submits it to Ethereum. After ~20 minutes, ckETH will be minted to the
+/// caller's ICP principal.
+#[ic_cdk::update]
+async fn sweep_eth_to_cketh() -> Result<SweepStatus, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Please log in first.".to_string());
+    }
+
+    let currency = get_table_currency();
+    if currency != Currency::ETH {
+        return Err("This function is only available for ETH tables.".to_string());
+    }
+
+    // Get user's derived Ethereum address
+    let pubkey = get_ecdsa_public_key(&caller).await?;
+    let eth_address = pubkey_to_eth_address(&pubkey)?;
+
+    // Check ETH balance
+    let balance = get_eth_balance(&eth_address).await?;
+    if balance == 0 {
+        return Ok(SweepStatus::NoBalance);
+    }
+
+    // Get gas price and nonce
+    let (max_fee_per_gas, max_priority_fee_per_gas) = get_gas_prices().await?;
+    let nonce = get_eth_nonce(&eth_address).await?;
+
+    // Calculate max gas cost
+    let max_gas_cost = max_fee_per_gas * (DEPOSIT_ETH_GAS_LIMIT as u128);
+
+    if balance <= max_gas_cost {
+        return Ok(SweepStatus::InsufficientForGas {
+            balance_wei: balance.to_string(),
+            estimated_gas_wei: max_gas_cost.to_string(),
+        });
+    }
+
+    // Value to deposit = balance - max gas cost
+    let deposit_value = balance - max_gas_cost;
+
+    // Build, sign, and submit the transaction
+    let signed_tx = build_and_sign_sweep_tx(
+        &caller,
+        deposit_value,
+        nonce,
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+        &pubkey,
+    ).await?;
+
+    let tx_hash = send_raw_transaction(&signed_tx).await?;
+
+    Ok(SweepStatus::Swept {
+        tx_hash,
+        amount_wei: deposit_value.to_string(),
+        gas_cost_wei: max_gas_cost.to_string(),
+    })
 }
 
 // ============================================================================

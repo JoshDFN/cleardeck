@@ -1,4 +1,4 @@
-type Currency = variant { ICP; BTC };
+type Currency = variant { ICP; BTC; ETH };
 type PlayerProfile = record {
   "principal" : principal;
   username : text;
@@ -59,6 +59,8 @@ service : () -> {
   get_tables_by_stake : (StakeLevel) -> (vec TableInfo) query;
   // Add a single BTC heads-up table (admin only)
   add_btc_headsup_table : (principal) -> (Result);
+  // Add a single ETH heads-up table (admin only)
+  add_eth_headsup_table : (principal) -> (Result);
   // Initialize 3 BTC tables (admin only)
   init_btc_tables : (principal, principal, principal) -> (Result);
   // Initialize default tables - call this after deploying table canisters

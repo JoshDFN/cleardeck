@@ -48,6 +48,15 @@
       "type": "rust",
       "init_arg": "(record { small_blind = 100 : nat64; big_blind = 200 : nat64; min_buy_in = 10000 : nat64; max_buy_in = 100000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { BTC } })"
     },
+    "eth_table_1": {
+      "candid": "src/table_canister/table_canister.did",
+      "declarations": {
+        "node_compatibility": true
+      },
+      "package": "table_canister",
+      "type": "rust",
+      "init_arg": "(record { small_blind = 50000000000000 : nat64; big_blind = 100000000000000 : nat64; min_buy_in = 1000000000000000 : nat64; max_buy_in = 100000000000000000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ETH } })"
+    },
     "history": {
       "candid": "src/history_canister/history_canister.did",
       "declarations": {

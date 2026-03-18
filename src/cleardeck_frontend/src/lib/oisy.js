@@ -25,6 +25,7 @@ const OISY_STAGING_URL = 'https://staging.oisy.com/sign';
 // Ledger canister IDs
 const ICP_LEDGER_CANISTER = 'ryjl3-tyaaa-aaaaa-aaaba-cai';
 const CKBTC_LEDGER_CANISTER = 'mxzaz-hqaaa-aaaar-qaada-cai';
+const CKETH_LEDGER_CANISTER = 'ss2fx-dyaaa-aaaar-qacoq-cai';
 
 // Helper to detect mainnet
 function isMainnet() {
@@ -46,6 +47,7 @@ function createOisyStore() {
         error: null,
         icpBalance: null,
         ckbtcBalance: null,
+        ckethBalance: null,
         loadingBalances: false,
     });
 
@@ -346,14 +348,26 @@ function createOisyStore() {
                     subaccount: [],
                 });
 
+                // Fetch ckETH balance
+                const ckethLedger = Actor.createActor(ledgerIdlFactory, {
+                    agent,
+                    canisterId: CKETH_LEDGER_CANISTER,
+                });
+
+                const ckethBalance = await ckethLedger.icrc1_balance_of({
+                    owner: ownerPrincipal,
+                    subaccount: [],
+                });
+
                 update(s => ({
                     ...s,
                     icpBalance: Number(icpBalance),
                     ckbtcBalance: Number(ckbtcBalance),
+                    ckethBalance: Number(ckethBalance),
                     loadingBalances: false,
                 }));
 
-                logger.info('OISY balances:', { icp: Number(icpBalance), ckbtc: Number(ckbtcBalance) });
+                logger.info('OISY balances:', { icp: Number(icpBalance), ckbtc: Number(ckbtcBalance), cketh: Number(ckethBalance) });
             } catch (error) {
                 logger.error('Failed to fetch OISY balances:', error);
                 update(s => ({ ...s, loadingBalances: false }));
@@ -511,6 +525,74 @@ function createOisyStore() {
         },
 
         /**
+         * Approve ckETH spending via OISY wallet (for deposits)
+         * @param {bigint} amount - Amount in wei to approve
+         * @param {string} spender - The canister ID that will be allowed to spend
+         * @returns {Promise<bigint>} Block height of the approval transaction
+         */
+        async approveCketh(amount, spender) {
+            const state = get(this);
+
+            if (!state.isConnected || !state.wallet) {
+                throw new Error('OISY wallet not connected');
+            }
+
+            if (state.walletType !== 'icrc') {
+                await this.disconnect();
+                await this.connectForIcrc();
+            }
+
+            const wallet = currentWallet;
+            if (!wallet || !wallet.approve) {
+                throw new Error('Wallet does not support approve');
+            }
+
+            logger.info('Requesting ckETH approval via OISY:', { amount: amount.toString(), spender });
+
+            try {
+                const spenderPrincipal = typeof spender === 'string'
+                    ? Principal.fromText(spender)
+                    : spender;
+
+                const blockIndex = await wallet.approve({
+                    params: {
+                        spender: {
+                            owner: spenderPrincipal,
+                            subaccount: [],
+                        },
+                        amount,
+                    },
+                    owner: state.principal,
+                    ledgerCanisterId: CKETH_LEDGER_CANISTER,
+                    options: {
+                        timeoutInMilliseconds: 300000,
+                    },
+                });
+
+                logger.info('ckETH approval successful, block index:', blockIndex);
+
+                await this.refreshBalances();
+
+                return blockIndex;
+            } catch (error) {
+                logger.error('ckETH approval failed:', error);
+
+                let errorMessage = 'Failed to approve ckETH spending';
+                if (error.message?.includes('rejected') || error.message?.includes('denied')) {
+                    errorMessage = 'Approval was rejected in OISY wallet';
+                } else if (error.message?.includes('timeout')) {
+                    errorMessage = 'Approval timed out. Please try again.';
+                } else if (error.message?.includes('insufficient')) {
+                    errorMessage = 'Insufficient balance in OISY wallet';
+                } else if (error.message) {
+                    errorMessage = error.message;
+                }
+
+                throw new Error(errorMessage);
+            }
+        },
+
+        /**
          * Get the current wallet instance
          */
         getWallet() {
@@ -530,6 +612,13 @@ export function formatOisyBalance(balance, currency = 'ICP') {
         if (btc >= 1) return `${btc.toFixed(4)} BTC`;
         if (num >= 1000) return `${(num / 1000).toFixed(1)}K sats`;
         return `${num} sats`;
+    }
+    if (currency === 'ETH' || currency === 'ckETH') {
+        const eth = num / 1_000_000_000_000_000_000;
+        if (eth >= 1) return `${eth.toFixed(4)} ETH`;
+        if (eth >= 0.0001) return `${eth.toFixed(6)} ETH`;
+        const gwei = num / 1_000_000_000;
+        return `${gwei.toFixed(2)} Gwei`;
     }
     return (num / 100_000_000).toFixed(4) + ' ICP';
 }

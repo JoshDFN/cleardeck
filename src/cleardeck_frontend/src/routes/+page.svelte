@@ -168,14 +168,14 @@
         }
       }
 
-      // Sort tables: ICP first (by ID), then BTC (by ID)
+      // Sort tables: ICP first, then BTC, then ETH (by ID within each)
+      const currencyOrder = { ICP: 0, BTC: 1, ETH: 2 };
       lobbyTables.sort((a, b) => {
         const currencyA = getTableCurrency(a);
         const currencyB = getTableCurrency(b);
-        // ICP comes before BTC
-        if (currencyA === 'ICP' && currencyB !== 'ICP') return -1;
-        if (currencyA !== 'ICP' && currencyB === 'ICP') return 1;
-        // Within same currency, sort by ID
+        const orderA = currencyOrder[currencyA] ?? 99;
+        const orderB = currencyOrder[currencyB] ?? 99;
+        if (orderA !== orderB) return orderA - orderB;
         return Number(a.id) - Number(b.id);
       });
       tables = lobbyTables;
@@ -576,6 +576,9 @@
               } else {
                 returnedDisplay = `${returnedSmallest} sats`;
               }
+            } else if (tableCurrency === 'ETH') {
+              const eth = returnedSmallest / 1_000_000_000_000_000_000;
+              returnedDisplay = `${eth >= 0.0001 ? eth.toFixed(6) : eth.toFixed(8)} ETH`;
             } else {
               returnedDisplay = `${(returnedSmallest / 100_000_000).toFixed(4)} ICP`;
             }

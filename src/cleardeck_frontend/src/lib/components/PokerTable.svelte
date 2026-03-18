@@ -1,6 +1,8 @@
 <script>
   import Card from './Card.svelte';
   import ActionFeed from './ActionFeed.svelte';
+  import Fireworks from './Fireworks.svelte';
+  import RainCloud from './RainCloud.svelte';
   import { playSound, setSoundEnabled, isSoundEnabled } from '$lib/sounds.js';
 
   const {
@@ -20,7 +22,8 @@
 
   // Currency-specific formatting
   const isBTC = currency === 'BTC';
-  const currencySymbol = isBTC ? 'BTC' : 'ICP';
+  const isETH = currency === 'ETH';
+  const currencySymbol = isBTC ? 'BTC' : isETH ? 'ETH' : 'ICP';
 
   // Sound mute state - persisted in localStorage
   let soundMuted = $state(typeof localStorage !== 'undefined' && localStorage.getItem('poker_sound_muted') === 'true');
@@ -102,7 +105,7 @@
     return key.replace(/([A-Z])/g, ' $1').trim();
   }
 
-  // Format amount based on currency (sats for BTC, e8s for ICP)
+  // Format amount based on currency (sats for BTC, wei for ETH, e8s for ICP)
   function formatAmount(smallestUnit, includeUnit = false) {
     const num = typeof smallestUnit === 'bigint' ? Number(smallestUnit) : smallestUnit;
     if (isBTC) {
@@ -111,6 +114,13 @@
       if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M${includeUnit ? ' sats' : ''}`;
       if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K${includeUnit ? ' sats' : ''}`;
       return `${num}${includeUnit ? ' sats' : ''}`;
+    } else if (isETH) {
+      // ETH: stored in wei (1e18), display in ETH
+      const eth = num / 1_000_000_000_000_000_000;
+      if (eth >= 1000) return `${(eth / 1000).toFixed(1)}K${includeUnit ? ' ETH' : ''}`;
+      if (eth >= 1) return eth.toFixed(4) + (includeUnit ? ' ETH' : '');
+      if (eth >= 0.0001) return eth.toFixed(4) + (includeUnit ? ' ETH' : '');
+      return eth.toFixed(6) + (includeUnit ? ' ETH' : '');
     } else {
       // ICP: display in ICP
       const icp = num / 100_000_000;
@@ -440,6 +450,35 @@
     }
   });
 
+  // Bust detection for heads-up — fireworks for winner, raincloud for loser
+  let bustWinnerSeat = $state(null);
+  let bustLoserSeat = $state(null);
+  let bustAnimationHandNumber = $state(0);
+
+  $effect(() => {
+    if (isHandComplete && lastWinners.length > 0 && handNumber > bustAnimationHandNumber) {
+      // Check if any player is bust (0 chips) in a heads-up game
+      const activePlayers = players.filter(p => p !== null && p !== undefined);
+      if (activePlayers.length === 2) {
+        const bustedPlayer = activePlayers.find(p => Number(p.chips) === 0);
+        if (bustedPlayer) {
+          const winnerSeat = lastWinners[0]?.seat;
+          const loserSeat = bustedPlayer.seat;
+          if (winnerSeat !== undefined && loserSeat !== undefined) {
+            bustWinnerSeat = winnerSeat;
+            bustLoserSeat = loserSeat;
+            bustAnimationHandNumber = handNumber;
+            // Auto-clear after 6 seconds
+            setTimeout(() => {
+              bustWinnerSeat = null;
+              bustLoserSeat = null;
+            }, 6000);
+          }
+        }
+      }
+    }
+  });
+
   // Pot odds calculation - returns ratio like "5:1" (pot to call ratio)
   function getPotOdds() {
     if (callAmount <= 0 || pot <= 0) return null;
@@ -733,6 +772,13 @@
           style:top="{seatPositions[i].y}%"
         >
           {#if player}
+            <!-- Bust animations -->
+            {#if bustWinnerSeat === i}
+              <Fireworks />
+            {/if}
+            {#if bustLoserSeat === i}
+              <RainCloud />
+            {/if}
             <div class="player-info">
               {#if i === actionOn && gameInProgress}
                 <div class="action-indicator">

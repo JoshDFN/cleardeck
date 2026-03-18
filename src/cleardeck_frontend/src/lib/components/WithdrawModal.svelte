@@ -11,8 +11,9 @@
 
   // Currency-specific settings
   const isBTC = currency === 'BTC';
-  const currencySymbol = isBTC ? 'BTC' : 'ICP';
-  const minWithdrawal = isBTC ? 11n : 100000n; // 11 sats (fee is 10) vs 0.001 ICP
+  const isETH = currency === 'ETH';
+  const currencySymbol = isBTC ? 'BTC' : isETH ? 'ETH' : 'ICP';
+  const minWithdrawal = isBTC ? 11n : isETH ? 10_000_000_000_000n : 100000n;
 
   // Format balance for display
   function formatBalance(smallestUnit) {
@@ -24,13 +25,20 @@
       if (num >= 1000) return `${(num / 1000).toFixed(1)}K sats`;
       return `${num} sats`;
     }
+    if (isETH) {
+      const eth = num / 1_000_000_000_000_000_000;
+      if (eth >= 1) return `${eth.toFixed(4)} ETH`;
+      if (eth >= 0.0001) return `${eth.toFixed(6)} ETH`;
+      const gwei = num / 1_000_000_000;
+      return `${gwei.toFixed(2)} Gwei`;
+    }
     return (num / 100_000_000).toFixed(4);
   }
 
   // Format with unit
   function formatWithUnit(smallestUnit) {
     const formatted = formatBalance(smallestUnit);
-    if (!formatted.includes('BTC') && !formatted.includes('sats') && !formatted.includes('ICP')) {
+    if (!formatted.includes('BTC') && !formatted.includes('sats') && !formatted.includes('ICP') && !formatted.includes('ETH') && !formatted.includes('Gwei')) {
       return `${formatted} ${currencySymbol}`;
     }
     return formatted;
@@ -40,6 +48,9 @@
   function inputToSmallestUnit(amount) {
     if (isBTC && inputUnit === 'sats') {
       return BigInt(Math.floor(Number(amount)));
+    }
+    if (isETH) {
+      return BigInt(Math.floor(Number(amount) * 1_000_000_000_000_000_000));
     }
     return BigInt(Math.floor(Number(amount) * 100_000_000));
   }
@@ -54,7 +65,7 @@
 
     // Minimum withdrawal check
     if (amountSmallest < minWithdrawal) {
-      const minDisplay = isBTC ? '1,000 sats' : '0.001 ICP';
+      const minDisplay = isBTC ? '1,000 sats' : isETH ? '0.00001 ETH' : '0.001 ICP';
       error = `Minimum withdrawal is ${minDisplay}`;
       return;
     }
@@ -90,6 +101,9 @@
     const maxSmallest = currentBalance || 0;
     if (isBTC && inputUnit === 'sats') {
       withdrawAmount = String(maxSmallest);
+    } else if (isETH) {
+      const maxDisplay = maxSmallest / 1_000_000_000_000_000_000;
+      withdrawAmount = maxDisplay.toFixed(8);
     } else {
       const maxDisplay = maxSmallest / 100_000_000;
       withdrawAmount = isBTC ? maxDisplay.toFixed(8) : maxDisplay.toFixed(4);
@@ -99,12 +113,17 @@
 
 <div class="modal-backdrop" onclick={onClose} onkeydown={(e) => e.key === 'Escape' && onClose()} role="button" tabindex="-1" aria-label="Close modal"></div>
 
-<div class="modal-content" class:btc-modal={isBTC} role="dialog" aria-labelledby="withdraw-modal-title">
+<div class="modal-content" class:btc-modal={isBTC} class:eth-modal={isETH} role="dialog" aria-labelledby="withdraw-modal-title">
   <div class="modal-header">
     <h2 id="withdraw-modal-title">
       {#if isBTC}
         <svg width="20" height="20" viewBox="0 0 64 64">
           <path fill="#f7931a" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
+        </svg>
+      {:else if isETH}
+        <svg width="20" height="20" viewBox="0 0 256 417">
+          <path fill="#627EEA" d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/>
+          <path fill="#627EEA" d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity=".6"/>
         </svg>
       {:else}
         <IcpLogo size={20} />
@@ -115,9 +134,9 @@
   </div>
 
   <div class="modal-body">
-    <div class="balance-info" class:btc={isBTC}>
+    <div class="balance-info" class:btc={isBTC} class:eth={isETH}>
       <span class="label">Available Balance</span>
-      <span class="amount" class:btc={isBTC}>{formatWithUnit(currentBalance)}</span>
+      <span class="amount" class:btc={isBTC} class:eth={isETH}>{formatWithUnit(currentBalance)}</span>
     </div>
 
     <div class="form-section">
@@ -140,20 +159,22 @@
         <input
           id="withdraw-amount"
           type="number"
-          step={isBTC ? (inputUnit === 'sats' ? "1" : "0.00000001") : "0.0001"}
-          min={isBTC ? (inputUnit === 'sats' ? "1000" : "0.00001") : "0.001"}
-          placeholder={isBTC ? (inputUnit === 'sats' ? "1000" : "0.00000000") : "0.0000"}
+          step={isBTC ? (inputUnit === 'sats' ? "1" : "0.00000001") : isETH ? "0.000001" : "0.0001"}
+          min={isBTC ? (inputUnit === 'sats' ? "1000" : "0.00001") : isETH ? "0.00001" : "0.001"}
+          placeholder={isBTC ? (inputUnit === 'sats' ? "1000" : "0.00000000") : isETH ? "0.000000" : "0.0000"}
           bind:value={withdrawAmount}
           disabled={processing}
         />
-        <span class="input-suffix" class:btc={isBTC}>{isBTC ? inputUnit : 'ICP'}</span>
-        <button class="max-btn" class:btc={isBTC} onclick={setMaxAmount} disabled={processing}>
+        <span class="input-suffix" class:btc={isBTC} class:eth={isETH}>{isBTC ? inputUnit : isETH ? 'ETH' : 'ICP'}</span>
+        <button class="max-btn" class:btc={isBTC} class:eth={isETH} onclick={setMaxAmount} disabled={processing}>
           MAX
         </button>
       </div>
       <p class="hint">
         {#if isBTC}
           Minimum: 1,000 sats (Fee: 10 sats)
+        {:else if isETH}
+          Minimum: 0.00001 ETH (Fee: 0.000002 ETH)
         {:else}
           Minimum withdrawal: 0.001 ICP. A small network fee applies.
         {/if}
@@ -199,7 +220,7 @@
       </button>
     </div>
 
-    <div class="info-box" class:btc={isBTC}>
+    <div class="info-box" class:btc={isBTC} class:eth={isETH}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="12" cy="12" r="10"/>
         <line x1="12" y1="16" x2="12" y2="12"/>
@@ -208,6 +229,11 @@
       {#if isBTC}
         <p>
           ckBTC (Bitcoin on ICP) will be sent to your wallet. You can convert it to real BTC
+          through the NNS or use it directly on ICP apps.
+        </p>
+      {:else if isETH}
+        <p>
+          ckETH (Ethereum on ICP) will be sent to your wallet. You can convert it to real ETH
           through the NNS or use it directly on ICP apps.
         </p>
       {:else}
@@ -247,6 +273,10 @@
 
   .modal-content.btc-modal {
     border-color: rgba(247, 147, 26, 0.3);
+  }
+
+  .modal-content.eth-modal {
+    border-color: rgba(98, 126, 234, 0.3);
   }
 
   .modal-header {
@@ -310,6 +340,11 @@
     border-color: rgba(247, 147, 26, 0.2);
   }
 
+  .balance-info.eth {
+    background: rgba(98, 126, 234, 0.05);
+    border-color: rgba(98, 126, 234, 0.2);
+  }
+
   .balance-info .label {
     color: #888;
     font-size: 12px;
@@ -325,6 +360,10 @@
 
   .balance-info .amount.btc {
     color: #f7931a;
+  }
+
+  .balance-info .amount.eth {
+    color: #627EEA;
   }
 
   .form-section {
@@ -393,6 +432,10 @@
     color: #f7931a;
   }
 
+  .input-suffix.eth {
+    color: #627EEA;
+  }
+
   input {
     flex: 1;
     background: rgba(0, 0, 0, 0.3);
@@ -433,12 +476,22 @@
     color: #f7931a;
   }
 
+  .max-btn.eth {
+    background: rgba(98, 126, 234, 0.1);
+    border-color: rgba(98, 126, 234, 0.3);
+    color: #627EEA;
+  }
+
   .max-btn:hover:not(:disabled) {
     background: rgba(0, 212, 170, 0.2);
   }
 
   .max-btn.btc:hover:not(:disabled) {
     background: rgba(247, 147, 26, 0.2);
+  }
+
+  .max-btn.eth:hover:not(:disabled) {
+    background: rgba(98, 126, 234, 0.2);
   }
 
   .max-btn:disabled {

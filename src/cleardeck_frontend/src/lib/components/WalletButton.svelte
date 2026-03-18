@@ -34,6 +34,47 @@
   const CKBTC_MINTER_CANISTER = 'mqygn-kiaaa-aaaar-qaadq-cai';
   const CKBTC_LEDGER_CANISTER = 'mxzaz-hqaaa-aaaar-qaada-cai';
 
+  // ckETH canister IDs (mainnet)
+  const CKETH_LEDGER_CANISTER = 'ss2fx-dyaaa-aaaar-qacoq-cai';
+  const ETH_TABLE_CANISTER = 'ghxrc-niaaa-aaaad-afzoa-cai';
+  let ckethBalance = $state(null);
+  let loadingCkethBalance = $state(false);
+  let showEthAddress = $state(false);
+  let ethDepositAddress = $state('');
+  let loadingEthAddress = $state(false);
+  let copiedEthAddress = $state(false);
+  // ETH deposit check + progress state
+  let ethCheckInterval = $state(null);
+  let ethCheckActive = $state(false);
+  let ethCheckTimeout = $state(null);
+  let ethSweepPolling = $state(false);
+  let ethSweepStartTime = $state(null);
+  let ethSweepElapsed = $state(0);
+  let ethSweepTimerInterval = $state(null);
+  let ethSweepPollInterval = $state(null);
+  let ethCkethArrived = $state(false);
+  let ethSweepStatus = $state(null); // { type, message }
+  let showWhyTheWait = $state(false);
+  let ethTableActorCached = $state(null);
+
+  // Reset addresses and polling when sidebar closes
+  $effect(() => {
+    if (!showDropdown) {
+      showAccountId = false;
+      showBtcAddress = false;
+      showEthAddress = false;
+      copiedPrincipal = false;
+      copiedAccountId = false;
+      copiedBtcAddress = false;
+      copiedEthAddress = false;
+      ethSweepStatus = null;
+      ethCkethArrived = false;
+      showWhyTheWait = false;
+      stopEthDepositCheck();
+      stopEthCkethPolling();
+    }
+  });
+
   // Custom display name
   let customName = $state(typeof localStorage !== 'undefined' ? localStorage.getItem('poker_custom_name') : null);
   let editingName = $state(false);
@@ -308,6 +349,168 @@
     loadingBtcAddress = false;
   }
 
+  // Create or get cached ETH table actor
+  function getEthTableActor() {
+    if (ethTableActorCached) return ethTableActorCached;
+    if (!authState.isAuthenticated || !authState.identity) return null;
+
+    const agent = new HttpAgent({
+      host: 'https://ic0.app',
+      identity: authState.identity,
+    });
+
+    const ethTableIdlFactory = ({ IDL }) => {
+      const EthDepositInfo = IDL.Record({
+        eth_address: IDL.Text,
+        min_deposit_wei: IDL.Text,
+      });
+      const SweepStatus = IDL.Variant({
+        NoBalance: IDL.Null,
+        InsufficientForGas: IDL.Record({ balance_wei: IDL.Text, estimated_gas_wei: IDL.Text }),
+        Swept: IDL.Record({ tx_hash: IDL.Text, amount_wei: IDL.Text, gas_cost_wei: IDL.Text }),
+      });
+      return IDL.Service({
+        get_eth_deposit_address: IDL.Func([], [IDL.Variant({ Ok: EthDepositInfo, Err: IDL.Text })], []),
+        sweep_eth_to_cketh: IDL.Func([], [IDL.Variant({ Ok: SweepStatus, Err: IDL.Text })], []),
+        get_balance: IDL.Func([], [IDL.Nat64], ['query']),
+      });
+    };
+
+    ethTableActorCached = Actor.createActor(ethTableIdlFactory, {
+      agent,
+      canisterId: ETH_TABLE_CANISTER,
+    });
+    return ethTableActorCached;
+  }
+
+  // Load ETH deposit address from the ETH table canister (threshold ECDSA derived)
+  async function loadEthDepositAddress() {
+    if (!authState.isAuthenticated || !authState.identity || !isMainnet()) return;
+
+    // Check localStorage cache first
+    const cacheKey = `eth_deposit_addr_${authState.principal}`;
+    const cached = typeof localStorage !== 'undefined' && localStorage.getItem(cacheKey);
+    if (cached) {
+      ethDepositAddress = cached;
+      loadingEthAddress = false;
+      return;
+    }
+
+    loadingEthAddress = true;
+    try {
+      const actor = getEthTableActor();
+      const result = await actor.get_eth_deposit_address();
+      if ('Ok' in result) {
+        ethDepositAddress = result.Ok.eth_address;
+        // Cache for instant loading next time
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(cacheKey, ethDepositAddress);
+        }
+      } else {
+        logger.error('Failed to get ETH deposit address:', result.Err);
+      }
+    } catch (e) {
+      logger.error('Failed to get ETH deposit address:', e);
+    }
+    loadingEthAddress = false;
+  }
+
+  // Manual check: poll every 15s for incoming ETH, stop after 2 minutes
+  function startEthDepositCheck() {
+    if (ethCheckActive) return;
+    ethCheckActive = true;
+    ethSweepStatus = null;
+
+    // Immediate first check
+    ethDepositCheck();
+    // Poll every 15 seconds
+    ethCheckInterval = setInterval(ethDepositCheck, 15000);
+    // Stop after 2 minutes
+    ethCheckTimeout = setTimeout(stopEthDepositCheck, 120000);
+  }
+
+  function stopEthDepositCheck() {
+    if (ethCheckInterval) { clearInterval(ethCheckInterval); ethCheckInterval = null; }
+    if (ethCheckTimeout) { clearTimeout(ethCheckTimeout); ethCheckTimeout = null; }
+    ethCheckActive = false;
+  }
+
+  async function ethDepositCheck() {
+    if (ethSweepPolling || ethCkethArrived) return;
+    const actor = getEthTableActor();
+    if (!actor) return;
+    try {
+      const result = await actor.sweep_eth_to_cketh();
+      console.log('sweep_eth_to_cketh result:', JSON.stringify(result, (_, v) => typeof v === 'bigint' ? v.toString() : v));
+      if ('Ok' in result) {
+        const status = result.Ok;
+        if ('Swept' in status) {
+          const ethAmount = (Number(BigInt(status.Swept.amount_wei)) / 1e18).toFixed(6);
+          ethSweepStatus = { type: 'success', message: `${ethAmount} ETH submitted to minter` };
+          stopEthDepositCheck();
+          startEthCkethPolling();
+        } else if ('InsufficientForGas' in status) {
+          const bal = (Number(BigInt(status.InsufficientForGas.balance_wei)) / 1e18).toFixed(6);
+          ethSweepStatus = { type: 'warning', message: `Only ${bal} ETH remaining. Send at least 0.005 ETH.` };
+          stopEthDepositCheck();
+        } else if ('NoBalance' in status) {
+          // Keep polling — no ETH found yet
+          console.log('No ETH balance found, continuing to poll...');
+        }
+      } else if ('Err' in result) {
+        ethSweepStatus = { type: 'error', message: result.Err };
+        stopEthDepositCheck();
+      }
+    } catch (e) {
+      console.error('ETH deposit check failed:', e);
+      ethSweepStatus = { type: 'error', message: e.message || String(e) };
+      stopEthDepositCheck();
+    }
+  }
+
+  // ckETH arrival polling (after sweep)
+  function startEthCkethPolling() {
+    ethSweepPolling = true;
+    ethSweepStartTime = Date.now();
+    ethSweepElapsed = 0;
+    ethCkethArrived = false;
+
+    ethSweepTimerInterval = setInterval(() => {
+      ethSweepElapsed = Math.floor((Date.now() - ethSweepStartTime) / 1000);
+    }, 1000);
+
+    checkEthCkethBalance();
+    ethSweepPollInterval = setInterval(checkEthCkethBalance, 30000);
+  }
+
+  function stopEthCkethPolling() {
+    if (ethSweepPollInterval) { clearInterval(ethSweepPollInterval); ethSweepPollInterval = null; }
+    if (ethSweepTimerInterval) { clearInterval(ethSweepTimerInterval); ethSweepTimerInterval = null; }
+    ethSweepPolling = false;
+  }
+
+  async function checkEthCkethBalance() {
+    const actor = getEthTableActor();
+    if (!actor) return;
+    try {
+      const balance = await actor.get_balance();
+      if (balance > 0n) {
+        ethCkethArrived = true;
+        stopEthCkethPolling();
+        // Refresh the ckETH balance display
+        loadCkethBalance();
+      }
+    } catch (e) {
+      logger.error('Failed to check ckETH balance:', e);
+    }
+  }
+
+  function formatElapsedTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }
+
   // Update BTC balance - calls the ckBTC minter to check for new deposits and mint ckBTC
   async function updateBtcBalance() {
     if (!authState.isAuthenticated || !authState.identity || !isMainnet()) return;
@@ -453,6 +656,54 @@
     return sats + ' sats';
   }
 
+  async function loadCkethBalance() {
+    if (!authState.isAuthenticated || !authState.identity || !isMainnet()) return;
+
+    loadingCkethBalance = true;
+    try {
+      const agent = new HttpAgent({
+        host: 'https://ic0.app',
+        identity: authState.identity,
+      });
+
+      const ledgerIdlFactory = ({ IDL }) => {
+        const Account = IDL.Record({
+          owner: IDL.Principal,
+          subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)),
+        });
+        return IDL.Service({
+          icrc1_balance_of: IDL.Func([Account], [IDL.Nat], ['query']),
+        });
+      };
+
+      const ledgerActor = Actor.createActor(ledgerIdlFactory, {
+        agent,
+        canisterId: CKETH_LEDGER_CANISTER,
+      });
+
+      const principal = authState.identity.getPrincipal();
+      const balance = await ledgerActor.icrc1_balance_of({
+        owner: principal,
+        subaccount: [],
+      });
+
+      ckethBalance = Number(balance);
+    } catch (e) {
+      logger.error('Failed to get ckETH balance:', e);
+    }
+    loadingCkethBalance = false;
+  }
+
+  function formatEthBalance(wei) {
+    if (wei === null || wei === undefined) return '-.--';
+    const eth = wei / 1_000_000_000_000_000_000;
+    if (eth >= 1) return eth.toFixed(4) + ' ETH';
+    if (eth >= 0.0001) return eth.toFixed(6) + ' ETH';
+    const gwei = wei / 1_000_000_000;
+    if (gwei >= 1) return gwei.toFixed(2) + ' Gwei';
+    return '0 ETH';
+  }
+
   // Subscribe to stores
   onMount(() => {
     const unsubAuth = auth.subscribe(s => {
@@ -460,9 +711,10 @@
       if (s.principal) {
         accountId = computeAccountId(s.principal);
       }
-      // Auto-load BTC balance when user becomes authenticated on mainnet
-      if (s.isAuthenticated && s.identity && isMainnet() && ckbtcBalance === null) {
-        loadCkbtcBalance();
+      // Auto-load BTC and ETH balance when user becomes authenticated on mainnet
+      if (s.isAuthenticated && s.identity && isMainnet()) {
+        if (ckbtcBalance === null) loadCkbtcBalance();
+        if (ckethBalance === null) loadCkethBalance();
       }
     });
     const unsubWallet = wallet.subscribe(s => { walletState = s; });
@@ -475,6 +727,8 @@
       unsubAuth();
       unsubWallet();
       unsubOisy();
+      stopEthDepositCheck();
+      stopEthCkethPolling();
     };
   });
 
@@ -686,8 +940,12 @@
                 <span class="balance-label btc">BTC</span>
                 <span class="balance-value btc">{ckbtcBalance !== null ? formatBtcBalance(ckbtcBalance) : '-.--'}</span>
               </div>
+              <div class="balance-row eth">
+                <span class="balance-label eth">ETH</span>
+                <span class="balance-value eth">{ckethBalance !== null ? formatEthBalance(ckethBalance) : '-.--'}</span>
+              </div>
             {/if}
-            <button class="refresh-btn" onclick={() => { wallet.refreshBalance(); if (isMainnet()) loadCkbtcBalance(); }}>
+            <button class="refresh-btn" onclick={() => { wallet.refreshBalance(); if (isMainnet()) { loadCkbtcBalance(); loadCkethBalance(); } }}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M23 4v6h-6M1 20v-6h6"/>
                 <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
@@ -756,6 +1014,86 @@
                 {/if}
               </div>
               <span class="btc-note">BTC deposits require 6 confirmations (~1 hour)</span>
+
+              <!-- ETH Deposit -->
+              <div class="deposit-item eth">
+                <span class="deposit-label eth">ETH</span>
+                {#if showEthAddress}
+                  {#if loadingEthAddress}
+                    <span class="loading-text">Loading...</span>
+                  {:else if ethDepositAddress}
+                    <div class="deposit-address">
+                      <span class="address-value eth">{ethDepositAddress}</span>
+                      <button
+                        class="copy-btn small eth"
+                        onclick={() => {
+                          navigator.clipboard.writeText(ethDepositAddress);
+                          copiedEthAddress = true;
+                          setTimeout(() => copiedEthAddress = false, 2000);
+                        }}
+                      >
+                        {copiedEthAddress ? '✓' : 'Copy'}
+                      </button>
+                    </div>
+                  {:else}
+                    <span class="error-text">Failed to load</span>
+                  {/if}
+                {:else}
+                  <button class="show-address-btn eth" onclick={() => { showEthAddress = true; loadEthDepositAddress(); }}>
+                    Show Address
+                  </button>
+                {/if}
+              </div>
+
+              <!-- ETH deposit status -->
+              {#if ethCkethArrived}
+                <div class="eth-status-row arrived">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                  ETH deposit complete!
+                </div>
+              {:else if ethSweepPolling}
+                <div class="eth-status-row converting">
+                  <span class="spinner-tiny eth"></span>
+                  Converting ETH... {formatElapsedTime(ethSweepElapsed)}
+                  <button class="why-wait-btn" onclick={() => showWhyTheWait = !showWhyTheWait}>
+                    {showWhyTheWait ? 'Hide' : 'Why?'}
+                  </button>
+                </div>
+                <div class="eth-progress-bar-mini">
+                  <div class="eth-progress-fill" style="width: {Math.min((ethSweepElapsed / 1200) * 100, 95)}%"></div>
+                </div>
+                {#if showWhyTheWait}
+                  <div class="eth-why-box">
+                    Your ETH is being locked on Ethereum and a digital twin is being minted to enable fast, low-fee poker. Always backed 1:1 by your native ETH. Fully decentralized.
+                  </div>
+                {/if}
+              {:else if ethSweepStatus?.type === 'warning' || ethSweepStatus?.type === 'error'}
+                <div class="eth-status-row warning">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                  {ethSweepStatus.message}
+                </div>
+              {:else if showEthAddress && ethDepositAddress}
+                <button
+                  class="check-deposit-btn eth"
+                  onclick={startEthDepositCheck}
+                  disabled={ethCheckActive}
+                >
+                  {#if ethCheckActive}
+                    <span class="spinner-tiny eth"></span>
+                    Waiting for deposit...
+                  {:else}
+                    Check for Deposit
+                  {/if}
+                </button>
+              {/if}
+              {#if !showEthAddress || !ethDepositAddress}
+                <span class="eth-note">Send native ETH to this address - auto-converted (~20 min)</span>
+              {/if}
             {/if}
           </div>
 
@@ -1193,6 +1531,184 @@
     font-size: 10px;
     margin-top: 4px;
     font-style: italic;
+  }
+
+  /* ETH styles */
+  .balance-row.eth {
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    margin-top: 4px;
+    padding-top: 10px;
+  }
+
+  .balance-label.eth {
+    color: #627EEA;
+  }
+
+  .balance-value.eth {
+    color: #627EEA;
+  }
+
+  .deposit-item.eth {
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    margin-top: 4px;
+    padding-top: 12px;
+    flex-direction: column;
+  }
+
+  .deposit-label.eth {
+    color: #627EEA;
+  }
+
+  .address-value.eth {
+    color: #627EEA;
+  }
+
+  .show-address-btn.eth:hover {
+    border-color: rgba(98, 126, 234, 0.4);
+    color: #627EEA;
+  }
+
+  .copy-btn.small.eth {
+    color: #627EEA;
+    border-color: rgba(98, 126, 234, 0.3);
+  }
+
+  .copy-btn.small.eth:hover {
+    background: rgba(98, 126, 234, 0.1);
+    border-color: rgba(98, 126, 234, 0.5);
+  }
+
+  .eth-deposit-info-compact {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .eth-deposit-info-compact .deposit-address {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .address-label.eth {
+    font-size: 10px;
+    color: #627EEA;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .eth-note {
+    display: block;
+    color: #666;
+    font-size: 10px;
+    margin-top: 4px;
+    font-style: italic;
+  }
+
+  .check-deposit-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 8px 12px;
+    margin-top: 6px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: 1px solid rgba(98, 126, 234, 0.3);
+    background: rgba(98, 126, 234, 0.1);
+    color: #627EEA;
+  }
+
+  .check-deposit-btn:hover:not(:disabled) {
+    background: rgba(98, 126, 234, 0.2);
+  }
+
+  .check-deposit-btn:disabled {
+    cursor: default;
+    opacity: 0.9;
+  }
+
+  .eth-status-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    margin-top: 4px;
+    padding: 4px 8px;
+    border-radius: 6px;
+  }
+
+  .eth-status-row.converting {
+    color: #627EEA;
+    background: rgba(98, 126, 234, 0.1);
+  }
+
+  .eth-status-row.arrived {
+    color: #4ade80;
+    background: rgba(74, 222, 128, 0.1);
+  }
+
+  .eth-status-row.warning {
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.1);
+  }
+
+  .spinner-tiny {
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid rgba(98, 126, 234, 0.3);
+    border-top-color: #627EEA;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+
+  .spinner-tiny.eth {
+    border-color: rgba(98, 126, 234, 0.3);
+    border-top-color: #627EEA;
+  }
+
+  .why-wait-btn {
+    background: none;
+    border: none;
+    color: #627EEA;
+    font-size: 10px;
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 0;
+    margin-left: auto;
+  }
+
+  .eth-progress-bar-mini {
+    height: 3px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 4px;
+  }
+
+  .eth-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #627EEA, #8B9CF7);
+    border-radius: 2px;
+    transition: width 1s linear;
+  }
+
+  .eth-why-box {
+    margin-top: 6px;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(98, 126, 234, 0.15);
+    border-radius: 6px;
+    font-size: 10px;
+    color: #888;
+    line-height: 1.5;
   }
 
   .dropdown-btn {

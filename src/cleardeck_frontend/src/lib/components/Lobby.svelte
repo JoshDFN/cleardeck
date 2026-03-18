@@ -4,7 +4,7 @@
   const { tables, onJoinTable, onRefresh } = $props();
 
   let activeFilter = $state('all'); // 'all' | 'available'
-  let currencyFilter = $state('all'); // 'all' | 'ICP' | 'BTC'
+  let currencyFilter = $state('all'); // 'all' | 'ICP' | 'BTC' | 'ETH'
   let sortColumn = $state('stakes'); // 'name' | 'stakes' | 'players' | 'buyin'
   let sortDirection = $state('asc'); // 'asc' | 'desc'
   let viewMode = $state(typeof localStorage !== 'undefined' ? (localStorage.getItem('lobby_view') || 'list') : 'list'); // 'list' | 'grid'
@@ -73,6 +73,13 @@
       if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
       if (num >= 1_000) return `${(num / 1_000).toFixed(0)}K`;
       return `${num}`;
+    } else if (currency === 'ETH') {
+      const eth = num / 1_000_000_000_000_000_000;
+      if (eth >= 1) return eth.toFixed(2);
+      if (eth >= 0.001) return eth.toFixed(4);
+      if (eth >= 0.000001) return eth.toFixed(6);
+      const gwei = num / 1_000_000_000;
+      return `${gwei.toFixed(0)} Gwei`;
     } else {
       const icp = num / 100_000_000;
       if (icp >= 1000) return `${(icp / 1000).toFixed(1)}K`;
@@ -101,6 +108,13 @@
       if (sb <= 1000) return 'Low';
       if (sb <= 5000) return 'Medium';
       if (sb <= 20000) return 'High';
+      return 'VIP';
+    } else if (currency === 'ETH') {
+      const sbEth = sb / 1_000_000_000_000_000_000;
+      if (sbEth <= 0.0002) return 'Micro';
+      if (sbEth <= 0.001) return 'Low';
+      if (sbEth <= 0.005) return 'Medium';
+      if (sbEth <= 0.02) return 'High';
       return 'VIP';
     } else {
       const sbIcp = sb / 100_000_000;
@@ -164,6 +178,7 @@
   const availableTables = $derived(tables.filter(t => t.player_count < t.config.max_players).length);
   const icpTableCount = $derived(tables.filter(t => getTableCurrency(t) === 'ICP').length);
   const btcTableCount = $derived(tables.filter(t => getTableCurrency(t) === 'BTC').length);
+  const ethTableCount = $derived(tables.filter(t => getTableCurrency(t) === 'ETH').length);
 </script>
 
 <div class="lobby">
@@ -232,6 +247,16 @@
           BTC
           {#if btcTableCount > 0}<span class="badge">{btcTableCount}</span>{/if}
         </button>
+        <button class="eth" class:active={currencyFilter === 'ETH'} onclick={() => currencyFilter = 'ETH'}>
+          <svg width="14" height="14" viewBox="0 0 256 417">
+            <path fill="#627EEA" d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/>
+            <path fill="#627EEA" d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity=".6"/>
+            <path fill="#627EEA" d="M127.961 312.187l-1.575 1.92v98.199l1.575 4.601L256 236.587z"/>
+            <path fill="#627EEA" d="M127.962 416.905v-104.72L0 236.585z" opacity=".6"/>
+          </svg>
+          ETH
+          {#if ethTableCount > 0}<span class="badge">{ethTableCount}</span>{/if}
+        </button>
       </div>
     </div>
   </div>
@@ -277,16 +302,21 @@
             {@const currency = getTableCurrency(table)}
             {@const isFull = table.player_count >= table.config.max_players}
             {@const fillPercent = (table.player_count / table.config.max_players) * 100}
-            <tr class:btc={currency === 'BTC'} class:full={isFull} onclick={() => onJoinTable(table)}>
+            <tr class:btc={currency === 'BTC'} class:eth={currency === 'ETH'} class:full={isFull} onclick={() => onJoinTable(table)}>
               <td class="col-game">
                 <div class="game-info">
                   <span class="table-name">{table.name}</span>
                   <span class="table-meta">
-                    <span class="currency-tag" class:btc={currency === 'BTC'} class:icp={currency === 'ICP'}>
+                    <span class="currency-tag" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'} class:icp={currency === 'ICP'}>
                       {#if currency === 'BTC'}
                         <svg width="12" height="12" viewBox="0 0 64 64">
                           <path fill="#f7931a" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
                           <path fill="#fff" d="M46.11 27.441c.636-4.258-2.606-6.547-7.039-8.074l1.438-5.768-3.51-.875-1.4 5.616c-.924-.23-1.872-.447-2.814-.662l1.41-5.653-3.509-.875-1.439 5.766c-.764-.174-1.514-.346-2.242-.527l.004-.018-4.842-1.209-.934 3.75s2.605.597 2.55.634c1.422.355 1.68 1.296 1.636 2.042l-1.638 6.571c.098.025.225.061.365.117l-.37-.092-2.297 9.205c-.174.432-.615 1.08-1.609.834.035.051-2.552-.637-2.552-.637l-1.743 4.019 4.57 1.139c.85.213 1.682.436 2.502.646l-1.453 5.834 3.507.875 1.44-5.772c.957.26 1.887.5 2.797.726l-1.434 5.745 3.511.875 1.453-5.823c5.987 1.133 10.49.676 12.384-4.739 1.527-4.36-.076-6.875-3.226-8.515 2.294-.529 4.022-2.038 4.483-5.155zM38.086 38.69c-1.085 4.36-8.426 2.003-10.806 1.412l1.928-7.729c2.38.594 10.012 1.77 8.878 6.317zm1.086-11.312c-.99 3.966-7.1 1.951-9.082 1.457l1.748-7.01c1.982.494 8.365 1.416 7.334 5.553z"/>
+                        </svg>
+                      {:else if currency === 'ETH'}
+                        <svg width="12" height="12" viewBox="0 0 256 417">
+                          <path fill="#627EEA" d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/>
+                          <path fill="#627EEA" d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity=".6"/>
                         </svg>
                       {:else}
                         <IcpLogo size={12} />
@@ -298,25 +328,30 @@
                 </div>
               </td>
               <td class="col-stakes">
-                <span class="stakes-value" class:btc={currency === 'BTC'}>
+                <span class="stakes-value" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'}>
                   {formatBlinds(table.config.small_blind, table.config.big_blind, currency)}
                 </span>
-                <span class="stakes-unit" class:btc={currency === 'BTC'}>
+                <span class="stakes-unit" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'}>
                   {#if currency === 'BTC'}
                     <svg width="10" height="10" viewBox="0 0 64 64">
                       <path fill="#f7931a" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
                       <path fill="#fff" d="M46.11 27.441c.636-4.258-2.606-6.547-7.039-8.074l1.438-5.768-3.51-.875-1.4 5.616c-.924-.23-1.872-.447-2.814-.662l1.41-5.653-3.509-.875-1.439 5.766c-.764-.174-1.514-.346-2.242-.527l.004-.018-4.842-1.209-.934 3.75s2.605.597 2.55.634c1.422.355 1.68 1.296 1.636 2.042l-1.638 6.571c.098.025.225.061.365.117l-.37-.092-2.297 9.205c-.174.432-.615 1.08-1.609.834.035.051-2.552-.637-2.552-.637l-1.743 4.019 4.57 1.139c.85.213 1.682.436 2.502.646l-1.453 5.834 3.507.875 1.44-5.772c.957.26 1.887.5 2.797.726l-1.434 5.745 3.511.875 1.453-5.823c5.987 1.133 10.49.676 12.384-4.739 1.527-4.36-.076-6.875-3.226-8.515 2.294-.529 4.022-2.038 4.483-5.155zM38.086 38.69c-1.085 4.36-8.426 2.003-10.806 1.412l1.928-7.729c2.38.594 10.012 1.77 8.878 6.317zm1.086-11.312c-.99 3.966-7.1 1.951-9.082 1.457l1.748-7.01c1.982.494 8.365 1.416 7.334 5.553z"/>
                     </svg>
+                  {:else if currency === 'ETH'}
+                    <svg width="10" height="10" viewBox="0 0 256 417">
+                      <path fill="#627EEA" d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/>
+                      <path fill="#627EEA" d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity=".6"/>
+                    </svg>
                   {:else}
                     <IcpLogo size={10} />
                   {/if}
-                  {currency === 'BTC' ? 'sats' : 'ICP'}
+                  {currency === 'BTC' ? 'sats' : currency === 'ETH' ? 'ETH' : 'ICP'}
                 </span>
               </td>
               <td class="col-players">
                 <div class="players-cell">
                   <div class="players-bar">
-                    <div class="players-fill" class:btc={currency === 'BTC'} style:width="{fillPercent}%"></div>
+                    <div class="players-fill" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'} style:width="{fillPercent}%"></div>
                   </div>
                   <span class="players-text">
                     <strong>{table.player_count}</strong>/{table.config.max_players}
@@ -325,13 +360,19 @@
               </td>
               <td class="col-buyin">
                 <span class="buyin-value">{formatBuyIn(table.config.min_buy_in, table.config.max_buy_in, currency)}</span>
-                <span class="buyin-unit" class:btc={currency === 'BTC'}>
+                <span class="buyin-unit" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'}>
                   {#if currency === 'BTC'}
                     <svg width="10" height="10" viewBox="0 0 64 64">
                       <path fill="#f7931a" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
                       <path fill="#fff" d="M46.11 27.441c.636-4.258-2.606-6.547-7.039-8.074l1.438-5.768-3.51-.875-1.4 5.616c-.924-.23-1.872-.447-2.814-.662l1.41-5.653-3.509-.875-1.439 5.766c-.764-.174-1.514-.346-2.242-.527l.004-.018-4.842-1.209-.934 3.75s2.605.597 2.55.634c1.422.355 1.68 1.296 1.636 2.042l-1.638 6.571c.098.025.225.061.365.117l-.37-.092-2.297 9.205c-.174.432-.615 1.08-1.609.834.035.051-2.552-.637-2.552-.637l-1.743 4.019 4.57 1.139c.85.213 1.682.436 2.502.646l-1.453 5.834 3.507.875 1.44-5.772c.957.26 1.887.5 2.797.726l-1.434 5.745 3.511.875 1.453-5.823c5.987 1.133 10.49.676 12.384-4.739 1.527-4.36-.076-6.875-3.226-8.515 2.294-.529 4.022-2.038 4.483-5.155zM38.086 38.69c-1.085 4.36-8.426 2.003-10.806 1.412l1.928-7.729c2.38.594 10.012 1.77 8.878 6.317zm1.086-11.312c-.99 3.966-7.1 1.951-9.082 1.457l1.748-7.01c1.982.494 8.365 1.416 7.334 5.553z"/>
                     </svg>
                     sats
+                  {:else if currency === 'ETH'}
+                    <svg width="10" height="10" viewBox="0 0 256 417">
+                      <path fill="#627EEA" d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/>
+                      <path fill="#627EEA" d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity=".6"/>
+                    </svg>
+                    ETH
                   {:else}
                     <IcpLogo size={10} />
                     ICP
@@ -345,7 +386,7 @@
                 </span>
               </td>
               <td class="col-action">
-                <button class="join-btn" class:btc={currency === 'BTC'} disabled={isFull}>
+                <button class="join-btn" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'} disabled={isFull}>
                   {#if isFull}
                     Full
                   {:else}
@@ -366,16 +407,21 @@
         {#each filteredTables as tableInfo}
           {@const currency = getTableCurrency(tableInfo)}
           {@const isFull = tableInfo.player_count >= tableInfo.config.max_players}
-          <div class="table-card" class:btc-table={currency === 'BTC'} onclick={() => onJoinTable(tableInfo)} onkeydown={(e) => e.key === 'Enter' && onJoinTable(tableInfo)} role="button" tabindex="0">
+          <div class="table-card" class:btc-table={currency === 'BTC'} class:eth-table={currency === 'ETH'} onclick={() => onJoinTable(tableInfo)} onkeydown={(e) => e.key === 'Enter' && onJoinTable(tableInfo)} role="button" tabindex="0">
             <div class="card-header">
               <div class="table-name-section">
                 <div class="name-row">
                   <h3>{tableInfo.name}</h3>
-                  <span class="currency-badge" class:btc={currency === 'BTC'} class:icp={currency === 'ICP'}>
+                  <span class="currency-badge" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'} class:icp={currency === 'ICP'}>
                     {#if currency === 'BTC'}
                       <svg width="12" height="12" viewBox="0 0 64 64">
                         <path fill="#f7931a" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
                         <path fill="#fff" d="M46.11 27.441c.636-4.258-2.606-6.547-7.039-8.074l1.438-5.768-3.51-.875-1.4 5.616c-.924-.23-1.872-.447-2.814-.662l1.41-5.653-3.509-.875-1.439 5.766c-.764-.174-1.514-.346-2.242-.527l.004-.018-4.842-1.209-.934 3.75s2.605.597 2.55.634c1.422.355 1.68 1.296 1.636 2.042l-1.638 6.571c.098.025.225.061.365.117l-.37-.092-2.297 9.205c-.174.432-.615 1.08-1.609.834.035.051-2.552-.637-2.552-.637l-1.743 4.019 4.57 1.139c.85.213 1.682.436 2.502.646l-1.453 5.834 3.507.875 1.44-5.772c.957.26 1.887.5 2.797.726l-1.434 5.745 3.511.875 1.453-5.823c5.987 1.133 10.49.676 12.384-4.739 1.527-4.36-.076-6.875-3.226-8.515 2.294-.529 4.022-2.038 4.483-5.155zM38.086 38.69c-1.085 4.36-8.426 2.003-10.806 1.412l1.928-7.729c2.38.594 10.012 1.77 8.878 6.317zm1.086-11.312c-.99 3.966-7.1 1.951-9.082 1.457l1.748-7.01c1.982.494 8.365 1.416 7.334 5.553z"/>
+                      </svg>
+                    {:else if currency === 'ETH'}
+                      <svg width="12" height="12" viewBox="0 0 256 417">
+                        <path fill="#627EEA" d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/>
+                        <path fill="#627EEA" d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity=".6"/>
                       </svg>
                     {:else}
                       <IcpLogo size={12} />
@@ -392,11 +438,11 @@
             </div>
 
             <div class="card-body">
-              <div class="blinds-display" class:btc={currency === 'BTC'}>
+              <div class="blinds-display" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'}>
                 <span class="blinds-value">
                   {formatBlinds(tableInfo.config.small_blind, tableInfo.config.big_blind, currency)}
                 </span>
-                <span class="blinds-label">{currency === 'BTC' ? 'sats' : 'ICP'} Blinds</span>
+                <span class="blinds-label">{currency === 'BTC' ? 'sats' : currency} Blinds</span>
               </div>
 
               <div class="info-grid">
@@ -417,7 +463,7 @@
               <!-- Player slots visualization -->
               <div class="seats-visual">
                 {#each Array(Number(tableInfo.config.max_players)) as _, i}
-                  <div class="seat" class:occupied={i < tableInfo.player_count} class:btc={currency === 'BTC'}></div>
+                  <div class="seat" class:occupied={i < tableInfo.player_count} class:btc={currency === 'BTC'} class:eth={currency === 'ETH'}></div>
                 {/each}
               </div>
             </div>
@@ -426,6 +472,7 @@
               <button
                 class="join-btn-card"
                 class:btc={currency === 'BTC'}
+                class:eth={currency === 'ETH'}
                 disabled={isFull}
               >
                 {#if isFull}
@@ -611,6 +658,12 @@
     color: #f7931a;
   }
 
+  .currency-pills button.eth.active {
+    background: rgba(98, 126, 234, 0.2);
+    border-color: rgba(98, 126, 234, 0.3);
+    color: #627EEA;
+  }
+
   .currency-pills .badge {
     font-size: 10px;
     background: rgba(255, 255, 255, 0.15);
@@ -680,6 +733,10 @@
 
   .tables-list tbody tr.btc:hover {
     background: rgba(247, 147, 26, 0.05);
+  }
+
+  .tables-list tbody tr.eth:hover {
+    background: rgba(98, 126, 234, 0.05);
   }
 
   .tables-list tbody tr.full {
@@ -757,6 +814,11 @@
     color: #f7931a;
   }
 
+  .currency-tag.eth {
+    background: rgba(98, 126, 234, 0.2);
+    color: #627EEA;
+  }
+
   .stake-level {
     font-size: 10px;
     color: #00d4aa;
@@ -776,6 +838,10 @@
     color: #f7931a;
   }
 
+  .stakes-value.eth {
+    color: #627EEA;
+  }
+
   .stakes-unit {
     display: inline-flex;
     align-items: center;
@@ -787,6 +853,10 @@
 
   .stakes-unit.btc {
     color: #f7931a;
+  }
+
+  .stakes-unit.eth {
+    color: #627EEA;
   }
 
   /* Buy-in unit */
@@ -801,6 +871,10 @@
 
   .buyin-unit.btc {
     color: #f7931a;
+  }
+
+  .buyin-unit.eth {
+    color: #627EEA;
   }
 
   /* Players */
@@ -828,6 +902,10 @@
 
   .players-fill.btc {
     background: linear-gradient(90deg, #f7931a, #c77700);
+  }
+
+  .players-fill.eth {
+    background: linear-gradient(90deg, #627EEA, #4a5fc7);
   }
 
   .players-text {
@@ -890,6 +968,10 @@
     background: linear-gradient(135deg, #f7931a 0%, #c77700 100%);
   }
 
+  .join-btn.eth {
+    background: linear-gradient(135deg, #627EEA 0%, #4a5fc7 100%);
+  }
+
   .join-btn:hover:not(:disabled) {
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(0, 212, 170, 0.3);
@@ -897,6 +979,10 @@
 
   .join-btn.btc:hover:not(:disabled) {
     box-shadow: 0 4px 12px rgba(247, 147, 26, 0.3);
+  }
+
+  .join-btn.eth:hover:not(:disabled) {
+    box-shadow: 0 4px 12px rgba(98, 126, 234, 0.3);
   }
 
   .join-btn:disabled {
@@ -1099,6 +1185,15 @@
     box-shadow: 0 12px 40px rgba(247, 147, 26, 0.15);
   }
 
+  .table-card.eth-table {
+    border-color: rgba(98, 126, 234, 0.2);
+  }
+
+  .table-card.eth-table:hover {
+    border-color: rgba(98, 126, 234, 0.4);
+    box-shadow: 0 12px 40px rgba(98, 126, 234, 0.15);
+  }
+
   .card-header {
     display: flex;
     justify-content: space-between;
@@ -1145,6 +1240,11 @@
     background: rgba(247, 147, 26, 0.15);
   }
 
+  .currency-badge.eth {
+    color: #627EEA;
+    background: rgba(98, 126, 234, 0.15);
+  }
+
   .stake-badge {
     font-size: 10px;
     color: #00d4aa;
@@ -1178,6 +1278,14 @@
 
   .blinds-display.btc {
     background: linear-gradient(135deg, rgba(247, 147, 26, 0.1), rgba(180, 100, 20, 0.05));
+  }
+
+  .blinds-display.eth {
+    background: linear-gradient(135deg, rgba(98, 126, 234, 0.1), rgba(74, 95, 199, 0.05));
+  }
+
+  .blinds-display.eth .blinds-value {
+    color: #627EEA;
   }
 
   .blinds-value {
@@ -1269,6 +1377,11 @@
     border-color: #f7931a;
   }
 
+  .seat.eth.occupied {
+    background: rgba(98, 126, 234, 0.2);
+    border-color: #627EEA;
+  }
+
   .card-footer {
     border-top: 1px solid rgba(255, 255, 255, 0.06);
     padding-top: 16px;
@@ -1295,12 +1408,20 @@
     background: linear-gradient(135deg, #f7931a 0%, #c77700 100%);
   }
 
+  .join-btn-card.eth {
+    background: linear-gradient(135deg, #627EEA 0%, #4a5fc7 100%);
+  }
+
   .join-btn-card:hover:not(:disabled) {
     box-shadow: 0 4px 20px rgba(0, 212, 170, 0.3);
   }
 
   .join-btn-card.btc:hover:not(:disabled) {
     box-shadow: 0 4px 20px rgba(247, 147, 26, 0.3);
+  }
+
+  .join-btn-card.eth:hover:not(:disabled) {
+    box-shadow: 0 4px 20px rgba(98, 126, 234, 0.3);
   }
 
   .join-btn-card:disabled {
