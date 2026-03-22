@@ -1,3 +1,8 @@
+type DogeDepositStatus = variant {
+  Credited : record { utxo_id : text; amount : nat64; confirmations : nat32 };
+  AlreadyCredited : record { utxo_id : text };
+  InsufficientConfirmations : record { utxo_id : text; confirmations : nat32; required : nat32 };
+};
 type ActionRecord = record {
   action : PlayerAction;
   seat : nat8;
@@ -126,7 +131,7 @@ type ShuffleProof = record {
 };
 type SidePot = record { eligible_players : blob; amount : nat64 };
 type Suit = variant { Diamonds; Hearts; Clubs; Spades };
-type Currency = variant { ICP; BTC; ETH };
+type Currency = variant { ICP; BTC; ETH; DOGE };
 type TableConfig = record {
   small_blind : nat64;
   time_bank_secs : nat64;
@@ -349,6 +354,20 @@ service : (TableConfig) -> {
   // After ~20 min, ckETH is minted to the caller's principal
   // Only available for ETH tables
   sweep_eth_to_cketh : () -> (variant { Ok : SweepStatus; Err : text });
+  // DOGE: Get unique Dogecoin deposit address (derived via threshold ECDSA)
+  // Users send native DOGE to this address. Only available for DOGE tables.
+  get_doge_deposit_address : () -> (variant { Ok : text; Err : text });
+  // DOGE: Check for confirmed DOGE deposits and credit internal balance
+  // Only available for DOGE tables.
+  check_doge_deposit : () -> (variant { Ok : vec DogeDepositStatus; Err : text });
+  // DOGE: Get user's internal DOGE wallet balance (not table escrow)
+  get_doge_balance : () -> (nat64) query;
+  // DOGE: Withdraw DOGE to an external Dogecoin address
+  // Builds and signs a P2PKH transaction via threshold ECDSA
+  withdraw_doge : (text, nat64) -> (variant { Ok : text; Err : text });
+  // BTC: Withdraw ckBTC back to a Bitcoin address
+  // Uses icrc2_approve + retrieve_btc_with_approval on the ckBTC minter
+  withdraw_btc : (text, nat64) -> (variant { Ok : nat64; Err : text });
   // Set a custom display name (visible to all players)
   // Name must be 1-12 characters, alphanumeric with some symbols allowed
   // Pass null to clear the name

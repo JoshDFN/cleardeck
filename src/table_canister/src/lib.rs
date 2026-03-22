@@ -67,6 +67,15 @@ const BTC_MIN_WITHDRAWAL_AMOUNT: u64 = 11; // Just above 10 sat fee - receive at
 const ETH_MAX_WITHDRAWAL_PER_TX: u64 = 1_000_000_000_000_000_000; // 1 ETH max per withdrawal
 const ETH_MIN_WITHDRAWAL_AMOUNT: u64 = 10_000_000_000_000; // 0.00001 ETH minimum (must cover fees)
 
+// Dogecoin canister (DFINITY official, mainnet beta)
+const DOGECOIN_CANISTER: &str = "gordg-fyaaa-aaaan-aaadq-cai";
+const DOGE_TRANSFER_FEE: u64 = 100_000; // 0.001 DOGE standard tx fee (in shibes)
+const DOGE_MIN_CONFIRMATIONS: u32 = 6;
+
+// Withdrawal limits for DOGE (in shibes - 1 DOGE = 100_000_000 shibes)
+const DOGE_MAX_WITHDRAWAL_PER_TX: u64 = 100_000_000_000; // 1000 DOGE max per withdrawal
+const DOGE_MIN_WITHDRAWAL_AMOUNT: u64 = 200_000; // 0.002 DOGE minimum (must cover fee)
+
 const WITHDRAWAL_COOLDOWN_NS: u64 = 60_000_000_000; // 60 second cooldown between withdrawals
 
 // Deposit verification rate limiting
@@ -89,9 +98,10 @@ const CLEANUP_INTERVAL_NS: u64 = 30_000_000_000; // Run cleanup every 30 seconds
 #[derive(Clone, Copy, Debug, CandidType, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum Currency {
     #[default]
-    ICP,  // Uses ICP ledger, amounts in e8s (1 ICP = 100_000_000 e8s)
-    BTC,  // Uses ckBTC ledger, amounts in satoshis (1 BTC = 100_000_000 sats)
-    ETH,  // Uses ckETH ledger, amounts in wei (1 ETH = 1_000_000_000_000_000_000 wei)
+    ICP,   // Uses ICP ledger, amounts in e8s (1 ICP = 100_000_000 e8s)
+    BTC,   // Uses ckBTC ledger, amounts in satoshis (1 BTC = 100_000_000 sats)
+    ETH,   // Uses ckETH ledger, amounts in wei (1 ETH = 1_000_000_000_000_000_000 wei)
+    DOGE,  // Direct DOGE via Dogecoin canister, amounts in shibes (1 DOGE = 100_000_000 shibes)
 }
 
 impl Currency {
@@ -100,7 +110,12 @@ impl Currency {
             Currency::ICP => Principal::from_text(ICP_LEDGER_CANISTER).unwrap(),
             Currency::BTC => Principal::from_text(CKBTC_LEDGER_CANISTER).unwrap(),
             Currency::ETH => Principal::from_text(CKETH_LEDGER_CANISTER).unwrap(),
+            Currency::DOGE => panic!("DOGE uses internal balance tracking, no external ledger"),
         }
+    }
+
+    pub fn has_external_ledger(&self) -> bool {
+        !matches!(self, Currency::DOGE)
     }
 
     pub fn transfer_fee(&self) -> u64 {
@@ -108,6 +123,7 @@ impl Currency {
             Currency::ICP => ICP_TRANSFER_FEE,
             Currency::BTC => CKBTC_TRANSFER_FEE,
             Currency::ETH => CKETH_TRANSFER_FEE,
+            Currency::DOGE => DOGE_TRANSFER_FEE,
         }
     }
 
@@ -116,6 +132,7 @@ impl Currency {
             Currency::ICP => ICP_MIN_WITHDRAWAL_AMOUNT,
             Currency::BTC => BTC_MIN_WITHDRAWAL_AMOUNT,
             Currency::ETH => ETH_MIN_WITHDRAWAL_AMOUNT,
+            Currency::DOGE => DOGE_MIN_WITHDRAWAL_AMOUNT,
         }
     }
 
@@ -124,6 +141,7 @@ impl Currency {
             Currency::ICP => ICP_MAX_WITHDRAWAL_PER_TX,
             Currency::BTC => BTC_MAX_WITHDRAWAL_PER_TX,
             Currency::ETH => ETH_MAX_WITHDRAWAL_PER_TX,
+            Currency::DOGE => DOGE_MAX_WITHDRAWAL_PER_TX,
         }
     }
 
@@ -132,12 +150,13 @@ impl Currency {
             Currency::ICP => "ICP",
             Currency::BTC => "BTC",
             Currency::ETH => "ETH",
+            Currency::DOGE => "DOGE",
         }
     }
 
     pub fn decimals(&self) -> u8 {
         match self {
-            Currency::ICP | Currency::BTC => 8,
+            Currency::ICP | Currency::BTC | Currency::DOGE => 8,
             Currency::ETH => 18,
         }
     }
@@ -164,6 +183,14 @@ impl Currency {
                 } else {
                     let gwei = smallest_units as f64 / 1_000_000_000.0;
                     format!("{:.2} Gwei", gwei)
+                }
+            }
+            Currency::DOGE => {
+                let decimal = smallest_units as f64 / 100_000_000.0;
+                if decimal >= 1.0 {
+                    format!("{:.2} DOGE", decimal)
+                } else {
+                    format!("{} shibes", smallest_units)
                 }
             }
         }
@@ -460,8 +487,10 @@ thread_local! {
     static VERIFIED_DEPOSITS: RefCell<HashMap<u64, Principal>> = RefCell::new(HashMap::new());
     // Pending deposits being verified - prevents double-crediting race condition
     static PENDING_DEPOSITS: RefCell<HashMap<u64, Principal>> = RefCell::new(HashMap::new());
-    // Pending withdrawals - prevents reentrancy
+    // Pending withdrawals - prevents reentrancy (used by WithdrawalGuard)
     static PENDING_WITHDRAWALS: RefCell<HashMap<Principal, u64>> = RefCell::new(HashMap::new());
+    // Pending DOGE withdrawals - prevents reentrancy (used by DogeWithdrawalGuard)
+    static PENDING_DOGE_WITHDRAWALS: RefCell<std::collections::HashSet<Principal>> = RefCell::new(std::collections::HashSet::new());
     // DEPRECATED: LEDGER_ID is now derived from TABLE_CONFIG.currency
     // Kept for backwards compatibility during migration
     static LEDGER_ID: RefCell<Principal> = RefCell::new(
@@ -577,6 +606,27 @@ fn periodic_cleanup() {
 
     DEPOSIT_RATE_LIMITS.with(|r| {
         r.borrow_mut().retain(|_, (window_start, _)| *window_start > cutoff);
+    });
+
+    // Clean up stale PENDING_DEPOSITS — entries stuck for > 5 minutes
+    // This can happen if an async verification call times out
+    let pending_cutoff = now.saturating_sub(5 * 60 * 1_000_000_000); // 5 minutes in ns
+    PENDING_DEPOSITS.with(|p| {
+        let before = p.borrow().len();
+        // PENDING_DEPOSITS doesn't store timestamps, so we clear all if map is large
+        // (indicates stuck entries since normal flow clears immediately)
+        if before > 50 {
+            ic_cdk::println!("WARNING: Clearing {} stale pending deposits", before);
+            p.borrow_mut().clear();
+        }
+    });
+
+    // Clean up stale PENDING_DOGE_WITHDRAWALS
+    PENDING_DOGE_WITHDRAWALS.with(|pw| {
+        if pw.borrow().len() > 20 {
+            ic_cdk::println!("WARNING: Clearing stale DOGE withdrawal guards");
+            pw.borrow_mut().clear();
+        }
     });
 
     // Clean up SHOWN_CARDS - keep only recent hands
@@ -723,6 +773,19 @@ mod history_types {
 }
 
 use history_types::*;
+
+// ============================================================================
+// Security: inspect_message — reject anonymous callers at ingress to prevent
+// cycle drain attacks. Runs before any update call is executed.
+// ============================================================================
+#[ic_cdk::inspect_message]
+fn inspect_message() {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        ic_cdk::trap("Anonymous calls not allowed");
+    }
+    ic_cdk::api::call::accept_message();
+}
 
 /// Set the history canister ID (controller only)
 /// Pass None to clear/disable history recording
@@ -933,7 +996,7 @@ fn record_hand_to_history(state: &TableState, winners: &[Winner], went_to_showdo
 
     // Async call to history canister - best effort but log errors
     ic_cdk::futures::spawn(async move {
-        let call_result = ic_cdk::call::Call::unbounded_wait(history_id, "record_hand")
+        let call_result = ic_cdk::call::Call::bounded_wait(history_id, "record_hand")
             .with_arg(record)
             .await;
 
@@ -1007,12 +1070,17 @@ fn canister_id() -> Principal {
     ic_cdk::api::canister_self()
 }
 
-/// Transfer tokens (ICP or ckBTC) from canister to a player (for withdrawals/payouts)
-/// Uses the table's configured currency
+/// Transfer tokens (ICP/ckBTC/ckETH) from canister to a player (for withdrawals/payouts)
+/// Uses the table's configured currency. DOGE uses on-chain withdrawal, not this function.
 async fn transfer_tokens(to: Principal, amount: u64) -> Result<u64, String> {
     use icrc_ledger_types::icrc1::transfer::{TransferArg, TransferError};
 
     let currency = get_table_currency();
+
+    if currency == Currency::DOGE {
+        return Err("DOGE withdrawals use withdraw_doge endpoint, not ledger transfers".to_string());
+    }
+
     let fee = currency.transfer_fee();
 
     if amount <= fee {
@@ -1027,8 +1095,8 @@ async fn transfer_tokens(to: Principal, amount: u64) -> Result<u64, String> {
             owner: to,
             subaccount: None,
         },
-        fee: None, // Use default fee
-        created_at_time: None,
+        fee: Some(Nat::from(fee)),
+        created_at_time: Some(ic_cdk::api::time()),
         memo: None,
         amount: Nat::from(amount - fee), // Deduct fee from amount
     };
@@ -1116,6 +1184,13 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
 
     // Query the ledger to verify the transfer
     let currency = get_table_currency();
+
+    // DOGE uses direct deposit detection, not ledger-based notify_deposit
+    if currency == Currency::DOGE {
+        clear_pending();
+        return Err("DOGE deposits are detected automatically. Use check_doge_deposit instead.".to_string());
+    }
+
     let ledger_id = currency.ledger_canister();
 
     // For BTC (ckBTC) and ETH (ckETH), use ICRC-3 verification method
@@ -1225,7 +1300,7 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
         length: 1,
     };
 
-    let call_result = ic_cdk::call::Call::unbounded_wait(ledger_id, "query_blocks")
+    let call_result = ic_cdk::call::Call::bounded_wait(ledger_id, "query_blocks")
         .with_arg(request)
         .await;
 
@@ -1324,6 +1399,7 @@ async fn deposit(amount: u64) -> Result<u64, String> {
         Currency::BTC => 1_000,                    // 1000 sats
         Currency::ETH => 10_000_000_000_000,       // 0.00001 ETH
         Currency::ICP => 20_000,                   // 0.0002 ICP
+        Currency::DOGE => 1_000_000,               // 0.01 DOGE
     };
     if amount < min_deposit {
         return Err(format!(
@@ -1349,7 +1425,7 @@ async fn deposit(amount: u64) -> Result<u64, String> {
         amount: Nat::from(amount),
         fee: Some(Nat::from(transfer_fee)),
         memo: None,
-        created_at_time: None,
+        created_at_time: Some(ic_cdk::api::time()),
     };
 
     // Use ic_cdk::call which properly handles Candid encoding/decoding
@@ -1446,7 +1522,7 @@ async fn claim_external_deposit() -> Result<u64, String> {
         amount: Nat::from(sweep_amount),
         fee: Some(Nat::from(transfer_fee)),
         memo: None,
-        created_at_time: None,
+        created_at_time: Some(ic_cdk::api::time()),
     };
 
     let transfer_result: Result<(Result<Nat, TransferError>,), _> =
@@ -1575,7 +1651,7 @@ async fn verify_icrc_deposit(block_index: u64, caller: Principal, canister: Prin
         length: Nat::from(1u64),
     };
 
-    let call_result = ic_cdk::call::Call::unbounded_wait(ledger_id, "get_transactions")
+    let call_result = ic_cdk::call::Call::bounded_wait(ledger_id, "get_transactions")
         .with_arg(request)
         .await;
 
@@ -1608,7 +1684,8 @@ async fn verify_icrc_deposit(block_index: u64, caller: Principal, canister: Prin
         return Err("This transaction was not sent by you".to_string());
     }
 
-    let amount: u64 = transfer.amount.0.clone().try_into().unwrap_or(0);
+    let amount: u64 = transfer.amount.0.clone().try_into()
+        .map_err(|_| "Deposit amount exceeds maximum".to_string())?;
     if amount == 0 {
         return Err("Invalid transaction amount".to_string());
     }
@@ -1644,9 +1721,69 @@ async fn verify_icrc_deposit(block_index: u64, caller: Principal, canister: Prin
     Ok(new_balance)
 }
 
+// ============================================================================
+// Security: CallerGuard pattern — ensures PENDING_WITHDRAWALS is always
+// cleaned up via Drop, even if the async callback traps.
+// ============================================================================
+struct WithdrawalGuard {
+    principal: Principal,
+}
+
+impl WithdrawalGuard {
+    fn new(principal: Principal) -> Result<Self, String> {
+        PENDING_WITHDRAWALS.with(|pw| {
+            if pw.borrow().contains_key(&principal) {
+                return Err("A withdrawal is already in progress".to_string());
+            }
+            Ok(())
+        })?;
+        Ok(WithdrawalGuard { principal })
+    }
+
+    fn set_amount(&self, amount: u64) {
+        PENDING_WITHDRAWALS.with(|pw| {
+            pw.borrow_mut().insert(self.principal, amount);
+        });
+    }
+}
+
+impl Drop for WithdrawalGuard {
+    fn drop(&mut self) {
+        PENDING_WITHDRAWALS.with(|pw| {
+            pw.borrow_mut().remove(&self.principal);
+        });
+    }
+}
+
+struct DogeWithdrawalGuard {
+    principal: Principal,
+}
+
+impl DogeWithdrawalGuard {
+    fn new(principal: Principal) -> Result<Self, String> {
+        PENDING_DOGE_WITHDRAWALS.with(|pw| {
+            if pw.borrow().contains(&principal) {
+                return Err("A DOGE withdrawal is already in progress".to_string());
+            }
+            pw.borrow_mut().insert(principal);
+            Ok(())
+        })?;
+        Ok(DogeWithdrawalGuard { principal })
+    }
+}
+
+impl Drop for DogeWithdrawalGuard {
+    fn drop(&mut self) {
+        PENDING_DOGE_WITHDRAWALS.with(|pw| {
+            pw.borrow_mut().remove(&self.principal);
+        });
+    }
+}
+
 /// Withdraw your balance from the table
 #[ic_cdk::update]
 async fn withdraw(amount: u64) -> Result<u64, String> {
+    check_rate_limit()?;
     let caller = ic_cdk::api::msg_caller();
     if caller == Principal::anonymous() {
         return Err("Anonymous callers cannot withdraw".to_string());
@@ -1682,13 +1819,8 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
         }
     }
 
-    // Check if player already has a pending withdrawal (prevent reentrancy)
-    let has_pending = PENDING_WITHDRAWALS.with(|p| {
-        p.borrow().contains_key(&caller)
-    });
-    if has_pending {
-        return Err("A withdrawal is already in progress".to_string());
-    }
+    // Acquire withdrawal guard — prevents reentrancy via Drop trait
+    let _guard = WithdrawalGuard::new(caller)?;
 
     // Check if player is in a hand (can't withdraw during play)
     let in_hand = TABLE.with(|t| {
@@ -1707,7 +1839,7 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
         return Err("Cannot withdraw while in a hand".to_string());
     }
 
-    // ATOMIC: Check balance, deduct, AND mark pending in single critical section
+    // ATOMIC: Check balance and deduct in single critical section
     BALANCES.with(|b| {
         let mut balances = b.borrow_mut();
         let current_balance = balances.get(&caller).copied().unwrap_or(0);
@@ -1721,22 +1853,16 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
 
         // Deduct immediately while holding the lock
         balances.insert(caller, current_balance - amount);
-
-        // Mark this withdrawal as pending to prevent reentrancy
-        PENDING_WITHDRAWALS.with(|p| {
-            p.borrow_mut().insert(caller, amount);
-        });
-
         Ok(())
     })?;
 
+    // Mark pending amount (for tracking; guard handles cleanup via Drop)
+    _guard.set_amount(amount);
+
     // Transfer to player's wallet
     let result = transfer_tokens(caller, amount).await;
-
-    // Clear pending state regardless of outcome
-    PENDING_WITHDRAWALS.with(|p| {
-        p.borrow_mut().remove(&caller);
-    });
+    // Note: _guard is dropped automatically here (or on any exit path),
+    // cleaning up PENDING_WITHDRAWALS even if the callback traps.
 
     match result {
         Ok(block) => {
@@ -4539,30 +4665,51 @@ fn get_max_players() -> u8 {
 // STABLE MEMORY - Persistence across upgrades
 // ============================================================================
 
-#[derive(CandidType, Deserialize)]
+/// Persistent state across upgrades.
+/// ALL fields must have #[serde(default)] to ensure forward-compatible deserialization.
+/// Adding a new field without #[serde(default)] will cause upgrade failures.
+#[derive(CandidType, Deserialize, Default)]
 struct PersistentState {
+    #[serde(default)]
+    schema_version: Option<u32>, // Increment when making breaking changes; Option for Candid compatibility
+    #[serde(default)]
     balances: Vec<(Principal, u64)>,
+    #[serde(default)]
     verified_deposits: Vec<(u64, Principal)>,
+    #[serde(default)]
     controllers: Vec<Principal>,
+    #[serde(default)]
     history_id: Option<Principal>,
-    #[serde(default)] // For backwards compatibility with old state
+    #[serde(default)]
     dev_mode: bool, // Kept for deserialization compatibility, but always ignored
+    #[serde(default)]
     table_config: Option<TableConfig>,
+    #[serde(default)]
     table_state: Option<TableState>, // Save active game state
+    #[serde(default)]
     hand_history: Vec<HandHistory>,
+    #[serde(default)]
     current_actions: Vec<ActionRecord>,
+    #[serde(default)]
     starting_chips: Vec<(u8, u64)>,
+    #[serde(default)]
     rate_limits: Vec<(Principal, (u64, u32))>,
+    #[serde(default)]
     shown_cards: Vec<(u64, Vec<u8>)>, // hand_number -> seats that showed
     #[serde(default)]
     current_seed: Option<Vec<u8>>, // Persist seed for mid-hand upgrades
     #[serde(default)]
     display_names: Vec<(Principal, String)>, // Custom display names
+    #[serde(default)]
+    doge_balances: Option<Vec<(Principal, u64)>>, // Internal DOGE balance tracking; Option for Candid compatibility
 }
+
+const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 #[ic_cdk::pre_upgrade]
 fn pre_upgrade() {
     let state = PersistentState {
+        schema_version: Some(CURRENT_SCHEMA_VERSION),
         balances: BALANCES.with(|b| b.borrow().iter().map(|(k, v)| (*k, *v)).collect()),
         verified_deposits: VERIFIED_DEPOSITS.with(|v| v.borrow().iter().map(|(k, v)| (*k, *v)).collect()),
         controllers: CONTROLLERS.with(|c| c.borrow().clone()),
@@ -4575,8 +4722,9 @@ fn pre_upgrade() {
         starting_chips: STARTING_CHIPS.with(|s| s.borrow().iter().map(|(k, v)| (*k, *v)).collect()),
         rate_limits: RATE_LIMITS.with(|r| r.borrow().iter().map(|(k, v)| (*k, *v)).collect()),
         shown_cards: SHOWN_CARDS.with(|s| s.borrow().iter().map(|(k, v)| (*k, v.clone())).collect()),
-        current_seed: CURRENT_SEED.with(|s| s.borrow().clone()), // Save seed for mid-hand upgrades
+        current_seed: CURRENT_SEED.with(|s| s.borrow().clone()),
         display_names: DISPLAY_NAMES.with(|d| d.borrow().iter().map(|(k, v)| (*k, v.clone())).collect()),
+        doge_balances: Some(DOGE_BALANCES.with(|b| b.borrow().iter().map(|(k, v)| (*k, *v)).collect())),
     };
 
     if let Err(e) = ic_cdk::storage::stable_save((state,)) {
@@ -4591,15 +4739,28 @@ fn post_upgrade() {
     let restore_result: Result<(PersistentState,), _> = ic_cdk::storage::stable_restore();
 
     let state = match restore_result {
-        Ok((s,)) => s,
+        Ok((s,)) => {
+            ic_cdk::println!("State restored successfully (schema v{})", s.schema_version.unwrap_or(1));
+            s
+        }
         Err(e) => {
-            // FAIL LOUDLY - do NOT silently lose user funds!
-            // If this panics, the upgrade will be rejected and the old code will remain.
-            // This is much safer than silently losing all user balances.
-            panic!("CRITICAL: Failed to restore state from stable memory: {:?}. \
-                    Upgrade REJECTED to protect user funds. \
-                    If you used --mode reinstall, that DESTROYS ALL DATA. \
-                    Always use --mode upgrade for production canisters.", e);
+            // Log the error prominently. We still panic to protect funds —
+            // a silent empty state would lose all user balances.
+            // However, if this is a fresh canister (reinstall), we allow empty init.
+            let err_msg = format!("{:?}", e);
+            if err_msg.contains("No more values on the wire") {
+                // Fresh canister or reinstall — no prior state to restore
+                ic_cdk::println!("WARNING: No prior state found (fresh install). Starting with empty state.");
+                PersistentState {
+                    schema_version: Some(CURRENT_SCHEMA_VERSION),
+                    ..Default::default()
+                }
+            } else {
+                panic!("CRITICAL: Failed to restore state from stable memory: {:?}. \
+                        Upgrade REJECTED to protect user funds. \
+                        If you used --mode reinstall, that DESTROYS ALL DATA. \
+                        Always use --mode upgrade for production canisters.", e);
+            }
         }
     };
 
@@ -4691,6 +4852,16 @@ fn post_upgrade() {
             names.insert(k, v);
         }
     });
+
+    // Restore DOGE balances (field may be absent in old state)
+    if let Some(doge_balances) = state.doge_balances {
+        DOGE_BALANCES.with(|b| {
+            let mut balances = b.borrow_mut();
+            for (k, v) in doge_balances {
+                balances.insert(k, v);
+            }
+        });
+    }
 }
 
 // ============================================================================
@@ -4704,14 +4875,24 @@ const CKBTC_MINTER_CANISTER: &str = "mqygn-kiaaa-aaaar-qaadq-cai";
 #[derive(CandidType, Deserialize)]
 struct GetBtcAddressArgs {
     owner: Option<Principal>,
-    subaccount: Option<[u8; 32]>,
+    subaccount: Option<Vec<u8>>,
 }
 
 /// Arguments for update_balance call to ckBTC minter
 #[derive(CandidType, Deserialize)]
 struct UpdateBalanceArgs {
     owner: Option<Principal>,
-    subaccount: Option<[u8; 32]>,
+    subaccount: Option<Vec<u8>>,
+}
+
+/// Derive a per-user subaccount from their principal
+/// This ensures each user gets a unique BTC deposit address within the canister
+fn principal_to_subaccount(principal: &Principal) -> Vec<u8> {
+    let mut subaccount = vec![0u8; 32];
+    let principal_bytes = principal.as_slice();
+    subaccount[0] = principal_bytes.len() as u8;
+    subaccount[1..1 + principal_bytes.len()].copy_from_slice(principal_bytes);
+    subaccount
 }
 
 /// UTXO info from ckBTC minter
@@ -4775,9 +4956,10 @@ async fn get_btc_deposit_address() -> Result<String, String> {
     let minter = Principal::from_text(CKBTC_MINTER_CANISTER)
         .map_err(|_| "Invalid minter canister ID".to_string())?;
 
+    let subaccount = principal_to_subaccount(&caller);
     let args = GetBtcAddressArgs {
-        owner: Some(caller),
-        subaccount: None,
+        owner: Some(ic_cdk::api::canister_self()),
+        subaccount: Some(subaccount),
     };
 
     let result: Result<(String,), _> = ic_cdk::call(minter, "get_btc_address", (args,)).await;
@@ -4809,9 +4991,10 @@ async fn update_btc_balance() -> Result<Vec<UtxoStatus>, String> {
     let minter = Principal::from_text(CKBTC_MINTER_CANISTER)
         .map_err(|_| "Invalid minter canister ID".to_string())?;
 
+    let subaccount = principal_to_subaccount(&caller);
     let args = UpdateBalanceArgs {
-        owner: Some(caller),
-        subaccount: None,
+        owner: Some(ic_cdk::api::canister_self()),
+        subaccount: Some(subaccount),
     };
 
     #[derive(CandidType, Deserialize)]
@@ -4856,6 +5039,163 @@ async fn update_btc_balance() -> Result<Vec<UtxoStatus>, String> {
     }
 }
 
+/// Arguments for retrieve_btc_with_approval call to ckBTC minter
+#[derive(CandidType, Deserialize, Debug)]
+struct RetrieveBtcWithApprovalArgs {
+    address: String,
+    amount: u64,
+    from_subaccount: Option<Vec<u8>>,
+}
+
+#[derive(CandidType, Deserialize, Debug)]
+struct RetrieveBtcOk {
+    block_index: u64,
+}
+
+#[derive(CandidType, Deserialize, Debug)]
+enum RetrieveBtcError {
+    MalformedAddress(String),
+    AlreadyProcessing,
+    AmountTooLow(u64),
+    InsufficientFunds { balance: u64 },
+    InsufficientAllowance { allowance: u64 },
+    TemporarilyUnavailable(String),
+    GenericError { error_code: u64, error_message: String },
+}
+
+/// Withdraw ckBTC back to a Bitcoin address
+/// Flow: approve minter to spend ckBTC → minter burns ckBTC and sends BTC
+#[ic_cdk::update]
+async fn withdraw_btc(btc_address: String, amount: u64) -> Result<u64, String> {
+    check_rate_limit()?;
+    let caller = ic_cdk::api::msg_caller();
+
+    if caller == Principal::anonymous() {
+        return Err("Please log in to withdraw BTC".to_string());
+    }
+
+    let currency = get_table_currency();
+    if currency != Currency::BTC {
+        return Err("This function is only available for BTC tables".to_string());
+    }
+
+    // Basic BTC address validation
+    if btc_address.is_empty() {
+        return Err("BTC address cannot be empty".to_string());
+    }
+
+    let ckbtc_fee: u64 = 10; // 10 satoshis ckBTC transfer fee
+    let min_btc_withdrawal: u64 = 10_000; // Minter minimum ~10k sats
+
+    if amount < min_btc_withdrawal {
+        return Err(format!("Minimum BTC withdrawal is {} satoshis", min_btc_withdrawal));
+    }
+
+    // Check and deduct internal balance first
+    BALANCES.with(|b| {
+        let mut balances = b.borrow_mut();
+        let current = balances.get(&caller).copied().unwrap_or(0);
+        if current < amount {
+            return Err(format!("Insufficient ckBTC balance. Have {} sats, need {}", current, amount));
+        }
+        balances.insert(caller, current - amount);
+        Ok(())
+    })?;
+
+    let minter = Principal::from_text(CKBTC_MINTER_CANISTER)
+        .map_err(|_| "Invalid minter canister ID".to_string())?;
+    let ledger_id = currency.ledger_canister();
+
+    let from_subaccount = principal_to_subaccount(&caller);
+
+    // Step 1: Approve minter to spend ckBTC from user's subaccount
+    use icrc_ledger_types::icrc2::approve::{ApproveArgs, ApproveError};
+
+    let approve_args = ApproveArgs {
+        from_subaccount: None, // Main account (balances are held on canister's main account)
+        spender: Account {
+            owner: minter,
+            subaccount: None,
+        },
+        amount: Nat::from(amount + ckbtc_fee),
+        expected_allowance: None,
+        expires_at: None,
+        fee: Some(Nat::from(ckbtc_fee)),
+        memo: None,
+        created_at_time: Some(ic_cdk::api::time()),
+    };
+
+    let approve_result: Result<(Result<Nat, ApproveError>,), _> =
+        ic_cdk::call(ledger_id, "icrc2_approve", (approve_args,)).await;
+
+    match approve_result {
+        Ok((Ok(_),)) => {},
+        Ok((Err(e),)) => {
+            // Refund balance on failure
+            BALANCES.with(|b| {
+                let mut balances = b.borrow_mut();
+                let current = balances.get(&caller).copied().unwrap_or(0);
+                balances.insert(caller, current.saturating_add(amount));
+            });
+            return Err(format!("Failed to approve minter: {:?}", e));
+        }
+        Err((code, msg)) => {
+            BALANCES.with(|b| {
+                let mut balances = b.borrow_mut();
+                let current = balances.get(&caller).copied().unwrap_or(0);
+                balances.insert(caller, current.saturating_add(amount));
+            });
+            return Err(format!("Approve call failed: {:?} - {}", code, msg));
+        }
+    }
+
+    // Step 2: Call retrieve_btc_with_approval on the minter
+    let retrieve_args = RetrieveBtcWithApprovalArgs {
+        address: btc_address,
+        amount: amount - ckbtc_fee, // Minter expects net amount after fee
+        from_subaccount: None,
+    };
+
+    #[derive(CandidType, Deserialize)]
+    enum RetrieveBtcResult {
+        Ok(RetrieveBtcOk),
+        Err(RetrieveBtcError),
+    }
+
+    let result: Result<(RetrieveBtcResult,), _> =
+        ic_cdk::call(minter, "retrieve_btc_with_approval", (retrieve_args,)).await;
+
+    match result {
+        Ok((RetrieveBtcResult::Ok(ok),)) => Ok(ok.block_index),
+        Ok((RetrieveBtcResult::Err(e),)) => {
+            // Refund on minter error
+            BALANCES.with(|b| {
+                let mut balances = b.borrow_mut();
+                let current = balances.get(&caller).copied().unwrap_or(0);
+                balances.insert(caller, current.saturating_add(amount));
+            });
+            let msg = match e {
+                RetrieveBtcError::MalformedAddress(a) => format!("Invalid BTC address: {}", a),
+                RetrieveBtcError::AmountTooLow(min) => format!("Amount too low. Minimum: {} sats", min),
+                RetrieveBtcError::InsufficientFunds { balance } => format!("Insufficient funds in minter. Balance: {} sats", balance),
+                RetrieveBtcError::InsufficientAllowance { allowance } => format!("Insufficient allowance: {} sats", allowance),
+                RetrieveBtcError::AlreadyProcessing => "Withdrawal already processing".to_string(),
+                RetrieveBtcError::TemporarilyUnavailable(m) => format!("Minter unavailable: {}", m),
+                RetrieveBtcError::GenericError { error_message, .. } => error_message,
+            };
+            Err(msg)
+        }
+        Err((code, msg)) => {
+            BALANCES.with(|b| {
+                let mut balances = b.borrow_mut();
+                let current = balances.get(&caller).copied().unwrap_or(0);
+                balances.insert(caller, current.saturating_add(amount));
+            });
+            Err(format!("retrieve_btc_with_approval failed: {:?} - {}", code, msg))
+        }
+    }
+}
+
 // ============================================================================
 // NATIVE ETH DEPOSIT - Threshold ECDSA + EVM RPC for ETH → ckETH conversion
 // ============================================================================
@@ -4879,7 +5219,7 @@ const ETH_CHAIN_ID: u64 = 1;
 // Gas limit for depositEth contract call (~33k actual, padded for safety)
 const DEPOSIT_ETH_GAS_LIMIT: u64 = 60_000;
 // Cycles to attach per EVM RPC call
-const EVM_RPC_CYCLES: u128 = 3_000_000_000;
+const EVM_RPC_CYCLES: u128 = 10_000_000_000; // 10B as recommended by EVM RPC skill
 // Cycles for sign_with_ecdsa (key_1 on 34-node subnet)
 const ECDSA_SIGN_CYCLES: u128 = 26_153_846_153;
 
@@ -5074,12 +5414,19 @@ async fn evm_rpc_request(json_rpc: &str) -> Result<String, String> {
         Ok((MultiRpcResult::Consistent(Ok(response)),)) => Ok(response),
         Ok((MultiRpcResult::Consistent(Err(err)),)) => Err(format!("RPC error: {:?}", err)),
         Ok((MultiRpcResult::Inconsistent(results),)) => {
-            for (_, result) in results {
-                if let Ok(response) = result {
-                    return Ok(response);
-                }
+            // Collect successful responses and check for consensus
+            let successful: Vec<_> = results.iter()
+                .filter_map(|(_, r)| r.as_ref().ok())
+                .collect();
+            if successful.is_empty() {
+                return Err("All RPC providers returned errors".to_string());
             }
-            Err("All RPC providers returned errors".to_string())
+            // If multiple providers succeeded but disagree, log warning and use first
+            // (trapping would be too aggressive for balance checks)
+            if successful.len() > 1 && successful[0] != successful[1] {
+                ic_cdk::println!("WARNING: EVM RPC providers returned inconsistent results");
+            }
+            Ok(successful[0].clone())
         }
         Err((code, msg)) => Err(format!("EVM RPC call failed: {:?} - {}", code, msg)),
     }
@@ -5315,6 +5662,588 @@ async fn sweep_eth_to_cketh() -> Result<SweepStatus, String> {
         amount_wei: deposit_value.to_string(),
         gas_cost_wei: max_gas_cost.to_string(),
     })
+}
+
+// ============================================================================
+// DOGE DEPOSIT: Threshold ECDSA + Dogecoin canister
+// ============================================================================
+
+/// DOGE internal wallet balances (separate from table escrow)
+/// This tracks DOGE held in the canister's derived addresses
+thread_local! {
+    static DOGE_BALANCES: RefCell<HashMap<Principal, u64>> = RefCell::new(HashMap::new());
+    static DOGE_CREDITED_UTXOS: RefCell<std::collections::HashSet<String>> = RefCell::new(std::collections::HashSet::new());
+}
+
+/// Candid types for the Dogecoin canister API
+#[derive(CandidType, Deserialize, Clone, Debug)]
+struct DogeGetUtxosRequest {
+    address: String,
+    filter: Option<DogeUtxoFilter>,
+    network: DogeNetwork,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+enum DogeUtxoFilter {
+    MinConfirmations(u32),
+    Page(Vec<u8>),
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+enum DogeNetwork {
+    #[serde(rename = "mainnet")]
+    Mainnet,
+    #[serde(rename = "testnet")]
+    Testnet,
+    #[serde(rename = "regtest")]
+    Regtest,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+struct DogeGetUtxosResponse {
+    utxos: Vec<DogeUtxo>,
+    tip_block_hash: Vec<u8>,
+    tip_height: u32,
+    next_page: Option<Vec<u8>>,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+struct DogeUtxo {
+    outpoint: DogeOutpoint,
+    value: u64,
+    height: u32,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+struct DogeOutpoint {
+    txid: Vec<u8>,
+    vout: u32,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+struct DogeSendTxRequest {
+    transaction: Vec<u8>,
+    network: DogeNetwork,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+enum DogeDepositStatus {
+    Credited { utxo_id: String, amount: u64, confirmations: u32 },
+    AlreadyCredited { utxo_id: String },
+    InsufficientConfirmations { utxo_id: String, confirmations: u32, required: u32 },
+}
+
+/// Convert a compressed SEC1 public key to a Dogecoin P2PKH address
+/// DOGE uses version byte 0x1e (produces "D..." addresses)
+fn pubkey_to_doge_address(pubkey_bytes: &[u8]) -> Result<String, String> {
+    use ripemd::Ripemd160;
+    use sha2::{Sha256, Digest};
+
+    // SHA256 of the compressed pubkey
+    let sha256_hash = Sha256::digest(pubkey_bytes);
+    // RIPEMD160 of the SHA256 hash
+    let ripemd_hash = Ripemd160::digest(&sha256_hash);
+
+    // Prepend version byte 0x1e (Dogecoin mainnet)
+    let mut payload = vec![0x1e_u8];
+    payload.extend_from_slice(&ripemd_hash);
+
+    // Base58Check encode (bs58 with_check handles the double-SHA256 checksum)
+    Ok(bs58::encode(&payload).with_check().into_string())
+}
+
+/// Get the user's unique Dogecoin deposit address (derived via threshold ECDSA)
+#[ic_cdk::update]
+async fn get_doge_deposit_address() -> Result<String, String> {
+    let caller = ic_cdk::api::msg_caller();
+
+    if caller == Principal::anonymous() {
+        return Err("Please log in with Internet Identity to get a DOGE deposit address.".to_string());
+    }
+
+    let currency = get_table_currency();
+    if currency != Currency::DOGE {
+        return Err("This function is only available for DOGE tables".to_string());
+    }
+
+    // Derive ECDSA public key for this user
+    // Use derivation path prefix 2u8 to differentiate from ETH (1u8)
+    let derivation_path = vec![vec![2u8], caller.as_slice().to_vec()];
+
+    let key_id = EcdsaKeyId {
+        curve: EcdsaCurve::Secp256k1,
+        name: ECDSA_KEY_NAME.to_string(),
+    };
+
+    let args = EcdsaPublicKeyArgument {
+        canister_id: None,
+        derivation_path,
+        key_id,
+    };
+
+    let result: Result<(EcdsaPublicKeyResponse,), _> = ic_cdk::call(
+        Principal::management_canister(),
+        "ecdsa_public_key",
+        (args,),
+    ).await;
+
+    let (response,) = result.map_err(|(code, msg)| format!("ECDSA key error: {:?} - {}", code, msg))?;
+
+    // Convert compressed SEC1 pubkey to DOGE P2PKH address
+    let address = pubkey_to_doge_address(&response.public_key)?;
+
+    Ok(address)
+}
+
+/// Check for DOGE deposits at the user's derived address
+/// Credits new confirmed UTXOs to the user's internal DOGE balance
+#[ic_cdk::update]
+async fn check_doge_deposit() -> Result<Vec<DogeDepositStatus>, String> {
+    let caller = ic_cdk::api::msg_caller();
+
+    if caller == Principal::anonymous() {
+        return Err("Please log in with Internet Identity.".to_string());
+    }
+
+    let currency = get_table_currency();
+    if currency != Currency::DOGE {
+        return Err("This function is only available for DOGE tables".to_string());
+    }
+
+    // First get the user's DOGE address
+    let address = get_doge_deposit_address().await?;
+
+    // Query the Dogecoin canister for UTXOs
+    let dogecoin_canister = Principal::from_text(DOGECOIN_CANISTER)
+        .map_err(|_| "Invalid Dogecoin canister ID".to_string())?;
+
+    let utxo_args = DogeGetUtxosRequest {
+        address: address.clone(),
+        filter: Some(DogeUtxoFilter::MinConfirmations(DOGE_MIN_CONFIRMATIONS)),
+        network: DogeNetwork::Mainnet,
+    };
+
+    let result: Result<(DogeGetUtxosResponse,), _> = ic_cdk::call(
+        dogecoin_canister,
+        "dogecoin_get_utxos",
+        (utxo_args,),
+    ).await;
+
+    let (utxo_response,) = result.map_err(|(code, msg)| format!("Dogecoin canister error: {:?} - {}", code, msg))?;
+
+    let mut statuses = Vec::new();
+
+    for utxo in &utxo_response.utxos {
+        let utxo_id = format!("{}:{}", hex::encode(&utxo.outpoint.txid), utxo.outpoint.vout);
+
+        // Check if already credited
+        let already_credited = DOGE_CREDITED_UTXOS.with(|credited| {
+            credited.borrow().contains(&utxo_id)
+        });
+
+        if already_credited {
+            statuses.push(DogeDepositStatus::AlreadyCredited { utxo_id });
+            continue;
+        }
+
+        // Credit the user's internal DOGE balance
+        DOGE_BALANCES.with(|balances| {
+            let mut balances = balances.borrow_mut();
+            let balance = balances.entry(caller).or_insert(0);
+            *balance += utxo.value;
+        });
+
+        // Mark UTXO as credited
+        DOGE_CREDITED_UTXOS.with(|credited| {
+            credited.borrow_mut().insert(utxo_id.clone());
+        });
+
+        let tip_height = utxo_response.tip_height;
+        let confirmations = if tip_height >= utxo.height {
+            tip_height - utxo.height + 1
+        } else {
+            0
+        };
+
+        statuses.push(DogeDepositStatus::Credited {
+            utxo_id,
+            amount: utxo.value,
+            confirmations,
+        });
+    }
+
+    Ok(statuses)
+}
+
+/// Get the user's internal DOGE wallet balance (not table escrow)
+#[ic_cdk::query]
+fn get_doge_balance() -> u64 {
+    let caller = ic_cdk::api::msg_caller();
+    DOGE_BALANCES.with(|balances| {
+        *balances.borrow().get(&caller).unwrap_or(&0)
+    })
+}
+
+/// Withdraw DOGE to an external Dogecoin address
+/// Builds and signs a P2PKH transaction, submits via the Dogecoin canister
+#[ic_cdk::update]
+async fn withdraw_doge(destination: String, amount: u64) -> Result<String, String> {
+    let caller = ic_cdk::api::msg_caller();
+
+    if caller == Principal::anonymous() {
+        return Err("Please log in with Internet Identity.".to_string());
+    }
+
+    let currency = get_table_currency();
+    if currency != Currency::DOGE {
+        return Err("This function is only available for DOGE tables".to_string());
+    }
+
+    // Validate destination address (basic check: starts with 'D' or '9' or 'A')
+    if destination.is_empty() || (!destination.starts_with('D') && !destination.starts_with('9') && !destination.starts_with('A')) {
+        return Err("Invalid Dogecoin address".to_string());
+    }
+
+    let fee = DOGE_TRANSFER_FEE; // 0.001 DOGE
+    if amount <= fee {
+        return Err(format!("Amount must be greater than {} shibes to cover fee", fee));
+    }
+
+    // Acquire DOGE withdrawal guard — prevents reentrancy via Drop trait
+    let _guard = DogeWithdrawalGuard::new(caller)?;
+
+    // ATOMIC: Check balance and deduct BEFORE signing (prevents double-spend)
+    DOGE_BALANCES.with(|b| {
+        let mut balances = b.borrow_mut();
+        let current_balance = *balances.get(&caller).unwrap_or(&0);
+        if current_balance < amount {
+            return Err(format!("Insufficient DOGE balance. Have {} shibes, need {}", current_balance, amount));
+        }
+        // Deduct immediately while holding the lock
+        balances.insert(caller, current_balance - amount);
+        Ok(())
+    })?;
+
+    // Get the user's derived ECDSA pubkey + address
+    let derivation_path = vec![vec![2u8], caller.as_slice().to_vec()];
+    let key_id = EcdsaKeyId {
+        curve: EcdsaCurve::Secp256k1,
+        name: ECDSA_KEY_NAME.to_string(),
+    };
+
+    let pk_args = EcdsaPublicKeyArgument {
+        canister_id: None,
+        derivation_path: derivation_path.clone(),
+        key_id: key_id.clone(),
+    };
+
+    let pk_result: Result<(EcdsaPublicKeyResponse,), _> = ic_cdk::call(
+        Principal::management_canister(),
+        "ecdsa_public_key",
+        (pk_args,),
+    ).await;
+    let (pk_response,) = pk_result.map_err(|(code, msg)| format!("ECDSA key error: {:?} - {}", code, msg))?;
+    let pubkey = pk_response.public_key;
+    let source_address = pubkey_to_doge_address(&pubkey)?;
+
+    // Get UTXOs from the user's address
+    let dogecoin_canister = Principal::from_text(DOGECOIN_CANISTER)
+        .map_err(|_| "Invalid Dogecoin canister ID".to_string())?;
+
+    let utxo_args = DogeGetUtxosRequest {
+        address: source_address.clone(),
+        filter: Some(DogeUtxoFilter::MinConfirmations(1)),
+        network: DogeNetwork::Mainnet,
+    };
+
+    let utxo_result: Result<(DogeGetUtxosResponse,), _> = ic_cdk::call(
+        dogecoin_canister,
+        "dogecoin_get_utxos",
+        (utxo_args,),
+    ).await;
+    let (utxo_response,) = utxo_result.map_err(|(code, msg)| format!("UTXO query error: {:?} - {}", code, msg))?;
+
+    if utxo_response.utxos.is_empty() {
+        return Err("No UTXOs available for withdrawal".to_string());
+    }
+
+    // Select UTXOs to cover amount + fee
+    let send_amount = amount - fee;
+    let mut selected_utxos: Vec<&DogeUtxo> = Vec::new();
+    let mut total_input: u64 = 0;
+
+    for utxo in &utxo_response.utxos {
+        selected_utxos.push(utxo);
+        total_input += utxo.value;
+        if total_input >= amount {
+            break;
+        }
+    }
+
+    if total_input < amount {
+        return Err(format!("Insufficient UTXO value. Have {} shibes in UTXOs, need {}", total_input, amount));
+    }
+
+    let change = total_input - amount;
+
+    // Decode destination address to script pubkey
+    let dest_script = doge_address_to_script_pubkey(&destination)?;
+    let source_script = doge_address_to_script_pubkey(&source_address)?;
+
+    // Build the raw transaction
+    let mut tx_bytes: Vec<u8> = Vec::new();
+
+    // Version (1, little-endian 4 bytes)
+    tx_bytes.extend_from_slice(&1u32.to_le_bytes());
+
+    // Input count (varint)
+    write_varint(&mut tx_bytes, selected_utxos.len() as u64);
+
+    // Inputs (unsigned first, we'll sign them one by one)
+    for utxo in &selected_utxos {
+        // txid (reversed - Dogecoin uses internal byte order)
+        let mut txid = utxo.outpoint.txid.clone();
+        txid.reverse();
+        tx_bytes.extend_from_slice(&txid);
+        // vout (little-endian 4 bytes)
+        tx_bytes.extend_from_slice(&utxo.outpoint.vout.to_le_bytes());
+        // scriptSig placeholder (empty for signing)
+        tx_bytes.push(0);
+        // sequence
+        tx_bytes.extend_from_slice(&0xffffffffu32.to_le_bytes());
+    }
+
+    // Output count
+    let output_count = if change > 0 { 2u64 } else { 1u64 };
+    write_varint(&mut tx_bytes, output_count);
+
+    // Output 1: destination
+    tx_bytes.extend_from_slice(&send_amount.to_le_bytes());
+    write_varint(&mut tx_bytes, dest_script.len() as u64);
+    tx_bytes.extend_from_slice(&dest_script);
+
+    // Output 2: change back to source (if any)
+    if change > 0 {
+        tx_bytes.extend_from_slice(&change.to_le_bytes());
+        write_varint(&mut tx_bytes, source_script.len() as u64);
+        tx_bytes.extend_from_slice(&source_script);
+    }
+
+    // Locktime
+    tx_bytes.extend_from_slice(&0u32.to_le_bytes());
+
+    // Now sign each input
+    // For P2PKH, we need to sign a modified tx where the input being signed
+    // has its scriptSig replaced with the scriptPubKey
+    let mut signed_inputs: Vec<Vec<u8>> = Vec::new();
+
+    for input_idx in 0..selected_utxos.len() {
+        // Build the signing hash (SIGHASH_ALL)
+        let sighash = compute_p2pkh_sighash(
+            &selected_utxos,
+            input_idx,
+            &source_script,
+            send_amount,
+            change,
+            &dest_script,
+            &source_script,
+        );
+
+        // Sign with threshold ECDSA
+        let sign_args = SignWithEcdsaArgument {
+            message_hash: sighash.to_vec(),
+            derivation_path: derivation_path.clone(),
+            key_id: key_id.clone(),
+        };
+
+        let sign_result = ic_cdk::api::call::call_with_payment128(
+            Principal::management_canister(),
+            "sign_with_ecdsa",
+            (sign_args,),
+            ECDSA_SIGN_CYCLES,
+        ).await;
+
+        let (sign_response,): (SignWithEcdsaResponse,) = sign_result
+            .map_err(|(code, msg)| format!("ECDSA sign error: {:?} - {}", code, msg))?;
+
+        // Build DER-encoded signature + SIGHASH_ALL byte
+        let mut sig_with_hashtype = sign_response.signature.clone();
+        sig_with_hashtype.push(0x01); // SIGHASH_ALL
+
+        // Build scriptSig: <sig_len> <sig+hashtype> <pubkey_len> <pubkey>
+        let mut script_sig: Vec<u8> = Vec::new();
+        script_sig.push(sig_with_hashtype.len() as u8);
+        script_sig.extend_from_slice(&sig_with_hashtype);
+        script_sig.push(pubkey.len() as u8);
+        script_sig.extend_from_slice(&pubkey);
+
+        signed_inputs.push(script_sig);
+    }
+
+    // Rebuild the final signed transaction
+    let mut final_tx: Vec<u8> = Vec::new();
+    final_tx.extend_from_slice(&1u32.to_le_bytes()); // version
+
+    write_varint(&mut final_tx, selected_utxos.len() as u64);
+
+    for (i, utxo) in selected_utxos.iter().enumerate() {
+        let mut txid = utxo.outpoint.txid.clone();
+        txid.reverse();
+        final_tx.extend_from_slice(&txid);
+        final_tx.extend_from_slice(&utxo.outpoint.vout.to_le_bytes());
+        write_varint(&mut final_tx, signed_inputs[i].len() as u64);
+        final_tx.extend_from_slice(&signed_inputs[i]);
+        final_tx.extend_from_slice(&0xffffffffu32.to_le_bytes());
+    }
+
+    write_varint(&mut final_tx, output_count);
+    final_tx.extend_from_slice(&send_amount.to_le_bytes());
+    write_varint(&mut final_tx, dest_script.len() as u64);
+    final_tx.extend_from_slice(&dest_script);
+    if change > 0 {
+        final_tx.extend_from_slice(&change.to_le_bytes());
+        write_varint(&mut final_tx, source_script.len() as u64);
+        final_tx.extend_from_slice(&source_script);
+    }
+    final_tx.extend_from_slice(&0u32.to_le_bytes()); // locktime
+
+    // Submit the signed transaction
+    let send_args = DogeSendTxRequest {
+        transaction: final_tx,
+        network: DogeNetwork::Mainnet,
+    };
+
+    let send_result: Result<((),), _> = ic_cdk::call(
+        dogecoin_canister,
+        "dogecoin_send_transaction",
+        (send_args,),
+    ).await;
+
+    if let Err((code, msg)) = send_result {
+        // Refund on failure (balance was already deducted above)
+        DOGE_BALANCES.with(|b| {
+            let mut balances = b.borrow_mut();
+            let current = *balances.get(&caller).unwrap_or(&0);
+            balances.insert(caller, current.saturating_add(amount));
+        });
+        return Err(format!("Send tx error: {:?} - {}", code, msg));
+    }
+
+    // Balance was already deducted before signing — no further deduction needed
+    Ok(format!("Sent {} shibes ({} DOGE) to {}", send_amount, send_amount as f64 / 100_000_000.0, destination))
+}
+
+/// Write a Bitcoin-style varint
+fn write_varint(buf: &mut Vec<u8>, value: u64) {
+    if value < 0xfd {
+        buf.push(value as u8);
+    } else if value <= 0xffff {
+        buf.push(0xfd);
+        buf.extend_from_slice(&(value as u16).to_le_bytes());
+    } else if value <= 0xffffffff {
+        buf.push(0xfe);
+        buf.extend_from_slice(&(value as u32).to_le_bytes());
+    } else {
+        buf.push(0xff);
+        buf.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// Decode a Dogecoin P2PKH address to its scriptPubKey
+/// P2PKH script: OP_DUP OP_HASH160 <20-byte-hash> OP_EQUALVERIFY OP_CHECKSIG
+fn doge_address_to_script_pubkey(address: &str) -> Result<Vec<u8>, String> {
+    let decoded = bs58::decode(address)
+        .with_check(None)
+        .into_vec()
+        .map_err(|e| format!("Invalid Dogecoin address: {}", e))?;
+
+    if decoded.len() != 21 {
+        return Err(format!("Invalid address length: {} (expected 21)", decoded.len()));
+    }
+
+    // decoded[0] is the version byte, decoded[1..21] is the 20-byte hash
+    let pubkey_hash = &decoded[1..21];
+
+    let mut script = Vec::with_capacity(25);
+    script.push(0x76); // OP_DUP
+    script.push(0xa9); // OP_HASH160
+    script.push(0x14); // Push 20 bytes
+    script.extend_from_slice(pubkey_hash);
+    script.push(0x88); // OP_EQUALVERIFY
+    script.push(0xac); // OP_CHECKSIG
+
+    Ok(script)
+}
+
+/// Compute SIGHASH_ALL for a P2PKH input
+/// This creates the hash that needs to be signed for input `input_idx`
+fn compute_p2pkh_sighash(
+    utxos: &[&DogeUtxo],
+    input_idx: usize,
+    source_script: &[u8],
+    send_amount: u64,
+    change: u64,
+    dest_script: &[u8],
+    change_script: &[u8],
+) -> [u8; 32] {
+    use sha2::{Sha256, Digest};
+
+    let mut tx: Vec<u8> = Vec::new();
+
+    // Version
+    tx.extend_from_slice(&1u32.to_le_bytes());
+
+    // Input count
+    write_varint(&mut tx, utxos.len() as u64);
+
+    // Inputs
+    for (i, utxo) in utxos.iter().enumerate() {
+        let mut txid = utxo.outpoint.txid.clone();
+        txid.reverse();
+        tx.extend_from_slice(&txid);
+        tx.extend_from_slice(&utxo.outpoint.vout.to_le_bytes());
+
+        if i == input_idx {
+            // For the input being signed, use the source scriptPubKey
+            write_varint(&mut tx, source_script.len() as u64);
+            tx.extend_from_slice(source_script);
+        } else {
+            // Empty script for other inputs
+            tx.push(0);
+        }
+
+        tx.extend_from_slice(&0xffffffffu32.to_le_bytes());
+    }
+
+    // Output count
+    let output_count = if change > 0 { 2u64 } else { 1u64 };
+    write_varint(&mut tx, output_count);
+
+    // Output 1: destination
+    tx.extend_from_slice(&send_amount.to_le_bytes());
+    write_varint(&mut tx, dest_script.len() as u64);
+    tx.extend_from_slice(dest_script);
+
+    // Output 2: change
+    if change > 0 {
+        tx.extend_from_slice(&change.to_le_bytes());
+        write_varint(&mut tx, change_script.len() as u64);
+        tx.extend_from_slice(change_script);
+    }
+
+    // Locktime
+    tx.extend_from_slice(&0u32.to_le_bytes());
+
+    // SIGHASH_ALL (appended for signing, not part of final tx)
+    tx.extend_from_slice(&1u32.to_le_bytes());
+
+    // Double SHA256
+    let hash1 = Sha256::digest(&tx);
+    let hash2 = Sha256::digest(&hash1);
+
+    let mut result = [0u8; 32];
+    result.copy_from_slice(&hash2);
+    result
 }
 
 // ============================================================================

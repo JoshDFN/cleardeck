@@ -24,6 +24,7 @@ pub enum Currency {
     ICP,
     BTC,
     ETH,
+    DOGE,
 }
 
 impl Currency {
@@ -33,6 +34,7 @@ impl Currency {
             Currency::ICP => "ICP",
             Currency::BTC => "BTC",
             Currency::ETH => "ETH",
+            Currency::DOGE => "DOGE",
         }
     }
 
@@ -42,6 +44,7 @@ impl Currency {
             Currency::ICP => "e8s",
             Currency::BTC => "sats",
             Currency::ETH => "wei",
+            Currency::DOGE => "shibes",
         }
     }
 }
@@ -530,6 +533,54 @@ fn add_eth_headsup_table(eth_table_canister: Principal) -> Result<(), String> {
             created_at: timestamp,
             created_by: caller,
             currency: Currency::ETH,
+        });
+    });
+
+    Ok(())
+}
+
+/// Add a single DOGE heads-up table
+/// All values in shibes (1 DOGE = 100_000_000 shibes)
+#[ic_cdk::update]
+fn add_doge_headsup_table(doge_table_canister: Principal) -> Result<(), String> {
+    let caller = ic_cdk::api::msg_caller();
+    let is_admin = ADMIN.with(|a| a.borrow().map(|admin| admin == caller).unwrap_or(false));
+
+    if !is_admin {
+        return Err("Only admin can add tables".to_string());
+    }
+
+    let timestamp = ic_cdk::api::time();
+
+    let next_id = TABLES.with(|t| {
+        t.borrow().keys().max().map(|m| m + 1).unwrap_or(1)
+    });
+
+    TABLES.with(|tables| {
+        let mut tables = tables.borrow_mut();
+
+        // DOGE Table: Heads Up - 10/20 DOGE blinds
+        // Buy-in: 500-5000 DOGE
+        tables.insert(next_id, TableInfo {
+            id: next_id,
+            canister_id: Some(doge_table_canister),
+            config: TableConfig {
+                small_blind: 1_000_000_000,          // 10 DOGE
+                big_blind: 2_000_000_000,             // 20 DOGE
+                min_buy_in: 50_000_000_000,           // 500 DOGE
+                max_buy_in: 500_000_000_000,          // 5000 DOGE
+                max_players: 2,
+                ante: 0,
+                action_timeout_secs: 30,
+                time_bank_secs: 30,
+                currency: Currency::DOGE,
+            },
+            name: "Heads Up - 10/20".to_string(),
+            player_count: 0,
+            status: TableStatus::WaitingForPlayers,
+            created_at: timestamp,
+            created_by: caller,
+            currency: Currency::DOGE,
         });
     });
 

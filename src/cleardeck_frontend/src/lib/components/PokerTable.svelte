@@ -23,7 +23,8 @@
   // Currency-specific formatting
   const isBTC = currency === 'BTC';
   const isETH = currency === 'ETH';
-  const currencySymbol = isBTC ? 'BTC' : isETH ? 'ETH' : 'ICP';
+  const isDOGE = currency === 'DOGE';
+  const currencySymbol = isBTC ? 'BTC' : isETH ? 'ETH' : isDOGE ? 'DOGE' : 'ICP';
 
   // Sound mute state - persisted in localStorage
   let soundMuted = $state(typeof localStorage !== 'undefined' && localStorage.getItem('poker_sound_muted') === 'true');
@@ -121,6 +122,13 @@
       if (eth >= 1) return eth.toFixed(4) + (includeUnit ? ' ETH' : '');
       if (eth >= 0.0001) return eth.toFixed(4) + (includeUnit ? ' ETH' : '');
       return eth.toFixed(6) + (includeUnit ? ' ETH' : '');
+    } else if (isDOGE) {
+      // DOGE: 1 DOGE = 100_000_000 shibes (same as BTC satoshis)
+      const doge = num / 100_000_000;
+      if (doge >= 1000) return `${(doge / 1000).toFixed(1)}K${includeUnit ? ' DOGE' : ''}`;
+      if (doge >= 1) return doge.toFixed(2) + (includeUnit ? ' DOGE' : '');
+      if (doge >= 0.01) return doge.toFixed(2) + (includeUnit ? ' DOGE' : '');
+      return doge.toFixed(4) + (includeUnit ? ' DOGE' : '');
     } else {
       // ICP: display in ICP
       const icp = num / 100_000_000;

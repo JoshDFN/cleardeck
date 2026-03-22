@@ -80,6 +80,11 @@
       if (eth >= 0.000001) return eth.toFixed(6);
       const gwei = num / 1_000_000_000;
       return `${gwei.toFixed(0)} Gwei`;
+    } else if (currency === 'DOGE') {
+      const doge = num / 100_000_000;
+      if (doge >= 1000) return `${(doge / 1000).toFixed(1)}K`;
+      if (doge >= 1) return doge.toFixed(0);
+      return doge.toFixed(2);
     } else {
       const icp = num / 100_000_000;
       if (icp >= 1000) return `${(icp / 1000).toFixed(1)}K`;
@@ -115,6 +120,13 @@
       if (sbEth <= 0.001) return 'Low';
       if (sbEth <= 0.005) return 'Medium';
       if (sbEth <= 0.02) return 'High';
+      return 'VIP';
+    } else if (currency === 'DOGE') {
+      const sbDoge = sb / 100_000_000;
+      if (sbDoge <= 20) return 'Micro';
+      if (sbDoge <= 100) return 'Low';
+      if (sbDoge <= 500) return 'Medium';
+      if (sbDoge <= 2000) return 'High';
       return 'VIP';
     } else {
       const sbIcp = sb / 100_000_000;
@@ -179,6 +191,7 @@
   const icpTableCount = $derived(tables.filter(t => getTableCurrency(t) === 'ICP').length);
   const btcTableCount = $derived(tables.filter(t => getTableCurrency(t) === 'BTC').length);
   const ethTableCount = $derived(tables.filter(t => getTableCurrency(t) === 'ETH').length);
+  const dogeTableCount = $derived(tables.filter(t => getTableCurrency(t) === 'DOGE').length);
 </script>
 
 <div class="lobby">
@@ -257,6 +270,11 @@
           ETH
           {#if ethTableCount > 0}<span class="badge">{ethTableCount}</span>{/if}
         </button>
+        <button class="doge" class:active={currencyFilter === 'DOGE'} onclick={() => currencyFilter = 'DOGE'}>
+          <span style="font-size: 16px;">🐕</span>
+          DOGE
+          {#if dogeTableCount > 0}<span class="badge">{dogeTableCount}</span>{/if}
+        </button>
       </div>
     </div>
   </div>
@@ -307,7 +325,7 @@
                 <div class="game-info">
                   <span class="table-name">{table.name}</span>
                   <span class="table-meta">
-                    <span class="currency-tag" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'} class:icp={currency === 'ICP'}>
+                    <span class="currency-tag" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'} class:icp={currency === 'ICP'} class:doge={currency === 'DOGE'}>
                       {#if currency === 'BTC'}
                         <svg width="12" height="12" viewBox="0 0 64 64">
                           <path fill="#f7931a" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
@@ -318,6 +336,8 @@
                           <path fill="#627EEA" d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/>
                           <path fill="#627EEA" d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity=".6"/>
                         </svg>
+                      {:else if currency === 'DOGE'}
+                        <span style="font-size: 12px;">🐕</span>
                       {:else}
                         <IcpLogo size={12} />
                       {/if}
@@ -331,7 +351,7 @@
                 <span class="stakes-value" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'}>
                   {formatBlinds(table.config.small_blind, table.config.big_blind, currency)}
                 </span>
-                <span class="stakes-unit" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'}>
+                <span class="stakes-unit" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'} class:doge={currency === 'DOGE'}>
                   {#if currency === 'BTC'}
                     <svg width="10" height="10" viewBox="0 0 64 64">
                       <path fill="#f7931a" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
@@ -342,10 +362,12 @@
                       <path fill="#627EEA" d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/>
                       <path fill="#627EEA" d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity=".6"/>
                     </svg>
+                  {:else if currency === 'DOGE'}
+                    <span style="font-size: 10px;">🐕</span>
                   {:else}
                     <IcpLogo size={10} />
                   {/if}
-                  {currency === 'BTC' ? 'sats' : currency === 'ETH' ? 'ETH' : 'ICP'}
+                  {currency === 'BTC' ? 'sats' : currency === 'ETH' ? 'ETH' : currency === 'DOGE' ? 'DOGE' : 'ICP'}
                 </span>
               </td>
               <td class="col-players">
@@ -360,7 +382,7 @@
               </td>
               <td class="col-buyin">
                 <span class="buyin-value">{formatBuyIn(table.config.min_buy_in, table.config.max_buy_in, currency)}</span>
-                <span class="buyin-unit" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'}>
+                <span class="buyin-unit" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'} class:doge={currency === 'DOGE'}>
                   {#if currency === 'BTC'}
                     <svg width="10" height="10" viewBox="0 0 64 64">
                       <path fill="#f7931a" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
@@ -373,6 +395,9 @@
                       <path fill="#627EEA" d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity=".6"/>
                     </svg>
                     ETH
+                  {:else if currency === 'DOGE'}
+                    <span style="font-size: 10px;">🐕</span>
+                    DOGE
                   {:else}
                     <IcpLogo size={10} />
                     ICP
@@ -407,12 +432,12 @@
         {#each filteredTables as tableInfo}
           {@const currency = getTableCurrency(tableInfo)}
           {@const isFull = tableInfo.player_count >= tableInfo.config.max_players}
-          <div class="table-card" class:btc-table={currency === 'BTC'} class:eth-table={currency === 'ETH'} onclick={() => onJoinTable(tableInfo)} onkeydown={(e) => e.key === 'Enter' && onJoinTable(tableInfo)} role="button" tabindex="0">
+          <div class="table-card" class:btc-table={currency === 'BTC'} class:eth-table={currency === 'ETH'} class:doge-table={currency === 'DOGE'} onclick={() => onJoinTable(tableInfo)} onkeydown={(e) => e.key === 'Enter' && onJoinTable(tableInfo)} role="button" tabindex="0">
             <div class="card-header">
               <div class="table-name-section">
                 <div class="name-row">
                   <h3>{tableInfo.name}</h3>
-                  <span class="currency-badge" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'} class:icp={currency === 'ICP'}>
+                  <span class="currency-badge" class:btc={currency === 'BTC'} class:eth={currency === 'ETH'} class:icp={currency === 'ICP'} class:doge={currency === 'DOGE'}>
                     {#if currency === 'BTC'}
                       <svg width="12" height="12" viewBox="0 0 64 64">
                         <path fill="#f7931a" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
@@ -423,6 +448,8 @@
                         <path fill="#627EEA" d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/>
                         <path fill="#627EEA" d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity=".6"/>
                       </svg>
+                    {:else if currency === 'DOGE'}
+                      <span style="font-size: 12px;">🐕</span>
                     {:else}
                       <IcpLogo size={12} />
                     {/if}
@@ -664,6 +691,12 @@
     color: #627EEA;
   }
 
+  .currency-pills button.doge.active {
+    background: rgba(194, 166, 51, 0.2);
+    border-color: rgba(194, 166, 51, 0.3);
+    color: #C2A633;
+  }
+
   .currency-pills .badge {
     font-size: 10px;
     background: rgba(255, 255, 255, 0.15);
@@ -812,6 +845,11 @@
   .currency-tag.btc {
     background: rgba(247, 147, 26, 0.2);
     color: #f7931a;
+  }
+
+  .currency-tag.doge {
+    background: rgba(194, 166, 51, 0.2);
+    color: #C2A633;
   }
 
   .currency-tag.eth {
@@ -1243,6 +1281,11 @@
   .currency-badge.eth {
     color: #627EEA;
     background: rgba(98, 126, 234, 0.15);
+  }
+
+  .currency-badge.doge {
+    color: #C2A633;
+    background: rgba(194, 166, 51, 0.15);
   }
 
   .stake-badge {

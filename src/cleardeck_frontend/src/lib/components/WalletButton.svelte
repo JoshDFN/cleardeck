@@ -43,6 +43,19 @@
   let ethDepositAddress = $state('');
   let loadingEthAddress = $state(false);
   let copiedEthAddress = $state(false);
+
+  // DOGE canister (will be set after deployment)
+  const DOGE_TABLE_CANISTER = '52zr7-xiaaa-aaaad-af4bq-cai';
+  let dogeBalance = $state(null);
+  let showDogeAddress = $state(false);
+  let dogeDepositAddress = $state('');
+  let loadingDogeAddress = $state(false);
+  let copiedDogeAddress = $state(false);
+  let dogeCheckActive = $state(false);
+  let dogeCheckInterval = $state(null);
+  let dogeCheckTimeout = $state(null);
+  let dogeDepositStatus = $state(null); // { type, message }
+  let dogeTableActorCached = $state(null);
   // ETH deposit check + progress state
   let ethCheckInterval = $state(null);
   let ethCheckActive = $state(false);
@@ -63,15 +76,19 @@
       showAccountId = false;
       showBtcAddress = false;
       showEthAddress = false;
+      showDogeAddress = false;
       copiedPrincipal = false;
       copiedAccountId = false;
       copiedBtcAddress = false;
       copiedEthAddress = false;
+      copiedDogeAddress = false;
       ethSweepStatus = null;
       ethCkethArrived = false;
       showWhyTheWait = false;
+      dogeDepositStatus = null;
       stopEthDepositCheck();
       stopEthCkethPolling();
+      stopDogeDepositCheck();
     }
   });
 
@@ -511,6 +528,121 @@
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   }
 
+  // ========================
+  // DOGE deposit functions
+  // ========================
+
+  function getDogeTableActor() {
+    if (dogeTableActorCached) return dogeTableActorCached;
+    if (!authState.isAuthenticated || !authState.identity || !DOGE_TABLE_CANISTER) return null;
+
+    const agent = new HttpAgent({
+      host: 'https://ic0.app',
+      identity: authState.identity,
+    });
+
+    const dogeIdlFactory = ({ IDL }) => {
+      const DogeDepositStatus = IDL.Variant({
+        Credited: IDL.Record({ utxo_id: IDL.Text, amount: IDL.Nat64, confirmations: IDL.Nat32 }),
+        AlreadyCredited: IDL.Record({ utxo_id: IDL.Text }),
+        InsufficientConfirmations: IDL.Record({ utxo_id: IDL.Text, confirmations: IDL.Nat32, required: IDL.Nat32 }),
+      });
+      return IDL.Service({
+        get_doge_deposit_address: IDL.Func([], [IDL.Variant({ Ok: IDL.Text, Err: IDL.Text })], []),
+        check_doge_deposit: IDL.Func([], [IDL.Variant({ Ok: IDL.Vec(DogeDepositStatus), Err: IDL.Text })], []),
+        get_doge_balance: IDL.Func([], [IDL.Nat64], ['query']),
+      });
+    };
+
+    dogeTableActorCached = Actor.createActor(dogeIdlFactory, {
+      agent,
+      canisterId: DOGE_TABLE_CANISTER,
+    });
+    return dogeTableActorCached;
+  }
+
+  async function loadDogeDepositAddress() {
+    if (!authState.isAuthenticated || !authState.identity || !isMainnet() || !DOGE_TABLE_CANISTER) return;
+
+    const cacheKey = `doge_deposit_addr_${authState.principal}`;
+    const cached = typeof localStorage !== 'undefined' && localStorage.getItem(cacheKey);
+    if (cached) {
+      dogeDepositAddress = cached;
+      loadingDogeAddress = false;
+      return;
+    }
+
+    loadingDogeAddress = true;
+    try {
+      const actor = getDogeTableActor();
+      const result = await actor.get_doge_deposit_address();
+      if ('Ok' in result) {
+        dogeDepositAddress = result.Ok;
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(cacheKey, dogeDepositAddress);
+        }
+      } else {
+        logger.error('Failed to get DOGE deposit address:', result.Err);
+      }
+    } catch (e) {
+      logger.error('Failed to get DOGE deposit address:', e);
+    }
+    loadingDogeAddress = false;
+  }
+
+  function startDogeDepositCheck() {
+    if (dogeCheckActive) return;
+    dogeCheckActive = true;
+    dogeDepositStatus = null;
+
+    dogeDepositCheck();
+    dogeCheckInterval = setInterval(dogeDepositCheck, 15000);
+    dogeCheckTimeout = setTimeout(stopDogeDepositCheck, 120000);
+  }
+
+  function stopDogeDepositCheck() {
+    if (dogeCheckInterval) { clearInterval(dogeCheckInterval); dogeCheckInterval = null; }
+    if (dogeCheckTimeout) { clearTimeout(dogeCheckTimeout); dogeCheckTimeout = null; }
+    dogeCheckActive = false;
+  }
+
+  async function dogeDepositCheck() {
+    const actor = getDogeTableActor();
+    if (!actor) return;
+    try {
+      const result = await actor.check_doge_deposit();
+      console.log('check_doge_deposit result:', JSON.stringify(result, (_, v) => typeof v === 'bigint' ? v.toString() : v));
+      if ('Ok' in result) {
+        const statuses = result.Ok;
+        const credited = statuses.filter(s => 'Credited' in s);
+        if (credited.length > 0) {
+          const totalShibes = credited.reduce((sum, s) => sum + Number(s.Credited.amount), 0);
+          const dogeAmount = (totalShibes / 100_000_000).toFixed(2);
+          dogeDepositStatus = { type: 'success', message: `${dogeAmount} DOGE deposited!` };
+          stopDogeDepositCheck();
+          loadDogeBalance();
+        }
+      } else if ('Err' in result) {
+        dogeDepositStatus = { type: 'error', message: result.Err };
+        stopDogeDepositCheck();
+      }
+    } catch (e) {
+      console.error('DOGE deposit check error:', e);
+    }
+  }
+
+  async function loadDogeBalance() {
+    if (!DOGE_TABLE_CANISTER) return;
+    const actor = getDogeTableActor();
+    if (!actor) return;
+    try {
+      const balance = await actor.get_doge_balance();
+      dogeBalance = Number(balance);
+    } catch (e) {
+      logger.error('Failed to load DOGE balance:', e);
+    }
+  }
+
   // Update BTC balance - calls the ckBTC minter to check for new deposits and mint ckBTC
   async function updateBtcBalance() {
     if (!authState.isAuthenticated || !authState.identity || !isMainnet()) return;
@@ -944,8 +1076,14 @@
                 <span class="balance-label eth">ETH</span>
                 <span class="balance-value eth">{ckethBalance !== null ? formatEthBalance(ckethBalance) : '-.--'}</span>
               </div>
+              {#if DOGE_TABLE_CANISTER}
+              <div class="balance-row doge">
+                <span class="balance-label doge">DOGE</span>
+                <span class="balance-value doge">{dogeBalance !== null ? (dogeBalance / 100_000_000).toFixed(2) + ' DOGE' : '-.--'}</span>
+              </div>
+              {/if}
             {/if}
-            <button class="refresh-btn" onclick={() => { wallet.refreshBalance(); if (isMainnet()) { loadCkbtcBalance(); loadCkethBalance(); } }}>
+            <button class="refresh-btn" onclick={() => { wallet.refreshBalance(); if (isMainnet()) { loadCkbtcBalance(); loadCkethBalance(); if (DOGE_TABLE_CANISTER) loadDogeBalance(); } }}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M23 4v6h-6M1 20v-6h6"/>
                 <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
@@ -1093,6 +1231,72 @@
               {/if}
               {#if !showEthAddress || !ethDepositAddress}
                 <span class="eth-note">Send native ETH to this address - auto-converted (~20 min)</span>
+              {/if}
+
+              <!-- DOGE Deposit -->
+              {#if DOGE_TABLE_CANISTER}
+              <div class="deposit-item doge">
+                <span class="deposit-label doge">DOGE</span>
+                {#if showDogeAddress}
+                  {#if loadingDogeAddress}
+                    <span class="loading-text">Loading...</span>
+                  {:else if dogeDepositAddress}
+                    <div class="deposit-address">
+                      <span class="address-value doge">{dogeDepositAddress}</span>
+                      <button
+                        class="copy-btn small doge"
+                        onclick={() => {
+                          navigator.clipboard.writeText(dogeDepositAddress);
+                          copiedDogeAddress = true;
+                          setTimeout(() => copiedDogeAddress = false, 2000);
+                        }}
+                      >
+                        {copiedDogeAddress ? '✓' : 'Copy'}
+                      </button>
+                    </div>
+                  {:else}
+                    <span class="error-text">Failed to load</span>
+                  {/if}
+                {:else}
+                  <button class="show-address-btn doge" onclick={() => { showDogeAddress = true; loadDogeDepositAddress(); }}>
+                    Show Address
+                  </button>
+                {/if}
+              </div>
+
+              <!-- DOGE deposit status -->
+              {#if dogeDepositStatus?.type === 'success'}
+                <div class="doge-status-row arrived">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                  {dogeDepositStatus.message}
+                </div>
+              {:else if dogeDepositStatus?.type === 'error'}
+                <div class="doge-status-row warning">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                  {dogeDepositStatus.message}
+                </div>
+              {:else if showDogeAddress && dogeDepositAddress}
+                <button
+                  class="check-deposit-btn doge"
+                  onclick={startDogeDepositCheck}
+                  disabled={dogeCheckActive}
+                >
+                  {#if dogeCheckActive}
+                    <span class="spinner-tiny doge"></span>
+                    Waiting for deposit...
+                  {:else}
+                    Check for Deposit
+                  {/if}
+                </button>
+              {/if}
+              {#if !showDogeAddress || !dogeDepositAddress}
+                <span class="doge-note">Send native DOGE - confirmed in ~6 min</span>
+              {/if}
               {/if}
             {/if}
           </div>
@@ -1710,6 +1914,25 @@
     color: #888;
     line-height: 1.5;
   }
+
+  /* DOGE styles */
+  .balance-label.doge, .deposit-label.doge { color: #C2A633; }
+  .balance-value.doge { color: #C2A633; }
+  .address-value.doge { color: #C2A633; }
+  .show-address-btn.doge { border-color: rgba(194, 166, 51, 0.3); color: #C2A633; }
+  .show-address-btn.doge:hover { background: rgba(194, 166, 51, 0.1); }
+  .copy-btn.doge { border-color: rgba(194, 166, 51, 0.3); color: #C2A633; }
+  .check-deposit-btn.doge { border-color: rgba(194, 166, 51, 0.3); color: #C2A633; }
+  .check-deposit-btn.doge:hover { background: rgba(194, 166, 51, 0.1); }
+  .spinner-tiny.doge { border-color: rgba(194, 166, 51, 0.3); border-top-color: #C2A633; }
+  .doge-note { font-size: 10px; color: #666; margin-top: 2px; }
+
+  .doge-status-row {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; margin-top: 4px; padding: 4px 8px; border-radius: 6px;
+  }
+  .doge-status-row.arrived { color: #4ade80; background: rgba(74, 222, 128, 0.1); }
+  .doge-status-row.warning { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
 
   .dropdown-btn {
     width: 100%;

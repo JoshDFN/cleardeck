@@ -33,3 +33,6 @@ alloy-rlp = { version = "0.3", default-features = false }
 serde_json = "1.0"
 getrandom = { version = "0.2", features = ["custom"] }
 evm_rpc_types = "3.1"
+# DOGE deposit: address generation
+ripemd = "0.1"
+bs58 = { version = "0.5", features = ["check"] }
