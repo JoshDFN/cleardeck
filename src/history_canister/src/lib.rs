@@ -209,11 +209,17 @@ fn init() {
 
 #[ic_cdk::update]
 fn authorize_table(table_canister: Principal) -> Result<(), String> {
+    let caller = ic_cdk::api::msg_caller();
+
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot authorize tables".to_string());
+    }
+
     STATE.with(|s| {
         let mut state = s.borrow_mut();
 
         // Only admin can authorize
-        if state.admin != Some(ic_cdk::api::msg_caller()) {
+        if state.admin != Some(caller) {
             return Err("Unauthorized".to_string());
         }
 
@@ -227,10 +233,16 @@ fn authorize_table(table_canister: Principal) -> Result<(), String> {
 
 #[ic_cdk::update]
 fn revoke_table(table_canister: Principal) -> Result<(), String> {
+    let caller = ic_cdk::api::msg_caller();
+
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot revoke tables".to_string());
+    }
+
     STATE.with(|s| {
         let mut state = s.borrow_mut();
 
-        if state.admin != Some(ic_cdk::api::msg_caller()) {
+        if state.admin != Some(caller) {
             return Err("Unauthorized".to_string());
         }
 
@@ -251,6 +263,18 @@ fn get_authorized_tables() -> Vec<Principal> {
 #[ic_cdk::update]
 fn record_hand(record: HandHistoryRecord) -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
+
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot record hands".to_string());
+    }
+
+    // Input validation: bounds check on players and actions
+    if record.players.is_empty() || record.players.len() > 10 {
+        return Err("Invalid player count: must be between 1 and 10".to_string());
+    }
+    if record.actions.len() > 1000 {
+        return Err("Too many actions: limit is 1000 per hand".to_string());
+    }
 
     STATE.with(|s| {
         let mut state = s.borrow_mut();
@@ -306,13 +330,13 @@ fn update_player_stats(state: &mut HistoryState, player: &PlayerHandRecord, hand
         showdowns_total: 0,
     });
 
-    stats.hands_played += 1;
+    stats.hands_played = stats.hands_played.saturating_add(1);
 
     let profit = player.ending_chips as i64 - player.starting_chips as i64;
-    stats.total_winnings += profit;
+    stats.total_winnings = stats.total_winnings.saturating_add(profit);
 
     if player.amount_won > 0 {
-        stats.hands_won += 1;
+        stats.hands_won = stats.hands_won.saturating_add(1);
         if player.amount_won > stats.biggest_pot_won {
             stats.biggest_pot_won = player.amount_won;
         }
@@ -322,9 +346,9 @@ fn update_player_stats(state: &mut HistoryState, player: &PlayerHandRecord, hand
     if hand.went_to_showdown {
         // Player went to showdown if they have revealed cards and didn't fold
         if player.hole_cards.is_some() {
-            stats.showdowns_total += 1;
+            stats.showdowns_total = stats.showdowns_total.saturating_add(1);
             if player.amount_won > 0 {
-                stats.showdowns_won += 1;
+                stats.showdowns_won = stats.showdowns_won.saturating_add(1);
             }
         }
     }
@@ -341,6 +365,8 @@ fn get_hand(hand_id: u64) -> Option<HandHistoryRecord> {
 
 #[ic_cdk::query]
 fn get_hands_by_table(table_id: Principal, offset: u64, limit: u64) -> Vec<HandSummary> {
+    let capped_limit = limit.min(100);
+
     STATE.with(|s| {
         let state = s.borrow();
 
@@ -355,7 +381,7 @@ fn get_hands_by_table(table_id: Principal, offset: u64, limit: u64) -> Vec<HandS
         hand_ids.iter()
             .rev()
             .skip(offset as usize)
-            .take(limit as usize)
+            .take(capped_limit as usize)
             .filter_map(|id| state.hands.get(id))
             .map(|h| to_summary(h))
             .collect()
@@ -364,6 +390,8 @@ fn get_hands_by_table(table_id: Principal, offset: u64, limit: u64) -> Vec<HandS
 
 #[ic_cdk::query]
 fn get_hands_by_player(player: Principal, offset: u64, limit: u64) -> Vec<HandSummary> {
+    let capped_limit = limit.min(100);
+
     STATE.with(|s| {
         let state = s.borrow();
 
@@ -377,7 +405,7 @@ fn get_hands_by_player(player: Principal, offset: u64, limit: u64) -> Vec<HandSu
         hand_ids.iter()
             .rev()
             .skip(offset as usize)
-            .take(limit as usize)
+            .take(capped_limit as usize)
             .filter_map(|id| state.hands.get(id))
             .map(|h| to_summary(h))
             .collect()
@@ -386,12 +414,14 @@ fn get_hands_by_player(player: Principal, offset: u64, limit: u64) -> Vec<HandSu
 
 #[ic_cdk::query]
 fn get_recent_hands(limit: u64) -> Vec<HandSummary> {
+    let capped_limit = limit.min(100);
+
     STATE.with(|s| {
         let state = s.borrow();
 
         state.hands.iter()
             .rev()
-            .take(limit as usize)
+            .take(capped_limit as usize)
             .map(|(_, h)| to_summary(h))
             .collect()
     })

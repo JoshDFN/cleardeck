@@ -1,7 +1,7 @@
 import { writable, derived } from 'svelte/store';
 import { AuthClient } from '@dfinity/auth-client';
-import { HttpAgent, Actor } from '@icp-sdk/core';
-import { Principal } from '@icp-sdk/core';
+import { HttpAgent, Actor } from '@icp-sdk/core/agent';
+import { Principal } from '@icp-sdk/core/principal';
 import { Ed25519KeyIdentity } from '@dfinity/identity';
 import { safeGetCanisterEnv } from '@icp-sdk/core/agent/canister-env';
 import { idlFactory as ledgerIdlFactory } from './ledger.did.js';

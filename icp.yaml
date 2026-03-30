@@ -12,8 +12,7 @@ canisters:
       configuration:
         package: table_canister
         candid: src/table_canister/table_canister.did
-    init_args:
-      text: '(record { small_blind = 1000000 : nat64; big_blind = 2000000 : nat64; min_buy_in = 200000000 : nat64; max_buy_in = 1000000000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })'
+    init_args: '(record { small_blind = 1000000 : nat64; big_blind = 2000000 : nat64; min_buy_in = 200000000 : nat64; max_buy_in = 1000000000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })'
 
   - name: table_2
     recipe:
@@ -21,8 +20,7 @@ canisters:
       configuration:
         package: table_canister
         candid: src/table_canister/table_canister.did
-    init_args:
-      text: '(record { small_blind = 5000000 : nat64; big_blind = 10000000 : nat64; min_buy_in = 1000000000 : nat64; max_buy_in = 5000000000 : nat64; max_players = 6 : nat8; action_timeout_secs = 45 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })'
+    init_args: '(record { small_blind = 5000000 : nat64; big_blind = 10000000 : nat64; min_buy_in = 1000000000 : nat64; max_buy_in = 5000000000 : nat64; max_players = 6 : nat8; action_timeout_secs = 45 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })'
 
   - name: table_3
     recipe:
@@ -30,8 +28,7 @@ canisters:
       configuration:
         package: table_canister
         candid: src/table_canister/table_canister.did
-    init_args:
-      text: '(record { small_blind = 10000000 : nat64; big_blind = 20000000 : nat64; min_buy_in = 2000000000 : nat64; max_buy_in = 10000000000 : nat64; max_players = 9 : nat8; action_timeout_secs = 60 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })'
+    init_args: '(record { small_blind = 10000000 : nat64; big_blind = 20000000 : nat64; min_buy_in = 2000000000 : nat64; max_buy_in = 10000000000 : nat64; max_players = 9 : nat8; action_timeout_secs = 60 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })'
 
   - name: btc_table_1
     recipe:
@@ -39,8 +36,7 @@ canisters:
       configuration:
         package: table_canister
         candid: src/table_canister/table_canister.did
-    init_args:
-      text: '(record { small_blind = 100 : nat64; big_blind = 200 : nat64; min_buy_in = 10000 : nat64; max_buy_in = 100000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { BTC } })'
+    init_args: '(record { small_blind = 100 : nat64; big_blind = 200 : nat64; min_buy_in = 10000 : nat64; max_buy_in = 100000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { BTC } })'
 
   - name: eth_table_1
     recipe:
@@ -48,8 +44,7 @@ canisters:
       configuration:
         package: table_canister
         candid: src/table_canister/table_canister.did
-    init_args:
-      text: '(record { small_blind = 50000000000000 : nat64; big_blind = 100000000000000 : nat64; min_buy_in = 1000000000000000 : nat64; max_buy_in = 100000000000000000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ETH } })'
+    init_args: '(record { small_blind = 50000000000000 : nat64; big_blind = 100000000000000 : nat64; min_buy_in = 1000000000000000 : nat64; max_buy_in = 100000000000000000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ETH } })'
 
   - name: doge_table_1
     recipe:
@@ -57,8 +52,7 @@ canisters:
       configuration:
         package: table_canister
         candid: src/table_canister/table_canister.did
-    init_args:
-      text: '(record { small_blind = 1000000000 : nat64; big_blind = 2000000000 : nat64; min_buy_in = 50000000000 : nat64; max_buy_in = 500000000000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { DOGE } })'
+    init_args: '(record { small_blind = 1000000000 : nat64; big_blind = 2000000000 : nat64; min_buy_in = 50000000000 : nat64; max_buy_in = 500000000000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { DOGE } })'
 
   - name: history
     recipe:

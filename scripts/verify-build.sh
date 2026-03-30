@@ -15,12 +15,15 @@ echo ""
 
 # Canister IDs on mainnet
 declare -A CANISTERS=(
-    ["lobby"]="kpfcd-kyaaa-aaaaj-qor3a-cai"
-    ["table_1"]="kieex-haaaa-aaaaj-qor3q-cai"
-    ["table_2"]="lfkaz-iiaaa-aaaaj-qor4a-cai"
-    ["table_3"]="lclgn-fqaaa-aaaaj-qor4q-cai"
-    ["btc_table_1"]="qrhly-eaaaa-aaaaj-qousa-cai"
-    ["history"]="kggj7-4qaaa-aaaaj-qor2q-cai"
+    ["lobby"]="hnyty-pyaaa-aaaad-afzja-cai"
+    ["table_1"]="hkzvm-caaaa-aaaad-afzjq-cai"
+    ["table_2"]="h76eb-diaaa-aaaad-afzka-cai"
+    ["table_3"]="hy7cv-oqaaa-aaaad-afzkq-cai"
+    ["btc_table_1"]="f6hqy-haaaa-aaaad-afzhq-cai"
+    ["eth_table_1"]="ghxrc-niaaa-aaaad-afzoa-cai"
+    ["doge_table_1"]="52zr7-xiaaa-aaaad-af4bq-cai"
+    ["history"]="he3ye-zqaaa-aaaad-afziq-cai"
+    ["frontend"]="hd26q-uiaaa-aaaad-afzia-cai"
 )
 
 echo "Step 1: Getting deployed WASM hashes from mainnet..."

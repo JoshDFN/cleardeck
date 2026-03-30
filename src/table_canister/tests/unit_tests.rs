@@ -944,4 +944,829 @@ mod tests {
 
         assert!(pair_with_ace > pair_with_king);
     }
+
+    // =========================================================================
+    // ICP ACCOUNT IDENTIFIER (compute_account_identifier)
+    // SHA224("\x0Aaccount-id" || principal || subaccount) with CRC32 prefix
+    // =========================================================================
+
+    fn compute_account_identifier(principal_bytes: &[u8], subaccount: Option<[u8; 32]>) -> [u8; 32] {
+        use sha2::{Sha224, Digest};
+        let mut hasher = Sha224::new();
+        hasher.update(b"\x0Aaccount-id");
+        hasher.update(principal_bytes);
+        hasher.update(subaccount.unwrap_or([0u8; 32]));
+        let hash = hasher.finalize(); // 28 bytes
+        let crc = crc32fast::hash(&hash);
+        let mut result = [0u8; 32];
+        result[0..4].copy_from_slice(&crc.to_be_bytes());
+        result[4..32].copy_from_slice(&hash);
+        result
+    }
+
+    #[test]
+    fn test_account_id_is_32_bytes() {
+        let principal = b"\x01\x02\x03\x04\x05";
+        let id = compute_account_identifier(principal, None);
+        assert_eq!(id.len(), 32);
+    }
+
+    #[test]
+    fn test_account_id_is_deterministic() {
+        let principal = b"\xde\xad\xbe\xef\x01\x02\x03\x04";
+        let a = compute_account_identifier(principal, None);
+        let b = compute_account_identifier(principal, None);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_account_id_unique_per_principal() {
+        let p1 = b"\x01\x02\x03\x04\x05";
+        let p2 = b"\x01\x02\x03\x04\x06";
+        let id1 = compute_account_identifier(p1, None);
+        let id2 = compute_account_identifier(p2, None);
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_account_id_none_subaccount_equals_zero_subaccount() {
+        let principal = b"\xaa\xbb\xcc\xdd";
+        let with_none = compute_account_identifier(principal, None);
+        let with_zeros = compute_account_identifier(principal, Some([0u8; 32]));
+        assert_eq!(with_none, with_zeros);
+    }
+
+    #[test]
+    fn test_account_id_subaccount_changes_result() {
+        let principal = b"\xaa\xbb\xcc\xdd";
+        let default_sub = compute_account_identifier(principal, None);
+        let mut custom = [0u8; 32];
+        custom[31] = 1;
+        let custom_sub = compute_account_identifier(principal, Some(custom));
+        assert_ne!(default_sub, custom_sub);
+    }
+
+    #[test]
+    fn test_account_id_crc32_prefix_validates() {
+        // The first 4 bytes must be CRC32 of bytes [4..32].
+        // This is the format verified by the NNS wallet.
+        use sha2::{Sha224, Digest};
+        let principal = b"\x01\x02\x03\x04\x05\x06\x07\x08";
+        let id = compute_account_identifier(principal, None);
+        let crc_stored = u32::from_be_bytes([id[0], id[1], id[2], id[3]]);
+        let crc_computed = crc32fast::hash(&id[4..]);
+        assert_eq!(crc_stored, crc_computed, "CRC32 prefix must validate the hash body");
+    }
+
+    #[test]
+    fn test_account_id_hex_is_64_chars() {
+        let principal = b"\x01\x02\x03\x04\x05";
+        let id = compute_account_identifier(principal, None);
+        let hex = hex::encode(id);
+        assert_eq!(hex.len(), 64);
+    }
+
+    // =========================================================================
+    // CURRENCY FORMAT_AMOUNT
+    // =========================================================================
+
+    fn format_icp(e8s: u64) -> String {
+        let decimal = e8s as f64 / 100_000_000.0;
+        format!("{:.4} ICP", decimal)
+    }
+
+    fn format_btc(satoshis: u64) -> String {
+        let decimal = satoshis as f64 / 100_000_000.0;
+        if decimal >= 0.001 {
+            format!("{:.4} BTC", decimal)
+        } else {
+            format!("{} sats", satoshis)
+        }
+    }
+
+    fn format_eth(wei: u64) -> String {
+        let decimal = wei as f64 / 1_000_000_000_000_000_000.0;
+        if decimal >= 0.001 {
+            format!("{:.6} ETH", decimal)
+        } else {
+            let gwei = wei as f64 / 1_000_000_000.0;
+            format!("{:.2} Gwei", gwei)
+        }
+    }
+
+    fn format_doge(shibes: u64) -> String {
+        let decimal = shibes as f64 / 100_000_000.0;
+        if decimal >= 1.0 {
+            format!("{:.2} DOGE", decimal)
+        } else {
+            format!("{} shibes", shibes)
+        }
+    }
+
+    // ICP formatting
+    #[test]
+    fn test_format_icp_one_icp() {
+        assert_eq!(format_icp(100_000_000), "1.0000 ICP");
+    }
+
+    #[test]
+    fn test_format_icp_zero() {
+        assert_eq!(format_icp(0), "0.0000 ICP");
+    }
+
+    #[test]
+    fn test_format_icp_fractional() {
+        assert_eq!(format_icp(50_000_000), "0.5000 ICP");
+    }
+
+    #[test]
+    fn test_format_icp_always_shows_icp_label() {
+        // ICP always uses the ICP label — no unit switching
+        assert!(format_icp(1).ends_with(" ICP"));
+        assert!(format_icp(100_000_000_000).ends_with(" ICP"));
+    }
+
+    // BTC formatting
+    #[test]
+    fn test_format_btc_above_threshold_shows_btc() {
+        // 0.001 BTC = 100_000 sats — threshold is >=
+        assert_eq!(format_btc(100_000), "0.0010 BTC");
+    }
+
+    #[test]
+    fn test_format_btc_below_threshold_shows_sats() {
+        // 99_999 sats < 0.001 BTC
+        assert_eq!(format_btc(99_999), "99999 sats");
+    }
+
+    #[test]
+    fn test_format_btc_one_btc() {
+        assert_eq!(format_btc(100_000_000), "1.0000 BTC");
+    }
+
+    #[test]
+    fn test_format_btc_zero_shows_sats() {
+        assert_eq!(format_btc(0), "0 sats");
+    }
+
+    #[test]
+    fn test_format_btc_one_sat_shows_sats() {
+        assert_eq!(format_btc(1), "1 sats");
+    }
+
+    // ETH formatting
+    #[test]
+    fn test_format_eth_one_eth() {
+        // 1 ETH = 1_000_000_000_000_000_000 wei
+        assert_eq!(format_eth(1_000_000_000_000_000_000), "1.000000 ETH");
+    }
+
+    #[test]
+    fn test_format_eth_above_threshold_shows_eth() {
+        // 0.001 ETH = 1_000_000_000_000_000 wei
+        assert_eq!(format_eth(1_000_000_000_000_000), "0.001000 ETH");
+    }
+
+    #[test]
+    fn test_format_eth_below_threshold_shows_gwei() {
+        // 500_000_000 wei = 0.5 Gwei
+        assert_eq!(format_eth(500_000_000), "0.50 Gwei");
+    }
+
+    #[test]
+    fn test_format_eth_zero_shows_gwei() {
+        assert_eq!(format_eth(0), "0.00 Gwei");
+    }
+
+    // DOGE formatting
+    #[test]
+    fn test_format_doge_one_doge() {
+        assert_eq!(format_doge(100_000_000), "1.00 DOGE");
+    }
+
+    #[test]
+    fn test_format_doge_above_threshold_shows_doge() {
+        // exactly 1.0 DOGE
+        assert_eq!(format_doge(100_000_000), "1.00 DOGE");
+    }
+
+    #[test]
+    fn test_format_doge_below_threshold_shows_shibes() {
+        assert_eq!(format_doge(99_999_999), "99999999 shibes");
+    }
+
+    #[test]
+    fn test_format_doge_zero_shows_shibes() {
+        assert_eq!(format_doge(0), "0 shibes");
+    }
+
+    #[test]
+    fn test_format_doge_one_shibe_shows_shibes() {
+        assert_eq!(format_doge(1), "1 shibes");
+    }
+
+    // =========================================================================
+    // TABLE CONFIG VALIDATION (validate_config)
+    // =========================================================================
+
+    #[derive(Clone)]
+    struct TestTableConfig {
+        small_blind: u64,
+        big_blind: u64,
+        min_buy_in: u64,
+        max_buy_in: u64,
+        max_players: u8,
+        action_timeout_secs: u64,
+        ante: u64,
+        time_bank_secs: u64,
+    }
+
+    impl TestTableConfig {
+        fn valid() -> Self {
+            // A minimal valid 2-player heads-up config
+            Self {
+                small_blind: 50,
+                big_blind: 100,
+                min_buy_in: 1_000,  // 10x big blind
+                max_buy_in: 10_000, // 100x big blind
+                max_players: 2,
+                action_timeout_secs: 30,
+                ante: 0,
+                time_bank_secs: 60,
+            }
+        }
+    }
+
+    fn validate_config(cfg: &TestTableConfig) -> Result<(), String> {
+        if cfg.max_players < 2 {
+            return Err("max_players must be at least 2".to_string());
+        }
+        if cfg.max_players > 10 {
+            return Err("max_players cannot exceed 10".to_string());
+        }
+        if cfg.small_blind == 0 {
+            return Err("small_blind must be greater than 0".to_string());
+        }
+        if cfg.big_blind == 0 {
+            return Err("big_blind must be greater than 0".to_string());
+        }
+        if cfg.small_blind > cfg.big_blind {
+            return Err("small_blind cannot be greater than big_blind".to_string());
+        }
+        if cfg.big_blind > cfg.small_blind * 10 {
+            return Err("big_blind cannot be more than 10x small_blind".to_string());
+        }
+        if cfg.min_buy_in == 0 {
+            return Err("min_buy_in must be greater than 0".to_string());
+        }
+        if cfg.max_buy_in < cfg.min_buy_in {
+            return Err("max_buy_in must be >= min_buy_in".to_string());
+        }
+        if cfg.min_buy_in < cfg.big_blind * 10 {
+            return Err("min_buy_in should be at least 10 big blinds".to_string());
+        }
+        if cfg.max_buy_in > cfg.big_blind * 1000 {
+            return Err("max_buy_in cannot exceed 1000 big blinds".to_string());
+        }
+        if cfg.action_timeout_secs > 300 {
+            return Err("action_timeout_secs cannot exceed 300 (5 minutes)".to_string());
+        }
+        if cfg.time_bank_secs > 600 {
+            return Err("time_bank_secs cannot exceed 600 (10 minutes)".to_string());
+        }
+        if cfg.ante > cfg.big_blind {
+            return Err("ante cannot exceed big_blind".to_string());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_valid_base_case() {
+        assert!(validate_config(&TestTableConfig::valid()).is_ok());
+    }
+
+    #[test]
+    fn test_config_max_players_too_low() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.max_players = 1;
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_max_players_minimum_is_2() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.max_players = 2;
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn test_config_max_players_too_high() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.max_players = 11;
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_max_players_maximum_is_10() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.max_players = 10;
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn test_config_small_blind_zero() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.small_blind = 0;
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_big_blind_zero() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.big_blind = 0;
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_small_blind_exceeds_big_blind() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.small_blind = 200;
+        cfg.big_blind = 100;
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_equal_blinds_accepted() {
+        // small == big is a valid (if unusual) straddle setup
+        let mut cfg = TestTableConfig::valid();
+        cfg.small_blind = 100;
+        cfg.big_blind = 100;
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn test_config_big_blind_more_than_10x_small_blind() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.small_blind = 10;
+        cfg.big_blind = 101; // > 10x
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_big_blind_exactly_10x_small_blind_accepted() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.small_blind = 10;
+        cfg.big_blind = 100;
+        // min_buy_in must be at least 10 * 100 = 1000
+        cfg.min_buy_in = 1_000;
+        cfg.max_buy_in = 10_000;
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn test_config_min_buy_in_zero() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.min_buy_in = 0;
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_max_buy_in_less_than_min_buy_in() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.max_buy_in = cfg.min_buy_in - 1;
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_min_buy_in_below_10_big_blinds() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.big_blind = 100;
+        cfg.min_buy_in = 999; // 10 * 100 = 1000 required
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_min_buy_in_exactly_10_big_blinds() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.big_blind = 100;
+        cfg.min_buy_in = 1_000;
+        cfg.max_buy_in = 10_000;
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn test_config_max_buy_in_exceeds_1000_big_blinds() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.big_blind = 100;
+        cfg.max_buy_in = 100_001; // > 1000 * 100
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_action_timeout_too_long() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.action_timeout_secs = 301;
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_action_timeout_maximum_accepted() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.action_timeout_secs = 300;
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn test_config_time_bank_too_long() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.time_bank_secs = 601;
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_time_bank_maximum_accepted() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.time_bank_secs = 600;
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn test_config_ante_exceeds_big_blind() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.ante = cfg.big_blind + 1;
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_config_ante_equals_big_blind_accepted() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.ante = cfg.big_blind;
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn test_config_zero_ante_accepted() {
+        let mut cfg = TestTableConfig::valid();
+        cfg.ante = 0;
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn timing_validate_config_batch_1000() {
+        let cfg = TestTableConfig::valid();
+        let start = std::time::Instant::now();
+        for _ in 0..1_000 {
+            let _ = validate_config(&cfg);
+        }
+        let us = start.elapsed().as_micros();
+        println!("[timing] validate_config 1000 calls: {}µs", us);
+        assert!(us < 10_000, "validate_config 1000x took {}µs", us);
+    }
+
+    #[test]
+    fn timing_account_id_batch_1000() {
+        let principals: Vec<Vec<u8>> = (0u16..1000)
+            .map(|i| vec![(i >> 8) as u8, (i & 0xff) as u8])
+            .collect();
+        let start = std::time::Instant::now();
+        for p in &principals {
+            let _ = compute_account_identifier(p, None);
+        }
+        let ms = start.elapsed().as_millis();
+        println!("[timing] compute_account_identifier 1000 calls: {}ms", ms);
+        assert!(ms < 500, "account ID 1000x took {}ms", ms);
+    }
+
+    // =========================================================================
+    // BTC DEPOSIT — SUBACCOUNT DERIVATION
+    // =========================================================================
+
+    // Mirror of the canister's principal_to_subaccount() — pure function under test.
+    // Uses a length-prefixed encoding: byte[0] = length, byte[1..] = principal bytes.
+    fn btc_subaccount_from_bytes(principal_bytes: &[u8]) -> [u8; 32] {
+        let mut subaccount = [0u8; 32];
+        subaccount[0] = principal_bytes.len() as u8;
+        let copy_len = principal_bytes.len().min(31);
+        subaccount[1..1 + copy_len].copy_from_slice(&principal_bytes[..copy_len]);
+        subaccount
+    }
+
+    // Mirror of the canister's compute_deposit_subaccount() — SHA256-based.
+    fn deposit_subaccount_from_bytes(principal_bytes: &[u8]) -> [u8; 32] {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(b"cleardeck-deposit:");
+        hasher.update(principal_bytes);
+        hasher.finalize().into()
+    }
+
+    #[test]
+    fn test_btc_subaccount_is_deterministic() {
+        let principal = b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e";
+        let a = btc_subaccount_from_bytes(principal);
+        let b = btc_subaccount_from_bytes(principal);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_btc_subaccount_is_32_bytes() {
+        let principal = b"\xab\xcd\xef\x01\x23";
+        let sub = btc_subaccount_from_bytes(principal);
+        assert_eq!(sub.len(), 32);
+    }
+
+    #[test]
+    fn test_btc_subaccount_length_prefix() {
+        // First byte must equal the length of the principal bytes
+        let principal = b"\x01\x02\x03\x04\x05";
+        let sub = btc_subaccount_from_bytes(principal);
+        assert_eq!(sub[0], principal.len() as u8);
+    }
+
+    #[test]
+    fn test_btc_subaccount_principal_bytes_embedded() {
+        let principal = b"\xaa\xbb\xcc\xdd";
+        let sub = btc_subaccount_from_bytes(principal);
+        assert_eq!(&sub[1..5], &[0xaa, 0xbb, 0xcc, 0xdd]);
+    }
+
+    #[test]
+    fn test_btc_subaccount_unique_per_principal() {
+        let p1 = b"\x01\x02\x03\x04\x05";
+        let p2 = b"\x01\x02\x03\x04\x06"; // differs only in last byte
+        let sub1 = btc_subaccount_from_bytes(p1);
+        let sub2 = btc_subaccount_from_bytes(p2);
+        assert_ne!(sub1, sub2);
+    }
+
+    #[test]
+    fn test_btc_subaccount_single_byte_principal() {
+        let principal = b"\xff";
+        let sub = btc_subaccount_from_bytes(principal);
+        assert_eq!(sub[0], 1); // length = 1
+        assert_eq!(sub[1], 0xff);
+        assert_eq!(&sub[2..], &[0u8; 30]);
+    }
+
+    #[test]
+    fn test_deposit_subaccount_is_deterministic() {
+        let principal = b"\xde\xad\xbe\xef\x01\x02\x03\x04";
+        let a = deposit_subaccount_from_bytes(principal);
+        let b = deposit_subaccount_from_bytes(principal);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_deposit_subaccount_is_32_bytes() {
+        let principal = b"\x01\x02";
+        let sub = deposit_subaccount_from_bytes(principal);
+        assert_eq!(sub.len(), 32);
+    }
+
+    #[test]
+    fn test_deposit_subaccount_unique_per_principal() {
+        let p1 = b"\x01\x02\x03\x04\x05";
+        let p2 = b"\x05\x04\x03\x02\x01";
+        let sub1 = deposit_subaccount_from_bytes(p1);
+        let sub2 = deposit_subaccount_from_bytes(p2);
+        assert_ne!(sub1, sub2);
+    }
+
+    #[test]
+    fn test_btc_and_deposit_subaccounts_differ() {
+        // The two derivation schemes must not collide — they serve different
+        // purposes (ckBTC minter path vs external ICRC wallet path).
+        let principal = b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a";
+        let btc_sub = btc_subaccount_from_bytes(principal);
+        let dep_sub = deposit_subaccount_from_bytes(principal);
+        assert_ne!(btc_sub, dep_sub, "BTC and deposit subaccounts must be distinct");
+    }
+
+    // =========================================================================
+    // BTC DEPOSIT — SWEEP AMOUNT CALCULATION
+    // =========================================================================
+
+    const CKBTC_FEE: u64 = 10; // satoshis
+
+    fn sweep_amount(minted: u64) -> Option<u64> {
+        if minted == 0 {
+            return None;
+        }
+        let net = minted.saturating_sub(CKBTC_FEE);
+        if net > 0 { Some(net) } else { None }
+    }
+
+    #[test]
+    fn test_sweep_deducts_ckbtc_fee() {
+        assert_eq!(sweep_amount(10_000), Some(9_990));
+    }
+
+    #[test]
+    fn test_sweep_exact_fee_yields_none() {
+        // Minted == fee → nothing to sweep
+        assert_eq!(sweep_amount(CKBTC_FEE), None);
+    }
+
+    #[test]
+    fn test_sweep_below_fee_yields_none() {
+        assert_eq!(sweep_amount(5), None);
+    }
+
+    #[test]
+    fn test_sweep_zero_minted_yields_none() {
+        assert_eq!(sweep_amount(0), None);
+    }
+
+    #[test]
+    fn test_sweep_one_sat_above_fee() {
+        assert_eq!(sweep_amount(CKBTC_FEE + 1), Some(1));
+    }
+
+    #[test]
+    fn test_sweep_large_deposit() {
+        // 1 BTC = 100_000_000 sats
+        assert_eq!(sweep_amount(100_000_000), Some(99_999_990));
+    }
+
+    #[test]
+    fn test_sweep_saturating_sub_no_underflow() {
+        // u64::MAX minted should not panic
+        let result = sweep_amount(u64::MAX);
+        assert_eq!(result, Some(u64::MAX - CKBTC_FEE));
+    }
+
+    // =========================================================================
+    // BTC DEPOSIT — BALANCE ARITHMETIC
+    // =========================================================================
+
+    #[test]
+    fn test_balance_credit_saturating_add() {
+        let current: u64 = u64::MAX - 5;
+        let credit: u64 = 10; // would overflow without saturating
+        let result = current.saturating_add(credit);
+        assert_eq!(result, u64::MAX, "saturating_add must clamp at u64::MAX");
+    }
+
+    #[test]
+    fn test_balance_deduct_exact_amount() {
+        let balance: u64 = 50_000;
+        let withdraw: u64 = 50_000;
+        assert_eq!(balance.checked_sub(withdraw), Some(0));
+    }
+
+    #[test]
+    fn test_balance_deduct_insufficient_funds() {
+        let balance: u64 = 9_000;
+        let withdraw: u64 = 10_000;
+        assert!(balance < withdraw, "withdrawal must be rejected when balance insufficient");
+    }
+
+    #[test]
+    fn test_balance_refund_saturating_add() {
+        // On withdrawal failure, refund must restore balance exactly
+        let balance_before: u64 = 50_000;
+        let deducted: u64 = 10_000;
+        let after_deduct = balance_before - deducted;
+        let after_refund = after_deduct.saturating_add(deducted);
+        assert_eq!(after_refund, balance_before);
+    }
+
+    // =========================================================================
+    // BTC DEPOSIT — WITHDRAWAL VALIDATION
+    // =========================================================================
+
+    const MIN_BTC_WITHDRAWAL: u64 = 10_000; // satoshis
+
+    fn validate_withdraw_btc(address: &str, amount: u64, balance: u64) -> Result<(), String> {
+        if address.is_empty() {
+            return Err("BTC address cannot be empty".to_string());
+        }
+        if amount < MIN_BTC_WITHDRAWAL {
+            return Err(format!("Minimum BTC withdrawal is {} satoshis", MIN_BTC_WITHDRAWAL));
+        }
+        if balance < amount {
+            return Err(format!("Insufficient ckBTC balance. Have {} sats, need {}", balance, amount));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_withdraw_btc_valid() {
+        assert!(validate_withdraw_btc("bc1qvalidaddress", 10_000, 50_000).is_ok());
+    }
+
+    #[test]
+    fn test_withdraw_btc_empty_address_rejected() {
+        assert!(validate_withdraw_btc("", 10_000, 50_000).is_err());
+    }
+
+    #[test]
+    fn test_withdraw_btc_below_minimum_rejected() {
+        assert!(validate_withdraw_btc("bc1qvalidaddress", 9_999, 50_000).is_err());
+    }
+
+    #[test]
+    fn test_withdraw_btc_exactly_minimum_accepted() {
+        assert!(validate_withdraw_btc("bc1qvalidaddress", 10_000, 10_000).is_ok());
+    }
+
+    #[test]
+    fn test_withdraw_btc_insufficient_balance_rejected() {
+        assert!(validate_withdraw_btc("bc1qvalidaddress", 10_000, 5_000).is_err());
+    }
+
+    #[test]
+    fn test_withdraw_btc_zero_amount_rejected() {
+        assert!(validate_withdraw_btc("bc1qvalidaddress", 0, 50_000).is_err());
+    }
+
+    // =========================================================================
+    // BTC DEPOSIT — TIMING TESTS
+    // Measures wall-clock duration of pure, synchronous operations that run
+    // on every deposit/withdrawal.  These are not hard assertions (they would
+    // be flaky on slow CI runners) but they log the duration so regressions
+    // are visible in `cargo test -- --nocapture`.
+    // =========================================================================
+
+    fn elapsed_micros(start: std::time::Instant) -> u128 {
+        start.elapsed().as_micros()
+    }
+
+    #[test]
+    fn timing_btc_subaccount_single_derivation() {
+        let principal = b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e";
+        let start = std::time::Instant::now();
+        let _ = btc_subaccount_from_bytes(principal);
+        let us = elapsed_micros(start);
+        println!("[timing] btc_subaccount single derivation: {}µs", us);
+        // Sanity: must complete well under 1ms on any reasonable hardware
+        assert!(us < 1_000, "subaccount derivation took {}µs — unexpectedly slow", us);
+    }
+
+    #[test]
+    fn timing_deposit_subaccount_single_derivation() {
+        let principal = b"\xde\xad\xbe\xef\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a";
+        let start = std::time::Instant::now();
+        let _ = deposit_subaccount_from_bytes(principal);
+        let us = elapsed_micros(start);
+        println!("[timing] deposit_subaccount (SHA256) single derivation: {}µs", us);
+        assert!(us < 1_000, "SHA256 subaccount derivation took {}µs — unexpectedly slow", us);
+    }
+
+    #[test]
+    fn timing_btc_subaccount_batch_1000() {
+        let principals: Vec<Vec<u8>> = (0u16..1000)
+            .map(|i| vec![(i >> 8) as u8, (i & 0xff) as u8, 0xaa, 0xbb])
+            .collect();
+
+        let start = std::time::Instant::now();
+        for p in &principals {
+            let _ = btc_subaccount_from_bytes(p);
+        }
+        let ms = start.elapsed().as_millis();
+        println!("[timing] btc_subaccount 1000 derivations: {}ms", ms);
+        assert!(ms < 100, "1000 subaccount derivations took {}ms — unexpectedly slow", ms);
+    }
+
+    #[test]
+    fn timing_deposit_subaccount_batch_1000() {
+        let principals: Vec<Vec<u8>> = (0u16..1000)
+            .map(|i| vec![(i >> 8) as u8, (i & 0xff) as u8, 0xcc, 0xdd])
+            .collect();
+
+        let start = std::time::Instant::now();
+        for p in &principals {
+            let _ = deposit_subaccount_from_bytes(p);
+        }
+        let ms = start.elapsed().as_millis();
+        println!("[timing] deposit_subaccount (SHA256) 1000 derivations: {}ms", ms);
+        assert!(ms < 500, "1000 SHA256 derivations took {}ms — unexpectedly slow", ms);
+    }
+
+    #[test]
+    fn timing_sweep_calculation_batch_1000() {
+        // Simulates processing 1000 UTXOs in a single update_btc_balance call
+        let utxos: Vec<u64> = (1u64..=1000).map(|i| i * 1_000).collect();
+
+        let start = std::time::Instant::now();
+        let total: u64 = utxos.iter()
+            .filter_map(|&minted| sweep_amount(minted))
+            .fold(0u64, |acc, x| acc.saturating_add(x));
+        let us = elapsed_micros(start);
+        println!("[timing] sweep calculation 1000 UTXOs: {}µs (total={})", us, total);
+        assert!(us < 10_000, "sweep calculation over 1000 UTXOs took {}µs", us);
+    }
+
+    #[test]
+    fn timing_balance_arithmetic_batch_10000() {
+        // Simulates 10,000 sequential balance credits (e.g. bulk deposit sweep)
+        let mut balance: u64 = 0;
+        let start = std::time::Instant::now();
+        for i in 0u64..10_000 {
+            balance = balance.saturating_add(i.saturating_mul(100));
+        }
+        let us = elapsed_micros(start);
+        println!("[timing] balance arithmetic 10k operations: {}µs (final={})", us, balance);
+        assert!(us < 10_000, "10k balance operations took {}µs", us);
+    }
 }

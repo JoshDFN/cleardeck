@@ -145,11 +145,21 @@ fn init() {
 fn set_admin(new_admin: Principal) -> Result<(), String> {
     let caller = ic_cdk::api::msg_caller();
 
+    // Reject anonymous callers
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot set admin".to_string());
+    }
+
     // Allow if no admin is set (recovery case) or if caller is current admin
     let is_current_admin = ADMIN.with(|a| a.borrow().map(|admin| admin == caller).unwrap_or(false));
     let no_admin_set = ADMIN.with(|a| a.borrow().is_none());
 
-    if !is_current_admin && !no_admin_set {
+    if no_admin_set {
+        // Recovery path: require caller to be a canister controller
+        if !ic_cdk::api::is_controller(&caller) {
+            return Err("Only canister controllers can set admin when no admin exists".to_string());
+        }
+    } else if !is_current_admin {
         return Err("Only current admin can set new admin".to_string());
     }
 
@@ -622,6 +632,11 @@ fn update_table_name(table_id: u64, new_name: String) -> Result<(), String> {
 /// SECURITY: Only authorized table canisters or admin can update
 #[ic_cdk::update]
 fn update_player_count(table_id: u64, count: u8) -> Result<(), String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot update player count".to_string());
+    }
+
     // Verify caller is authorized
     if !is_authorized_table() && !is_admin() {
         return Err("Unauthorized: only registered table canisters can update player count".to_string());
@@ -683,6 +698,11 @@ fn validate_username(username: &str) -> Result<(), String> {
 #[ic_cdk::update]
 fn register_player(username: String) -> Result<PlayerProfile, String> {
     let caller = ic_cdk::api::msg_caller();
+
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot register".to_string());
+    }
+
     let timestamp = ic_cdk::api::time();
 
     // Validate username format and content
@@ -722,6 +742,11 @@ fn register_player(username: String) -> Result<PlayerProfile, String> {
 /// SECURITY: Only authorized table canisters or admin can update
 #[ic_cdk::update]
 fn update_player_stats(player: Principal, winnings: i64, hands: u64) -> Result<(), String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot update player stats".to_string());
+    }
+
     // Verify caller is authorized
     if !is_authorized_table() && !is_admin() {
         return Err("Unauthorized: only registered table canisters can update player stats".to_string());

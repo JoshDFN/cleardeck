@@ -12,8 +12,8 @@
   import { playSound, setSoundEnabled, isSoundEnabled } from "$lib/sounds.js";
   import logger from "$lib/logger.js";
   import { auth, isSignatureError, wallet } from "$lib/auth.js";
-  import { HttpAgent } from '@icp-sdk/core';
-  import { Principal } from '@icp-sdk/core';
+  import { HttpAgent } from '@icp-sdk/core/agent';
+  import { Principal } from '@icp-sdk/core/principal';
 
   let view = $state('lobby'); // 'lobby' | 'table'
   let tables = $state([]);
@@ -579,6 +579,8 @@
             } else if (tableCurrency === 'ETH') {
               const eth = returnedSmallest / 1_000_000_000_000_000_000;
               returnedDisplay = `${eth >= 0.0001 ? eth.toFixed(6) : eth.toFixed(8)} ETH`;
+            } else if (tableCurrency === 'DOGE') {
+              returnedDisplay = `${(returnedSmallest / 100_000_000).toFixed(4)} DOGE`;
             } else {
               returnedDisplay = `${(returnedSmallest / 100_000_000).toFixed(4)} ICP`;
             }

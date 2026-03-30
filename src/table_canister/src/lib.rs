@@ -485,6 +485,12 @@ thread_local! {
     static CURRENT_ACTIONS: RefCell<Vec<ActionRecord>> = RefCell::new(Vec::new());
     static BALANCES: RefCell<HashMap<Principal, u64>> = RefCell::new(HashMap::new());
     static VERIFIED_DEPOSITS: RefCell<HashMap<u64, Principal>> = RefCell::new(HashMap::new());
+    // Watermark: highest block index that was pruned from VERIFIED_DEPOSITS.
+    // Any notify_deposit with block_index <= this value is rejected, preventing replay of pruned entries.
+    static MIN_VERIFIED_BLOCK_INDEX: RefCell<u64> = RefCell::new(0);
+    // Failed ckBTC sweeps: (caller, amount) pairs where sweep transfer failed after minter minted.
+    // These funds are stuck in the user's subaccount and can be retried.
+    static FAILED_CKBTC_SWEEPS: RefCell<Vec<(Principal, u64)>> = RefCell::new(Vec::new());
     // Pending deposits being verified - prevents double-crediting race condition
     static PENDING_DEPOSITS: RefCell<HashMap<u64, Principal>> = RefCell::new(HashMap::new());
     // Pending withdrawals - prevents reentrancy (used by WithdrawalGuard)
@@ -649,17 +655,29 @@ fn periodic_cleanup() {
         }
     });
 
-    // Cap VERIFIED_DEPOSITS to prevent unbounded memory growth
-    // Keep the most recent 10,000 entries (remove oldest by block index)
+    // Cap VERIFIED_DEPOSITS to prevent unbounded memory growth.
+    // Keep the most recent 10,000 entries. Record the highest pruned block index
+    // as a watermark so pruned entries cannot be replayed via notify_deposit().
     VERIFIED_DEPOSITS.with(|v| {
         let mut deposits = v.borrow_mut();
         if deposits.len() > 10_000 {
             let mut keys: Vec<u64> = deposits.keys().copied().collect();
             keys.sort();
             let to_remove = deposits.len() - 10_000;
+            let mut highest_pruned: u64 = 0;
             for key in keys.into_iter().take(to_remove) {
                 deposits.remove(&key);
+                if key > highest_pruned {
+                    highest_pruned = key;
+                }
             }
+            // Update watermark — only raise it, never lower
+            MIN_VERIFIED_BLOCK_INDEX.with(|m| {
+                let mut min = m.borrow_mut();
+                if highest_pruned > *min {
+                    *min = highest_pruned;
+                }
+            });
         }
     });
 
@@ -1148,6 +1166,16 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
 
     if rate_limited {
         return Err("Too many deposit verification attempts. Please wait a minute.".to_string());
+    }
+
+    // Reject block indices at or below the pruning watermark.
+    // These were previously verified but pruned for memory; replaying them would grant free funds.
+    let below_watermark = MIN_VERIFIED_BLOCK_INDEX.with(|m| {
+        block_index <= *m.borrow()
+    });
+
+    if below_watermark {
+        return Err("This deposit has already been credited".to_string());
     }
 
     // Check if this block was already processed
@@ -1852,7 +1880,7 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
         }
 
         // Deduct immediately while holding the lock
-        balances.insert(caller, current_balance - amount);
+        balances.insert(caller, current_balance.saturating_sub(amount));
         Ok(())
     })?;
 
@@ -1932,6 +1960,9 @@ fn dev_faucet(_amount: u64) -> Result<u64, String> {
 #[ic_cdk::update]
 fn buy_in(seat: u8, amount: u64) -> Result<(), String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot perform this action".to_string());
+    }
 
     // Check escrow balance
     let balance = BALANCES.with(|b| {
@@ -1976,7 +2007,7 @@ fn buy_in(seat: u8, amount: u64) -> Result<(), String> {
         // Deduct from escrow
         BALANCES.with(|b| {
             let mut balances = b.borrow_mut();
-            balances.insert(caller, balance - amount);
+            balances.insert(caller, balance.saturating_sub(amount));
         });
 
         // BUGFIX: If joining mid-hand, player must sit out until next hand
@@ -2033,6 +2064,9 @@ fn buy_in(seat: u8, amount: u64) -> Result<(), String> {
 #[ic_cdk::update]
 fn reload(amount: u64) -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot perform this action".to_string());
+    }
 
     let currency = get_table_currency();
     // Check escrow balance (atomic check and deduct)
@@ -2044,7 +2078,7 @@ fn reload(amount: u64) -> Result<u64, String> {
                 currency.format_amount(balance),
                 currency.format_amount(amount)));
         }
-        balances.insert(caller, balance - amount);
+        balances.insert(caller, balance.saturating_sub(amount));
         Ok(amount)
     })?;
 
@@ -2101,6 +2135,9 @@ fn reload(amount: u64) -> Result<u64, String> {
 #[ic_cdk::update]
 fn cash_out() -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot perform this action".to_string());
+    }
 
     // Check if player is in a hand
     let in_hand = TABLE.with(|t| {
@@ -3006,6 +3043,9 @@ fn count_players_can_act(state: &TableState) -> usize {
 #[ic_cdk::update]
 fn join_table(seat: u8) -> Result<(), String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot perform this action".to_string());
+    }
     let now = ic_cdk::api::time();
 
     // Check escrow balance
@@ -3046,7 +3086,7 @@ fn join_table(seat: u8) -> Result<(), String> {
         let buy_in_amount = state.config.min_buy_in;
         BALANCES.with(|b| {
             let mut balances = b.borrow_mut();
-            balances.insert(caller, balance - buy_in_amount);
+            balances.insert(caller, balance.saturating_sub(buy_in_amount));
         });
 
         // Determine if joining during active hand - if so, sit out until next hand
@@ -3101,6 +3141,9 @@ fn join_table(seat: u8) -> Result<(), String> {
 #[ic_cdk::update]
 fn leave_table() -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot perform this action".to_string());
+    }
 
     let chips = TABLE.with(|t| {
         let mut table = t.borrow_mut();
@@ -3164,6 +3207,9 @@ fn leave_table() -> Result<u64, String> {
 fn player_action(action: PlayerAction) -> Result<(), String> {
     check_rate_limit()?;
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot perform this action".to_string());
+    }
     let now = ic_cdk::api::time();
 
     TABLE.with(|t| {
@@ -3994,6 +4040,11 @@ pub enum TimeoutCheckResult {
 /// This should be called periodically or before each action
 #[ic_cdk::update]
 fn check_timeouts() -> TimeoutCheckResult {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        ic_cdk::trap("Anonymous callers cannot perform this action");
+    }
+
     // Run periodic cleanup of unbounded maps
     periodic_cleanup();
 
@@ -4132,6 +4183,9 @@ fn check_timeouts() -> TimeoutCheckResult {
 #[ic_cdk::update]
 fn heartbeat() -> Result<(), String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot perform this action".to_string());
+    }
     let now = ic_cdk::api::time();
 
     // Rate limit heartbeats to prevent DoS
@@ -4180,6 +4234,9 @@ fn heartbeat() -> Result<(), String> {
 #[ic_cdk::update]
 fn sit_out() -> Result<(), String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot perform this action".to_string());
+    }
     let now = ic_cdk::api::time();
 
     TABLE.with(|t| {
@@ -4202,6 +4259,9 @@ fn sit_out() -> Result<(), String> {
 #[ic_cdk::update]
 fn sit_in() -> Result<(), String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot perform this action".to_string());
+    }
     let now = ic_cdk::api::time();
 
     TABLE.with(|t| {
@@ -4239,6 +4299,9 @@ fn sit_in() -> Result<(), String> {
 #[ic_cdk::update]
 fn sit_out_next_hand() -> Result<(), String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot perform this action".to_string());
+    }
 
     TABLE.with(|t| {
         let mut table = t.borrow_mut();
@@ -4260,6 +4323,9 @@ fn sit_out_next_hand() -> Result<(), String> {
 #[ic_cdk::update]
 fn use_time_bank() -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot perform this action".to_string());
+    }
     let now = ic_cdk::api::time();
 
     TABLE.with(|t| {
@@ -4311,6 +4377,9 @@ fn use_time_bank() -> Result<u64, String> {
 #[ic_cdk::update]
 fn show_cards() -> Result<(Card, Card), String> {
     let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot perform this action".to_string());
+    }
 
     TABLE.with(|t| {
         let table = t.borrow();
@@ -4702,6 +4771,12 @@ struct PersistentState {
     display_names: Vec<(Principal, String)>, // Custom display names
     #[serde(default)]
     doge_balances: Option<Vec<(Principal, u64)>>, // Internal DOGE balance tracking; Option for Candid compatibility
+    #[serde(default)]
+    doge_credited_utxos: Option<Vec<String>>, // Credited DOGE UTXOs; Option for Candid compatibility
+    #[serde(default)]
+    min_verified_block_index: Option<u64>, // Watermark: highest pruned block index; Option for Candid compatibility
+    #[serde(default)]
+    failed_ckbtc_sweeps: Option<Vec<(Principal, u64)>>, // (caller, amount) for failed ckBTC sweeps awaiting retry
 }
 
 const CURRENT_SCHEMA_VERSION: u32 = 2;
@@ -4725,6 +4800,9 @@ fn pre_upgrade() {
         current_seed: CURRENT_SEED.with(|s| s.borrow().clone()),
         display_names: DISPLAY_NAMES.with(|d| d.borrow().iter().map(|(k, v)| (*k, v.clone())).collect()),
         doge_balances: Some(DOGE_BALANCES.with(|b| b.borrow().iter().map(|(k, v)| (*k, *v)).collect())),
+        doge_credited_utxos: Some(DOGE_CREDITED_UTXOS.with(|c| c.borrow().iter().cloned().collect())),
+        min_verified_block_index: Some(MIN_VERIFIED_BLOCK_INDEX.with(|m| *m.borrow())),
+        failed_ckbtc_sweeps: Some(FAILED_CKBTC_SWEEPS.with(|f| f.borrow().clone())),
     };
 
     if let Err(e) = ic_cdk::storage::stable_save((state,)) {
@@ -4860,6 +4938,30 @@ fn post_upgrade() {
             for (k, v) in doge_balances {
                 balances.insert(k, v);
             }
+        });
+    }
+
+    // Restore DOGE credited UTXOs (field may be absent in old state)
+    if let Some(doge_credited_utxos) = state.doge_credited_utxos {
+        DOGE_CREDITED_UTXOS.with(|c| {
+            let mut credited = c.borrow_mut();
+            for utxo_id in doge_credited_utxos {
+                credited.insert(utxo_id);
+            }
+        });
+    }
+
+    // Restore watermark for VERIFIED_DEPOSITS pruning (field may be absent in old state)
+    if let Some(min_block) = state.min_verified_block_index {
+        MIN_VERIFIED_BLOCK_INDEX.with(|m| {
+            *m.borrow_mut() = min_block;
+        });
+    }
+
+    // Restore failed ckBTC sweeps (field may be absent in old state)
+    if let Some(failed_sweeps) = state.failed_ckbtc_sweeps {
+        FAILED_CKBTC_SWEEPS.with(|f| {
+            *f.borrow_mut() = failed_sweeps;
         });
     }
 }
@@ -5081,16 +5183,128 @@ async fn update_btc_balance() -> Result<Vec<UtxoStatus>, String> {
                     ic_cdk::println!("Swept {} sats ckBTC to main account for {}", sweep_amount, caller);
                 }
                 Ok((Err(e),)) => {
-                    ic_cdk::println!("WARNING: ckBTC sweep failed for {}: {:?}. Funds in subaccount.", caller, e);
+                    ic_cdk::println!("WARNING: ckBTC sweep failed for {}: {:?}. Funds in subaccount. Recording for retry.", caller, e);
+                    FAILED_CKBTC_SWEEPS.with(|f| {
+                        f.borrow_mut().push((caller, sweep_amount));
+                    });
                 }
                 Err((code, msg)) => {
-                    ic_cdk::println!("WARNING: ckBTC sweep call failed for {}: {:?} - {}", caller, code, msg);
+                    ic_cdk::println!("WARNING: ckBTC sweep call failed for {}: {:?} - {}. Recording for retry.", caller, code, msg);
+                    FAILED_CKBTC_SWEEPS.with(|f| {
+                        f.borrow_mut().push((caller, sweep_amount));
+                    });
                 }
             }
         }
     }
 
     Ok(statuses)
+}
+
+/// Retry a previously failed ckBTC sweep. When the sweep from a user's subaccount
+/// to the canister's main account fails after ckBTC was minted, the amount is recorded.
+/// The user can call this to retry sweeping those funds into their balance.
+#[ic_cdk::update]
+async fn retry_ckbtc_sweep() -> Result<u64, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot retry sweeps".to_string());
+    }
+
+    // Find and remove all failed sweeps for this caller
+    let failed: Vec<u64> = FAILED_CKBTC_SWEEPS.with(|f| {
+        let mut sweeps = f.borrow_mut();
+        let mut caller_amounts = Vec::new();
+        sweeps.retain(|(p, amount)| {
+            if *p == caller {
+                caller_amounts.push(*amount);
+                false // remove from list
+            } else {
+                true // keep
+            }
+        });
+        caller_amounts
+    });
+
+    if failed.is_empty() {
+        return Err("No failed sweeps to retry".to_string());
+    }
+
+    let total_amount: u64 = failed.iter().copied().fold(0u64, |acc, x| acc.saturating_add(x));
+
+    // Compute the user's deposit subaccount
+    let subaccount = {
+        let mut hasher = Sha256::new();
+        hasher.update(b"cleardeck-deposit:");
+        hasher.update(caller.as_slice());
+        hasher.finalize().to_vec()
+    };
+
+    let currency = TABLE_CONFIG.with(|c| {
+        c.borrow().as_ref().map(|tc| tc.currency.clone())
+    }).ok_or("Table not configured")?;
+
+    let ledger_id = currency.ledger_canister();
+    let ckbtc_fee = 10u64; // ckBTC transfer fee: 10 satoshis
+
+    if total_amount <= ckbtc_fee {
+        return Err(format!("Failed sweep amount ({}) is too small to cover the fee ({})", total_amount, ckbtc_fee));
+    }
+
+    let sweep_amount = total_amount.saturating_sub(ckbtc_fee);
+    let subaccount_arr: [u8; 32] = subaccount.try_into().unwrap_or([0u8; 32]);
+
+    let transfer_args = TransferArg {
+        from_subaccount: Some(subaccount_arr),
+        to: Account {
+            owner: ic_cdk::api::canister_self(),
+            subaccount: None,
+        },
+        amount: Nat::from(sweep_amount),
+        fee: Some(Nat::from(ckbtc_fee)),
+        memo: None,
+        created_at_time: Some(ic_cdk::api::time()),
+    };
+
+    let transfer_result: Result<(Result<Nat, TransferError>,), _> =
+        ic_cdk::call(ledger_id, "icrc1_transfer", (transfer_args,)).await;
+
+    match transfer_result {
+        Ok((Ok(_),)) => {
+            BALANCES.with(|b| {
+                let mut balances = b.borrow_mut();
+                let current = balances.get(&caller).copied().unwrap_or(0);
+                balances.insert(caller, current.saturating_add(sweep_amount));
+            });
+            ic_cdk::println!("Retry sweep succeeded: {} sats ckBTC for {}", sweep_amount, caller);
+            Ok(sweep_amount)
+        }
+        Ok((Err(e),)) => {
+            // Re-record the failed sweep so user can try again
+            FAILED_CKBTC_SWEEPS.with(|f| {
+                f.borrow_mut().push((caller, total_amount));
+            });
+            Err(format!("Sweep retry failed: {:?}. Your funds are safe — try again later.", e))
+        }
+        Err((code, msg)) => {
+            FAILED_CKBTC_SWEEPS.with(|f| {
+                f.borrow_mut().push((caller, total_amount));
+            });
+            Err(format!("Sweep retry call failed: {:?} - {}. Your funds are safe — try again later.", code, msg))
+        }
+    }
+}
+
+/// Query: check if the caller has any failed ckBTC sweeps pending retry.
+#[ic_cdk::query]
+fn get_failed_sweeps() -> Vec<u64> {
+    let caller = ic_cdk::api::msg_caller();
+    FAILED_CKBTC_SWEEPS.with(|f| {
+        f.borrow().iter()
+            .filter(|(p, _)| *p == caller)
+            .map(|(_, amount)| *amount)
+            .collect()
+    })
 }
 
 /// Arguments for retrieve_btc_with_approval call to ckBTC minter
@@ -5152,7 +5366,7 @@ async fn withdraw_btc(btc_address: String, amount: u64) -> Result<u64, String> {
         if current < amount {
             return Err(format!("Insufficient ckBTC balance. Have {} sats, need {}", current, amount));
         }
-        balances.insert(caller, current - amount);
+        balances.insert(caller, current.saturating_sub(amount));
         Ok(())
     })?;
 
@@ -5904,7 +6118,7 @@ async fn check_doge_deposit() -> Result<Vec<DogeDepositStatus>, String> {
         DOGE_BALANCES.with(|balances| {
             let mut balances = balances.borrow_mut();
             let balance = balances.entry(caller).or_insert(0);
-            *balance += utxo.value;
+            *balance = balance.saturating_add(utxo.value);
         });
 
         // Mark UTXO as credited
@@ -5974,7 +6188,7 @@ async fn withdraw_doge(destination: String, amount: u64) -> Result<String, Strin
             return Err(format!("Insufficient DOGE balance. Have {} shibes, need {}", current_balance, amount));
         }
         // Deduct immediately while holding the lock
-        balances.insert(caller, current_balance - amount);
+        balances.insert(caller, current_balance.saturating_sub(amount));
         Ok(())
     })?;
 

@@ -1,8 +1,8 @@
 <script>
   import { auth } from '$lib/auth.js';
   import { oisy, formatOisyBalance } from '$lib/oisy.js';
-  import { Actor } from '@icp-sdk/core';
-  import { Principal } from '@icp-sdk/core';
+  import { Actor } from '@icp-sdk/core/agent';
+  import { Principal } from '@icp-sdk/core/principal';
   import { onMount } from 'svelte';
   import IcpLogo from './IcpLogo.svelte';
 
@@ -11,7 +11,8 @@
   // Currency-specific settings (must be before any $state that uses them)
   const isBTC = currency === 'BTC';
   const isETH = currency === 'ETH';
-  const currencySymbol = isBTC ? 'BTC' : isETH ? 'ETH' : 'ICP';
+  const isDOGE = currency === 'DOGE';
+  const currencySymbol = isBTC ? 'BTC' : isETH ? 'ETH' : isDOGE ? 'DOGE' : 'ICP';
   const unitName = isBTC ? 'sats' : isETH ? 'wei' : 'e8s';
   const transferFee = isBTC ? 10n : isETH ? 2_000_000_000_000n : 10000n;
   const minDeposit = isBTC ? 1000n : isETH ? 10_000_000_000_000n : 20000n;
@@ -30,7 +31,7 @@
   });
 
   // Subscribe to OISY wallet state
-  let oisyState = $state({ isConnected: false, isConnecting: false, icpBalance: null, ckbtcBalance: null });
+  let oisyState = $state({ isConnected: false, isConnecting: false, icpBalance: null, ckbtcBalance: null, ckethBalance: null, loadingBalances: false });
   $effect(() => {
     const unsub = oisy.subscribe(s => { oisyState = s; });
     return unsub;
@@ -799,9 +800,6 @@
     }
   }
 
-  // Use effective balance (from II or OISY depending on walletSource)
-  const hasEnoughBalance = $derived(effectiveWalletBalance !== null && effectiveWalletBalance > Number(minDeposit));
-
   // Whether we're in the token (ckBTC/ckETH/ICP) deposit flow vs native (BTC/ETH) flow
   const showTokenFlow = $derived(
     (!isBTC || depositMethod === 'ckbtc') && (!isETH || depositMethod === 'cketh')
@@ -976,7 +974,7 @@
               {/if}
             </span>
           </div>
-          {#if !oisyState.loadingBalances && !hasEnoughBalance}
+          {#if !oisyState.loadingBalances && !effectiveHasEnoughBalance}
             <div class="no-balance-warning oisy" class:btc={isBTC} class:eth={isETH}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10"/>
@@ -1009,7 +1007,7 @@
             {/if}
           </span>
         </div>
-        {#if !loadingBalance && !hasEnoughBalance}
+        {#if !loadingBalance && !effectiveHasEnoughBalance}
           <div class="no-balance-warning" class:btc={isBTC} class:eth={isETH}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="10"/>
@@ -1532,7 +1530,7 @@
     {/if}
 
     <!-- ETH ckETH funding instructions when no balance (only in cketh mode) -->
-    {#if isETH && depositMethod === 'cketh' && !loadingBalance && !hasEnoughBalance}
+    {#if isETH && depositMethod === 'cketh' && !loadingBalance && !effectiveHasEnoughBalance}
       <div class="deposit-address-section eth">
         <h3>Your ckETH Deposit Address</h3>
         <p class="address-hint">Send ckETH to this principal to fund your poker account:</p>
@@ -1577,7 +1575,7 @@
     {/if}
 
     <!-- ICP funding instructions when no balance -->
-    {#if !isBTC && !isETH && !loadingBalance && !hasEnoughBalance}
+    {#if !isBTC && !isETH && !loadingBalance && !effectiveHasEnoughBalance}
       <div class="deposit-address-section">
         <h3>Your Deposit Address</h3>
         <p class="address-hint">Send ICP to this address to fund your poker account:</p>

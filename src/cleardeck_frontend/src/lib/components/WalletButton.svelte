@@ -2,8 +2,8 @@
   import { auth, wallet, formattedBalance } from '$lib/auth.js';
   import { oisy, formatOisyBalance } from '$lib/oisy.js';
   import { onMount } from 'svelte';
-  import { Principal } from '@icp-sdk/core';
-  import { Actor, HttpAgent } from '@icp-sdk/core';
+  import { Principal } from '@icp-sdk/core/principal';
+  import { Actor, HttpAgent } from '@icp-sdk/core/agent';
   import logger from '$lib/logger.js';
 
   // Props
@@ -27,7 +27,7 @@
   let loadingCkbtcBalance = $state(false);
 
   // OISY wallet state
-  let oisyState = $state({ isConnected: false, isConnecting: false, icpBalance: null, ckbtcBalance: null, principal: null, error: null });
+  let oisyState = $state({ isConnected: false, isConnecting: false, icpBalance: null, ckbtcBalance: null, ckethBalance: null, loadingBalances: false, principal: null, error: null });
   let copiedOisyPrincipal = $state(false);
 
   // ckBTC canister IDs (mainnet)

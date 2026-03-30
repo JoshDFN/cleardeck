@@ -14,8 +14,8 @@
 import { writable, get } from 'svelte/store';
 import { IcpWallet } from '@dfinity/oisy-wallet-signer/icp-wallet';
 import { IcrcWallet } from '@dfinity/oisy-wallet-signer/icrc-wallet';
-import { Principal } from '@icp-sdk/core';
-import { Actor, HttpAgent } from '@icp-sdk/core';
+import { Principal } from '@icp-sdk/core/principal';
+import { Actor, HttpAgent } from '@icp-sdk/core/agent';
 import logger from './logger.js';
 
 // OISY Wallet URLs

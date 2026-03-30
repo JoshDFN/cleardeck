@@ -54,7 +54,7 @@ function getAgentOptions() {
 
     const agentOptions = {
         host,
-        verifyQuerySignatures: false,
+        ...(isMainnet ? {} : { verifyQuerySignatures: false }),
     };
 
     if (authState?.identity) {

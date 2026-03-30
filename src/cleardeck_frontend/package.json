@@ -16,8 +16,7 @@
     "@dfinity/ledger-icp": "^9.1.0",
     "@dfinity/oisy-wallet-signer": "^4.1.0",
     "@dfinity/utils": "^4.1.0",
-    "@icp-sdk/core": "^5.0.0",
-    "@noble/hashes": "^2.0.1"
+    "@icp-sdk/core": "^5.0.0"
   },
   "devDependencies": {
     "@icp-sdk/bindgen": "^0.3.0",
