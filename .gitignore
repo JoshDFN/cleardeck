@@ -10,7 +10,7 @@
 # icp-cli cache (ephemeral, rebuilt automatically)
 .icp/cache/
 
-# legacy dfx cache
+# legacy dfx cache (safe to keep in case dfx was ever run locally)
 .dfx/
 
 # generated TypeScript bindings

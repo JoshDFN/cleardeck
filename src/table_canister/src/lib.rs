@@ -3,8 +3,8 @@
 // ============================================================================
 // This canister holds REAL USER FUNDS (ICP/BTC). When upgrading:
 //
-// ✅ ALWAYS use: dfx canister install <name> --mode upgrade --network ic
-// ❌ NEVER use:  dfx canister install <name> --mode reinstall --network ic
+// ✅ ALWAYS use: icp deploy <name> -e ic --mode upgrade
+// ❌ NEVER use:  icp deploy <name> -e ic --mode reinstall
 //
 // --mode reinstall DESTROYS ALL STATE including user balances!
 // The post_upgrade hook will PANIC if state restoration fails, rejecting
