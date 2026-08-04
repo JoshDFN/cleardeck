@@ -15,26 +15,29 @@
 //! defects already documented in `docs/SECURITY-FINDINGS.md` from new ones.
 
 pub mod actions;
+pub mod documented;
 pub mod fuzz;
 pub mod invariants;
 pub mod legacy_ledger_shapes;
 pub mod ledger;
 pub mod rng;
+pub mod scenario;
 pub mod table_api;
 pub mod wasms;
 pub mod world;
 
+pub use documented::{classify, is_documented, Disposition};
 pub use invariants::{Invariant, Severity, Violation};
 pub use table_api::{Card, PlayerAction, PlayerStatus, TableConfig, TableState};
 pub use world::{OpError, Snapshot, World};
 
 /// Convenience for tests: assert that a set of violations contains none that the
 /// project has not already characterised.
+///
+/// "Characterised" means matched by a NAMED entry in [`documented::REGISTER`], not
+/// "has a negative delta" -- see `documented.rs` and docs/DEFECTS.md H-03.
 pub fn assert_no_new_violations(vs: &[Violation], context: &str) {
-    let blocking: Vec<&Violation> = vs
-        .iter()
-        .filter(|v| !v.severity.is_documented_defect())
-        .collect();
+    let blocking: Vec<&Violation> = vs.iter().filter(|v| !documented::is_documented(v)).collect();
     assert!(
         blocking.is_empty(),
         "{context}: {} invariant violation(s) that are NOT documented defects:\n{}",
@@ -42,12 +45,14 @@ pub fn assert_no_new_violations(vs: &[Violation], context: &str) {
         blocking
             .iter()
             .map(|v| format!(
-                "  [{}] {:?} delta={} phase={} -- {}",
+                "  [{}] {} {:?} delta={} phase={} -- {}\n      BLOCKS BECAUSE: {}",
                 v.invariant.name(),
+                v.check,
                 v.severity,
                 v.delta_e8s,
                 v.phase,
-                v.detail
+                v.detail,
+                documented::blocking_reason(v).unwrap_or("")
             ))
             .collect::<Vec<_>>()
             .join("\n")

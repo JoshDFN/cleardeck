@@ -9,6 +9,58 @@ import {
 
 export const ALL_DEV_PLAYERS = [HERO_PLAYER, ...OPPONENT_PLAYERS];
 
+/**
+ * Reads the lobby's own settled/unsettled signal.
+ *
+ * `+page.svelte` publishes `data-lobby-state` on <main>: "loading" only while
+ * there is genuinely nothing to show, "ready" once the lobby list is what the
+ * user sees. Before that attribute existed, the "Loading tables..." block was a
+ * SIBLING of <Lobby> rather than an either/or branch, so both rendered at once
+ * and ~230 px of layout was in a screenshot or not depending on shutter timing
+ * (docs/DEFECTS.md H-09).
+ *
+ * @param {import('playwright').Page} page
+ * @returns {Promise<string|null>}
+ */
+export function lobbyStateOf(page) {
+  return page.locator('main').first().getAttribute('data-lobby-state').catch(() => null);
+}
+
+/**
+ * Waits until the lobby is settled: real state, not a sleep.
+ *
+ * Three conditions, all read from the live DOM:
+ *   1. <main data-lobby-state="ready">         the app says it has finished loading
+ *   2. the loading block is gone from the DOM   no half-rendered 230 px band
+ *   3. `data-lobby-tables` matches the rows on screen
+ *
+ * Note on the player counts: they need no separate wait. `loadTables()` resolves
+ * every `get_player_count` / `get_max_players` query into a local array and only
+ * then assigns `tables`, and only then sets `loading = false`. So
+ * `data-lobby-state="ready"` already implies every count in every row is a real,
+ * resolved canister answer — there is no placeholder state to wait out. (An
+ * earlier version of this helper tried to detect placeholders by looking for a
+ * bare "-" in the row text and hung forever on the buy-in cell, `2.00 - 10.00`.)
+ *
+ * @param {import('playwright').Page} page
+ * @param {{timeoutMs?:number, requireRows?:boolean}} [opts]
+ */
+export async function waitForLobbySettled(page, { timeoutMs = 60_000, requireRows = true } = {}) {
+  await page.waitForFunction(
+    (needRows) => {
+      const main = document.querySelector('main');
+      if (!main || main.getAttribute('data-lobby-state') !== 'ready') return false;
+      if (document.querySelector('.loading-state')) return false;
+      const rows = document.querySelectorAll('tbody tr').length;
+      if (needRows && rows === 0) return false;
+      const claimed = Number(main.getAttribute('data-lobby-tables'));
+      return Number.isFinite(claimed) && claimed === rows;
+    },
+    requireRows,
+    { timeout: timeoutMs },
+  );
+}
+
 /** Friendly, deterministic names so screenshots do not show raw principals. */
 export const DISPLAY_NAMES = { 1: 'You', 2: 'Nakamoto', 3: 'Ada', 4: 'Turing' };
 

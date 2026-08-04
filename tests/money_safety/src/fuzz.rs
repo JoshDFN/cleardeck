@@ -9,13 +9,15 @@
 //! and M3 is evaluated at every hand boundary. An upgrade step additionally
 //! evaluates M5 across itself.
 //!
-//! Violations are classified by `Severity`. Violations that are already
-//! characterised in `docs/SECURITY-FINDINGS.md` (money stranded inside the
-//! canister, and the stale `side_pots` breakdown that causes it) are counted and
-//! reported but do not stop the run -- otherwise the fuzzer would trip on FINDING
-//! 01 within the first hand and never explore anything else. Anything else --
-//! chips created from nothing, a double payout, state lost across an upgrade --
-//! fails the run and is shrunk to a minimal reproducer.
+//! Whether a violation stops the run is decided by the NAMED register in
+//! `crate::documented`, never by the sign of the delta. Only the handful of
+//! (invariant, check, direction, magnitude) tuples listed there -- each carrying a
+//! defect id from `docs/DEFECTS.md` -- are counted, reported and allowed to
+//! continue, because otherwise the fuzzer would trip on E-01 within the first hand
+//! and never explore anything else. Everything else -- chips from nothing, a double
+//! payout, state lost across an upgrade, a rake, an unregistered `BUG:`/`CRITICAL:`
+//! line from the canister itself -- fails the run and is shrunk to a minimal
+//! reproducer.
 
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -90,6 +92,9 @@ pub struct FuzzReport {
     pub harness: &'static str,
     pub ledger: &'static str,
     pub ledger_sha256: &'static str,
+    /// sha256 of the table canister module the run executed against. Without this a
+    /// report cannot be attributed to a build (docs/DEFECTS.md H-01).
+    pub table_wasm_sha256: &'static str,
     pub runs: Vec<RunReport>,
     pub minimal_reproducers: Vec<Reproducer>,
     pub totals: Totals,
@@ -558,7 +563,7 @@ pub fn run_sequence(
     let final_snap = world.snapshot();
     let (blocking, documented): (Vec<Finding>, Vec<Finding>) = findings
         .into_values()
-        .partition(|f| !f.violation.severity.is_documented_defect());
+        .partition(|f| !crate::documented::is_documented(&f.violation));
 
     let tail_start = transcript.len().saturating_sub(40);
     let report = RunReport {

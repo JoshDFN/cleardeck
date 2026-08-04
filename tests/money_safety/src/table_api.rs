@@ -50,6 +50,37 @@ pub struct Card {
     pub rank: Rank,
 }
 
+impl Card {
+    /// The same card as the engine's own type, so a test can re-evaluate a hand
+    /// through `poker_core::evaluate_hand` -- the exact function the canister's
+    /// showdown path calls.
+    pub fn to_engine(self) -> poker_core::Card {
+        poker_core::Card {
+            suit: match self.suit {
+                Suit::Hearts => poker_core::Suit::Hearts,
+                Suit::Diamonds => poker_core::Suit::Diamonds,
+                Suit::Clubs => poker_core::Suit::Clubs,
+                Suit::Spades => poker_core::Suit::Spades,
+            },
+            rank: match self.rank {
+                Rank::Two => poker_core::Rank::Two,
+                Rank::Three => poker_core::Rank::Three,
+                Rank::Four => poker_core::Rank::Four,
+                Rank::Five => poker_core::Rank::Five,
+                Rank::Six => poker_core::Rank::Six,
+                Rank::Seven => poker_core::Rank::Seven,
+                Rank::Eight => poker_core::Rank::Eight,
+                Rank::Nine => poker_core::Rank::Nine,
+                Rank::Ten => poker_core::Rank::Ten,
+                Rank::Jack => poker_core::Rank::Jack,
+                Rank::Queen => poker_core::Rank::Queen,
+                Rank::King => poker_core::Rank::King,
+                Rank::Ace => poker_core::Rank::Ace,
+            },
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // configuration
 // ---------------------------------------------------------------------------
@@ -207,6 +238,22 @@ pub struct TableState {
     pub bb_has_option: bool,
     pub first_hand: bool,
     pub auto_deal_at: Option<u64>,
+    /// Stakes of seats vacated mid-hand. Part of the payout basis since the E-05
+    /// fix: money in the pot belongs to the hand, not to the chair, so leaving the
+    /// table no longer removes the record of what a player put in. Mirrored here
+    /// because M1b's attribution leg has to measure `pot` against the WHOLE basis;
+    /// against the seated players alone it would report every departure as an
+    /// orphaned stake, which is exactly what the fix stops being true.
+    #[serde(default)]
+    pub departed_stakes: Vec<DepartedStake>,
+}
+
+#[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub struct DepartedStake {
+    pub hand_number: u64,
+    pub seat: u8,
+    pub principal: Principal,
+    pub contributed: u64,
 }
 
 impl TableState {
@@ -224,9 +271,24 @@ impl TableState {
             .fold(0u64, |a, sp| a.saturating_add(sp.amount))
     }
 
+    /// What the SEATED players are credited with putting in this hand.
     pub fn wagered_total(&self) -> u64 {
         self.seated()
             .fold(0u64, |a, p| a.saturating_add(p.total_bet_this_hand))
+    }
+
+    /// Stakes recorded for seats that left mid-hand, for THIS hand only.
+    pub fn departed_total(&self) -> u64 {
+        self.departed_stakes
+            .iter()
+            .filter(|d| d.hand_number == self.hand_number)
+            .fold(0u64, |a, d| a.saturating_add(d.contributed))
+    }
+
+    /// THE PAYOUT BASIS: every chip this hand collected, whether or not the seat
+    /// that put it in is still occupied. This is what `pot` must equal.
+    pub fn payout_basis_total(&self) -> u64 {
+        self.wagered_total().saturating_add(self.departed_total())
     }
 
     pub fn seat_of(&self, who: Principal) -> Option<u8> {
@@ -255,13 +317,29 @@ pub enum TimeoutCheckResult {
     AutoDealReady,
 }
 
-/// Narrow view of `Winner`: only what "who was paid how much" needs.
-/// `hand_rank` and `cards` are dropped by Candid record subtyping.
+/// Narrow view of `Winner`: who was paid how much, and -- critically -- with WHICH
+/// hand the canister thought they won.
+///
+/// `hand_rank` is `poker_core::HandRank`, the engine's own type and the type on the
+/// canister's Candid wire, so a test can compare it against a fresh
+/// `poker_core::evaluate_hand` of the revealed cards with no mirror in between.
 #[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
 pub struct WinnerAmount {
     pub seat: u8,
     pub principal: Principal,
     pub amount: u64,
+    pub hand_rank: Option<poker_core::HandRank>,
+}
+
+/// Narrow view of `ShowdownPlayer`: every player who reached the showdown, with the
+/// hole cards the canister revealed and the rank it assigned them.
+#[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub struct ShowdownRecord {
+    pub seat: u8,
+    pub principal: Principal,
+    pub cards: Option<(poker_core::Card, poker_core::Card)>,
+    pub hand_rank: Option<poker_core::HandRank>,
+    pub amount_won: u64,
 }
 
 /// Narrow view of `HandHistory`.
@@ -269,4 +347,14 @@ pub struct WinnerAmount {
 pub struct HandHistoryAmounts {
     pub hand_number: u64,
     pub winners: Vec<WinnerAmount>,
+    pub community_cards: Vec<Card>,
+    pub showdown_players: Vec<ShowdownRecord>,
+}
+
+impl HandHistoryAmounts {
+    pub fn awarded_total(&self) -> u64 {
+        self.winners
+            .iter()
+            .fold(0u64, |a, w| a.saturating_add(w.amount))
+    }
 }

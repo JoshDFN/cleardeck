@@ -36,6 +36,45 @@ export function runDirs(sha) {
 }
 
 /**
+ * Every filename variant a (scene, viewport) pair can be written under. Used to
+ * clear the stable `latest/` mirror before writing, so a verified PNG from an
+ * earlier run cannot survive next to this run's UNVERIFIED one and be read as
+ * this run's evidence.
+ *
+ * @param {string} scene bare scene name, WITHOUT any UNVERIFIED-/FAILED- prefix
+ * @param {string} viewport
+ * @returns {string[]} basenames
+ */
+function allVariantNames(scene, viewport) {
+  const names = [];
+  for (const prefix of ['', 'UNVERIFIED-', 'FAILED-']) {
+    names.push(`${prefix}${scene}-${viewport}.png`);
+    names.push(`${prefix}${scene}-${viewport}-full.png`);
+  }
+  return names;
+}
+
+/**
+ * Removes every filename variant of one (scene, viewport) from `latest/`.
+ *
+ * WHY: a full run clears `latest/` up front, but a partial run
+ * (`--scenes table-showdown`) does not. Without this, a scene that verified last
+ * run and does NOT verify this run leaves `latest/table-showdown-desktop.png`
+ * from the previous commit sitting beside the new
+ * `latest/UNVERIFIED-table-showdown-desktop.png`, and the canonical name is
+ * exactly the one a reader trusts.
+ *
+ * @param {string} latestDir
+ * @param {string} scene bare scene name
+ * @param {string} viewport
+ */
+export function clearLatestVariants(latestDir, scene, viewport) {
+  for (const name of allVariantNames(scene, viewport)) {
+    fs.rmSync(path.join(latestDir, name), { force: true });
+  }
+}
+
+/**
  * Writes `<scene>-<viewport>.png` at exactly the viewport size, plus a
  * `-full.png` full-page variant (ClearDeck pages are taller than any viewport
  * because of the disclaimer banner and footer).
@@ -92,15 +131,28 @@ export function writeIndex(shaDir, latestDir, manifest) {
     `- app origin: ${manifest.appOrigin}`,
     `- gateway: ${manifest.gateway}`,
     `- frontend asset canister: ${manifest.frontendCanisterId}`,
+    ...(manifest.volatileThirdParty
+      ? [`- fiat figures: **${manifest.volatileThirdParty.mode}** — ${manifest.volatileThirdParty.note}`]
+      : []),
     '',
     '| scene | viewport | file | state verified on-chain | notes |',
     '| --- | --- | --- | --- | --- |',
   ];
   for (const s of manifest.scenes) {
     for (const shot of s.shots) {
+      // Verification is PER SHOT, not per scene. `deposit` verifies at desktop and
+      // cannot verify at mobile (the modal has no entry point below 900px); stamping
+      // the scene-level verdict on both rows marked the good desktop shot "NO" while
+      // it carried the canonical filename — the index disagreeing with the evidence
+      // it indexes. The filename is the single source of truth for that verdict, so
+      // derive it from the filename.
+      const base = (shot.files?.[0] || '').split('/').pop() || '';
+      const verdict = base.startsWith('UNVERIFIED-') || base.startsWith('FAILED-')
+        ? 'NO'
+        : 'yes';
       lines.push(
         `| ${s.scene} | ${shot.viewport} | \`${shot.files[0]}\` | ` +
-          `${s.verified ? 'yes' : 'NO'} | ${(shot.notes || s.notes || '').replace(/\|/g, '/')} |`,
+          `${verdict} | ${(shot.notes || s.notes || '').replace(/\|/g, '/')} |`,
       );
     }
     if (s.shots.length === 0) {

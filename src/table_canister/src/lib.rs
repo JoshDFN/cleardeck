@@ -65,6 +65,15 @@ const MAX_SHOWN_CARDS_HANDS: usize = 10; // Track shown cards for last 10 hands
 const RATE_LIMIT_CLEANUP_AGE_NS: u64 = 60_000_000_000; // Clean up rate limit entries older than 1 minute
 const CLEANUP_INTERVAL_NS: u64 = 30_000_000_000; // Run cleanup every 30 seconds
 
+// Deposit anti-replay. See "DEPOSIT ANTI-REPLAY" below and docs/DEFECTS.md E-02.
+// How many credited block indices are remembered individually. Everything older
+// is refused by DEPOSIT_WATERMARK instead, never forgotten.
+const MAX_VERIFIED_DEPOSITS: usize = 10_000;
+// Trimming sorts the whole key set, so the deposit path only trims once per
+// SLACK deposits rather than on every deposit once the map is at capacity.
+// periodic_cleanup trims at MAX_VERIFIED_DEPOSITS exactly.
+const VERIFIED_DEPOSITS_SLACK: usize = 1_000;
+
 // ============================================================================
 // TYPES - Core poker data structures
 // ============================================================================
@@ -272,6 +281,50 @@ pub struct TableState {
     pub first_hand: bool, // Track if this is the first hand (for dealer button init)
     pub auto_deal_at: Option<u64>, // Timestamp for when to auto-deal next hand (nanoseconds)
     pub last_action: Option<LastActionInfo>, // Last action taken - for UI display
+    /// Stakes of seats that were VACATED while the hand was still live.
+    ///
+    /// `#[serde(default)]` so state written before this field existed restores as
+    /// empty, which is correct: at that point nothing had been recorded.
+    ///
+    /// # Why this field exists (docs/DEFECTS.md E-05)
+    ///
+    /// `leave_table` and `cash_out` set `players[seat] = None` mid-hand. The money
+    /// that seat had already put in stays in `pot`, but the RECORD of who put it
+    /// there vanished with the seat, so the payout basis -- built by enumerating
+    /// the seat vector -- silently shrank, and the difference was appended to the
+    /// highest bet level: the pot only the deepest stacks can win. An honest
+    /// short-stacked all-in lost part of the main pot it was entitled to, with
+    /// every chip conserved, which is why no conservation invariant could see it.
+    ///
+    /// The model: **a stake is recorded independently of seat occupancy.** Money
+    /// in the pot belongs to the hand, not to the chair. Once it is in, the only
+    /// thing leaving the table changes is that the player can no longer WIN it --
+    /// exactly what folding does -- so a departed stake is carried with
+    /// `has_folded = true` and never appears in an eligibility list. The
+    /// alternative model, keeping a ghost `Player` in the seat until the hand
+    /// ends, was rejected: it makes an empty chair look occupied to
+    /// `join_table`, `count_active_players`, the blinds and the UI, and every one
+    /// of those reads would then need to know about a state that is neither
+    /// present nor absent.
+    ///
+    /// Entries are tagged with the hand they belong to and are ignored for any
+    /// other hand, so a stale entry can never join a later hand's pot. They are
+    /// cleared when the hand settles.
+    #[serde(default)]
+    pub departed_stakes: Vec<DepartedStake>,
+}
+
+/// The stake of a seat that was vacated while the hand was still live.
+///
+/// Carries the principal as well as the seat, because money that nobody at the
+/// table can claim has to be refundable to the player who put it in, and by then
+/// they have no seat to credit. See [`TableState::departed_stakes`].
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct DepartedStake {
+    pub hand_number: u64,
+    pub seat: u8,
+    pub principal: Principal,
+    pub contributed: u64,
 }
 
 // `SidePot` also lives in `poker_core` now (see the re-export note above); the
@@ -383,7 +436,13 @@ thread_local! {
     static LAST_HAND_WINNERS: RefCell<Vec<Winner>> = RefCell::new(Vec::new()); // Winners from the previous completed hand
     static CURRENT_ACTIONS: RefCell<Vec<ActionRecord>> = RefCell::new(Vec::new());
     static BALANCES: RefCell<HashMap<Principal, u64>> = RefCell::new(HashMap::new());
+    // Block indices already credited, and therefore refused. Bounded to
+    // MAX_VERIFIED_DEPOSITS + VERIFIED_DEPOSITS_SLACK entries by raising
+    // DEPOSIT_WATERMARK, NOT by forgetting. See "DEPOSIT ANTI-REPLAY".
     static VERIFIED_DEPOSITS: RefCell<HashMap<u64, Principal>> = RefCell::new(HashMap::new());
+    // Monotonically non-decreasing floor: every block index strictly below this is
+    // permanently uncreditable, whether or not it is still in VERIFIED_DEPOSITS.
+    static DEPOSIT_WATERMARK: RefCell<u64> = RefCell::new(0);
     // Pending deposits being verified - prevents double-crediting race condition
     static PENDING_DEPOSITS: RefCell<HashMap<u64, Principal>> = RefCell::new(HashMap::new());
     // Pending withdrawals - prevents reentrancy
@@ -525,19 +584,11 @@ fn periodic_cleanup() {
         }
     });
 
-    // Cap VERIFIED_DEPOSITS to prevent unbounded memory growth
-    // Keep the most recent 10,000 entries (remove oldest by block index)
-    VERIFIED_DEPOSITS.with(|v| {
-        let mut deposits = v.borrow_mut();
-        if deposits.len() > 10_000 {
-            let mut keys: Vec<u64> = deposits.keys().copied().collect();
-            keys.sort();
-            let to_remove = deposits.len() - 10_000;
-            for key in keys.into_iter().take(to_remove) {
-                deposits.remove(&key);
-            }
-        }
-    });
+    // Bound VERIFIED_DEPOSITS. This used to drop the oldest block indices and
+    // FORGET them, which made an already-credited transfer creditable again --
+    // withdrawable ICP created from nothing (docs/DEFECTS.md E-02). It now raises
+    // DEPOSIT_WATERMARK past whatever it drops, so dropped means refused.
+    bound_verified_deposits(MAX_VERIFIED_DEPOSITS);
 
     // Prune DISPLAY_NAMES for principals with no balance and not seated
     let seated_principals: Vec<Principal> = TABLE.with(|t| {
@@ -902,27 +953,14 @@ fn phase_to_string(phase: &GamePhase) -> String {
     }
 }
 
-/// Find the seat that is first clockwise from the dealer among a set of seats
-/// In poker, pot remainders go to the first player clockwise from the button
-fn first_clockwise_from_dealer(dealer_seat: u8, seats: &[u8], num_seats: usize) -> u8 {
-    if seats.is_empty() {
-        return 0;
-    }
-    if seats.len() == 1 {
-        return seats[0];
-    }
-
-    // Start from the seat after the dealer and go clockwise
-    for offset in 1..=num_seats {
-        let check_seat = ((dealer_seat as usize + offset) % num_seats) as u8;
-        if seats.contains(&check_seat) {
-            return check_seat;
-        }
-    }
-
-    // Fallback (shouldn't happen)
-    seats[0]
-}
+// `first_clockwise_from_dealer` used to live here. It answered "which ONE of these
+// seats gets the whole remainder of a chopped pot", and that question is not one the
+// rules of poker ask: odd chips go out one each, walking clockwise from the button
+// (Robert's Rules for flop games; the TDA rules distribute them one at a time from
+// the earliest position). With two winners the two rules coincide, which is why the
+// difference went unnoticed; with three the engine gave one seat two chips that
+// belonged to two different seats. See `poker_core::split_pot_clockwise`, which
+// replaced it, and docs/DEFECTS.md E-35.
 
 // ============================================================================
 // LEDGER INTEGRATION - Real Money Play
@@ -970,6 +1008,171 @@ async fn transfer_tokens(to: Principal, amount: u64) -> Result<u64, String> {
     }
 }
 
+// ============================================================================
+// DEPOSIT ANTI-REPLAY  (docs/DEFECTS.md E-02, docs/SECURITY-FINDINGS.md FINDING 10)
+// ============================================================================
+//
+// THE INVARIANT THIS CODE GUARANTEES, IN WORDS
+//   For every ledger block index B, this canister credits escrow for B AT MOST
+//   ONCE over the entire lifetime of its state. All three deposit doors --
+//   `notify_deposit`, `deposit` (the ICRC-2 pull) and `verify_ckbtc_deposit` --
+//   must call `claim_deposit_block` and see `Ok(())` before they touch BALANCES,
+//   and `claim_deposit_block` is the ONLY writer of the record. It is also the
+//   only place the rule is expressed, so there is one thing to audit.
+//
+// WHY A WATERMARK AND NOT SIMPLY A BIGGER SET
+//   The record has to be bounded: an unbounded map eventually makes `pre_upgrade`
+//   fail to serialise, and a canister holding real funds that cannot be upgraded
+//   is bricked with the funds inside. The shipped code bounded it by FORGETTING
+//   the oldest block indices, and a forgotten index passed the
+//   already-processed check again. One on-ledger transfer, two escrow credits.
+//   So the bound must never turn "spent" into "unknown". It turns it into
+//   "permanently refused" instead:
+//
+//       block index B is REFUSED  if  B < DEPOSIT_WATERMARK
+//                                 or  VERIFIED_DEPOSITS contains B
+//
+//   DEPOSIT_WATERMARK only ever moves UP, and `bound_verified_deposits` moves it
+//   up by exactly enough to cover every index it is about to drop. "Forgotten"
+//   therefore means "below the watermark", which is refused. Memory is bounded
+//   and nothing is ever un-spent.
+//
+// WHAT THIS COSTS, STATED PLAINLY
+//   A raw transfer whose block index has fallen below the watermark can never be
+//   credited, even though it was never credited. Reaching that state takes
+//   MAX_VERIFIED_DEPOSITS further deposits recorded after it and before the
+//   sender ever calls `notify_deposit`. The trade is deliberate and it is
+//   one-directional: a refused late deposit is recoverable, because the ICP is
+//   still on the ledger in this canister's account and the block index is in the
+//   error message, whereas a double credit is not recoverable, because the
+//   invented balance leaves as somebody else's money. The error message says
+//   exactly this, so a user who really did send ICP is not told to send some.
+//
+// ACROSS AN UPGRADE
+//   Both VERIFIED_DEPOSITS and DEPOSIT_WATERMARK are in `PersistentState`, so an
+//   `install_code --mode upgrade` carries the record over unchanged and a block
+//   credited before the upgrade is still refused after it.
+//
+// A FRESH CANISTER, AND A LEDGER OLDER THAN ANYTHING WE REMEMBER
+//   The ICP ledger has tens of millions of blocks that predate this canister.
+//   They are not a replay risk, for a reason that does not depend on the
+//   watermark: `notify_deposit` requires the block's `to` to equal THIS
+//   canister's own account identifier, and no block written before this canister
+//   existed can name it.
+//   `--mode reinstall` is a different matter: it erases this record along with
+//   every balance, after which historical blocks that really were sent to this
+//   canister's account become creditable again. That is NOT defended here. It is
+//   written up in docs/SECURITY-FINDINGS.md, because reinstall already destroys
+//   all escrow and is already forbidden for production canisters (CLAUDE.md,
+//   and `post_upgrade` panics rather than let a bad restore through).
+//
+// KEY SPACE
+//   The record is keyed by block index alone. A table's currency is fixed at
+//   init (`TableConfig.currency`), so ICP block indices and ckBTC transaction
+//   indices never share one canister's key space.
+
+/// Every block index strictly below this has been consumed and can never be
+/// credited again.
+fn deposit_watermark() -> u64 {
+    DEPOSIT_WATERMARK.with(|w| *w.borrow())
+}
+
+/// The refusal reason for `block_index`, or `None` if it currently looks
+/// claimable. Cheap, and it does NOT claim: a caller that passes this must still
+/// call `claim_deposit_block` before crediting, because an `await` in between
+/// gives another message the chance to claim the same block.
+fn deposit_block_refusal(block_index: u64) -> Option<String> {
+    let floor = deposit_watermark();
+    if block_index < floor {
+        return Some(format!(
+            "Deposit block {} is below this table's deposit replay-protection watermark ({}) \
+             and can no longer be credited automatically. Your transfer is still on the ledger \
+             in this canister's account. Contact the table operator and quote block index {}. \
+             (Only reachable if more than {} later deposits were recorded before you claimed \
+             this one.)",
+            block_index, floor, block_index, MAX_VERIFIED_DEPOSITS
+        ));
+    }
+    if VERIFIED_DEPOSITS.with(|v| v.borrow().contains_key(&block_index)) {
+        return Some("This deposit has already been credited".to_string());
+    }
+    None
+}
+
+/// Claim `block_index` for `who`, atomically.
+///
+/// `Ok(())` means the caller now holds the exclusive right to credit that block
+/// and MUST do it in this same message: there must be no `await` between this
+/// returning `Ok` and the `BALANCES` update, or the claim and the credit can come
+/// apart across an upgrade or a trap.
+fn claim_deposit_block(block_index: u64, who: Principal) -> Result<(), String> {
+    // INVARIANT ENFORCEMENT POINT (see the module comment above): a block index
+    // is claimable at most once, ever.
+    if let Some(reason) = deposit_block_refusal(block_index) {
+        return Err(reason);
+    }
+    let claimed = VERIFIED_DEPOSITS.with(|v| {
+        use std::collections::hash_map::Entry;
+        match v.borrow_mut().entry(block_index) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(slot) => {
+                slot.insert(who);
+                true
+            }
+        }
+    });
+    if !claimed {
+        return Err("This deposit has already been credited".to_string());
+    }
+    // Enforce the memory bound at the WRITE point, not only from the timeout
+    // path: nothing obliges a depositor to ever call `check_timeouts`, and an
+    // unbounded record is a route to an unupgradeable canister.
+    bound_verified_deposits(MAX_VERIFIED_DEPOSITS + VERIFIED_DEPOSITS_SLACK);
+    Ok(())
+}
+
+/// Bound `VERIFIED_DEPOSITS` to `MAX_VERIFIED_DEPOSITS` entries once it exceeds
+/// `trigger`, WITHOUT ever forgetting that a block was spent: raise
+/// `DEPOSIT_WATERMARK` past every index about to be dropped, then drop them.
+fn bound_verified_deposits(trigger: usize) {
+    let len = VERIFIED_DEPOSITS.with(|v| v.borrow().len());
+    if len <= trigger || len <= MAX_VERIFIED_DEPOSITS {
+        return;
+    }
+    let drop_count = len - MAX_VERIFIED_DEPOSITS;
+    let mut keys: Vec<u64> = VERIFIED_DEPOSITS.with(|v| v.borrow().keys().copied().collect());
+    keys.sort_unstable();
+    // The highest index being dropped. Everything at or below it becomes refused
+    // by the watermark instead of by its own entry, so dropping it is not
+    // forgetting it.
+    let highest_dropped = keys[drop_count - 1];
+    let new_floor = highest_dropped.saturating_add(1);
+    DEPOSIT_WATERMARK.with(|w| {
+        let mut w = w.borrow_mut();
+        if new_floor > *w {
+            *w = new_floor;
+        }
+    });
+    let floor = deposit_watermark();
+    VERIFIED_DEPOSITS.with(|v| v.borrow_mut().retain(|index, _| *index >= floor));
+    ic_cdk::println!(
+        "deposit replay protection: watermark raised to {} (dropped {} of {} recorded block \
+         indices; they remain permanently uncreditable)",
+        floor, drop_count, len
+    );
+}
+
+/// Deposit replay-protection state, so an operator or a user can see whether a
+/// given block index is still claimable: `(watermark, recorded_block_count)`.
+/// Any block index below the watermark, or already recorded, will be refused.
+#[ic_cdk::query]
+fn get_deposit_replay_state() -> (u64, u64) {
+    (
+        deposit_watermark(),
+        VERIFIED_DEPOSITS.with(|v| v.borrow().len() as u64),
+    )
+}
+
 /// Verify and credit a deposit by checking the ledger transaction
 /// Players should first transfer ICP to the canister's account, then call this with the block index
 #[ic_cdk::update]
@@ -1008,13 +1211,11 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
         return Err("Too many deposit verification attempts. Please wait a minute.".to_string());
     }
 
-    // Check if this block was already processed
-    let already_processed = VERIFIED_DEPOSITS.with(|v| {
-        v.borrow().contains_key(&block_index)
-    });
-
-    if already_processed {
-        return Err("This deposit has already been credited".to_string());
+    // Cheap pre-flight: refuse a block that is already consumed before paying for
+    // a ledger query. This is NOT the enforcement point -- `claim_deposit_block`
+    // below is, because the state can change across the await.
+    if let Some(reason) = deposit_block_refusal(block_index) {
+        return Err(reason);
     }
 
     // Check if this block is currently being verified (prevent race condition)
@@ -1064,10 +1265,13 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
         e8s: u64,
     }
 
-    #[derive(CandidType, Deserialize, Debug, Clone)]
-    struct AccountIdentifier {
-        hash: Vec<u8>,
-    }
+    // The ICP ledger's did says `type AccountIdentifier = blob`, i.e. a BARE
+    // 32-byte blob, NOT `record { hash : blob }`. Declaring it as a record made
+    // the `Operation` variant arms mismatch, and under Candid's `opt` rule a
+    // mismatched `opt Operation` decodes to `null` with NO error -- so every
+    // legitimate transfer was reported as "Transaction is not a transfer".
+    // See docs/DEFECTS.md E-04 / SECURITY-FINDINGS.md FINDING 06 BUG B.
+    type AccountIdentifier = Vec<u8>;
 
     // TimeStamp is a record with timestamp_nanos field (defined first for use in Approve)
     #[derive(CandidType, Deserialize, Debug, Clone)]
@@ -1081,7 +1285,7 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
         to: AccountIdentifier,
         amount: Tokens,
         fee: Tokens,
-        spender: Option<Vec<u8>>,
+        spender: Option<AccountIdentifier>,
     }
 
     #[derive(CandidType, Deserialize, Debug, Clone)]
@@ -1101,7 +1305,7 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
     struct Approve {
         from: AccountIdentifier,
         spender: AccountIdentifier,
-        allowance_e8s: i128,
+        allowance_e8s: candid::Int,
         allowance: Tokens,
         fee: Tokens,
         expires_at: Option<TimeStamp>,
@@ -1156,8 +1360,12 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
         .await;
 
     let response = match call_result {
-        Ok(response) => match response.candid::<(QueryBlocksResponse,)>() {
-            Ok((r,)) => r,
+        // `Response::candid::<R>()` is `decode_one::<R>()`. Asking for
+        // `(QueryBlocksResponse,)` asked the decoder for ONE value of type
+        // `record { 0 : QueryBlocksResponse }`, which the reply can never be.
+        // See docs/DEFECTS.md E-04 / SECURITY-FINDINGS.md FINDING 06 BUG A.
+        Ok(response) => match response.candid::<QueryBlocksResponse>() {
+            Ok(r) => r,
             Err(e) => {
                 clear_pending();
                 return Err(format!("Failed to decode ledger response: {:?}", e));
@@ -1172,10 +1380,10 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
     // Helper function to verify and credit a transfer
     let verify_and_credit = |transfer: &Transfer| -> Result<u64, String> {
         // Verify the transfer was TO this canister
-        if transfer.to.hash.len() != 32 {
+        if transfer.to.len() != 32 {
             return Err("Invalid destination account".to_string());
         }
-        let to_bytes: [u8; 32] = transfer.to.hash.clone().try_into()
+        let to_bytes: [u8; 32] = transfer.to.clone().try_into()
             .map_err(|_| "Invalid destination account length")?;
 
         if to_bytes != expected_to {
@@ -1185,18 +1393,45 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
         // Verify the sender is the caller by computing their expected account identifier.
         // Account identifiers are deterministic: SHA224(domain || principal || subaccount).
         let expected_from = compute_account_identifier(&caller, None);
-        let from_bytes: [u8; 32] = transfer.from.hash.clone().try_into()
+        let from_bytes: [u8; 32] = transfer.from.clone().try_into()
             .map_err(|_| "Invalid source account length".to_string())?;
         if from_bytes != expected_from {
             return Err("This transfer was not sent from your account. Only the sender can claim their deposit.".to_string());
         }
 
-        let amount = transfer.amount.e8s;
+        // An ICRC-2 pull whose spender is THIS canister was made by `deposit()`,
+        // which credited it when the pull happened. `spender` is the only field
+        // that distinguishes such a block from a plain send: `from` is the
+        // caller's account and `to` is this canister's account either way, and
+        // ignoring `spender` is what made one deposit creditable twice
+        // (docs/DEFECTS.md E-02). `deposit()` also records its block index now,
+        // so this is a second line of defence -- and the only one that covers
+        // pulls made before that recording existed.
+        let own_account = compute_account_identifier(&canister, None);
+        if transfer.spender.as_deref() == Some(&own_account[..]) {
+            return Err("This block is an ICRC-2 pull performed by this canister on your \
+                        behalf (the deposit() flow). It was credited to your balance when the \
+                        pull happened and cannot be credited again.".to_string());
+        }
 
-        // Mark this deposit as processed
-        VERIFIED_DEPOSITS.with(|v| {
-            v.borrow_mut().insert(block_index, caller);
-        });
+        let amount = transfer.amount.e8s;
+        if amount == 0 {
+            return Err("Transfer amount is zero; nothing to credit".to_string());
+        }
+
+        // THE ENFORCEMENT POINT. Claim the block, atomically, with no await
+        // between this and the credit below. The pre-flight check further up ran
+        // BEFORE the ledger query, so anything could have claimed this block in
+        // between -- notably `deposit()`, whose own pull writes a block of exactly
+        // this shape. The suffix marks that this is the post-verification claim
+        // and not the pre-flight, because the two are diagnosed differently.
+        claim_deposit_block(block_index, caller).map_err(|reason| {
+            format!(
+                "{} [refused at the post-verification claim: the block was claimed \
+                 while your request was being verified]",
+                reason
+            )
+        })?;
 
         // Credit the player's escrow balance (with overflow protection)
         let new_balance = BALANCES.with(|b| {
@@ -1284,7 +1519,51 @@ async fn deposit(amount: u64) -> Result<u64, String> {
     };
 
     match transfer_result {
-        Ok(_block_index) => {
+        Ok(block_index) => {
+            // Record the block this pull just wrote, BEFORE crediting. Without
+            // this, the block satisfied every check `notify_deposit` performs
+            // (its `from` is the caller, its `to` is this canister) and the same
+            // movement could be credited a second time -- withdrawable ICP
+            // created from nothing (docs/DEFECTS.md E-02, the FUND-THEFT entry).
+            // Both ledgers type block indices as 64-bit, so the conversion below
+            // cannot lose information in practice.
+            let block: u64 = block_index.0.clone().try_into().unwrap_or(u64::MAX);
+            if let Err(reason) = claim_deposit_block(block, caller) {
+                // The pull SUCCEEDED, so real money has already moved. Which of
+                // the two refusals this is decides whether crediting here would
+                // double-credit or whether NOT crediting here would strand the
+                // money, so the two are handled separately rather than lumped.
+                let already_recorded =
+                    VERIFIED_DEPOSITS.with(|v| v.borrow().contains_key(&block));
+                if already_recorded {
+                    // Something already claimed this exact block. The only
+                    // principal that can claim it is the block's `from`, which is
+                    // this caller, so the caller already holds the credit. Report
+                    // the balance they really have and do NOT credit twice.
+                    let current =
+                        BALANCES.with(|b| b.borrow().get(&caller).copied().unwrap_or(0));
+                    ic_cdk::println!(
+                        "deposit(): block {} was already claimed ({}); no second credit \
+                         applied for {}. Balance remains {}.",
+                        block, reason, caller, current
+                    );
+                    return Ok(current);
+                }
+                // Refused but NOT recorded, which can only be the watermark. That
+                // is unreachable by construction -- `bound_verified_deposits`
+                // never raises the watermark above the newest recorded index, and
+                // this block is newer than every recorded index -- but if it ever
+                // happens, money has been pulled that nothing will ever credit.
+                // Credit it here and shout. This cannot double-credit: a
+                // below-watermark block is refused to every other claimant.
+                ic_cdk::println!(
+                    "CRITICAL: deposit(): the block {} this pull just wrote was refused by \
+                     the deposit watermark ({}): {}. Crediting anyway rather than stranding \
+                     the caller's transfer. This means bound_verified_deposits has a bug.",
+                    block, deposit_watermark(), reason
+                );
+            }
+
             // Credit the player's escrow balance
             let new_balance = BALANCES.with(|b| {
                 let mut balances = b.borrow_mut();
@@ -1530,29 +1809,32 @@ async fn verify_ckbtc_deposit(block_index: u64, caller: Principal, canister: Pri
         return Err("This transaction was not sent by you".to_string());
     }
 
+    // An ICRC-2 pull whose spender is THIS canister was made by `deposit()`,
+    // which credited it when the pull happened. Same rule and same reason as the
+    // ICP door (docs/DEFECTS.md E-02): `from` is the caller and `to` is this
+    // canister either way, so `spender` is the only field that tells the two
+    // apart. `deposit()` records its block index now, so this is the second line
+    // of defence -- and the only one covering pulls made before that recording
+    // existed, which on a ckBTC table is the whole of any pre-fix history.
+    if transfer
+        .spender
+        .as_ref()
+        .is_some_and(|s| s.owner == canister)
+    {
+        return Err("This transaction is an ICRC-2 pull performed by this canister on your \
+                    behalf (the deposit() flow). It was credited to your balance when the \
+                    pull happened and cannot be credited again.".to_string());
+    }
+
     let amount: u64 = transfer.amount.0.clone().try_into().unwrap_or(0);
     if amount == 0 {
         return Err("Invalid transaction amount".to_string());
     }
 
-    // ATOMIC: Check if already verified AND mark as verified in one operation
-    // This prevents race conditions where two concurrent calls could both pass the check
-    let already_verified = VERIFIED_DEPOSITS.with(|v| {
-        let mut deposits = v.borrow_mut();
-        // use_entry pattern for atomic check-and-insert
-        use std::collections::hash_map::Entry;
-        match deposits.entry(block_index) {
-            Entry::Occupied(_) => true,  // Already verified
-            Entry::Vacant(e) => {
-                e.insert(caller);  // Mark as verified atomically
-                false
-            }
-        }
-    });
-
-    if already_verified {
-        return Err("This deposit has already been credited".to_string());
-    }
+    // THE ENFORCEMENT POINT for the ckBTC door: one atomic claim, no await
+    // between it and the credit below. Same rule and same record as the ICP door,
+    // including the watermark (see "DEPOSIT ANTI-REPLAY").
+    claim_deposit_block(block_index, caller)?;
 
     // Credit the player's escrow balance
     let new_balance = BALANCES.with(|b| {
@@ -1919,17 +2201,26 @@ fn cash_out() -> Result<u64, String> {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
 
-        for (i, player_opt) in state.players.iter_mut().enumerate() {
-            if let Some(player) = player_opt {
-                if player.principal == caller {
-                    let chips = player.chips;
-                    state.players[i] = None;  // Remove from table
-                    return Ok(chips);
-                }
-            }
+        let seat = state
+            .players
+            .iter()
+            .position(|p| p.as_ref().map(|p| p.principal == caller).unwrap_or(false))
+            .ok_or("Not at table")?;
+
+        // The guard above only refuses players who have NOT folded, so a folded
+        // player -- including one folded by the action timer without ever calling
+        // anything -- can vacate a seat while the hand is live. Their stake stays in
+        // the payout basis, exactly as with `leave_table`. docs/DEFECTS.md E-05,
+        // FINDING 08: this is the door that needs no deliberate call at all.
+        let hand_is_live = state.phase != GamePhase::WaitingForPlayers
+            && state.phase != GamePhase::HandComplete;
+        if hand_is_live {
+            record_departed_stake(state, seat);
         }
 
-        Err("Not at table".to_string())
+        let chips = state.players[seat].as_ref().map(|p| p.chips).unwrap_or(0);
+        state.players[seat] = None; // Remove from table
+        Ok::<u64, String>(chips)
     })?;
 
     // Return chips to escrow balance (with overflow protection)
@@ -2213,6 +2504,7 @@ fn init_table_state(config: TableConfig) {
             first_hand: true, // Track first hand for dealer button init
             auto_deal_at: None,
             last_action: None,
+            departed_stakes: Vec::new(),
         });
     });
 
@@ -2358,6 +2650,9 @@ async fn start_new_hand() -> Result<ShuffleProof, String> {
         state.community_cards.clear();
         state.pot = 0;
         state.side_pots.clear();
+        // Nothing has left this hand yet. Entries are tagged with the hand number
+        // as well, so a leftover could not join this pot even if one survived.
+        state.departed_stakes.clear();
         state.current_bet = state.config.big_blind;
         state.min_raise = state.config.big_blind;
         state.phase = GamePhase::PreFlop;
@@ -2655,7 +2950,10 @@ fn join_table(seat: u8) -> Result<(), String> {
 }
 
 /// Leave table and return chips to escrow balance
-/// If mid-hand, this acts as a fold - pot contributions stay in the pot
+///
+/// If mid-hand this acts as a fold: the money already in the pot stays there, but
+/// the RECORD of who put it there is kept in `state.departed_stakes` so it stays
+/// part of the payout basis. See docs/DEFECTS.md E-05 for what happened before.
 #[ic_cdk::update]
 fn leave_table() -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
@@ -2670,10 +2968,9 @@ fn leave_table() -> Result<u64, String> {
             .ok_or("Not at table")?;
 
         let player = state.players[seat].as_ref().ok_or("Player not found")?;
-        let chips = player.chips;
-        let was_in_hand = !player.has_folded &&
-            state.phase != GamePhase::WaitingForPlayers &&
-            state.phase != GamePhase::HandComplete;
+        let hand_is_live = state.phase != GamePhase::WaitingForPlayers
+            && state.phase != GamePhase::HandComplete;
+        let was_in_hand = !player.has_folded && hand_is_live;
         let was_action_on = state.action_on as usize == seat;
 
         // If we're in a hand, mark as folded first (pot contributions stay in pot)
@@ -2683,18 +2980,41 @@ fn leave_table() -> Result<u64, String> {
             }
         }
 
+        // Anything this player bet that nobody covered was never in play, and once
+        // they are gone nobody can ever cover it. Hand it back before they leave,
+        // rather than leaving it in a pot they are no longer eligible for.
+        if hand_is_live {
+            let contributions = hand_contributions(state);
+            if let Some((top, _excess)) = poker_core::uncalled_excess(&contributions) {
+                if top as usize == seat {
+                    return_uncalled_bet(state);
+                }
+            }
+        }
+
+        // Keep this seat's stake in the payout basis. Money in the pot belongs to
+        // the hand, not to the chair.
+        if hand_is_live {
+            record_departed_stake(state, seat);
+        }
+
+        let chips = state.players[seat]
+            .as_ref()
+            .map(|p| p.chips)
+            .unwrap_or(0);
+
         // Remove player from table
         state.players[seat] = None;
 
         // If player was in the hand, advance game state
         if was_in_hand {
+            let now = ic_cdk::api::time();
             // Check if only one player left - award pot
             if count_active_players(state) == 1 {
-                end_hand_single_winner(state);
+                end_hand_single_winner(state, now);
             } else if was_action_on {
                 // If it was this player's turn, move to next player
                 state.action_on = find_next_active_seat(state, state.action_on);
-                let now = ic_cdk::api::time();
                 let timeout_ns = state.config.action_timeout_secs * 1_000_000_000;
                 state.action_timer = Some(ActionTimer {
                     player_seat: state.action_on,
@@ -2727,254 +3047,396 @@ fn player_action(action: PlayerAction) -> Result<(), String> {
     TABLE.with(|t| {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
-
-        // Find the player
-        let player_seat = state.players.iter()
-            .position(|p| p.as_ref().map(|p| p.principal == caller).unwrap_or(false))
-            .ok_or("Not at table")?;
-
-        if player_seat != state.action_on as usize {
-            return Err("Not your turn".to_string());
-        }
-
-        if state.phase == GamePhase::WaitingForPlayers || state.phase == GamePhase::HandComplete {
-            return Err("No hand in progress".to_string());
-        }
-
-        // BUGFIX: Check if the action timer has expired
-        // If check_timeouts hasn't been called, we still enforce the timer here
-        if let Some(ref timer) = state.action_timer {
-            if now > timer.expires_at {
-                return Err("Action timer has expired. Your turn was forfeited.".to_string());
-            }
-        }
-
-        // First, gather all the info we need from the player without holding the mutable ref
-        let (player_chips, player_current_bet) = {
-            let player = state.players[player_seat].as_ref()
-                .ok_or("Player not found at seat")?;
-            (player.chips, player.current_bet)
-        };
-
-        // Track whether we need to reset acted flags after processing
-        let mut should_reset_acted = false;
-        let mut new_current_bet = state.current_bet;
-
-        // Check if this is BB acting on their option
-        let is_bb_option = state.phase == GamePhase::PreFlop
-            && state.bb_has_option
-            && player_seat == state.big_blind_seat as usize;
-
-        // Validate and process action
-        match action.clone() {
-            PlayerAction::Fold => {
-                let player = state.players[player_seat].as_mut().expect("Player validated at seat");
-                player.has_folded = true;
-                player.last_seen = now;
-                player.has_acted_this_round = true;
-                if is_bb_option {
-                    state.bb_has_option = false;
-                }
-            }
-            PlayerAction::Check => {
-                // Player can check if:
-                // 1. Their current bet matches the table's current bet (nothing to call)
-                // 2. It's BB's option and no one has raised above BB's posted amount
-                //    (handles short-stacked BB who posted less than config.big_blind)
-                let can_check = state.current_bet == player_current_bet
-                    || (is_bb_option && state.current_bet <= player_current_bet);
-
-                if !can_check {
-                    return Err("Cannot check, there's a bet to call".to_string());
-                }
-                let player = state.players[player_seat].as_mut().expect("Player validated at seat");
-                player.last_seen = now;
-                player.has_acted_this_round = true;
-                if is_bb_option {
-                    state.bb_has_option = false;
-                }
-            }
-            PlayerAction::Call => {
-                let to_call = state.current_bet.saturating_sub(player_current_bet);
-                if to_call == 0 {
-                    return Err("Nothing to call, use check".to_string());
-                }
-                let actual_call = to_call.min(player_chips);
-
-                let player = state.players[player_seat].as_mut().expect("Player validated at seat");
-                player.chips = player.chips.saturating_sub(actual_call);
-                player.current_bet = player.current_bet.saturating_add(actual_call);
-                player.total_bet_this_hand = player.total_bet_this_hand.saturating_add(actual_call);
-                state.pot = state.pot.saturating_add(actual_call);
-                if player.chips == 0 {
-                    player.is_all_in = true;
-                }
-                player.last_seen = now;
-                player.has_acted_this_round = true;
-            }
-            PlayerAction::Bet(amount) => {
-                if state.current_bet > 0 {
-                    return Err("Cannot bet, there's already a bet. Use raise.".to_string());
-                }
-                if amount < state.config.big_blind {
-                    return Err(format!("Minimum bet is {}", state.config.currency.format_amount(state.config.big_blind)));
-                }
-                if amount > player_chips {
-                    return Err("Not enough chips".to_string());
-                }
-
-                let player = state.players[player_seat].as_mut().expect("Player validated at seat");
-                player.chips = player.chips.saturating_sub(amount);
-                player.current_bet = amount;
-                player.total_bet_this_hand = player.total_bet_this_hand.saturating_add(amount);
-                state.pot = state.pot.saturating_add(amount);
-                new_current_bet = amount;
-                state.min_raise = amount;
-                state.last_aggressor = Some(player_seat as u8);
-                if player.chips == 0 {
-                    player.is_all_in = true;
-                }
-                player.last_seen = now;
-                player.has_acted_this_round = true;
-                should_reset_acted = true;
-                // Any bet/aggressive action removes BB's option
-                state.bb_has_option = false;
-            }
-            PlayerAction::Raise(amount) => {
-                let raise_amount = amount.saturating_sub(state.current_bet);
-                if raise_amount < state.min_raise {
-                    let currency = state.config.currency;
-                    return Err(format!("Minimum raise is {} (to {})",
-                        currency.format_amount(state.min_raise),
-                        currency.format_amount(state.current_bet.saturating_add(state.min_raise))));
-                }
-                let total_needed = amount.saturating_sub(player_current_bet);
-                if total_needed > player_chips {
-                    return Err("Not enough chips".to_string());
-                }
-
-                let player = state.players[player_seat].as_mut().expect("Player validated at seat");
-                player.chips = player.chips.saturating_sub(total_needed);
-                player.current_bet = amount;
-                player.total_bet_this_hand = player.total_bet_this_hand.saturating_add(total_needed);
-                state.pot = state.pot.saturating_add(total_needed);
-                state.min_raise = raise_amount;
-                new_current_bet = amount;
-                state.last_aggressor = Some(player_seat as u8);
-                if player.chips == 0 {
-                    player.is_all_in = true;
-                }
-                player.last_seen = now;
-                player.has_acted_this_round = true;
-                should_reset_acted = true;
-                // Any raise removes BB's option (not just when BB raises)
-                state.bb_has_option = false;
-            }
-            PlayerAction::AllIn => {
-                let player = state.players[player_seat].as_mut().expect("Player validated at seat");
-                let all_in_amount = player.chips;
-                state.pot = state.pot.saturating_add(all_in_amount);
-                player.current_bet = player.current_bet.saturating_add(all_in_amount);
-                player.total_bet_this_hand = player.total_bet_this_hand.saturating_add(all_in_amount);
-                let final_bet = player.current_bet;
-
-                if final_bet > state.current_bet {
-                    let raise_amount = final_bet.saturating_sub(state.current_bet);
-                    if raise_amount >= state.min_raise {
-                        state.min_raise = raise_amount;
-                    }
-                    new_current_bet = final_bet;
-                    state.last_aggressor = Some(player_seat as u8);
-                    should_reset_acted = true;
-                    // All-in that raises removes BB's option
-                    state.bb_has_option = false;
-                }
-
-                player.chips = 0;
-                player.is_all_in = true;
-                player.last_seen = now;
-                player.has_acted_this_round = true;
-            }
-        }
-
-        state.current_bet = new_current_bet;
-
-        // Reset acted flags after we're done with the player borrow
-        if should_reset_acted {
-            for (i, p_opt) in state.players.iter_mut().enumerate() {
-                if let Some(ref mut p) = p_opt {
-                    if i != player_seat && !p.has_folded && !p.is_all_in {
-                        p.has_acted_this_round = false;
-                    }
-                }
-            }
-        }
-
-        // Track last action for UI display
-        let last_action_type = match action.clone() {
-            PlayerAction::Fold => LastAction::Fold,
-            PlayerAction::Check => LastAction::Check,
-            PlayerAction::Call => {
-                let call_amount = state.current_bet.saturating_sub(player_current_bet).min(player_chips);
-                LastAction::Call { amount: call_amount }
-            },
-            PlayerAction::Bet(amount) => LastAction::Bet { amount },
-            PlayerAction::Raise(amount) => LastAction::Raise { amount },
-            PlayerAction::AllIn => {
-                // Get the player's final bet to show in the action
-                let final_bet = state.players[player_seat].as_ref()
-                    .map(|p| p.current_bet)
-                    .unwrap_or(0);
-                LastAction::AllIn { amount: final_bet }
-            },
-        };
-        state.last_action = Some(LastActionInfo {
-            seat: player_seat as u8,
-            action: last_action_type,
-            timestamp: now,
-        });
-
-        // Record action with current phase and amount
-        let current_phase = phase_to_string(&state.phase);
-        let action_amount = match action.clone() {
-            PlayerAction::Fold | PlayerAction::Check => 0,
-            PlayerAction::Call => state.current_bet.saturating_sub(player_current_bet).min(player_chips),
-            PlayerAction::Bet(amt) | PlayerAction::Raise(amt) => amt,
-            PlayerAction::AllIn => state.players[player_seat].as_ref()
-                .map(|p| p.current_bet)
-                .unwrap_or(0),
-        };
-        CURRENT_ACTIONS.with(|a| {
-            a.borrow_mut().push(ActionRecord {
-                seat: player_seat as u8,
-                action: action.clone(),
-                timestamp: now,
-                phase: current_phase,
-                amount: action_amount,
-            });
-        });
-
-        // Advance game
-        advance_game(state);
-
-        Ok(())
+        apply_player_action(state, caller, now, action)
     })
+}
+
+/// The betting rules of [`player_action`], with the platform pulled out.
+///
+/// `player_action` is `check_rate_limit()` + `msg_caller()` + `time()` + the
+/// `TABLE` borrow + THIS. Everything that decides what is legal, what it does to
+/// the table and where the action goes next lives here, so
+/// `tests/betting_rules.rs` drives the same code the canister runs rather than a
+/// re-implementation of it. docs/DEFECTS.md H-04 is what happens otherwise: seven
+/// of seven mutations to this file survived with all 101 tests green.
+pub fn apply_player_action(
+    state: &mut TableState,
+    caller: Principal,
+    now: u64,
+    action: PlayerAction,
+) -> Result<(), String> {
+    // Find the player
+    let player_seat = state.players.iter()
+        .position(|p| p.as_ref().map(|p| p.principal == caller).unwrap_or(false))
+        .ok_or("Not at table")?;
+
+    if state.phase == GamePhase::WaitingForPlayers || state.phase == GamePhase::HandComplete {
+        return Err("No hand in progress".to_string());
+    }
+
+    // An action timer that has already expired must be RESOLVED, not merely
+    // refused. Refusing left `action_on` pointing at a seat that could no longer
+    // act, so unless something else called `check_timeouts` the hand could not
+    // progress at all and the table wedged. Resolving it here, BEFORE the
+    // whose-turn check, means any player touching the table unwedges it.
+    // See docs/DEFECTS.md E-31.
+    let phase_before_timeout = state.phase.clone();
+    let timed_out_seat = resolve_expired_action_timer(state, now);
+
+    if state.phase == GamePhase::WaitingForPlayers || state.phase == GamePhase::HandComplete {
+        // Resolving the stale timeout ended the hand (everyone else had folded,
+        // or the board ran out). Nothing left for this action to do.
+        return Err(timed_out_message(timed_out_seat, player_seat));
+    }
+
+    // Resolving the stale timer moved the hand to a NEW STREET, so a card this
+    // player has not seen is now on the board. Their message was composed against
+    // the old board; applying it here would commit chips to a street they were
+    // never shown -- measured before this guard as an out-of-turn `Bet(500)` sent
+    // on the flop landing on the turn. The table is still unwedged (the timeout
+    // above has already been applied and persists), so the fix is to refuse THIS
+    // message and let them re-send against the board they can actually see.
+    // See docs/DEFECTS.md "E-31 -- correction".
+    if state.phase != phase_before_timeout {
+        return Err(format!(
+            "A player's clock ran out and the hand moved on to {}. Your action was sent \
+             against the {} board, so it was not applied. Re-send it now that you can see \
+             the new card.",
+            phase_to_string(&state.phase),
+            phase_to_string(&phase_before_timeout)
+        ));
+    }
+
+    if player_seat != state.action_on as usize {
+        // Either it was never their turn, or their own clock had run out and the
+        // action has moved on. Say which.
+        if timed_out_seat == Some(player_seat as u8) {
+            return Err(timed_out_message(timed_out_seat, player_seat));
+        }
+        return Err("Not your turn".to_string());
+    }
+
+    // First, gather all the info we need from the player without holding the mutable ref
+    let (player_chips, player_current_bet, player_has_acted) = {
+        let player = state.players[player_seat].as_ref()
+            .ok_or("Player not found at seat")?;
+        (player.chips, player.current_bet, player.has_acted_this_round)
+    };
+
+    // Track whether we need to reset acted flags after processing
+    let mut should_reset_acted = false;
+    let mut new_current_bet = state.current_bet;
+
+    // Check if this is BB acting on their option
+    let is_bb_option = state.phase == GamePhase::PreFlop
+        && state.bb_has_option
+        && player_seat == state.big_blind_seat as usize;
+
+    // ------------------------------------------------------------------
+    // STANDARD RULE: an incomplete all-in raise does not reopen the betting.
+    // docs/DEFECTS.md E-30. Tests: tests/betting_rules.rs section 1.
+    //
+    // TDA 2022 Rule 47-A, verbatim: "An all-in wager (or CUMULATIVE MULTIPLE SHORT
+    // ALL-INS) totaling less than a full bet or raise will not reopen betting for
+    // players who have already acted and are not facing at least a full bet or
+    // raise when the action returns to them." Robert's Rules of Poker (Ciaffone),
+    // no-limit section, states the other half of the same rule: "Multiple all-in
+    // wagers, each of an amount too small to qualify as a raise, still act as a
+    // raise and reopen the betting if the resulting wager size to a player
+    // qualifies as a raise."
+    //
+    // So the test is NOT "is this player facing anything at all" -- that was the
+    // first implementation of this fix and it is wrong, because it closes a player
+    // whose two short all-ins have added up to a full raise. The test is "is this
+    // player facing at least a full raise", i.e. `amount_owed >= min_raise`.
+    //
+    // `state.min_raise` is exactly the right number to compare against, and it is
+    // load-bearing that it is: the `AllIn` arm below updates `min_raise` ONLY when
+    // the shove is a full raise, so after any number of incomplete all-ins
+    // `min_raise` still holds the last FULL bet-or-raise increment. Cumulative
+    // shorts therefore accumulate in `current_bet` while the yardstick stays put,
+    // which is precisely what Rule 47-A asks to be measured.
+    //
+    // A player who has not yet acted this round (including the big blind, whose
+    // posted blind is not an action) keeps a full option regardless.
+    //
+    // docs/DEFECTS.md E-30 and "E-30 -- correction".
+    // ------------------------------------------------------------------
+    // Named `amount_owed` rather than `to_call`: the `Call` arm below already has a
+    // local `to_call` and shadowing it here would read as two different numbers.
+    let amount_owed = state.current_bet.saturating_sub(player_current_bet);
+    let action_is_closed_to_raising = player_has_acted && amount_owed < state.min_raise;
+
+    // Validate and process action
+    match action.clone() {
+        PlayerAction::Fold => {
+            let player = state.players[player_seat].as_mut().expect("Player validated at seat");
+            player.has_folded = true;
+            player.last_seen = now;
+            player.has_acted_this_round = true;
+            if is_bb_option {
+                state.bb_has_option = false;
+            }
+        }
+        PlayerAction::Check => {
+            // Player can check if:
+            // 1. Their current bet matches the table's current bet (nothing to call)
+            // 2. It's BB's option and no one has raised above BB's posted amount
+            //    (handles short-stacked BB who posted less than config.big_blind)
+            let can_check = state.current_bet == player_current_bet
+                || (is_bb_option && state.current_bet <= player_current_bet);
+
+            if !can_check {
+                return Err("Cannot check, there's a bet to call".to_string());
+            }
+            let player = state.players[player_seat].as_mut().expect("Player validated at seat");
+            player.last_seen = now;
+            player.has_acted_this_round = true;
+            if is_bb_option {
+                state.bb_has_option = false;
+            }
+        }
+        PlayerAction::Call => {
+            let to_call = state.current_bet.saturating_sub(player_current_bet);
+            if to_call == 0 {
+                return Err("Nothing to call, use check".to_string());
+            }
+            let actual_call = to_call.min(player_chips);
+
+            let player = state.players[player_seat].as_mut().expect("Player validated at seat");
+            player.chips = player.chips.saturating_sub(actual_call);
+            player.current_bet = player.current_bet.saturating_add(actual_call);
+            player.total_bet_this_hand = player.total_bet_this_hand.saturating_add(actual_call);
+            state.pot = state.pot.saturating_add(actual_call);
+            if player.chips == 0 {
+                player.is_all_in = true;
+            }
+            player.last_seen = now;
+            player.has_acted_this_round = true;
+        }
+        PlayerAction::Bet(amount) => {
+            if state.current_bet > 0 {
+                return Err("Cannot bet, there's already a bet. Use raise.".to_string());
+            }
+            if amount < state.config.big_blind {
+                return Err(format!("Minimum bet is {}", state.config.currency.format_amount(state.config.big_blind)));
+            }
+            if amount > player_chips {
+                return Err("Not enough chips".to_string());
+            }
+
+            let player = state.players[player_seat].as_mut().expect("Player validated at seat");
+            player.chips = player.chips.saturating_sub(amount);
+            player.current_bet = amount;
+            player.total_bet_this_hand = player.total_bet_this_hand.saturating_add(amount);
+            state.pot = state.pot.saturating_add(amount);
+            new_current_bet = amount;
+            state.min_raise = amount;
+            state.last_aggressor = Some(player_seat as u8);
+            if player.chips == 0 {
+                player.is_all_in = true;
+            }
+            player.last_seen = now;
+            player.has_acted_this_round = true;
+            should_reset_acted = true;
+            // Any bet/aggressive action removes BB's option
+            state.bb_has_option = false;
+        }
+        PlayerAction::Raise(amount) => {
+            if action_is_closed_to_raising {
+                return Err(closed_action_message(&state.config.currency, amount_owed));
+            }
+            let raise_amount = amount.saturating_sub(state.current_bet);
+            if raise_amount < state.min_raise {
+                let currency = state.config.currency;
+                return Err(format!("Minimum raise is {} (to {})",
+                    currency.format_amount(state.min_raise),
+                    currency.format_amount(state.current_bet.saturating_add(state.min_raise))));
+            }
+            let total_needed = amount.saturating_sub(player_current_bet);
+            if total_needed > player_chips {
+                return Err("Not enough chips".to_string());
+            }
+
+            let player = state.players[player_seat].as_mut().expect("Player validated at seat");
+            player.chips = player.chips.saturating_sub(total_needed);
+            player.current_bet = amount;
+            player.total_bet_this_hand = player.total_bet_this_hand.saturating_add(total_needed);
+            state.pot = state.pot.saturating_add(total_needed);
+            state.min_raise = raise_amount;
+            new_current_bet = amount;
+            state.last_aggressor = Some(player_seat as u8);
+            if player.chips == 0 {
+                player.is_all_in = true;
+            }
+            player.last_seen = now;
+            player.has_acted_this_round = true;
+            should_reset_acted = true;
+            // Any raise removes BB's option (not just when BB raises)
+            state.bb_has_option = false;
+        }
+        PlayerAction::AllIn => {
+            // A shove that puts MORE than the current bet in front of this
+            // player is a raise. If the action is closed to them they are not
+            // allowed to raise, so refuse rather than silently reinterpret an
+            // over-shove as a call: quietly changing the size of somebody's
+            // wager is not a safe default in a canister that holds funds.
+            // Shoving for the call amount or less is a call for less, which is
+            // always legal.
+            if action_is_closed_to_raising
+                && player_current_bet.saturating_add(player_chips) > state.current_bet
+            {
+                return Err(closed_action_message(&state.config.currency, amount_owed));
+            }
+
+            let min_raise_in_force = state.min_raise;
+            let player = state.players[player_seat].as_mut().expect("Player validated at seat");
+            let all_in_amount = player.chips;
+            state.pot = state.pot.saturating_add(all_in_amount);
+            player.current_bet = player.current_bet.saturating_add(all_in_amount);
+            player.total_bet_this_hand = player.total_bet_this_hand.saturating_add(all_in_amount);
+            let final_bet = player.current_bet;
+
+            if final_bet > state.current_bet {
+                let raise_amount = final_bet.saturating_sub(state.current_bet);
+                // A FULL raise (at least the min-raise increment in force)
+                // reopens the betting to everyone. An INCOMPLETE all-in raise
+                // does NOT: see the rule note above `action_is_closed_to_raising`.
+                // It still raises the amount owed, and it still costs the big
+                // blind their free check, but players who have already acted
+                // get no new raise -- only call or fold.
+                let is_full_raise = raise_amount >= min_raise_in_force;
+                if is_full_raise {
+                    state.min_raise = raise_amount;
+                    should_reset_acted = true;
+                }
+                new_current_bet = final_bet;
+                state.last_aggressor = Some(player_seat as u8);
+                // Any all-in above the current bet removes BB's free option:
+                // the big blind now faces a bet and can no longer check.
+                state.bb_has_option = false;
+            }
+
+            player.chips = 0;
+            player.is_all_in = true;
+            player.last_seen = now;
+            player.has_acted_this_round = true;
+        }
+    }
+
+    state.current_bet = new_current_bet;
+
+    // Reset acted flags after we're done with the player borrow
+    if should_reset_acted {
+        for (i, p_opt) in state.players.iter_mut().enumerate() {
+            if let Some(ref mut p) = p_opt {
+                if i != player_seat && !p.has_folded && !p.is_all_in {
+                    p.has_acted_this_round = false;
+                }
+            }
+        }
+    }
+
+    // Track last action for UI display
+    let last_action_type = match action.clone() {
+        PlayerAction::Fold => LastAction::Fold,
+        PlayerAction::Check => LastAction::Check,
+        PlayerAction::Call => {
+            let call_amount = state.current_bet.saturating_sub(player_current_bet).min(player_chips);
+            LastAction::Call { amount: call_amount }
+        },
+        PlayerAction::Bet(amount) => LastAction::Bet { amount },
+        PlayerAction::Raise(amount) => LastAction::Raise { amount },
+        PlayerAction::AllIn => {
+            // Get the player's final bet to show in the action
+            let final_bet = state.players[player_seat].as_ref()
+                .map(|p| p.current_bet)
+                .unwrap_or(0);
+            LastAction::AllIn { amount: final_bet }
+        },
+    };
+    state.last_action = Some(LastActionInfo {
+        seat: player_seat as u8,
+        action: last_action_type,
+        timestamp: now,
+    });
+
+    // Record action with current phase and amount
+    let current_phase = phase_to_string(&state.phase);
+    let action_amount = match action.clone() {
+        PlayerAction::Fold | PlayerAction::Check => 0,
+        PlayerAction::Call => state.current_bet.saturating_sub(player_current_bet).min(player_chips),
+        PlayerAction::Bet(amt) | PlayerAction::Raise(amt) => amt,
+        PlayerAction::AllIn => state.players[player_seat].as_ref()
+            .map(|p| p.current_bet)
+            .unwrap_or(0),
+    };
+    CURRENT_ACTIONS.with(|a| {
+        a.borrow_mut().push(ActionRecord {
+            seat: player_seat as u8,
+            action: action.clone(),
+            timestamp: now,
+            phase: current_phase,
+            amount: action_amount,
+        });
+    });
+
+    // Advance game
+    advance_game(state, now);
+
+    Ok(())
+}
+
+/// The rejection a player sees when the action is not reopened to them.
+///
+/// It has to say what they MAY do, not just what they may not: an "invalid
+/// action" with no explanation is indistinguishable from a bug to the player.
+fn closed_action_message(currency: &Currency, to_call: u64) -> String {
+    format!(
+        "The all-in raise was less than a full raise, so the betting is not reopened \
+         to you. You may only call {} or fold.",
+        currency.format_amount(to_call)
+    )
+}
+
+/// The rejection a player sees when their own clock ran out before their message
+/// arrived. The timeout has already been applied by then.
+fn timed_out_message(timed_out_seat: Option<u8>, player_seat: usize) -> String {
+    if timed_out_seat == Some(player_seat as u8) {
+        "Your action timer expired before this action arrived; the hand has moved on."
+            .to_string()
+    } else {
+        "No hand in progress".to_string()
+    }
 }
 
 // Note: reset_acted_flags is now inlined in player_action to avoid borrow conflicts
 
-fn advance_game(state: &mut TableState) {
-    let now = ic_cdk::api::time();
+/// Move the hand on after an action has been applied.
+///
+/// `now` is passed in rather than read from `ic_cdk::api::time()` so the betting
+/// state machine has no platform dependency and `tests/betting_rules.rs` can
+/// drive THIS function instead of a copy of it. See docs/DEFECTS.md H-04: seven
+/// of seven mutations to this file used to survive with the whole suite green.
+pub fn advance_game(state: &mut TableState, now: u64) {
+    // Keep the DISPLAYED side-pot breakdown in step with the money after every
+    // action, not once per street. `side_pots` is a breakdown of what has been
+    // collected, so a reader of `get_table_state` -- the UI, or a money-safety
+    // invariant -- must never see it disagree with `pot`. It is display-only: the
+    // payout is always recomputed from the contributions when the hand settles.
+    if state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete {
+        refresh_side_pots(state);
+    }
 
     // Check if only one player left
     if count_active_players(state) == 1 {
-        end_hand_single_winner(state);
+        end_hand_single_winner(state, now);
         return;
     }
 
     // Check if betting round is complete
     if is_betting_round_complete(state) {
-        advance_to_next_street(state);
+        advance_to_next_street(state, now);
         return;
     }
 
@@ -2991,7 +3453,12 @@ fn advance_game(state: &mut TableState) {
     });
 }
 
-fn is_betting_round_complete(state: &TableState) -> bool {
+/// True when nobody left in the hand still owes an action this street.
+///
+/// `pub` so `tests/betting_rules.rs` can ask the engine, in poker terms, whether
+/// a round is closed -- which is the whole question behind "did an incomplete
+/// all-in wrongly reopen the betting".
+pub fn is_betting_round_complete(state: &TableState) -> bool {
     let players_can_act = count_players_can_act(state);
 
     if players_can_act == 0 {
@@ -3030,11 +3497,20 @@ fn is_betting_round_complete(state: &TableState) -> bool {
 
 /// Run out the remaining community cards when all active players are all-in
 /// This is non-recursive to avoid stack overflow
-fn run_out_board(state: &mut TableState) {
-    // Calculate side pots first
-    if state.side_pots.is_empty() {
-        calculate_side_pots(state);
-    }
+///
+/// `now` is passed in rather than read from `ic_cdk::api::time()` for the same
+/// reason as [`advance_game`]: the whole settlement path is then host-testable, and
+/// docs/DEFECTS.md H-04 is what happens when it is not.
+fn run_out_board(state: &mut TableState, now: u64) {
+    // This is THE all-in moment: nobody left can call, so anything the last
+    // aggressor bet over the biggest stack that could cover it comes straight back
+    // before the board runs out. Real clients do it here; ours used to leave the
+    // excess sitting in a pot only the bettor was eligible for, which paid the
+    // right player but showed everybody an inflated pot.
+    return_uncalled_bet(state);
+    // Keep the DISPLAYED breakdown current. It is display only: the payout is
+    // recomputed from the contributions when the hand settles and never reads this.
+    refresh_side_pots(state);
 
     // Deal remaining cards based on current phase
     loop {
@@ -3071,13 +3547,13 @@ fn run_out_board(state: &mut TableState) {
             GamePhase::River => {
                 // Go to showdown
                 state.phase = GamePhase::Showdown;
-                determine_winners(state);
+                determine_winners(state, now);
                 return;
             }
             _ => {
                 // Already at showdown or waiting - just determine winners
                 if state.phase == GamePhase::Showdown {
-                    determine_winners(state);
+                    determine_winners(state, now);
                 }
                 return;
             }
@@ -3085,8 +3561,24 @@ fn run_out_board(state: &mut TableState) {
     }
 }
 
-fn advance_to_next_street(state: &mut TableState) {
-    let now = ic_cdk::api::time();
+/// Close the current betting round and open the next street.
+///
+/// `now` is passed in for the same reason as [`advance_game`]: no platform
+/// dependency in the betting state machine.
+pub fn advance_to_next_street(state: &mut TableState, now: u64) {
+    // The betting round is closed, so every seat that could still have called the
+    // biggest bet has now either matched it, folded, or is all-in for less. Whatever
+    // the largest contributor put in above the second-largest was therefore never
+    // covered and can never be covered: hand it back before the pots are formed.
+    // Idempotent -- after the return the top is level with the second, so calling it
+    // again does nothing.
+    return_uncalled_bet(state);
+    // Refresh the DISPLAYED side-pot breakdown on EVERY street, not just the flop.
+    // Building it once at the PreFlop -> Flop transition and never again is exactly
+    // what made it stale, and the stale value was then used as the payout basis
+    // (docs/DEFECTS.md E-01). It is now display-only state and the payout is always
+    // recomputed from the contributions.
+    refresh_side_pots(state);
 
     // Reset for new street
     state.current_bet = 0;
@@ -3100,9 +3592,6 @@ fn advance_to_next_street(state: &mut TableState) {
 
     match state.phase {
         GamePhase::PreFlop => {
-            // Calculate side pots before dealing flop (in case of all-ins)
-            calculate_side_pots(state);
-
             // Deal flop (burn + 3 cards - need 4 cards available)
             if state.deck_index + 3 < state.deck.len() {
                 state.deck_index += 1; // Burn
@@ -3134,7 +3623,7 @@ fn advance_to_next_street(state: &mut TableState) {
         GamePhase::River => {
             // Go to showdown
             state.phase = GamePhase::Showdown;
-            determine_winners(state);
+            determine_winners(state, now);
             return;
         }
         _ => {}
@@ -3143,7 +3632,7 @@ fn advance_to_next_street(state: &mut TableState) {
     // Check if we can have more betting (need 2+ players who can act)
     if count_players_can_act(state) < 2 {
         // Run out the board without recursion
-        run_out_board(state);
+        run_out_board(state, now);
         return;
     }
 
@@ -3159,21 +3648,495 @@ fn advance_to_next_street(state: &mut TableState) {
     });
 }
 
-/// Calculate side pots when there are all-in players
-/// This should be called before showdown or when all betting is complete
+// ============================================================================
+// THE PAYOUT PATH
+// ============================================================================
+//
+// docs/DEFECTS.md E-01, E-03, E-05 and docs/FINDING-01-chip-destruction.md were
+// three doors into one mistake: the money was paid out of a SEPARATE ACCOUNT of
+// the pot that could drift away from what the players actually put in.
+//
+//   E-01  `state.side_pots` was built once, at the PreFlop -> Flop transition, and
+//         `determine_winners` only rebuilt it "if empty" -- which it never was.
+//         Every chip wagered on the flop, turn and river was paid to nobody and
+//         then discarded by `state.pot = 0`. Unrecoverable: `withdraw` pays only
+//         against the caller's own escrow and there is no admin withdrawal.
+//   E-03  the split was reconciled against `state.pot` and `state.pot` won
+//         unconditionally: too high and the excess was minted into the highest bet
+//         level, too low and every pot was scaled down through an `f64` ratio.
+//   E-05  a seat vacated mid-hand took the RECORD of its stake with it while the
+//         money stayed in the pot, which is what drove E-03's minting direction.
+//
+// The rules this code now lives by:
+//
+//   1. THE CONTRIBUTIONS ARE THE ONLY PAYOUT BASIS. Every chip in the pot got
+//      there by being subtracted from a stack and added to that seat's
+//      `total_bet_this_hand` in the same statement, so paying out the
+//      contributions restores exactly what was collected, by construction.
+//   2. THE BASIS IS BUILT AT PAYOUT TIME, EVERY TIME. `state.side_pots` is
+//      display-only state and is never read to decide who is paid what.
+//   3. `state.pot` IS A REDUNDANT ACCUMULATOR, NOT A SOURCE OF TRUTH. It is
+//      cross-checked against the contributions and any disagreement is reported
+//      as a `CRITICAL:` line -- an undocumented one of those fails the
+//      money-safety suite -- but it can never move a chip.
+//   4. NOTHING VANISHES. A stake whose seat left is still in the basis; a layer
+//      nobody can win is carried, and if truly nobody can claim it, refunded to
+//      the seats that put it there.
+//   5. THE ARITHMETIC IS CHECKED BEFORE IT IS APPLIED. `plan_payouts` is pure and
+//      host-testable, and the canister refuses to settle a plan that does not pay
+//      out exactly what it collected.
+
+/// Refresh the DISPLAYED side-pot breakdown from the current contributions.
 ///
-/// Thin adapter: the pot-splitting maths lives in
-/// `poker_core::side_pots::build_side_pots` so it can be tested, fuzzed and
-/// differentially compared off-chain. This function only marshals table state in
-/// and out. `poker_core::apply_side_pots` preserves the original early-return
-/// (when nobody has bet this hand the previous side pots are left untouched).
-fn calculate_side_pots(state: &mut TableState) {
-    let contributions = collect_contributions(&state.players);
-    let total_pot = state.pot;
-    let warnings = poker_core::apply_side_pots(&mut state.side_pots, &contributions, total_pot);
-    for warning in warnings {
-        ic_cdk::println!("{}", warning);
+/// Display only. It exists because the UI shows a main pot and side pots while the
+/// hand is live, and because a reader of `get_table_state` should see the truth. No
+/// payout ever reads it: [`plan_payouts`] rebuilds the breakdown from the
+/// contributions at the moment money moves.
+fn refresh_side_pots(state: &mut TableState) {
+    let contributions = hand_contributions(state);
+    state.side_pots = poker_core::build_side_pots_from_contributions(&contributions);
+    report_pot_disagreement(state, &contributions);
+}
+
+/// Cross-check the redundant `state.pot` accumulator against the contributions.
+///
+/// These cannot disagree: every write to `state.pot` in this file is paired with a
+/// write to a seat's `total_bet_this_hand`, and a seat that leaves mid-hand now
+/// leaves its stake behind in `departed_stakes`. If they ever do disagree the
+/// engine says so loudly, and the money-safety suite blocks on an undocumented
+/// `CRITICAL:` line.
+///
+/// It deliberately does NOT trap and does not adjust anything. The contributions
+/// are the account that corresponds to chips actually taken from stacks, so
+/// settling from them is conservation-exact whatever `state.pot` says; trapping
+/// here would instead leave the pot unsettled, and an unsettled pot is the one
+/// state from which money genuinely cannot be recovered (FINDING 01).
+fn report_pot_disagreement(state: &TableState, contributions: &[Contribution]) {
+    let collected = poker_core::total_contributed(contributions);
+    if collected != state.pot {
+        ic_cdk::println!(
+            "CRITICAL: pot accounting disagreement in hand {}: state.pot = {} but the \
+             contributions (including {} departed stake(s)) sum to {}. Settling from the \
+             contributions, which is what was taken from the stacks.",
+            state.hand_number,
+            state.pot,
+            state
+                .departed_stakes
+                .iter()
+                .filter(|d| d.hand_number == state.hand_number)
+                .count(),
+            collected
+        );
     }
+}
+
+/// Hand back the part of the largest stake that nobody covered.
+///
+/// Only ever called when the betting round is closed (a street transition, the
+/// all-in run-out, or settlement), because only then is "nobody covered it"
+/// final. Returns what was handed back, if anything.
+///
+/// The chips go back to the seat's stack, and `total_bet_this_hand` and
+/// `state.pot` are both reduced, so the two accounts of the pot stay in step and
+/// the displayed pot stops including money that was never in play.
+///
+/// If the largest contributor has already left the table its stake is left alone
+/// here; `leave_table` returns its own uncalled excess before it vacates, and
+/// anything still unclaimable at settlement is refunded by [`apply_payouts`].
+fn return_uncalled_bet(state: &mut TableState) -> Option<(u8, u64)> {
+    let contributions = hand_contributions(state);
+    let (seat, excess) = poker_core::uncalled_excess(&contributions)?;
+    if excess == 0 {
+        return None;
+    }
+    let player = state.players.get_mut(seat as usize)?.as_mut()?;
+    if player.total_bet_this_hand < excess {
+        return None;
+    }
+    player.total_bet_this_hand -= excess;
+    player.chips = player.chips.saturating_add(excess);
+    // An all-in player who gets money back is not all-in for that money any more,
+    // but the betting round is closed, so this only affects whether the engine
+    // thinks they can act on later streets -- which they can, if they have chips.
+    if player.chips > 0 {
+        player.is_all_in = false;
+    }
+    state.pot = state.pot.saturating_sub(excess);
+    ic_cdk::println!(
+        "returned uncalled bet of {} to seat {} in hand {}",
+        excess,
+        seat,
+        state.hand_number
+    );
+    Some((seat, excess))
+}
+
+/// Every stake in the current hand, whether or not its seat is still occupied.
+///
+/// THE payout basis. `collect_contributions` alone reads the seat vector, so a seat
+/// vacated mid-hand disappeared from it while its money stayed in the pot
+/// (docs/DEFECTS.md E-05); the departed stakes recorded by `leave_table` /
+/// `cash_out` are what closes that.
+///
+/// A departed stake is carried with `has_folded = true`: it is in the pot, it
+/// counts towards the bet levels, and it can never win a layer.
+pub fn hand_contributions(state: &TableState) -> Vec<Contribution> {
+    let mut out = collect_contributions(&state.players);
+    for stake in state
+        .departed_stakes
+        .iter()
+        .filter(|d| d.hand_number == state.hand_number && d.contributed > 0)
+    {
+        // A seat CAN carry two stakes in one hand, and the money-safety fuzzer found
+        // the sequence: a player leaves mid-hand, somebody else takes the empty chair
+        // (`join_table` seats them `SittingOut`), they call `sit_in()`, and from then
+        // on `find_next_active_seat` will give them the action even though they hold
+        // no cards -- so they can put money into a hand they were never dealt into.
+        // That is docs/DEFECTS.md E-36, and it belongs to the seating and betting
+        // path, not to this one.
+        //
+        // What this path must do about it is keep BOTH stakes. Dropping either is a
+        // destroyed chip. The new occupant is not in `live_claims` (no hole cards), so
+        // they cannot win the departed player's money or their own; it is carried to a
+        // layer that can be settled. Reported as a WARNING and not as `CRITICAL:`
+        // deliberately: nothing about the engine's accounting is inconsistent here,
+        // and `CRITICAL:` is reserved in this file for accounts that disagree, which
+        // the money-safety classifier treats as a failure that stops the run.
+        if out.iter().any(|c| c.seat == stake.seat) {
+            ic_cdk::println!(
+                "WARNING: seat {} carries both a live stake and a departed stake in hand {} \
+                 (the chair was re-occupied mid-hand, docs/DEFECTS.md E-36). Both are in the \
+                 payout basis; the new occupant holds no cards and can win neither.",
+                stake.seat,
+                state.hand_number
+            );
+        }
+        out.push(Contribution::new(stake.seat, stake.contributed, true));
+    }
+    out.sort_by_key(|c| c.seat);
+    out
+}
+
+/// Record the stake of a seat that is about to be vacated mid-hand.
+///
+/// Called by every door out of an occupied seat while a hand is live
+/// (`leave_table`, `cash_out`). Returns the stake recorded, if any.
+fn record_departed_stake(state: &mut TableState, seat: usize) -> u64 {
+    let hand_number = state.hand_number;
+    let Some(player) = state.players.get(seat).and_then(|p| p.as_ref()) else {
+        return 0;
+    };
+    let contributed = player.total_bet_this_hand;
+    if contributed == 0 {
+        return 0;
+    }
+    let principal = player.principal;
+    // Drop anything from an earlier hand: bounded by the number of seats per hand.
+    state
+        .departed_stakes
+        .retain(|d| d.hand_number == hand_number);
+    state.departed_stakes.push(DepartedStake {
+        hand_number,
+        seat: seat as u8,
+        principal,
+        contributed,
+    });
+    ic_cdk::println!(
+        "seat {} left hand {} with {} in the pot; the stake stays in the payout basis",
+        seat,
+        hand_number,
+        contributed
+    );
+    contributed
+}
+
+/// Why a seat is being credited. Carried so the record says which pot, and so a
+/// refund can never be mistaken for a win.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PayoutReason {
+    /// A share of pot layer `layer`, won at showdown or by everybody else folding.
+    PotShare { layer: usize },
+    /// A layer no remaining player could win, returned to the seats that put the
+    /// money there. Real betting cannot produce this.
+    Refund { layer: usize },
+}
+
+/// One credit the settlement must make.
+#[derive(Clone, Debug)]
+pub struct Payout {
+    pub seat: u8,
+    /// `None` for a departed stake being refunded: it has no seat any more, so the
+    /// money goes to that principal's escrow.
+    pub principal: Option<Principal>,
+    pub amount: u64,
+    pub reason: PayoutReason,
+}
+
+/// What a hand owes, derived from the contributions and the cards. PURE.
+#[derive(Clone, Debug)]
+pub struct PayoutPlan {
+    /// The pot layers this plan pays out of, newly built from the contributions.
+    pub side_pots: Vec<SidePot>,
+    /// Every credit to make, layer by layer.
+    pub payouts: Vec<Payout>,
+    /// Seats that reached a showdown, with the rank they held.
+    pub ranked: Vec<(u8, HandRank, Principal, (Card, Card))>,
+    /// Chips the hand collected: the contributions after any uncalled bet has been
+    /// returned. This is what the plan must pay out, exactly.
+    pub collected: u64,
+    /// Sum of `payouts`.
+    pub awarded: u64,
+}
+
+impl PayoutPlan {
+    /// The post-condition. ClearDeck takes no rake, so this is exact to the e8.
+    pub fn conserves(&self) -> bool {
+        self.awarded == self.collected
+    }
+
+    pub fn amount_for(&self, seat: u8) -> u64 {
+        self.payouts
+            .iter()
+            .filter(|p| p.seat == seat)
+            .fold(0u64, |a, p| a.saturating_add(p.amount))
+    }
+}
+
+/// Every seat that still has a claim on the pot: seated, not folded, holding cards.
+///
+/// A seat with no cards cannot win a pot, and it cannot have bet anything either,
+/// because `join_table` seats a mid-hand arrival as `SittingOut`, which never gets
+/// the action.
+fn live_claims(state: &TableState) -> Vec<(u8, Principal, (Card, Card))> {
+    state
+        .players
+        .iter()
+        .enumerate()
+        .filter_map(|(seat, player)| {
+            let p = player.as_ref()?;
+            if p.has_folded {
+                return None;
+            }
+            Some((seat as u8, p.principal, p.hole_cards?))
+        })
+        .collect()
+}
+
+/// Rank the claims, IF there is a board to rank them against.
+///
+/// A hand that ends before the flop has no board and needs no ranking: everybody
+/// else folded, so the last player standing takes the pot without showing.
+/// `poker_core::evaluate_hand` rejects a 0-card board by trapping -- that is the
+/// E-09 fix doing its job -- so ranking unconditionally here would trap on every
+/// pre-flop fold-out.
+fn rank_claims(
+    state: &TableState,
+    claim: &[(u8, Principal, (Card, Card))],
+) -> Vec<(u8, HandRank, Principal, (Card, Card))> {
+    if !(3..=5).contains(&state.community_cards.len()) {
+        return Vec::new();
+    }
+    claim
+        .iter()
+        .map(|(seat, principal, cards)| {
+            (
+                *seat,
+                evaluate_hand(cards, &state.community_cards),
+                *principal,
+                *cards,
+            )
+        })
+        .collect()
+}
+
+/// The claimants holding the best hand, or all of them if they tie.
+///
+/// A SINGLE claimant wins without showing a hand: that is the rule that pays the
+/// last player standing when everybody else folds, and it is why a pre-flop
+/// fold-out needs no board. `None` means two or more claimants and nothing to rank
+/// them by, which real betting cannot produce.
+fn best_hands_among(
+    claimants: &[u8],
+    ranked: &[(u8, HandRank, Principal, (Card, Card))],
+) -> Option<Vec<u8>> {
+    if claimants.len() == 1 {
+        return Some(claimants.to_vec());
+    }
+    let ranks: Vec<(u8, &HandRank)> = ranked
+        .iter()
+        .filter(|(s, _, _, _)| claimants.contains(s))
+        .map(|(s, rank, _, _)| (*s, rank))
+        .collect();
+    let best = ranks.iter().map(|(_, rank)| *rank).max().cloned()?;
+    Some(
+        ranks
+            .iter()
+            .filter(|(_, rank)| **rank == best)
+            .map(|(s, _)| *s)
+            .collect(),
+    )
+}
+
+/// Decide who gets what. PURE: no platform calls, no mutation, host-testable.
+///
+/// The rules, in order:
+///
+/// 1. the pot is split into layers by all-in depth, from the contributions alone
+///    (`poker_core::build_side_pots_from_contributions`);
+/// 2. a seat is eligible for a layer only if it covered that layer in full and
+///    still has a claim -- it has not folded and has not left the table;
+/// 3. among the eligible seats, the best five-card hand takes the layer and equal
+///    hands chop it. One remaining claimant takes the layer without showing a hand,
+///    which is what pays the last player standing when everybody else folds;
+/// 4. chips that do not divide go out ONE EACH, clockwise from the button;
+/// 5. a layer nobody can win is refunded to the seats that put the money there,
+///    rather than being handed to whoever happens to be deepest.
+///
+/// Callers must return the uncalled bet BEFORE calling this ([`return_uncalled_bet`]);
+/// the plan then covers only money that was actually contested.
+pub fn plan_payouts(state: &TableState) -> PayoutPlan {
+    let contributions = hand_contributions(state);
+    let collected = poker_core::total_contributed(&contributions);
+    let side_pots = poker_core::build_side_pots_from_contributions(&contributions);
+
+    let claim = live_claims(state);
+    let ranked = rank_claims(state, &claim);
+    let num_seats = state.players.len();
+    let mut payouts: Vec<Payout> = Vec::new();
+
+    let claimants_of = |pot: &SidePot| -> Vec<u8> {
+        let mut c: Vec<u8> = pot
+            .eligible_players
+            .iter()
+            .copied()
+            .filter(|seat| claim.iter().any(|(s, _, _)| s == seat))
+            .collect();
+        c.sort_unstable();
+        c.dedup();
+        c
+    };
+
+    // Nobody at the table can win ANY of this money. That is a corrupt state -- a
+    // hand cannot reach settlement with no rankable claim on it -- so rather than
+    // guess, hand every seat back exactly what it put in. It is conserving, it is
+    // exact, and it cannot be gamed: you get your own stake, no more and no less.
+    // Before this, the engine returned early here and left the money in `pot`,
+    // where the next `start_new_hand` zeroed it: destroyed.
+    if side_pots.iter().all(|p| claimants_of(p).is_empty()) {
+        for c in contributions.iter().filter(|c| c.total_bet_this_hand > 0) {
+            payouts.push(Payout {
+                seat: c.seat,
+                principal: principal_of(state, c.seat),
+                amount: c.total_bet_this_hand,
+                reason: PayoutReason::Refund { layer: 0 },
+            });
+        }
+        return PayoutPlan {
+            side_pots,
+            awarded: payouts
+                .iter()
+                .fold(0u64, |a, p| a.saturating_add(p.amount)),
+            payouts,
+            ranked,
+            collected,
+        };
+    }
+
+    // Chips from a layer whose eligible seats cannot be ranked, carried into the
+    // next layer that can be settled. `build_side_pots_from_contributions` already
+    // carries layers with no ELIGIBLE seat; this is the same rule for the one case
+    // it cannot see, an eligible seat holding no cards. Unreachable in play: a seat
+    // is only eligible for a layer it paid into, and a seat that paid was dealt in.
+    let mut carry = 0u64;
+
+    for (layer, pot) in side_pots.iter().enumerate() {
+        if pot.amount == 0 {
+            continue;
+        }
+        let claimants = claimants_of(pot);
+
+        if claimants.is_empty() {
+            carry = carry.saturating_add(pot.amount);
+            continue;
+        }
+        let pot_amount = pot.amount.saturating_add(carry);
+        carry = 0;
+
+        let winners = match best_hands_among(&claimants, &ranked) {
+            Some(w) => w,
+            // Two or more claimants and no board to rank them against. Real betting
+            // cannot reach a settlement in that state; carry the money to a layer
+            // that can be settled rather than guessing a winner.
+            None => {
+                carry = carry.saturating_add(pot_amount);
+                continue;
+            }
+        };
+
+        for (seat, amount) in
+            poker_core::split_pot_clockwise(pot_amount, &winners, state.dealer_seat, num_seats)
+        {
+            payouts.push(Payout {
+                seat,
+                principal: principal_of(state, seat),
+                amount,
+                reason: PayoutReason::PotShare { layer },
+            });
+        }
+    }
+
+    // Chips carried past the last settleable layer. Unreachable: the top layer
+    // always has a claimant in any hand that got as far as settling. If it ever
+    // happens, the money goes back to the seats that funded the hand rather than
+    // being dropped -- a dropped chip is a destroyed chip, and it would make the
+    // plan fail its own post-condition and refuse to settle at all.
+    if carry > 0 {
+        let total = poker_core::total_contributed(&contributions);
+        let mut handed = 0u64;
+        let funders: Vec<&Contribution> = contributions
+            .iter()
+            .filter(|c| c.total_bet_this_hand > 0)
+            .collect();
+        for (i, c) in funders.iter().enumerate() {
+            let share = if i + 1 == funders.len() {
+                carry.saturating_sub(handed)
+            } else {
+                ((carry as u128 * c.total_bet_this_hand as u128) / total.max(1) as u128) as u64
+            };
+            handed = handed.saturating_add(share);
+            payouts.push(Payout {
+                seat: c.seat,
+                principal: principal_of(state, c.seat),
+                amount: share,
+                reason: PayoutReason::Refund { layer: 0 },
+            });
+        }
+    }
+
+    let awarded = payouts
+        .iter()
+        .fold(0u64, |a, p| a.saturating_add(p.amount));
+
+    PayoutPlan {
+        side_pots,
+        payouts,
+        ranked,
+        collected,
+        awarded,
+    }
+}
+
+/// Who occupies `seat`, if anybody. Falls back to a departed stake's principal, so
+/// a refund can reach a player who has already left.
+fn principal_of(state: &TableState, seat: u8) -> Option<Principal> {
+    if let Some(p) = state.players.get(seat as usize).and_then(|p| p.as_ref()) {
+        return Some(p.principal);
+    }
+    state
+        .departed_stakes
+        .iter()
+        .find(|d| d.hand_number == state.hand_number && d.seat == seat)
+        .map(|d| d.principal)
 }
 
 /// Collect ALL players who bet this hand (including folded) with their bets.
@@ -3201,251 +4164,216 @@ pub fn collect_contributions(players: &[Option<Player>]) -> Vec<Contribution> {
         .collect()
 }
 
-fn end_hand_single_winner(state: &mut TableState) {
-    // Reveal the seed now that hand is ending
-    reveal_seed_on_hand_end(state);
+/// Apply a settlement plan to the table. THE ONLY PLACE CHIPS ARE AWARDED.
+///
+/// Refuses -- by trapping, so the whole message is rolled back -- to apply a plan
+/// that does not pay out exactly what the hand collected. ClearDeck takes no rake,
+/// so that is exact to the e8, and a plan that fails it can only mean a bug in
+/// [`plan_payouts`]. Trapping leaves the hand unsettled and the state untouched,
+/// which is recoverable (players can still leave the table with their stacks and
+/// the code can be fixed and the message retried); paying out a plan that does not
+/// add up is not.
+///
+/// Returns one aggregated [`Winner`] per credited seat. A refund of money nobody
+/// could win is included in that list: `Winner::amount` means "chips credited to
+/// this seat when the hand settled", which is what keeps
+/// `sum(winners) == collected` -- the identity the money-safety suite checks as
+/// M3 NO RAKE.
+fn apply_payouts(state: &mut TableState, plan: &PayoutPlan) -> Vec<Winner> {
+    if !plan.conserves() {
+        ic_cdk::trap(&format!(
+            "CRITICAL: refusing to settle hand {}: the payout plan awards {} out of {} \
+             collected (delta {}). Nothing has been credited. side_pots={:?} payouts={:?}",
+            state.hand_number,
+            plan.awarded,
+            plan.collected,
+            plan.awarded as i128 - plan.collected as i128,
+            plan.side_pots,
+            plan.payouts
+        ));
+    }
 
-    // Find the remaining player
-    let winner = state.players.iter()
-        .enumerate()
-        .find(|(_, p)| p.as_ref().map(|p| !p.has_folded).unwrap_or(false));
-
-    // BUGFIX: state.pot already contains all contributions
-    // side_pots are just a breakdown of the same money for eligibility tracking
-    // DO NOT add them together - that would double-pay
-    let total_pot = state.pot;
-
-    let mut winners_for_history = Vec::new();
-
-    if let Some((seat, Some(player))) = winner {
-        let winner_info = Winner {
-            seat: seat as u8,
-            principal: player.principal,
-            amount: total_pot,
-            hand_rank: None,
-            cards: None,
-        };
-
-        winners_for_history.push(winner_info.clone());
-
-        // Award entire pot (with overflow protection)
-        if let Some(ref mut p) = state.players[seat] {
-            p.chips = p.chips.saturating_add(total_pot);
+    let mut winners: Vec<Winner> = Vec::new();
+    for payout in &plan.payouts {
+        if payout.amount == 0 {
+            continue;
         }
+        let seated = state
+            .players
+            .get(payout.seat as usize)
+            .and_then(|p| p.as_ref())
+            .map(|p| p.principal);
 
-        // Update local history
-        HAND_HISTORY.with(|h| {
-            if let Some(last) = h.borrow_mut().last_mut() {
-                last.winners.push(winner_info.clone());
-                last.community_cards = state.community_cards.clone();
-                CURRENT_ACTIONS.with(|a| {
-                    last.actions = a.borrow().clone();
+        match (seated, payout.principal) {
+            // The seat is occupied, but by somebody OTHER than the player this money
+            // is owed to: the original occupant left and a new player took the chair.
+            // Pay the person who is owed it, into their escrow, not the chair.
+            // `join_table` seats a mid-hand arrival as SittingOut with no cards, so
+            // this cannot arise from ordinary play; it is here because crediting a
+            // stranger would be a real loss and the check costs one comparison.
+            (Some(occupant), Some(owed)) if occupant != owed => {
+                BALANCES.with(|b| {
+                    let mut balances = b.borrow_mut();
+                    let current = balances.get(&owed).copied().unwrap_or(0);
+                    balances.insert(owed, current.saturating_add(payout.amount));
                 });
+                ic_cdk::println!(
+                    "CRITICAL: seat {} is occupied by {} but {} is owed {}; paid to their \
+                     escrow instead of the seat",
+                    payout.seat,
+                    occupant,
+                    owed,
+                    payout.amount
+                );
+                push_winner(state, &mut winners, payout, owed);
             }
-        });
-
-        // Store winners for display (separate from HAND_HISTORY)
-        LAST_HAND_WINNERS.with(|w| {
-            *w.borrow_mut() = vec![winner_info];
-        });
-    }
-
-    // Record to history canister (no showdown - single winner by fold)
-    record_hand_to_history(state, &winners_for_history, false);
-
-    state.pot = 0;
-    state.side_pots.clear();
-    state.phase = GamePhase::HandComplete;
-    state.action_timer = None;
-
-    // Mark players with 0 chips as broke (start their reload timer)
-    let now = ic_cdk::api::time();
-    for player in state.players.iter_mut().flatten() {
-        if player.chips == 0 && player.broke_at.is_none() {
-            player.broke_at = Some(now);
-        } else if player.chips > 0 {
-            player.broke_at = None;
+            // The usual case: the seat is still occupied by the player being paid.
+            (Some(occupant), _) => {
+                if let Some(ref mut p) = state.players[payout.seat as usize] {
+                    p.chips = p.chips.saturating_add(payout.amount);
+                }
+                push_winner(state, &mut winners, payout, occupant);
+            }
+            // The seat is empty and this is a refund to a player who left. Their
+            // stack already went back to escrow when they left, so this goes to the
+            // same place.
+            (None, Some(who)) => {
+                BALANCES.with(|b| {
+                    let mut balances = b.borrow_mut();
+                    let current = balances.get(&who).copied().unwrap_or(0);
+                    balances.insert(who, current.saturating_add(payout.amount));
+                });
+                ic_cdk::println!(
+                    "refunded {} to the escrow of {} (seat {} left hand {})",
+                    payout.amount,
+                    who,
+                    payout.seat,
+                    state.hand_number
+                );
+                push_winner(state, &mut winners, payout, who);
+            }
+            // No seat and no recorded principal: there is nobody to credit, so
+            // paying this plan out would destroy the chips. Refuse.
+            (None, None) => ic_cdk::trap(&format!(
+                "CRITICAL: refusing to settle hand {}: {} chips are owed to seat {} but that \
+                 seat is empty and no departed stake records who was in it. Nothing has been \
+                 credited.",
+                state.hand_number, payout.amount, payout.seat
+            )),
         }
     }
-
-    // Schedule auto-deal for next hand
-    state.auto_deal_at = Some(ic_cdk::api::time() + AUTO_DEAL_DELAY_NS);
+    winners
 }
 
-fn determine_winners(state: &mut TableState) {
-    // Reveal the seed now that hand is ending (showdown)
-    reveal_seed_on_hand_end(state);
-
-    // Calculate side pots if not already done
-    if state.side_pots.is_empty() {
-        calculate_side_pots(state);
-    }
-
-    // Evaluate hands for all non-folded players
-    let mut player_hands: Vec<(u8, HandRank, Principal, (Card, Card))> = Vec::new();
-
-    for (i, player) in state.players.iter().enumerate() {
-        if let Some(ref p) = player {
-            if !p.has_folded {
-                if let Some(cards) = p.hole_cards {
-                    let hand_rank = evaluate_hand(&cards, &state.community_cards);
-                    player_hands.push((i as u8, hand_rank, p.principal, cards));
-                }
-            }
-        }
-    }
-
-    if player_hands.is_empty() {
-        state.phase = GamePhase::HandComplete;
+/// Fold one payout into the aggregated winner list.
+fn push_winner(
+    state: &TableState,
+    winners: &mut Vec<Winner>,
+    payout: &Payout,
+    principal: Principal,
+) {
+    if let Some(existing) = winners.iter_mut().find(|w| w.seat == payout.seat) {
+        existing.amount = existing.amount.saturating_add(payout.amount);
         return;
     }
+    let shown = state
+        .players
+        .get(payout.seat as usize)
+        .and_then(|p| p.as_ref())
+        .and_then(|p| p.hole_cards);
+    let rank = match payout.reason {
+        // A refund is not a win, so it carries no hand.
+        PayoutReason::Refund { .. } => None,
+        PayoutReason::PotShare { .. } => shown
+            .filter(|_| state.community_cards.len() >= 3)
+            .map(|cards| evaluate_hand(&cards, &state.community_cards)),
+    };
+    winners.push(Winner {
+        seat: payout.seat,
+        principal,
+        amount: payout.amount,
+        // Only a showdown reveals a hand. A pot won because everybody else folded
+        // is recorded without one, as it was before.
+        hand_rank: if state.phase == GamePhase::Showdown {
+            rank
+        } else {
+            None
+        },
+        cards: if state.phase == GamePhase::Showdown {
+            shown
+        } else {
+            None
+        },
+    });
+}
 
-    let mut winner_list = Vec::new();
-    let mut chips_awarded: HashMap<u8, u64> = HashMap::new();
+/// Settle the hand: return the uncalled bet, build the payout basis from the
+/// contributions, pay it out, and record what happened.
+///
+/// ONE routine for both endings. Before this, a hand that ended by fold was paid
+/// out of `state.pot` and a hand that ended at a showdown was paid out of the
+/// frozen `state.side_pots`, and only one of those two was ever right
+/// (docs/DEFECTS.md E-01). There is now a single payout basis and a single place it
+/// is applied.
+fn settle_hand(state: &mut TableState) -> Vec<Winner> {
+    // Whatever nobody covered goes back first, so it is not treated as contested
+    // money and cannot end up in somebody else's pot.
+    return_uncalled_bet(state);
 
-    // If no side pots, use simple main pot logic
-    if state.side_pots.is_empty() {
-        // Sort by hand rank (best first)
-        player_hands.sort_by(|a, b| b.1.cmp(&a.1));
+    let plan = plan_payouts(state);
+    report_pot_disagreement(state, &hand_contributions(state));
+    // Publish the breakdown the payout is actually being made from, so
+    // `get_table_state` shows the truth for the rest of this message.
+    state.side_pots = plan.side_pots.clone();
 
-        let best_rank = &player_hands[0].1;
-        let winners: Vec<_> = player_hands.iter()
-            .filter(|(_, rank, _, _)| rank == best_rank)
-            .collect();
+    let winners = apply_payouts(state, &plan);
 
-        // Guard against division by zero (should never happen but be safe)
-        if winners.is_empty() {
-            state.phase = GamePhase::HandComplete;
-            return;
-        }
-        let pot_share = state.pot / winners.len() as u64;
-        let remainder = state.pot % winners.len() as u64;
-
-        // Find which winner gets the remainder (first clockwise from dealer)
-        let winner_seats: Vec<u8> = winners.iter().map(|(seat, _, _, _)| *seat).collect();
-        let remainder_seat = first_clockwise_from_dealer(
-            state.dealer_seat,
-            &winner_seats,
-            state.players.len()
-        );
-
-        for (seat, rank, principal, cards) in winners.iter() {
-            let amount = if *seat == remainder_seat { pot_share + remainder } else { pot_share };
-            let entry = chips_awarded.entry(*seat).or_insert(0);
-            *entry = entry.saturating_add(amount);
-
-            winner_list.push(Winner {
-                seat: *seat,
-                principal: *principal,
-                amount,
-                hand_rank: Some(rank.clone()),
-                cards: Some(*cards),
-            });
-        }
-    } else {
-        // Process each side pot separately
-        for side_pot in &state.side_pots {
-            // Find best hand among eligible players
-            let eligible_hands: Vec<_> = player_hands.iter()
-                .filter(|(seat, _, _, _)| side_pot.eligible_players.contains(seat))
-                .collect();
-
-            if eligible_hands.is_empty() {
-                continue;
-            }
-
-            // Find the best hand(s) among eligible players
-            let best_rank = match eligible_hands.iter().map(|(_, rank, _, _)| rank).max() {
-                Some(rank) => rank,
-                None => continue, // No eligible hands for this pot
-            };
-
-            let pot_winners: Vec<_> = eligible_hands.iter()
-                .filter(|(_, rank, _, _)| rank == best_rank)
-                .collect();
-
-            // Guard against division by zero
-            if pot_winners.is_empty() {
-                continue;
-            }
-            let pot_share = side_pot.amount / pot_winners.len() as u64;
-            let remainder = side_pot.amount % pot_winners.len() as u64;
-
-            // Find which winner gets the remainder (first clockwise from dealer)
-            let winner_seats: Vec<u8> = pot_winners.iter().map(|(seat, _, _, _)| *seat).collect();
-            let remainder_seat = first_clockwise_from_dealer(
-                state.dealer_seat,
-                &winner_seats,
-                state.players.len()
-            );
-
-            for (seat, rank, principal, cards) in pot_winners.iter() {
-                let amount = if *seat == remainder_seat { pot_share + remainder } else { pot_share };
-                let entry = chips_awarded.entry(*seat).or_insert(0);
-                *entry = entry.saturating_add(amount);
-
-                // Only add to winner list once per player (aggregate amounts)
-                if let Some(existing) = winner_list.iter_mut().find(|w| w.seat == *seat) {
-                    existing.amount = existing.amount.saturating_add(amount);
-                } else {
-                    winner_list.push(Winner {
-                        seat: *seat,
-                        principal: *principal,
-                        amount,
-                        hand_rank: Some(rank.clone()),
-                        cards: Some(*cards),
-                    });
-                }
-            }
-        }
-    }
-
-    // Build showdown players list BEFORE awarding chips (need to access chips_awarded)
-    let showdown_players: Vec<ShowdownPlayer> = player_hands.iter().map(|(seat, rank, principal, cards)| {
-        let amount_won = chips_awarded.get(seat).copied().unwrap_or(0);
-        ShowdownPlayer {
+    let showdown_players: Vec<ShowdownPlayer> = plan
+        .ranked
+        .iter()
+        .map(|(seat, rank, principal, cards)| ShowdownPlayer {
             seat: *seat,
             principal: *principal,
             cards: Some(*cards),
             hand_rank: Some(rank.clone()),
-            amount_won,
-        }
-    }).collect();
-
-    // Award chips to winners (with overflow protection)
-    for (seat, amount) in chips_awarded {
-        if let Some(ref mut player) = state.players[seat as usize] {
-            player.chips = player.chips.saturating_add(amount);
-        }
-    }
+            amount_won: plan.amount_for(*seat),
+        })
+        .collect();
 
     // Update local history
     HAND_HISTORY.with(|h| {
         if let Some(last) = h.borrow_mut().last_mut() {
-            last.winners = winner_list.clone();
+            last.winners = winners.clone();
             last.community_cards = state.community_cards.clone();
-            last.showdown_players = showdown_players;
+            if state.phase == GamePhase::Showdown {
+                last.showdown_players = showdown_players;
+            }
             CURRENT_ACTIONS.with(|a| {
                 last.actions = a.borrow().clone();
             });
         }
     });
 
-    // Store winners for display (separate from HAND_HISTORY since that gets a new entry when a new hand starts)
+    // Store winners for display (separate from HAND_HISTORY, which gets a new entry
+    // when a new hand starts)
     LAST_HAND_WINNERS.with(|w| {
-        *w.borrow_mut() = winner_list.clone();
+        *w.borrow_mut() = winners.clone();
     });
 
-    // Record to history canister (went to showdown)
-    record_hand_to_history(state, &winner_list, true);
+    winners
+}
 
+/// Close the hand out once the money has moved.
+fn finish_hand(state: &mut TableState, now: u64) {
+    // Every chip collected has been credited to a seat or an escrow balance -- that
+    // is what `apply_payouts` refuses to proceed without -- so the pot is empty.
     state.pot = 0;
     state.side_pots.clear();
+    state.departed_stakes.clear();
     state.phase = GamePhase::HandComplete;
     state.action_timer = None;
 
     // Mark players with 0 chips as broke (start their reload timer)
-    let now = ic_cdk::api::time();
     for player in state.players.iter_mut().flatten() {
         if player.chips == 0 && player.broke_at.is_none() {
             player.broke_at = Some(now);
@@ -3456,7 +4384,33 @@ fn determine_winners(state: &mut TableState) {
     }
 
     // Schedule auto-deal for next hand
-    state.auto_deal_at = Some(ic_cdk::api::time() + AUTO_DEAL_DELAY_NS);
+    state.auto_deal_at = Some(now + AUTO_DEAL_DELAY_NS);
+}
+
+/// Everybody folded except one player: they take the pot without showing a hand.
+pub fn end_hand_single_winner(state: &mut TableState, now: u64) {
+    // Reveal the seed now that hand is ending
+    reveal_seed_on_hand_end(state);
+
+    let winners = settle_hand(state);
+
+    // Record to history canister (no showdown - single winner by fold)
+    record_hand_to_history(state, &winners, false);
+
+    finish_hand(state, now);
+}
+
+/// The showdown.
+pub fn determine_winners(state: &mut TableState, now: u64) {
+    // Reveal the seed now that hand is ending (showdown)
+    reveal_seed_on_hand_end(state);
+
+    let winners = settle_hand(state);
+
+    // Record to history canister (went to showdown)
+    record_hand_to_history(state, &winners, true);
+
+    finish_hand(state, now);
 }
 
 // ============================================================================
@@ -3569,44 +4523,94 @@ fn check_timeouts() -> TimeoutCheckResult {
             }
         }
 
-        // Then check for player timeouts
-        if let Some(ref timer) = state.action_timer {
-            if now > timer.expires_at {
-                let seat = timer.player_seat;
-
-                // Auto-fold the player
-                if let Some(ref mut player) = state.players[seat as usize] {
-                    player.has_folded = true;
-                    player.timeout_count = player.timeout_count.saturating_add(1);
-
-                    // Sit them out if too many timeouts
-                    if player.timeout_count >= MAX_TIMEOUTS_BEFORE_SITOUT {
-                        player.status = PlayerStatus::SittingOut;
-                        player.sitting_out_since = Some(now);
-                    }
-
-                    // Record the timeout as a fold with current phase
-                    let current_phase = phase_to_string(&state.phase);
-                    CURRENT_ACTIONS.with(|a| {
-                        a.borrow_mut().push(ActionRecord {
-                            seat,
-                            action: PlayerAction::Fold,
-                            timestamp: now,
-                            phase: current_phase,
-                            amount: 0, // Fold has no amount
-                        });
-                    });
-                }
-
-                // Advance the game
-                advance_game(state);
-
-                return TimeoutCheckResult::PlayerTimedOut(seat);
-            }
+        // Then check for player timeouts. ONE shared code path with the
+        // resolution inside `player_action`, so the two can never disagree about
+        // what a timeout does.
+        if let Some(seat) = resolve_expired_action_timer(state, now) {
+            return TimeoutCheckResult::PlayerTimedOut(seat);
         }
 
         TimeoutCheckResult::NoAction
     })
+}
+
+/// Apply an action timer that has already expired, and move the hand on.
+///
+/// Returns the seat that timed out, or `None` if there was no expired timer.
+///
+/// WHY THIS IS ONE FUNCTION. `player_action` used to *refuse* an action whose
+/// timer had expired and change nothing else, while only `check_timeouts` ever
+/// resolved the timeout. Nothing in the canister calls `check_timeouts` on its
+/// own -- there is no heartbeat timer driving it, the frontend does -- so if the
+/// frontend stopped polling, `state.action_on` stayed pointed at a seat that
+/// could no longer act and the hand could not progress at all. That was hit
+/// immediately in manual play: both seats ended up `Disconnected` and
+/// `start_new_hand` refused with "Need at least 2 active players with chips"
+/// until they were sat back in by hand. See docs/DEFECTS.md E-31.
+///
+/// A timed-out action must RESOLVE the hand state, because the alternative is a
+/// table that no message can move. The seat's action is forfeited, the game
+/// advances, and the next player gets a fresh clock starting now (they must not
+/// be charged for the idle period).
+///
+/// WHAT A FORFEITED ACTION IS. It is a fold, including when checking would have
+/// been free. That is NOT what online poker rooms do -- they check when there is
+/// nothing to call -- and it is recorded as an audit finding rather than changed
+/// here, because it changes which hands reach showdown and
+/// `tests/money_safety/tests/regressions.rs` REG-08 pins the current behaviour.
+/// This function deliberately preserves it.
+///
+/// The one addition to what `check_timeouts` did before is
+/// `has_acted_this_round = true` on the folded seat, so that flag keeps meaning
+/// exactly "has taken an action this round" -- which is what the incomplete-all-in
+/// rule above derives from. It is unobservable: every read of it is already
+/// guarded by `!has_folded`.
+///
+/// `now` is passed in, not read from `ic_cdk::api::time()`, so the timer path is
+/// host-testable. See `tests/betting_rules.rs`.
+pub fn resolve_expired_action_timer(state: &mut TableState, now: u64) -> Option<u8> {
+    let seat = match state.action_timer {
+        Some(ref timer) if now > timer.expires_at => timer.player_seat,
+        _ => return None,
+    };
+
+    if seat as usize >= state.players.len() {
+        // A timer pointing at a seat that does not exist cannot be resolved as a
+        // fold. Drop it so it cannot wedge the table forever.
+        state.action_timer = None;
+        return None;
+    }
+
+    // Auto-fold the player
+    if let Some(ref mut player) = state.players[seat as usize] {
+        player.has_folded = true;
+        player.has_acted_this_round = true;
+        player.timeout_count = player.timeout_count.saturating_add(1);
+
+        // Sit them out if too many timeouts
+        if player.timeout_count >= MAX_TIMEOUTS_BEFORE_SITOUT {
+            player.status = PlayerStatus::SittingOut;
+            player.sitting_out_since = Some(now);
+        }
+
+        // Record the timeout as a fold with current phase
+        let current_phase = phase_to_string(&state.phase);
+        CURRENT_ACTIONS.with(|a| {
+            a.borrow_mut().push(ActionRecord {
+                seat,
+                action: PlayerAction::Fold,
+                timestamp: now,
+                phase: current_phase,
+                amount: 0, // Fold has no amount
+            });
+        });
+    }
+
+    // Advance the game. This replaces the timer, so the same expiry can never be
+    // resolved twice.
+    advance_game(state, now);
+
+    Some(seat)
 }
 
 /// Player heartbeat to show they're connected
@@ -4150,6 +5154,11 @@ fn get_max_players() -> u8 {
 struct PersistentState {
     balances: Vec<(Principal, u64)>,
     verified_deposits: Vec<(u64, Principal)>,
+    /// Deposit replay-protection floor. `#[serde(default)]` so state written
+    /// before this field existed restores as 0, which is correct: at that point
+    /// nothing had been dropped, so no index was below the floor.
+    #[serde(default)]
+    deposit_watermark: u64,
     controllers: Vec<Principal>,
     history_id: Option<Principal>,
     #[serde(default)] // For backwards compatibility with old state
@@ -4165,13 +5174,68 @@ struct PersistentState {
     current_seed: Option<Vec<u8>>, // Persist seed for mid-hand upgrades
     #[serde(default)]
     display_names: Vec<(Principal, String)>, // Custom display names
+
+    // ------------------------------------------------------------------------
+    // TABLE-STATE INTEGRITY DIGEST  (docs/DEFECTS.md E-38,
+    //                                docs/SECURITY-FINDINGS.md FINDING 14)
+    // ------------------------------------------------------------------------
+    //
+    // These three fields are redundant. They exist to make ONE specific silent
+    // failure loud, and they are FLAT SCALARS wrapped in `opt` on purpose.
+    //
+    // `table_state` above is `opt TableState`. Candid's rule for `opt t` is that a
+    // value which cannot be decoded as `t` arrives as **null**, not as an error. So
+    // the moment anybody adds a field to `TableState` that is not itself `opt`, an
+    // upgrade from state written before that field silently restores
+    // `table_state = None`; `post_upgrade` then takes its "no active game state"
+    // branch, calls `init_table_state`, and every seated player's chips and the live
+    // pot are destroyed with nothing in the log. `#[serde(default)]` does NOT
+    // prevent this: Candid does not honour serde defaults, only `opt`.
+    //
+    // That has already happened once in this file. `TableState::departed_stakes` is
+    // a bare `vec`, so it is live right now -- currently masked only because
+    // `deposit_watermark` is a bare `nat64` at the TOP level, which fails the whole
+    // restore and gets the upgrade rejected instead. Fixing that one field alone
+    // converts a rejected upgrade into silent chip destruction.
+    //
+    // An `opt` wrapping a flat scalar is the one shape that cannot itself be
+    // silently dropped, so these stay readable when `table_state` does not, and
+    // `post_upgrade` refuses the upgrade when they disagree with what came back.
+    //
+    // THIS IS A GUARD RAIL, NOT THE FIX. The fix is to make both fields `opt`, in
+    // one change, plus a harness that upgrades from a PREVIOUS RELEASE's wasm
+    // (docs/DEFECTS.md H-16). All this does is turn silent loss into a refusal.
+    #[serde(default)]
+    table_was_present: Option<bool>,
+    #[serde(default)]
+    table_pot_at_save: Option<u64>,
+    #[serde(default)]
+    table_seated_chips_at_save: Option<u64>,
+}
+
+/// `(pot, sum of seated players' chips)` for the live table, if there is one.
+///
+/// Used only to build and check [`PersistentState`]'s integrity digest.
+fn table_digest() -> Option<(u64, u64)> {
+    TABLE.with(|t| {
+        t.borrow().as_ref().map(|s| {
+            let seated = s
+                .players
+                .iter()
+                .flatten()
+                .fold(0u64, |acc, p| acc.saturating_add(p.chips));
+            (s.pot, seated)
+        })
+    })
 }
 
 #[ic_cdk::pre_upgrade]
 fn pre_upgrade() {
+    let digest = table_digest();
     let state = PersistentState {
         balances: BALANCES.with(|b| b.borrow().iter().map(|(k, v)| (*k, *v)).collect()),
         verified_deposits: VERIFIED_DEPOSITS.with(|v| v.borrow().iter().map(|(k, v)| (*k, *v)).collect()),
+        deposit_watermark: deposit_watermark(),
         controllers: CONTROLLERS.with(|c| c.borrow().clone()),
         history_id: HISTORY_ID.with(|h| *h.borrow()),
         dev_mode: false, // Always false, kept for backwards compatibility
@@ -4184,6 +5248,10 @@ fn pre_upgrade() {
         shown_cards: SHOWN_CARDS.with(|s| s.borrow().iter().map(|(k, v)| (*k, v.clone())).collect()),
         current_seed: CURRENT_SEED.with(|s| s.borrow().clone()), // Save seed for mid-hand upgrades
         display_names: DISPLAY_NAMES.with(|d| d.borrow().iter().map(|(k, v)| (*k, v.clone())).collect()),
+        // See the field comments: redundant on purpose, and read back in post_upgrade.
+        table_was_present: Some(digest.is_some()),
+        table_pot_at_save: Some(digest.map(|(pot, _)| pot).unwrap_or(0)),
+        table_seated_chips_at_save: Some(digest.map(|(_, chips)| chips).unwrap_or(0)),
     };
 
     if let Err(e) = ic_cdk::storage::stable_save((state,)) {
@@ -4217,6 +5285,14 @@ fn post_upgrade() {
         }
     });
 
+    // Restore the anti-replay record. The watermark FIRST, so that if anything
+    // below it somehow survived in the saved set it is still refused.
+    DEPOSIT_WATERMARK.with(|w| {
+        let mut w = w.borrow_mut();
+        if state.deposit_watermark > *w {
+            *w = state.deposit_watermark;
+        }
+    });
     VERIFIED_DEPOSITS.with(|v| {
         let mut deposits = v.borrow_mut();
         for (k, val) in state.verified_deposits {
@@ -4235,6 +5311,47 @@ fn post_upgrade() {
     // dev_mode is intentionally NOT restored - it's permanently disabled
     // The field is kept in PersistentState only for backwards compatibility
     let _ = state.dev_mode; // Explicitly ignore
+
+    // ------------------------------------------------------------------------
+    // TABLE-STATE INTEGRITY CHECK (docs/SECURITY-FINDINGS.md FINDING 14)
+    //
+    // Runs BEFORE anything touches TABLE. If the redundant digest says a table was
+    // saved and no table came back, the only way that happens is a Candid decode of
+    // `opt TableState` silently yielding null -- which is what Candid does when a
+    // non-`opt` field was added to `TableState`. Carrying on from here would
+    // re-init an EMPTY table over the top of real chips, so refuse the upgrade
+    // instead. `post_upgrade` panicking rejects the install and leaves the old code
+    // and the old state in place, which is recoverable; destroyed chips are not.
+    // ------------------------------------------------------------------------
+    if state.table_was_present == Some(true) && state.table_state.is_none() {
+        panic!(
+            "CRITICAL: the saved state records a live table (pot {}, {} chips in seats) but \
+             table_state decoded as null. That is what Candid does to an `opt` record whose \
+             inner type gained a field that is not itself `opt`. Restoring would re-initialise \
+             an EMPTY table and destroy every seated player's chips. Upgrade REJECTED. \
+             See docs/SECURITY-FINDINGS.md FINDING 14 and docs/DEFECTS.md E-38.",
+            state.table_pot_at_save.unwrap_or(0),
+            state.table_seated_chips_at_save.unwrap_or(0)
+        );
+    }
+    if let (Some(restored), Some(true)) = (state.table_state.as_ref(), state.table_was_present) {
+        let seated = restored
+            .players
+            .iter()
+            .flatten()
+            .fold(0u64, |acc, p| acc.saturating_add(p.chips));
+        let pot_ok = state.table_pot_at_save.is_none_or(|p| p == restored.pot);
+        let chips_ok = state.table_seated_chips_at_save.is_none_or(|c| c == seated);
+        if !pot_ok || !chips_ok {
+            panic!(
+                "CRITICAL: the restored table does not match the digest written beside it: \
+                 pot {} (saved {:?}), seated chips {} (saved {:?}). Some part of TableState \
+                 did not survive the decode. Upgrade REJECTED rather than settle from a \
+                 half-restored table. See docs/SECURITY-FINDINGS.md FINDING 14.",
+                restored.pot, state.table_pot_at_save, seated, state.table_seated_chips_at_save
+            );
+        }
+    }
 
     // Restore table state if it exists, otherwise initialize from config
     if let Some(table_state) = state.table_state {
@@ -4468,3 +5585,867 @@ async fn update_btc_balance() -> Result<Vec<UtxoStatus>, String> {
 // ============================================================================
 
 ic_cdk::export_candid!();
+
+// ============================================================================
+// PAYOUT PATH TESTS -- host-speed, no replica, no wasm
+// ============================================================================
+//
+// docs/DEFECTS.md H-04: seven of seven mutations to THIS FILE survived with all
+// 101 tests green, because nothing drove a hand through the canister's own
+// settlement code and looked at the money. `tests/integration_test.rs` was
+// comments only, and `tests/unit_tests.rs` tested private copies of the engine.
+//
+// These tests drive the REAL `determine_winners` / `end_hand_single_winner` /
+// `plan_payouts` over a real `TableState`, on the host, in milliseconds. They are
+// the fast leg of the proof; the slow leg is `tests/settlement/`, an independent
+// oracle that derives what each seat is owed from the rules of poker and drives
+// the real canister wasm on PocketIC against the real ICP ledger.
+//
+// Every case here states the money, the cards, and the answer the rules of poker
+// give, so a reader can check the expected numbers by hand.
+
+#[cfg(test)]
+mod payout_tests {
+    use super::*;
+    use poker_core::{Rank, Suit};
+
+    const SEC: u64 = 1_000_000_000;
+
+    fn card(rank: Rank, suit: Suit) -> Card {
+        Card { suit, rank }
+    }
+
+    /// Two cards from a short notation, e.g. `hole("As", "8d")`.
+    fn c(text: &str) -> Card {
+        let bytes: Vec<char> = text.chars().collect();
+        let rank = match bytes[0] {
+            '2' => Rank::Two,
+            '3' => Rank::Three,
+            '4' => Rank::Four,
+            '5' => Rank::Five,
+            '6' => Rank::Six,
+            '7' => Rank::Seven,
+            '8' => Rank::Eight,
+            '9' => Rank::Nine,
+            'T' => Rank::Ten,
+            'J' => Rank::Jack,
+            'Q' => Rank::Queen,
+            'K' => Rank::King,
+            'A' => Rank::Ace,
+            other => panic!("bad rank {other}"),
+        };
+        let suit = match bytes[1] {
+            'h' => Suit::Hearts,
+            'd' => Suit::Diamonds,
+            'c' => Suit::Clubs,
+            's' => Suit::Spades,
+            other => panic!("bad suit {other}"),
+        };
+        card(rank, suit)
+    }
+
+    fn board(text: &str) -> Vec<Card> {
+        text.split_whitespace().map(c).collect()
+    }
+
+    fn config(small_blind: u64, big_blind: u64) -> TableConfig {
+        TableConfig {
+            small_blind,
+            big_blind,
+            min_buy_in: 1,
+            max_buy_in: u64::MAX / 4,
+            max_players: 6,
+            action_timeout_secs: 30,
+            ante: 0,
+            time_bank_secs: 30,
+            currency: Currency::ICP,
+        }
+    }
+
+    fn principal(seat: u8) -> Principal {
+        Principal::from_slice(&[seat + 1])
+    }
+
+    /// A seat: chips behind, chips already in the pot this hand, folded, hole cards.
+    struct Seat {
+        seat: u8,
+        chips: u64,
+        wagered: u64,
+        folded: bool,
+        hole: Option<&'static str>,
+    }
+
+    fn seat(seat: u8, chips: u64, wagered: u64, hole: &'static str) -> Seat {
+        Seat {
+            seat,
+            chips,
+            wagered,
+            folded: false,
+            hole: Some(hole),
+        }
+    }
+
+    fn folded_seat(seat: u8, chips: u64, wagered: u64) -> Seat {
+        Seat {
+            seat,
+            chips,
+            wagered,
+            folded: true,
+            hole: None,
+        }
+    }
+
+    /// A table at the river with the given seats, ready to settle. `pot` is the sum
+    /// of the stakes, exactly as `player_action` maintains it.
+    fn table(seats: Vec<Seat>, board_text: &str, dealer_seat: u8) -> TableState {
+        let cfg = config(1, 2);
+        let mut players: Vec<Option<Player>> = (0..cfg.max_players).map(|_| None).collect();
+        let mut pot = 0u64;
+        for s in &seats {
+            pot += s.wagered;
+            players[s.seat as usize] = Some(Player {
+                principal: principal(s.seat),
+                seat: s.seat,
+                chips: s.chips,
+                hole_cards: s.hole.map(|h| {
+                    let cards = board(h);
+                    (cards[0], cards[1])
+                }),
+                current_bet: 0,
+                total_bet_this_hand: s.wagered,
+                has_folded: s.folded,
+                has_acted_this_round: true,
+                is_all_in: s.chips == 0,
+                status: PlayerStatus::Active,
+                last_seen: 0,
+                timeout_count: 0,
+                time_bank_remaining: 30,
+                is_sitting_out_next_hand: false,
+                broke_at: None,
+                sitting_out_since: None,
+            });
+        }
+        TableState {
+            id: 0,
+            config: cfg,
+            players,
+            community_cards: board(board_text),
+            deck: poker_core::create_deck(),
+            deck_index: 52,
+            pot,
+            side_pots: Vec::new(),
+            current_bet: 0,
+            min_raise: 2,
+            phase: GamePhase::River,
+            dealer_seat,
+            small_blind_seat: 0,
+            big_blind_seat: 1,
+            action_on: 0,
+            action_timer: None,
+            shuffle_proof: None,
+            hand_number: 7,
+            last_aggressor: None,
+            bb_has_option: false,
+            first_hand: false,
+            auto_deal_at: None,
+            last_action: None,
+            departed_stakes: Vec::new(),
+        }
+    }
+
+    /// Everything the canister owes: chips in front of players plus what is still
+    /// in the pot. Must not change across a settlement.
+    fn table_value(state: &TableState) -> u64 {
+        state
+            .players
+            .iter()
+            .flatten()
+            .fold(state.pot, |a, p| a.saturating_add(p.chips))
+    }
+
+    fn chips_at(state: &TableState, seat: u8) -> u64 {
+        state.players[seat as usize]
+            .as_ref()
+            .map(|p| p.chips)
+            .unwrap_or(0)
+    }
+
+    fn settle(state: &mut TableState) -> Vec<Winner> {
+        state.phase = GamePhase::Showdown;
+        let before = table_value(state);
+        determine_winners(state, 10 * SEC);
+        assert_eq!(
+            table_value(state),
+            before,
+            "CONSERVATION: a settlement may not change what the table owes in total"
+        );
+        assert_eq!(state.pot, 0, "the pot must be empty after settling");
+        LAST_HAND_WINNERS.with(|w| w.borrow().clone())
+    }
+
+    // -----------------------------------------------------------------------
+    // E-01: the post-flop pot
+    // -----------------------------------------------------------------------
+
+    /// THE LEAD'S SCENARIO, exactly. Heads-up, blinds 1,000,000 / 2,000,000.
+    /// Pre-flop call and check (2,000,000 each). A 30,000,000 bet and call on the
+    /// flop. Checks to showdown. The pot is 64,000,000 and the winner must get all
+    /// of it.
+    ///
+    /// Before the fix this hand paid the winner 4,000,000 -- the frozen pre-flop
+    /// breakdown -- and destroyed 60,000,000 (docs/FINDING-01-chip-destruction.md).
+    #[test]
+    fn e01_the_whole_post_flop_pot_goes_to_the_winner() {
+        let mut state = table(
+            vec![
+                // 200,000,000 buy-in each, 32,000,000 of it already in the pot.
+                seat(0, 168_000_000, 32_000_000, "Ac Qc"),
+                seat(1, 168_000_000, 32_000_000, "Kd 4c"),
+            ],
+            "Jd Ah 7h 5c Kc",
+            1,
+        );
+        assert_eq!(state.pot, 64_000_000);
+
+        let winners = settle(&mut state);
+
+        // Seat 0 holds a pair of aces, seat 1 a pair of kings.
+        assert_eq!(winners.len(), 1);
+        assert_eq!(winners[0].seat, 0);
+        assert_eq!(
+            winners[0].amount, 64_000_000,
+            "the winner is paid the WHOLE pot, not the pre-flop part of it"
+        );
+        assert_eq!(chips_at(&state, 0), 168_000_000 + 64_000_000);
+        assert_eq!(chips_at(&state, 1), 168_000_000);
+    }
+
+    /// The same shape with the side-pot breakdown deliberately stale, which is the
+    /// state the engine was ALWAYS in from the flop onwards: `state.side_pots` was
+    /// built once at the PreFlop -> Flop transition and never rebuilt.
+    ///
+    /// A stale breakdown must not be able to move one chip.
+    #[test]
+    fn e01_a_stale_side_pot_breakdown_cannot_change_the_payout() {
+        let fresh = {
+            let mut state = table(
+                vec![
+                    seat(0, 100, 62, "Ac Qc"),
+                    seat(1, 100, 62, "Kd 4c"),
+                    seat(2, 100, 62, "4s 3s"),
+                    seat(3, 100, 62, "2s Qd"),
+                ],
+                "Jd Ah 7h 5c Kc",
+                1,
+            );
+            settle(&mut state);
+            (chips_at(&state, 0), chips_at(&state, 1))
+        };
+
+        let mut state = table(
+            vec![
+                seat(0, 100, 62, "Ac Qc"),
+                seat(1, 100, 62, "Kd 4c"),
+                seat(2, 100, 62, "4s 3s"),
+                seat(3, 100, 62, "2s Qd"),
+            ],
+            "Jd Ah 7h 5c Kc",
+            1,
+        );
+        // Exactly what E-01 froze: the pre-flop money only, 2 chips per seat.
+        state.side_pots = vec![SidePot {
+            amount: 8,
+            eligible_players: vec![0, 1, 2, 3],
+        }];
+        let winners = settle(&mut state);
+
+        assert_eq!(winners[0].seat, 0);
+        assert_eq!(winners[0].amount, 248, "all four streets, not the pre-flop 8");
+        assert_eq!((chips_at(&state, 0), chips_at(&state, 1)), fresh);
+    }
+
+    /// A hand that ends because everybody folded is paid from the same basis as a
+    /// showdown. Before the fix these were two different code paths reading two
+    /// different accounts of the pot, and only one of them was right.
+    #[test]
+    fn a_fold_out_and_a_showdown_are_paid_from_the_same_basis() {
+        let mut state = table(
+            vec![
+                seat(0, 100, 62, "Ac Qc"),
+                folded_seat(1, 100, 62),
+                folded_seat(2, 100, 62),
+            ],
+            "Jd Ah 7h 5c Kc",
+            1,
+        );
+        let before = table_value(&state);
+        end_hand_single_winner(&mut state, 10 * SEC);
+        assert_eq!(table_value(&state), before, "CONSERVATION");
+        assert_eq!(state.pot, 0);
+        assert_eq!(
+            chips_at(&state, 0),
+            100 + 186,
+            "the last player standing takes every chip collected"
+        );
+    }
+
+    /// A hand that ends BEFORE the flop has no board, and the last player standing
+    /// takes the pot without showing a hand. Ranking them would be both unnecessary
+    /// and impossible: `poker_core::evaluate_hand` traps on a 0-card board, by
+    /// design, so a settlement that ranks unconditionally traps on every pre-flop
+    /// fold-out. This test is that trap, pinned.
+    #[test]
+    fn a_pre_flop_fold_out_settles_with_no_board_at_all() {
+        let mut state = table(
+            vec![
+                seat(0, 100, 1, "Ac Qc"),  // small blind, folds
+                seat(1, 100, 2, "Kd 4c"),  // big blind, wins
+            ],
+            "",
+            0,
+        );
+        state.phase = GamePhase::PreFlop;
+        if let Some(p) = state.players[0].as_mut() {
+            p.has_folded = true;
+        }
+        assert!(state.community_cards.is_empty());
+
+        let before = table_value(&state);
+        end_hand_single_winner(&mut state, 10 * SEC);
+        assert_eq!(table_value(&state), before, "CONSERVATION");
+        assert_eq!(state.pot, 0);
+        // The big blind's own uncalled 1 comes back, and it wins the 2 that was
+        // contested: 100 + 1 + 2 = 103 all told, and the small blind keeps 100.
+        assert_eq!(chips_at(&state, 1), 103);
+        assert_eq!(chips_at(&state, 0), 100);
+        let winners = LAST_HAND_WINNERS.with(|w| w.borrow().clone());
+        assert_eq!(winners.len(), 1);
+        assert_eq!(winners[0].seat, 1);
+        assert!(
+            winners[0].hand_rank.is_none(),
+            "a pot won by everybody folding shows no hand"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // E-03: state.pot can never be the payout basis
+    // -----------------------------------------------------------------------
+
+    /// E-03 direction A: `state.pot` OVERSTATES the contributions. The old code
+    /// appended the difference to the highest bet level -- minting chips into the
+    /// pot only the deepest stacks can win. It must now be impossible for
+    /// `state.pot` to move a chip.
+    #[test]
+    fn e03_an_overstated_pot_cannot_mint_a_chip() {
+        let mut state = table(
+            vec![
+                seat(0, 0, 50, "As 8d"),   // short all-in, best hand
+                seat(1, 100, 200, "4d 9h"),
+                seat(2, 100, 200, "7s Th"),
+            ],
+            "Kd Tc 3d 2c Ad",
+            1,
+        );
+        let honest = state.pot;
+        assert_eq!(honest, 450);
+        // Corrupt the redundant accumulator by 100.
+        state.pot += 100;
+
+        let plan = plan_payouts(&state);
+        assert_eq!(
+            plan.collected, honest,
+            "the payout basis is the contributions, not state.pot"
+        );
+        assert_eq!(
+            plan.side_pots.iter().map(|p| p.amount).sum::<u64>(),
+            honest,
+            "and no side pot was inflated to meet state.pot"
+        );
+        assert!(plan.conserves());
+
+        // Seat 0 has a pair of aces and wins the main pot; seat 2 has a pair of
+        // tens and beats seat 2's ace-high for the rest.
+        assert_eq!(plan.amount_for(0), 150, "3 x 50");
+        assert_eq!(plan.amount_for(2), 300, "2 x 150");
+        assert_eq!(plan.amount_for(1), 0);
+    }
+
+    /// E-03 direction B: `state.pot` UNDERSTATES the contributions. The old code
+    /// scaled every side pot down through an `f64` ratio and destroyed the
+    /// difference, and logged `BUG: Side pots (...) exceed total pot (...)` while
+    /// settling anyway.
+    #[test]
+    fn e03_an_understated_pot_cannot_destroy_a_chip() {
+        let mut state = table(
+            vec![
+                seat(0, 0, 50, "As 8d"),
+                seat(1, 100, 200, "4d 9h"),
+                seat(2, 100, 200, "7s Th"),
+            ],
+            "Kd Tc 3d 2c Ad",
+            1,
+        );
+        state.pot = 0; // the shape the fuzzer actually produced
+
+        let plan = plan_payouts(&state);
+        assert_eq!(plan.collected, 450);
+        assert_eq!(plan.awarded, 450, "every chip wagered is still paid out");
+        assert!(plan.conserves());
+    }
+
+    /// At e8 magnitudes the `f64` ratio the old reconciliation used cannot even
+    /// represent the pot. Nothing on the payout path may touch a float.
+    #[test]
+    fn e03_the_payout_is_exact_at_magnitudes_f64_cannot_represent() {
+        let big = 9_007_199_254_740_993u64; // 2^53 + 1
+        let mut state = table(
+            vec![seat(0, 0, big, "Ac Qc"), seat(1, 0, big, "Kd 4c")],
+            "Jd Ah 7h 5c Kc",
+            1,
+        );
+        let winners = settle(&mut state);
+        assert_eq!(winners[0].seat, 0);
+        assert_eq!(winners[0].amount, 2 * big, "not one e8 lost to rounding");
+        assert_eq!(chips_at(&state, 0), 2 * big);
+    }
+
+    // -----------------------------------------------------------------------
+    // E-05: a vacated seat
+    // -----------------------------------------------------------------------
+
+    /// THE E-05 REGRESSION. Seat 1 folds with 60 committed and leaves the table
+    /// before the pots are built. The main pot the honest short all-in can win must
+    /// still contain seat 1's 20 of it.
+    ///
+    /// Before the fix `collect_contributions` read the seat vector, seat 1 was no
+    /// longer in it, and the missing 60 was appended to the pot only the deep stacks
+    /// could win: seat 0's main pot fell from 80 to 60 and 20 chips moved to seat 3,
+    /// with every chip conserved so no conservation invariant could see it.
+    #[test]
+    fn e05_a_departed_seats_stake_stays_in_the_main_pot() {
+        let mut state = table(
+            vec![
+                seat(0, 0, 20, "As 8d"),    // all-in, pair of aces: best hand
+                folded_seat(1, 0, 60),      // folds, then leaves
+                seat(2, 100, 200, "4d 9h"), // ace high
+                seat(3, 100, 200, "7s Th"), // pair of tens
+            ],
+            "Kd Tc 3d 2c Ad",
+            1,
+        );
+        // Exactly what `leave_table` does now: record the stake, then vacate.
+        let recorded = record_departed_stake(&mut state, 1);
+        assert_eq!(recorded, 60);
+        state.players[1] = None;
+
+        let contributions = hand_contributions(&state);
+        assert_eq!(
+            poker_core::total_contributed(&contributions),
+            480,
+            "the departed stake is still in the payout basis"
+        );
+
+        let plan = plan_payouts(&state);
+        assert_eq!(
+            plan.side_pots
+                .iter()
+                .map(|p| (p.amount, p.eligible_players.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (80, vec![0, 2, 3]),
+                (120, vec![2, 3]),
+                (280, vec![2, 3]),
+            ],
+            "the main pot is four seats times 20, including the seat that left"
+        );
+        assert_eq!(plan.amount_for(0), 80, "the short all-in wins the whole main pot");
+        assert_eq!(plan.amount_for(3), 400);
+        assert_eq!(plan.amount_for(2), 0);
+        assert!(plan.conserves());
+    }
+
+    /// The same hand, settled two ways: seat 1 folds and STAYS, versus seat 1 folds
+    /// and LEAVES. Nothing about the money changed between them, so not one chip may
+    /// move. That equality is the whole of E-05.
+    #[test]
+    fn e05_folding_and_leaving_pay_out_identically() {
+        let make = || {
+            table(
+                vec![
+                    seat(0, 0, 20, "As 8d"),
+                    folded_seat(1, 0, 60),
+                    seat(2, 100, 200, "4d 9h"),
+                    seat(3, 100, 200, "7s Th"),
+                ],
+                "Kd Tc 3d 2c Ad",
+                1,
+            )
+        };
+
+        let mut stayed = make();
+        let stayed_winners = settle(&mut stayed);
+
+        let mut left = make();
+        record_departed_stake(&mut left, 1);
+        left.players[1] = None;
+        let left_winners = settle(&mut left);
+
+        let render = |ws: &[Winner]| {
+            let mut v: Vec<(u8, u64)> = ws.iter().map(|w| (w.seat, w.amount)).collect();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(render(&stayed_winners), render(&left_winners));
+        assert_eq!(render(&stayed_winners), vec![(0, 80), (3, 400)]);
+    }
+
+    // -----------------------------------------------------------------------
+    // uncalled bets
+    // -----------------------------------------------------------------------
+
+    /// A bet nobody covered comes back to the bettor before the pots are formed,
+    /// so the displayed pot stops including money that was never in play.
+    #[test]
+    fn an_uncalled_bet_is_returned_before_the_pots_are_formed() {
+        let mut state = table(
+            vec![
+                seat(0, 0, 20, "7s 4h"),
+                folded_seat(1, 40, 60),
+                seat(2, 300, 100, "7d 6h"), // bet 40 more than anyone covered
+                folded_seat(3, 40, 60),
+            ],
+            "Qh Ad 2h 2s 8h",
+            1,
+        );
+        assert_eq!(state.pot, 240);
+
+        let returned = return_uncalled_bet(&mut state);
+        assert_eq!(returned, Some((2, 40)));
+        assert_eq!(chips_at(&state, 2), 340, "the 40 is back in front of seat 2");
+        assert_eq!(state.pot, 200, "and out of the displayed pot");
+        assert_eq!(
+            state.players[2].as_ref().unwrap().total_bet_this_hand,
+            60,
+            "the two accounts of the pot stay in step"
+        );
+        assert_eq!(return_uncalled_bet(&mut state), None, "idempotent");
+
+        // Seats 0 and 2 both play the board for a pair of deuces, so the 80 main pot
+        // is chopped and seat 2 takes the 120 above seat 0's reach.
+        let plan = plan_payouts(&state);
+        assert_eq!(plan.amount_for(0), 40);
+        assert_eq!(plan.amount_for(2), 160);
+        assert!(plan.conserves());
+    }
+
+    /// The net result of a hand must not depend on WHETHER the uncalled bet was
+    /// returned separately: an uncontested overbet used to sit in a solo side pot
+    /// and reach the same player. This pins that the fix did not change who ends up
+    /// with the money, only when and how it is described.
+    #[test]
+    fn returning_an_uncalled_bet_changes_no_seats_net_position() {
+        let seats = || {
+            vec![
+                seat(0, 0, 100, "As 8d"),
+                seat(1, 0, 300, "7s Th"), // over-bet: 200 uncovered
+            ]
+        };
+        let mut with_return = table(seats(), "Kd Tc 3d 2c Ad", 1);
+        return_uncalled_bet(&mut with_return);
+        let winners_a = settle(&mut with_return);
+
+        let mut without = table(seats(), "Kd Tc 3d 2c Ad", 1);
+        let winners_b = settle(&mut without);
+
+        // Seat 0 holds a pair of aces and wins the 200 that was actually contested;
+        // seat 1 gets its uncontested 200 back either way.
+        assert_eq!(chips_at(&with_return, 1), chips_at(&without, 1));
+        assert_eq!(chips_at(&with_return, 0), chips_at(&without, 0));
+        assert_eq!(chips_at(&with_return, 0), 200);
+        assert_eq!(chips_at(&with_return, 1), 200);
+        // What DID change is the description. Only the 200 that was actually
+        // contested is recorded as won; before the fix the engine left seat 1's
+        // uncovered 200 in a side pot only seat 1 was eligible for and recorded it
+        // as a 200 win, which is why the pot the players were shown was inflated.
+        assert_eq!(winners_a.iter().map(|w| w.amount).sum::<u64>(), 200);
+        assert_eq!(
+            winners_b.iter().map(|w| w.amount).sum::<u64>(),
+            200,
+            "settlement returns the uncalled bet itself, so both routes agree"
+        );
+        assert!(
+            !winners_a.iter().any(|w| w.seat == 1),
+            "seat 1 won nothing: it got its own uncontested bet back"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // odd chips
+    // -----------------------------------------------------------------------
+
+    /// A three-way chop that leaves two odd chips must place them one each,
+    /// clockwise from the button. The engine used to give both to a single seat.
+    /// docs/DEFECTS.md E-35, settlement oracle D-04.
+    #[test]
+    fn e35_odd_chips_go_one_each_clockwise_from_the_button() {
+        // Three seats play the board for an exact tie, over a folded seat's 2. That
+        // is what makes a layer indivisible by three: three EQUAL live stakes always
+        // divide by three, so the remainder has to come from dead money underneath
+        // them. The settlement oracle found the same shape on the real canister
+        // (D-04) with the same 8-chip layer.
+        //
+        // Layers: (0,2] = 4 x 2 = 8 chopped three ways -> 2 each and TWO over;
+        //         (2,7] = 3 x 5 = 15 chopped three ways -> 5 each, nothing over.
+        let make = |dealer: u8| {
+            table(
+                vec![
+                    folded_seat(0, 0, 2),
+                    seat(1, 0, 7, "2c 3c"),
+                    seat(2, 0, 7, "2d 4d"),
+                    seat(3, 0, 7, "2h 5h"),
+                ],
+                "As Ks Qh Jd Td",
+                dealer,
+            )
+        };
+        // Button on seat 0, so clockwise order is 1, 2, 3: the two odd chips go to
+        // seats 1 and 2, one each. The engine used to give BOTH to seat 1.
+        let mut state = make(0);
+        assert_eq!(state.pot, 23);
+        let winners = settle(&mut state);
+        let mut paid: Vec<(u8, u64)> = winners.iter().map(|w| (w.seat, w.amount)).collect();
+        paid.sort_unstable();
+        assert_eq!(paid, vec![(1, 8), (2, 8), (3, 7)]);
+        assert_eq!(paid.iter().map(|(_, a)| a).sum::<u64>(), 23);
+        assert!(
+            paid.iter().all(|(_, a)| *a >= 7 && *a <= 8),
+            "no winner may be more than one chip clear of another: {paid:?}"
+        );
+
+        // And the placement follows the button: from seat 2 the order is 3, 1, 2.
+        let mut state = make(2);
+        let winners = settle(&mut state);
+        let mut paid: Vec<(u8, u64)> = winners.iter().map(|w| (w.seat, w.amount)).collect();
+        paid.sort_unstable();
+        assert_eq!(paid, vec![(1, 8), (2, 7), (3, 8)]);
+        assert_eq!(paid.iter().map(|(_, a)| a).sum::<u64>(), 23);
+    }
+
+    /// A two-way chop of an odd pot: the single odd chip goes to the first winner
+    /// clockwise from the button, which is where the old rule and this one agree.
+    ///
+    /// The odd chip comes from a folded seat's 1, so that no part of the pot is an
+    /// uncalled bet -- two seats cannot contribute unequally without one of them
+    /// being owed the difference back.
+    #[test]
+    fn a_two_way_chop_of_an_odd_pot_places_its_one_chip_clockwise() {
+        for (dealer, expect) in [
+            (0u8, vec![(1u8, 4u64), (2, 3)]),
+            (1, vec![(1, 3), (2, 4)]),
+        ] {
+            let mut state = table(
+                vec![
+                    folded_seat(0, 0, 1),
+                    seat(1, 0, 3, "2c 3c"),
+                    seat(2, 0, 3, "2d 4d"),
+                ],
+                "As Ks Qh Jd Td",
+                dealer,
+            );
+            assert_eq!(state.pot, 7);
+            let winners = settle(&mut state);
+            let mut paid: Vec<(u8, u64)> = winners.iter().map(|w| (w.seat, w.amount)).collect();
+            paid.sort_unstable();
+            // Layers: (0,1] = 3 chips chopped two ways, one odd chip to place;
+            //         (1,3] = 4 chips chopped two ways, 2 each.
+            assert_eq!(paid, expect, "button on seat {dealer}");
+            assert_eq!(paid.iter().map(|(_, a)| a).sum::<u64>(), 7);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // the post-condition, and the shapes real betting cannot produce
+    // -----------------------------------------------------------------------
+
+    /// Money nobody left at the table can win is refunded to the seats that put it
+    /// there, and to the ESCROW of a player who has already left. Real betting
+    /// cannot reach this; two `leave_table` calls can.
+    #[test]
+    fn money_nobody_can_win_is_refunded_not_handed_to_the_deepest_stack() {
+        let mut state = table(
+            vec![folded_seat(0, 0, 30), folded_seat(1, 0, 30)],
+            "As Ks Qh Jd Td",
+            1,
+        );
+        let plan = plan_payouts(&state);
+        assert!(plan.conserves());
+        assert_eq!(plan.amount_for(0), 30);
+        assert_eq!(plan.amount_for(1), 30);
+        assert!(plan
+            .payouts
+            .iter()
+            .all(|p| matches!(p.reason, PayoutReason::Refund { .. })));
+
+        // And applying it really moves the chips.
+        let before = table_value(&state);
+        state.phase = GamePhase::Showdown;
+        determine_winners(&mut state, 10 * SEC);
+        assert_eq!(table_value(&state), before);
+        assert_eq!(chips_at(&state, 0), 30);
+    }
+
+    /// The refusal. A plan that does not pay out exactly what it collected must
+    /// never be applied.
+    ///
+    /// `should_panic` carries no expected string because off-canister
+    /// `ic_cdk::trap` panics with its own "trap should only be called inside
+    /// canisters" message rather than the argument; on the replica the argument IS
+    /// the message, and it names the hand, the shortfall and the whole plan.
+    #[test]
+    #[should_panic]
+    fn a_plan_that_does_not_add_up_is_refused() {
+        let mut state = table(
+            vec![seat(0, 0, 100, "Ac Qc"), seat(1, 0, 100, "Kd 4c")],
+            "Jd Ah 7h 5c Kc",
+            1,
+        );
+        let mut plan = plan_payouts(&state);
+        assert!(plan.conserves());
+        // A rake: keep one chip of a 200 pot.
+        plan.awarded -= 1;
+        plan.payouts[0].amount -= 1;
+        assert!(!plan.conserves(), "the plan now keeps a chip");
+        apply_payouts(&mut state, &plan);
+    }
+
+    /// Property: for any shape of stakes and any board, the plan pays out exactly
+    /// what the hand collected. This is the post-condition E-01 and E-03 broke, and
+    /// the no-rake property makes it exact to the e8.
+    #[test]
+    fn every_settlement_pays_out_exactly_what_it_collected() {
+        let deck = poker_core::create_deck();
+        let mut seed = 0xc1ea_dec4_u64;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            seed >> 33
+        };
+        let mut settled = 0usize;
+        let mut with_side_pots = 0usize;
+        let mut with_chops = 0usize;
+
+        for case in 0..2_000 {
+            let n = 2 + (next() % 4) as usize;
+            // Deal without replacement out of a shuffled deck.
+            let mut cards = deck.clone();
+            for i in (1..cards.len()).rev() {
+                let j = (next() % (i as u64 + 1)) as usize;
+                cards.swap(i, j);
+            }
+            let mut seats: Vec<Seat> = Vec::new();
+            for i in 0..n {
+                let wagered = 1 + next() % 500;
+                let folded = next() % 4 == 0;
+                let hole: Vec<Card> = cards[i * 2..i * 2 + 2].to_vec();
+                seats.push(Seat {
+                    seat: i as u8,
+                    chips: next() % 100,
+                    wagered,
+                    folded,
+                    hole: None,
+                });
+                // Hole cards have to be set by hand: the notation helper only takes
+                // static text.
+                let _ = hole;
+            }
+            // Up to five seats take cards[0..10], so the board starts at 10.
+            let board_cards: Vec<Card> = cards[10..15].to_vec();
+            let mut state = table(seats, "As Ks Qh Jd Td", (next() % 6) as u8);
+            state.community_cards = board_cards;
+            for (i, p) in state.players.iter_mut().enumerate() {
+                if let Some(p) = p {
+                    p.hole_cards = Some((cards[i * 2], cards[i * 2 + 1]));
+                }
+            }
+
+            let plan = plan_payouts(&state);
+            assert!(
+                plan.conserves(),
+                "case {case}: awarded {} of {} collected. contributions={:?} pots={:?}",
+                plan.awarded,
+                plan.collected,
+                hand_contributions(&state),
+                plan.side_pots
+            );
+            if plan.side_pots.len() > 1 {
+                with_side_pots += 1;
+            }
+            let payees: std::collections::BTreeSet<u8> =
+                plan.payouts.iter().map(|p| p.seat).collect();
+            if payees.len() > 1 {
+                with_chops += 1;
+            }
+
+            // And applying it conserves the table's total value.
+            state.phase = GamePhase::Showdown;
+            let before = table_value(&state);
+            determine_winners(&mut state, 10 * SEC);
+            assert_eq!(table_value(&state), before, "case {case}: CONSERVATION");
+            assert_eq!(state.pot, 0, "case {case}: the pot must be settled");
+            settled += 1;
+        }
+        assert_eq!(settled, 2_000);
+        assert!(
+            with_side_pots > 100,
+            "only {with_side_pots} of the sweep had a real side-pot ladder"
+        );
+        assert!(
+            with_chops > 50,
+            "only {with_chops} of the sweep paid more than one seat"
+        );
+    }
+
+    /// The two accounts of the pot must agree in every ordinary hand, including one
+    /// where a seat left mid-hand. This is the check that would catch a future
+    /// `state.pot` update with no matching `total_bet_this_hand` update.
+    #[test]
+    fn the_pot_and_the_contributions_agree_even_when_a_seat_leaves() {
+        let mut state = table(
+            vec![
+                seat(0, 0, 20, "As 8d"),
+                folded_seat(1, 0, 60),
+                seat(2, 100, 200, "4d 9h"),
+                seat(3, 100, 200, "7s Th"),
+            ],
+            "Kd Tc 3d 2c Ad",
+            1,
+        );
+        assert_eq!(
+            poker_core::total_contributed(&hand_contributions(&state)),
+            state.pot
+        );
+        record_departed_stake(&mut state, 1);
+        state.players[1] = None;
+        assert_eq!(
+            poker_core::total_contributed(&hand_contributions(&state)),
+            state.pot,
+            "vacating a seat must not change the payout basis"
+        );
+    }
+
+    /// A stake from an earlier hand can never join this hand's pot.
+    #[test]
+    fn a_stale_departed_stake_is_ignored() {
+        let mut state = table(vec![seat(0, 0, 20, "As 8d"), seat(1, 0, 20, "4d 9h")], "Kd Tc 3d 2c Ad", 1);
+        state.departed_stakes.push(DepartedStake {
+            hand_number: state.hand_number - 1,
+            seat: 4,
+            principal: principal(4),
+            contributed: 1_000_000,
+        });
+        let plan = plan_payouts(&state);
+        assert_eq!(plan.collected, 40, "the stale stake is not in the basis");
+        assert!(plan.conserves());
+    }
+}

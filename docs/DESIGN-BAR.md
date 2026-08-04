@@ -24,6 +24,33 @@ segmentation it says so and gives the tolerance.
 | **GGPoker** | Same. | Medium. |
 | **WPT Global** | Same. | Medium-high (several full 1124–1440px desktop client window captures). |
 
+### 0.1 Provenance corrections applied 2026-08-04
+
+**Sixteen files were filed under the wrong client, and the index's own `source_page` URLs
+prove it.** The App Store harvester walked neighbouring bundle ids and attributed both to
+whichever vendor it was collecting:
+
+| Bundle id | Filed as | Actually | Files |
+|---|---|---|---|
+| `id1529839330` | `ggpoker` | **ClubGG Poker** — GGPoker's separate free/club app, a different product with a different table UI | 10 |
+| `id1571146807` | `wptglobal` | **ClubWPT Poker & Casino** — a subscription/sweepstakes product under the WPT brand, **not** WPT Global's real-money client | 6 |
+
+Any per-client aggregate computed before this correction mixed **three** products into two.
+`INDEX.json` has been rewritten: those files now carry `client: clubgg` / `client: clubwpt`,
+the original wrong label is preserved in `client_original_wrong`, a `corrections` block
+records why, and the per-client counts were recomputed (GGPoker marketing 39 → 29, WPT
+Global marketing 17 → 11). The pre-correction index is kept at
+`INDEX.json.pre-reattribution`. **All four are marketing creatives, so no measurement in
+this file was derived from them** — but a future reader browsing "the GGPoker folder" would
+have been looking at two different products.
+
+**Gutter contamination.** Vendor-client screenshots taken off review pages carry 125–184 px
+of the review site's own white page baked into the right edge. Anything measured relative to
+"the image" was therefore measuring the review website as much as the poker client, and the
+old "surround share" number for at least one file was literally the review site's white
+gutter and its affiliate button. Every measurement in §1 crops the gutter first and is
+relative to the client window only.
+
 Two things we deliberately did **not** do, and which cap what this corpus can contain:
 
 1. **We did not create a PokerNow game.** Game creation is behind a Cloudflare Turnstile
@@ -42,32 +69,105 @@ The single most useful number is **how much of the window the playing surface oc
 because it determines whether a table feels like a game or like a web page with a
 picture of a table on it.
 
+> **These numbers were re-derived from scratch on 2026-08-04 and several of them replaced
+> the originals.** The first pass measured the wrong thing three times over: it caught
+> PokerNow's `.table` DIV (rail plus the whole pod row) instead of the green ellipse; it
+> reported "surround share" as `palette[0].pct` of a whole-file colour quantize, which for
+> at least one file was measuring the *review website's white gutter and its affiliate
+> button*; and it measured window-relative percentages on files that still had 125–184 px
+> of that review-page gutter baked into the right edge. The corrected method, the
+> verification of it, and the honest gaps are in §1.1. What follows is the corrected set.
+
+### 1.1 How the playing surface is measured now, and how it was checked
+
+1. **Crop the review-page gutter first.** Most vendor-client captures came off review
+   pages as element screenshots, so a near-white strip of the review site sits at the
+   right edge. Columns that are ≥97% one bright desaturated colour are cropped before
+   anything is measured. Removed: **128 px** from `web-ps-gipsy-1.png`, **125 px** from
+   `web-gg-gipsy-4.png`, 0 from the rest. Every percentage below is relative to the
+   **client window only**.
+2. **Hue-mask the felt, then take the largest 4-connected component** and its bounding
+   box. Per-file hue bands, because the four clients ship different felts (mid green, dark
+   green, dark teal, bright teal) at different JPEG qualities.
+3. **Sanity-check the box three ways**, all tolerant of the cards, chips, avatars and
+   watermarks that sit *on* the felt and are excluded by the mask (which is why any check
+   that walks a single scanline through the middle is worthless — an early attempt at one
+   reported PokerNow's minor axis 21% short):
+   - `fill_vs_ellipse` = blob area ÷ π·a·b. A clean ellipse with overlays lands 84–96%; a
+     rounded rectangle or stadium exceeds 100%; a mask that has leaked into the background
+     lands nowhere near either.
+   - `widest_row_rel` and `tallest_col_rel`: where in the box the widest row and tallest
+     column sit, 0–1. An ellipse or stadium gives ≈0.5. A stray connected sliver dragging
+     the box outwards gives ≈0 or ≈1 — that is the exact failure mode behind the original
+     wrong numbers, so it is now checked every time.
+4. **Replace "surround share" with an explicit mask ratio**: felt-mask pixels vs
+   everything else, over the client window only. No quantize, no palette bucket.
+5. **Eyeball every detection.** The measurer writes a magenta-box overlay per file and all
+   of them were inspected; the four table captures below are the ones whose detection is
+   visibly correct.
+
+Reproduce: `S=<scratchpad> python3 $SCRATCH/v-felt.py` (universal band, gutter crop,
+axis cross-check) and `$SCRATCH/v-felt2.py` (per-file bands, fill + centroid checks);
+overlays land in `$SCRATCH/v-felt-out/`.
+
+### 1.2 The corrected cross-client table
+
 | Bar | PokerNow | PokerStars | GGPoker | WPT Global |
 |---|---|---|---|---|
-| Felt colour (sampled) | `#26804D` | `#146127` | `#0B4E10` (green) / `#014F59` (teal) | `#00757D` / `#00737A` |
+| Felt colour (sampled) | `#26804D` | `#146127` green theme; **Aurora theme has no coloured felt at all** | `#0B4E10` (green) / `#014F59` (teal) | `#00757D` / `#00737A` |
 | Surround / out-of-felt colour | `#242324` | `#17191D` | `#132013` / `#0C1719` | `#080925` / `#04031C` |
-| Surround share of the window | 60.3% | 55.7% | 66.4% / **82.5%** | 57.4% / 51.9% |
-| Felt aspect ratio (w:h) | **1.60** | ~1.40 | ~1.10–1.32 | **1.80–2.27** |
-| Board card width ÷ felt width | **13.4%** (exact) | ~7.0% | not reliably measurable | ~6.5% |
+| **Not-felt share of the client window** (explicit mask ratio) | **74.0%** | **76.6%** | **74.5%** | **71.5–77.9%** |
+| **Playing-surface aspect (w:h)** | **2.00** (two viewports, identical) | **≥2.19** green theme (client clipped at right); **1.72** Aurora | **2.17** | **2.08** and **2.62** (two different table arts) |
+| **Surface width ÷ client window width** | **62.5%** | **≥81.6%** green; 79.6% Aurora | **75.3%** | **73.1–74.1%** |
+| Surface height ÷ window height | 50.1% | 43.3% green; 64.5% Aurora | 49.4% | 40.2–53.1% |
+| Shape (from `fill_vs_ellipse`) | ellipse (96%) | ellipse (84%) | ellipse (85%) | ellipse 92% / stadium 105% |
+| Board card width ÷ surface width | **13.0%** (exact) | ~8.6% (±) | not reliably measurable | ~6.1% (±) |
 | Seat pods sit… | **off the felt**, on the surround | on the rail | on the rail | on the rail |
-| Compliance / responsible-gaming text | bottom strip | persistent "Responsible Gaming" top-left | footer only | footer only |
+| Compliance / responsible-gaming text | bottom strip | persistent "Responsible Gaming" **inside the table window**, top-left | footer only | footer only |
 
-Three things jump out and they are the real strategic findings:
+**All eight reference measurements, and ClearDeck measured with the identical tool:**
 
-1. **Every one of these clients is majority dark surround.** The felt is a minority of
-   the pixels — between 52% and 82% of the window is *not* felt. Nobody fills the
-   viewport with green. GGPoker's teal table is the most extreme: 82.5% of the window is
-   near-black `#0C1719`. A poker client reads as premium because the table is a lit
-   object floating in a dark room.
-2. **Felt aspect ratio splits the field.** WPT Global stretches to 1.8–2.27 (a long
-   stadium). GGPoker is nearly round (1.1–1.3). PokerNow sits at 1.60. This is a real
-   design choice, not a detail: a wide table buys horizontal room for 9–10 pods, a round
-   table concentrates attention on the board.
-3. **PokerNow's board is roughly twice as large, proportionally, as the paid clients'.**
-   A single board card is 13.4% of felt width on PokerNow versus ~6.5–7% on WPT Global
-   and PokerStars. The five-card board spans **72.2% of the felt width** on PokerNow.
-   That is a legibility-over-realism decision and it is why PokerNow reads well on a
-   phone.
+| Capture | Client window | Surface | Aspect | Width % | Fill vs ellipse | Not-felt % |
+|---|---|---|---|---|---|---|
+| `pokernow/table-9max-desktop-1` | 1512×945 | 945×473 | 2.00 | 62.5% | 96.2% | 74.0% |
+| `pokernow/_m-1280x800` | 1280×800 | 800×401 | 2.00 | 62.5% | 96.3% | 73.9% |
+| `pokerstars/web-ps-gipsy-1` (green) | 670×577 | 547×250 | ≥2.19 | ≥81.6% | 84.0% | 76.6% |
+| `pokerstars/web-ps-wpd2-2` (Aurora) | 732×524 | 583×338 | 1.72 | 79.6% | n/a | n/a |
+| `ggpoker/web-gg-wpd2-2` | 900×632 | 678×312 | 2.17 | 75.3% | 84.6% | 74.5% |
+| `wptglobal/web-wpt-tphB-2` | 1124×754 | 833×400 | 2.08 | 74.1% | 92.2% | 71.5% |
+| `wptglobal/web-wpt-beasts-1` | 1440×1000 | 1053×402 | 2.62 | 73.1% | 95.3% | 77.9% |
+| `wptglobal/web-wpt-beasts-3` | 1439×994 | 1053×401 | 2.63 | 73.2% | 104.5% | 75.8% |
+| **ClearDeck** `table-preflop-desktop` | **1440×900** | **876×476** | **1.84** | **60.8%** | **104.7%** | **71.1%** |
+
+Reference aspect: range **1.72–2.63**, median **2.13**. Reference width share: range
+**62.5–81.6%**, median **73.7%**.
+
+Four things jump out, and they are the real strategic findings:
+
+1. **The field does NOT split on aspect ratio. Every leader is a wide stadium.** Seven of
+   the eight reference measurements are **2.00 or wider**; the eighth is 1.72. The
+   original claim that "GGPoker is nearly round (1.1–1.3)" was an artefact of measuring
+   the wrong rectangle — GGPoker is **2.17**, and its real-gameplay capture shows an
+   unmistakable ~2:1 stadium. This is the single most consequential correction in this
+   file, because **ClearDeck's table is a rounded rectangle at 1.84** (its 104.7% ellipse
+   fill is the straight sides showing up in the arithmetic), so it is both the flattest
+   *and* the only non-elliptical surface in the comparison.
+2. **Every one of these clients is majority dark surround, and by a consistent margin.**
+   Measured properly as a mask ratio, **71.5–77.9%** of the client window is *not* felt.
+   The old 52–82% spread was noise from the quantize. ClearDeck's 71.1% already sits at
+   the edge of that band, so this is the one bar we broadly clear.
+3. **PokerNow's board is roughly twice as large, proportionally, as anyone else's.** A
+   single board card is **13.0%** of surface width on PokerNow versus ~6.1–8.6% on WPT
+   Global and PokerStars, and the five-card board spans **69.7%** of surface width. On
+   ClearDeck the board card is **6.8%** of surface width and the board spans **37.9%** —
+   the paid-client end of the range, on a browser-first client that has PokerNow's
+   constraints rather than a native client's.
+4. **PokerStars' Aurora theme abolishes the felt/surround distinction entirely.** Sampled
+   pixels inside and outside the table are the *same* colour (`rgb(23,42,51)`); the
+   playing surface is delineated by a thin light outline, not a fill. So "the felt must be
+   a minority of dark pixels" is not a universal law of the category — one of the two
+   biggest operators ships a table with no felt to measure. Any bar phrased in terms of
+   felt colour has at least one serious counter-example.
 
 ---
 
@@ -81,13 +181,27 @@ bars. All values are CSS pixels at a **1512 × 945** viewport unless stated.
 | Element | Size | Notes |
 |---|---|---|
 | `.table` (whole playing area incl. surround) | 1511.8 × 714.4, top at y=47.3 | 100% of window width, **75.6% of window height** |
-| Visible felt ellipse | **912 × 570** | **60.3% of window width, 60.3% of window height**, aspect **1.60** |
+| DOM box previously reported as the felt | 912 × 570 | 60.3% of window width and height, aspect 1.60. **This is not the extent of the painted green surface — see the row below.** |
+| **Visible green playing surface** (measured from pixels) | **945 × 473** | **62.5% of window width, 50.1% of window height, aspect 2.00** |
 | Board card (`.card`, "big") | **122.5 × 149.7** | aspect **0.818**; 13.4% of felt width |
 | Five-card board (`.table-cards`) | 658.6 × 149.7 | **72.2% of felt width** |
 | Opponent hole card ("med") | 83.0 × 100.7 | **68% of a board card** — opponents' cards are deliberately smaller |
 | Seat pod (`.table-player`) | **272.1 × 96.4** | 29.8% of felt width; **outside** the ellipse |
 | Player name / stack rows | 122.5 × 24.5 / 103.4 × 21.8 | name above stack, left-aligned in the pod |
-| Pot readout (`.table-pot-size`) | 196.5 × 51.7 | centred, **above** the board, 21.5% of felt width |
+| Pot readout (`.table-pot-size`) | 196.5 × 51.7 | centred, **above** the board, 20.8% of surface width |
+
+**On the 912×570 / 945×473 disagreement, because it matters and should not be papered
+over.** The 912×570 figure came from a DOM `getBoundingClientRect`; 945×473 is what the
+green pixels actually occupy, measured twice at two different viewports (1512×945 and
+1280×800), agreeing to 0.1% on every ratio, with a 96% elliptical fill and its widest row
+and tallest column both near the centre of the box. The measured surface is *wider* than
+the DOM box it was supposed to sit inside, so the two cannot be describing the same thing —
+whichever element was captured, it is not the one painting the felt. **Every ratio in this
+file is stated against the visible surface (945), because that is what a player sees and
+what a design bar has to be written against.** Consequences: the board card is 13.0% of
+surface width, not 13.4%; the five-card board spans 69.7%, not 72.2%; the seat pod is 28.8%,
+not 29.8%; the pot readout 20.8%, not 21.5%. The card and board *pixel* sizes are unchanged
+and still exact — only the denominator moved.
 
 ### 2.2 The scaling law (this is the important architectural finding)
 
@@ -335,26 +449,60 @@ vibes.
 Concrete, checkable targets derived from the above. These are the numbers a look-and-feel
 critic should hold ClearDeck to.
 
+> **Bars 1, 2, 7, 10 and 15 were rewritten on 2026-08-04.** As originally written they
+> rejected reality: bar 1's window-share range excluded 3 of the 4 reference clients, bar
+> 2's aspect-ratio range excluded **all four**, bar 7 quoted a card ratio computed against
+> a felt width that was itself wrong, bar 10 promoted a single-client observation to a
+> cross-client law, and bar 15 claimed a majority of leaders do something only two of them
+> were ever observed doing. Worse, the old bars 1 and 2 were both satisfied by ClearDeck's
+> own table (60.8% and 1.84) while excluding the clients they claimed to be derived from —
+> a bar that passes the thing it is meant to judge and fails its own references is not a
+> bar. Corrected values below, with the measurement in §1.
+
 **Table and layout**
-1. Playing surface occupies **55–65% of window width** at desktop, with the rest as a
-   dark surround. Do not fill the viewport with felt.
-2. Felt aspect ratio in **1.5–1.9** for a 6–9 seat table. Below 1.4 wastes horizontal
-   space; above 2.3 only works with a heavy rail.
+1. Playing surface occupies **70% ±8 of client window width** at desktop (measured range
+   **62.5–81.6%**, median 73.7%), with the rest as a dark surround. Do not fill the
+   viewport with felt — but do not undershoot either: ClearDeck's **60.8%** is *below every
+   reference measurement except PokerNow's 62.5%*, so the table currently reads smaller
+   than the category, not more restrained than it.
+2. Playing-surface aspect ratio **1.9–2.3** (measured range **1.72–2.63**, median 2.13,
+   with 7 of 8 measurements at ≥2.00). **The field does not split here — every leader is a
+   wide stadium.** ClearDeck's 1.84 is below the whole reference band bar one, and its
+   surface is a rounded rectangle rather than an ellipse or stadium (ellipse fill 104.7%
+   against the references' 84–96%). Reshaping the surface to a ~2:1 stadium is the
+   single highest-leverage geometry change available.
 3. Surround must be genuinely dark (`#17191D`–`#242324` band) and must be the **majority
-   of the pixels**.
+   of the pixels**: measured **71.5–77.9%** of the client window is not-felt, as an
+   explicit felt-mask ratio. ClearDeck is at 71.1%, just inside. Note the counter-example
+   before treating this as a law: PokerStars' Aurora theme has **no felt fill at all**, so
+   this bar governs *contrast and framing*, not literally "green must be scarce".
 4. Empty seats render as a **full-size pod with an explicit call to action**
    (`SIT` / `Sit Here` / `+`). Never a gap.
 5. Seat pod width **25–30% of felt width**. Name above stack, two rows, left-aligned.
 
 **Cards**
 6. Board card aspect **0.80–0.82**. `border-radius` ~7% of width.
-7. Board card width **≥7% of felt width**; PokerNow's 13.4% is the legibility ceiling and
-   the right target for a browser-first client. The five-card board should span
-   **50–72% of felt width**.
+7. Board card width **≥9% of the playing surface width**, target **13%**. Measured against
+   the *corrected* surface widths: PokerNow **13.0%** (exact, DOM card 122.5 px ÷ surface
+   945 px), PokerStars ~**8.6%**, WPT Global ~**6.1%**, GGPoker not reliably measurable.
+   The five-card board should span **50–70%** of surface width (PokerNow: **69.7%**).
+   ClearDeck today: board card **6.8%** of surface width, board span **37.9%** — the
+   native-client end of the range, on a browser-first client with PokerNow's constraints.
+   PokerNow's ratio is the right target precisely because it is the only other
+   browser-first client in the corpus, and it is why PokerNow reads well on a phone.
 8. Opponents' hole cards render **smaller than board cards** (PokerNow: 68%).
 9. Card rank in a display face at **~2× base UI size**, red `#DB3131`-ish, black
    `#2C2C2C` (never `#000`).
-10. **Two typefaces total** on the table: one UI sans, one display face for ranks.
+10. **Two typefaces total** on the table: one UI sans, one display face for ranks. Status:
+    this is a **one-client observation promoted to a house rule, not a measured
+    cross-client finding**, and it should be quoted as such. It is exact for PokerNow only
+    (`Mulish` + `Abril Fatface`, read from computed styles on a live DOM). For PokerStars,
+    GGPoker and WPT Global we have JPEGs and PNGs, and **you cannot read a font stack off a
+    raster** — nothing in the corpus establishes their typeface count either way. It is
+    still a good rule (two faces is the discipline PokerNow's table legibility rests on)
+    and worth adopting; it is not evidence about the category. Where the corpus *does*
+    contradict a monoculture: GGPoker's card faces use a visibly different system, a
+    four-colour deck with per-suit card backgrounds rather than a single white face.
 
 **Motion**
 11. **500 ms** for anything that moves an object: card to felt, dealer button to seat,
@@ -368,9 +516,26 @@ critic should hold ClearDeck to.
 **The all-in moment**
 15. The reference clients dramatise all-in with **information, not fireworks**: an
     `All-In` tag on the pod, **live equity percentages per player**, and the pot total
-    called out. GGPoker adds a named hand-strength phrase. ClearDeck should show live
-    equity at all-in — it is the single highest-value thing three of four leaders do and
-    it costs no animation budget.
+    called out. GGPoker adds a named hand-strength phrase.
+
+    **Corrected count: two of four, not three of four.** Equity badges appear in real
+    gameplay for exactly two clients, and the evidence is four files:
+    - **PokerStars** — `web-ps-wpd-2.png`, `web-ps-wpd2-2.png`: Aurora-theme table at
+      all-in with `0%` / `100%` badges beside the two players, `All-In` under the name,
+      `Pot: $123.15` above the board. (`web-ps-wpd-2.png` also carries an "Are you over
+      18?" age gate that dims the page — usable as equity evidence, useless for geometry.)
+    - **GGPoker** — `web-gg-wpd-2.png`, `web-gg-wpd2-2.png`: `100.00%` to two decimals,
+      `All-In` tag, `Total Pot : $3,306`, plus the hand-strength phrase "Sharp red hands".
+
+    **PokerNow: no equity anywhere** in 220 real-gameplay frames — it was observed as a
+    spectator, and nothing in §2.5 shows an equity display. **WPT Global: none** in its
+    real-gameplay captures; its only all-in reference is an illustrated marketing render,
+    which §8 already says not to treat as authoritative.
+
+    The recommendation survives the correction and is arguably strengthened: both clients
+    that do this are the big-money native clients, and it costs no animation budget.
+    ClearDeck should show live equity at all-in. Just do not defend it with "three of four
+    leaders do it" — the number is two, and both are natives.
 
 **Showdown**
 16. All live hole cards face-up, winning hand named in words, winner pod glowing for
@@ -429,11 +594,15 @@ Honest gaps, so nobody over-claims from it.
 | Gap | Why | Impact |
 |---|---|---|
 | **No PokerNow heads-up (2-seat) table** | All 18 public PokerNow games are 10-seat; a 2-seat table needs game creation, which is Turnstile-gated. | Heads-up proportions for PokerNow are unknown. GGPoker heads-up is covered (marketing creative only). |
-| **No PokerNow seated bet-sizing controls** | We observed as a spectator and chose not to sit down in strangers' live games. | Bet-control geometry for PokerNow unmeasured; PokerStars' and GGPoker's are covered from creatives. |
+| **ZERO real-gameplay captures of the bet-sizing action bar, for ANY client** | Verified 2026-08-04 across all 438 files. PokerNow was observed as a spectator (a spectator sees a `JOIN` button where the controls would be), and its 80 production-renderer tutorial frames are a *scripted replay* — the wide control strip at the bottom of those frames is the tutorial's own step navigation (`STEP 1 OF 2`, prev/play/next), not poker controls. The three native clients cannot be installed here, and their real-gameplay captures are all spectator/observer views or all-in moments. What exists for bet controls is **marketing creatives only**. | **This is the single largest hole in the corpus, and it lands squarely on the control surface a poker player touches most.** Nothing in this file constrains slider geometry, pot-fraction button sets, min-raise affordances, or bet-input behaviour. Treat every ClearDeck bet-control decision as *unbenchmarked*. Two routes close it: (a) sit down with real money in one live PokerNow game and capture one's own seated controls, or (b) create a PokerNow game, which is Turnstile-gated and therefore off-limits under the rules we are working to. Neither was done. |
 | **No real-gameplay all-in for WPT Global** | Its only all-in reference is an illustrated marketing render. | Do not treat WPT's all-in composition as authoritative. |
-| **Board-card ratio not measurable for GGPoker** | Available captures were too small / the board too obscured for reliable white-rectangle segmentation. | GG card proportions are qualitative only. |
+| **Board-card ratio not measurable for GGPoker** | GGPoker's cards are a four-colour deck with per-suit coloured card *backgrounds* (blue / black / green / red), so white-rectangle segmentation has nothing to find. | GG card proportions are qualitative only. Note this is a design finding in its own right, not just a measurement failure. |
+| **PokerStars' Aurora theme cannot be measured by any felt-colour method** | It has no felt fill: sampled pixels inside and outside the table are the same `rgb(23,42,51)`, and the surface is delineated by a thin light outline. Its geometry here (583×338, aspect 1.72) came from scanning that outline's extent through the surface's centre row and centre column, not from a mask. | Its aspect is trustworthy; its "not-felt share" is undefined and is deliberately left blank in §1.2 rather than filled with a number. |
+| **PokerStars' green-theme aspect is a lower bound only** | `web-ps-gipsy-1.png` is cropped at the right edge: the client window itself is cut off, so the felt's measured width (547 px) is truncated while its height (250 px) is intact. | Aspect ≥2.19 and width share ≥81.6%; the true values are higher and unknown. Do not quote 2.19 as *the* PokerStars number. |
+| **One PokerStars all-in capture carries an age gate** | `web-ps-wpd-2.png` has an "Are you over 18?" modal dimming the whole page. | Usable as evidence for equity badges; useless for geometry — a naive mask measures the dimming overlay (91.8% of the window) instead of the table. |
 | **No screen recordings for the three native clients** | Frame-accurate motion timing needs video; we have exact CSS timings only for PokerNow. | All motion numbers in §6 derive from PokerNow. Treat them as a floor validated on one client, not four. |
-| **Felt bounding boxes for the native clients are ±5%** | Colour segmentation on third-party screenshots that include window chrome. | Only PokerNow's geometry is exact. |
+| **Playing-surface boxes for the native clients are ±5%** | Colour segmentation on third-party screenshots that include window chrome. Now gutter-cropped and sanity-checked three ways (§1.1), which removes the gross errors but not the residual few per cent. | Only PokerNow's geometry is exact — and it is exact twice, at two viewports, agreeing to 0.1%. |
+| **Every reference aspect ratio rests on one capture per table art** | Only PokerNow has two independent captures of the same table. | The **direction** of the §1.2 finding is robust (7 of 8 measurements ≥2.00, from four different vendors, four different measuring sessions). Any single number in that table could move a few per cent. |
 | **Deposit/cashier flows are thin everywhere** | Cashiers sit behind login. | We have PokerStars' method matrix and WPT's milestone table, but no real cashier screen. |
 
 ### Reproducing the measurements
@@ -455,7 +624,33 @@ $SCRATCH/reference/
   pokernow/pokernow-game-css-snapshot.css # source of every exact animation duration in §2.3
 ```
 
+The **corrected** measurers, which supersede `tools/measure2.py` for anything geometric,
+live in the scratchpad alongside their overlays:
+
+```
+$SCRATCH/
+  v-felt.py                  universal hue band + review-page gutter crop + axis cross-check
+  v-felt2.py                 per-file hue bands + fill-vs-ellipse + centroid sanity checks
+  critic-felt2.py            the pass that first caught the wrong-rectangle error
+  v-felt-out/
+    v-felt-results.json      universal-band results, all clients
+    v-felt2b-results.json    per-file-band results
+    w-<client>_<file>.png    magenta box = detected surface, yellow = widest row,
+                             cyan = tallest column. EYEBALL THESE before quoting a number.
+    cd-preflop-desktop.png   ClearDeck's own table measured with the identical tool
+    aurora-*.png             the outline-scan overlays for PokerStars' Aurora theme
+  reference/INDEX.json.pre-reattribution   the index before the 16-file client correction
+```
+
 ```sh
+# Corrected geometry for every client, plus ClearDeck, with overlays to eyeball.
+S=$SCRATCH python3 $SCRATCH/v-felt.py     # universal band + gutter crop + axis check
+S=$SCRATCH python3 $SCRATCH/v-felt2.py    # per-file bands + fill/centroid checks
+
+# SUPERSEDED for geometry, kept because its palette sampling is still useful.
+# Its felt boxes are the ones that were wrong: it caught PokerNow's `.table` DIV
+# (1349x862, aspect 1.56) rather than the green ellipse (945x473, aspect 2.00),
+# and its "surround share" is palette[0].pct of a whole-file quantize.
 # Re-derive the felt/palette/card numbers for any client, with visual verification.
 # Writes measure2.json plus dbg2-<tag>.png overlays so the detection can be eyeballed
 # (magenta = detected felt box, cyan = client window, yellow = detected board cards).

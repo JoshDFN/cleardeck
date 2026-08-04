@@ -1,17 +1,34 @@
-//! Inputs the reference libraries cannot even represent.
+//! Inputs a well-behaved evaluator should refuse.
 //!
-//! `rs_poker` and `poker` both refuse (or debug-assert on) fewer than five cards,
-//! more than seven cards, and duplicate cards. `poker_core` accepts all three
-//! silently and returns a `HandRank` that looks perfectly ordinary. These probes
-//! record exactly what it returns, so the fix wave knows whether the answer is
-//! merely useless or actively wrong.
+//! `poker_core` accepts fewer than five cards, more than five cards into its
+//! five-card entry point, and duplicate cards, and returns a `HandRank` that looks
+//! perfectly ordinary. These probes record exactly what it returns, so the fix wave
+//! knows whether the answer is merely useless or actively wrong.
 //!
-//! Where a reference *can* be consulted (six-card boards; five-card boards) it is,
-//! and the probe becomes a real differential check.
+//! # The corrected conclusion (docs/DEFECTS.md H-05)
+//!
+//! This file used to attach hard-coded strings claiming "both references reject a
+//! hand containing the same card twice" and "no reference will evaluate fewer than
+//! five cards". Neither reference was called, and both claims are false of
+//! reference A: `rs_poker` silently ranks `Ah Ah Ah Ah Ah` as `StraightFlush(0)`,
+//! `Kh Kh Kd Kd Qs` as `FourOfAKind(155)` and the two-card hand `Ah Kd` as
+//! `HighCard(2140)`. `phevaluator` hands back the out-of-range sentinel `0` for
+//! duplicates instead of raising. Only `poker` 0.7.0 errors.
+//!
+//! So: **no evaluator in this harness validates its own input.** Every probe below
+//! now ASKS both references through [`super::reference_probe`] and reports the
+//! measured answer, and E-09 has to be fixed at the `poker_core` boundary rather
+//! than delegated to a reference that would supposedly have caught it.
+//!
+//! Every probe also asks `poker_core` inside a panic guard, so a probe emits a
+//! finding only while the engine still ACCEPTS the input. Once `evaluate_hand`
+//! starts refusing, the probe goes quiet by itself instead of reporting a defect
+//! that has been fixed.
 
 use poker_core::{detect_straight, HandRank};
 use rs_poker::core::Rankable;
 
+use super::reference_probe::{ask_both, describe_with_third, ReferenceVerdicts};
 use crate::cards::{parse_hand, slice_to_string, to_rs_poker, CardIdx};
 use crate::category::{category_of_cleardeck, category_of_rs_poker, Category};
 use crate::engine::{ours_five_cards_raw, ours_hand, render};
@@ -40,6 +57,49 @@ fn finding(
 
 fn cards(s: &str) -> Vec<CardIdx> {
     parse_hand(s).expect("literal cards in a probe must parse")
+}
+
+/// What `poker_core` did with a degenerate input, measured the same way the
+/// references are measured: a rank, or a refusal.
+///
+/// A `HandRank` return is not the only possible outcome any more -- fixing E-09
+/// means `evaluate_hand` and `evaluate_five_cards` start rejecting these inputs, and
+/// on this side of the boundary a rejection can only arrive as a panic. Catching it
+/// is what lets a probe report NOTHING once the defect is gone.
+enum OurAnswer {
+    Ranked(HandRank),
+    Refused(String),
+}
+
+fn ask_engine<F: FnOnce() -> HandRank + std::panic::UnwindSafe>(f: F) -> OurAnswer {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let out = std::panic::catch_unwind(f);
+    std::panic::set_hook(previous);
+    match out {
+        Ok(rank) => OurAnswer::Ranked(rank),
+        Err(e) => OurAnswer::Refused(
+            e.downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| e.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panicked".to_string()),
+        ),
+    }
+}
+
+/// One sentence stating what the references did, for the `explanation` field.
+///
+/// This is the H-05 correction in the report itself: if neither reference refused,
+/// the finding says so out loud rather than implying corroboration it does not have.
+fn corroboration(v: &ReferenceVerdicts) -> &'static str {
+    if v.none_refused() {
+        "NEITHER reference refused this input either, so no reference would have caught it: the \
+         validation has to live in poker_core"
+    } else if v.rs_poker.is_refusal() && v.poker_crate.is_refusal() {
+        "both references refused the input"
+    } else {
+        "one reference refused the input and the other ranked it anyway"
+    }
 }
 
 /// rs_poker's native rank for any 5..=7 card hand, as a category.
@@ -102,27 +162,41 @@ pub fn run() -> DegenerateOutcome {
 
     // ---- P3: fewer than five cards reach `evaluate_hand` ---------------------
     // `combinations(cards, 5)` returns EMPTY when fewer than five cards are
-    // available, and `evaluate_hand` then falls back to `HandRank::HighCard(vec![])`
-    //, which is `Ord`-EQUAL for every player and `Ord`-LESS than every real hand.
+    // available, and `evaluate_hand` then falls back to `HandRank::HighCard(vec![])`,
+    // which is `Ord`-EQUAL for every player and `Ord`-LESS than every real hand.
+    //
+    // Reported only while the engine actually accepts the input. Both references are
+    // asked, and their measured answers go in the report: `poker` 0.7.0 errors on the
+    // card count, `rs_poker` ranks two cards as `HighCard(2140)` without complaint.
     for spec in ["Ah Kd", "Ah Kd Qc", "Ah Kd Qc Js"] {
         probes += 1;
         let hand = cards(spec);
-        let ours = ours_hand(&hand);
-        if ours == HandRank::HighCard(Vec::new()) {
-            findings.push(finding(
-                "degenerate/fewer-than-five-cards-returns-empty-highcard",
-                Severity::Latent,
-                &hand,
+        let hand_for_engine = hand.clone();
+        let OurAnswer::Ranked(ours) = ask_engine(move || ours_hand(&hand_for_engine)) else {
+            continue; // the engine now refuses a short board: nothing to report
+        };
+        let verdicts = ask_both(&hand);
+        let degenerate_ordering = ours == HandRank::HighCard(Vec::new());
+        findings.push(finding(
+            "degenerate/fewer-than-five-cards-returns-empty-highcard",
+            Severity::Latent,
+            &hand,
+            render(&ours),
+            describe_with_third(&hand, &verdicts),
+            format!(
+                "evaluate_hand accepted {} card(s) and returned {}{}. {}.",
+                hand.len(),
                 render(&ours),
-                "no reference will evaluate fewer than five cards; the rulebook has no ranking for them".into(),
-                format!(
-                    "evaluate_hand with only {} cards returns HandRank::HighCard([]), which compares EQUAL \
-                     between players and LESS than every real hand instead of refusing; any showdown \
-                     reached before the flop would chop rather than error.",
-                    hand.len()
-                ),
-            ));
-        }
+                if degenerate_ordering {
+                    ", which compares EQUAL between players and LESS than every real hand instead \
+                     of refusing, so any showdown reached before the flop would chop rather than \
+                     error"
+                } else {
+                    ", a rank for a board that cannot make a five-card hand"
+                },
+                corroboration(&verdicts)
+            ),
+        ));
     }
 
     // ---- P4: `evaluate_five_cards` handed six or seven cards ----------------
@@ -138,7 +212,13 @@ pub fn run() -> DegenerateOutcome {
     ] {
         probes += 1;
         let hand = cards(spec);
-        let ours = ours_five_cards_raw(&hand);
+        let hand_for_engine = hand.clone();
+        let OurAnswer::Ranked(ours) = ask_engine(move || ours_five_cards_raw(&hand_for_engine))
+        else {
+            continue; // evaluate_five_cards now rejects >5 cards: nothing to report
+        };
+        // These inputs are 6 or 7 DISTINCT cards, so rs_poker's native 6/7-card path
+        // is a legitimate oracle here: its answer is the best real hand present.
         let truth = rs_category(&hand);
         let our_cat = category_of_cleardeck(&ours);
         if our_cat != truth {
@@ -162,21 +242,35 @@ pub fn run() -> DegenerateOutcome {
     // ---- P5: duplicate cards -----------------------------------------------
     // A dealing bug that hands the same card out twice must not be laundered into
     // a plausible-looking rank.
+    //
+    // This probe used to be pushed UNCONDITIONALLY with the hard-coded claim "both
+    // references reject a hand containing the same card twice". Measured: `poker`
+    // 0.7.0 does; `rs_poker` ranks `Ah Ah Ah Ah Ah` as `StraightFlush(0)` and
+    // `Kh Kh Kd Kd Qs` as `FourOfAKind(155)`.
     for spec in ["Ah Ah Ah Ah Ah", "Ah Ah Ah Ah Kh", "Kh Kh Kd Kd Qs"] {
         probes += 1;
         let hand = cards(spec);
-        let ours = ours_five_cards_raw(&hand);
+        let hand_for_engine = hand.clone();
+        let OurAnswer::Ranked(ours) = ask_engine(move || ours_five_cards_raw(&hand_for_engine))
+        else {
+            continue; // evaluate_five_cards now rejects duplicates: nothing to report
+        };
+        let verdicts = ask_both(&hand);
+        let distinct: std::collections::BTreeSet<CardIdx> = hand.iter().copied().collect();
         findings.push(finding(
             "degenerate/duplicate-cards-are-silently-ranked",
             Severity::Latent,
             &hand,
             render(&ours),
-            "both references reject a hand containing the same card twice".into(),
+            describe_with_third(&hand, &verdicts),
             format!(
-                "evaluate_five_cards accepts the physically impossible hand {} and returns {}; \
-                 a dealing or shuffling defect would surface as a wrong winner rather than a trap.",
+                "evaluate_five_cards accepts the physically impossible hand {} ({} distinct \
+                 physical cards) and returns {}, so a dealing or shuffling defect would surface as \
+                 a wrong winner rather than a trap. {}.",
                 slice_to_string(&hand),
-                render(&ours)
+                distinct.len(),
+                render(&ours),
+                corroboration(&verdicts)
             ),
         ));
     }
@@ -186,6 +280,9 @@ pub fn run() -> DegenerateOutcome {
     // ever hands the same physical card to a player twice (or puts a hole card on
     // the board), the 21-subset loop happily uses BOTH copies, so a five-card hand
     // can be built out of four physical cards.
+    // Also previously pushed unconditionally, with the hard-coded claim that "both
+    // references reject the input outright". Measured: `rs_poker` ranks
+    // `Ah Ah Kh Qh Jh 2c 3d` as `StraightFlush(0)`.
     for (spec, note) in [
         (
             // Hole = Ah Ah. The "flush" Ah Ah Kh Qh Jh uses four physical cards.
@@ -200,26 +297,28 @@ pub fn run() -> DegenerateOutcome {
     ] {
         probes += 1;
         let hand = cards(spec);
-        let ours = ours_hand(&hand);
+        let hand_for_engine = hand.clone();
+        let OurAnswer::Ranked(ours) = ask_engine(move || ours_hand(&hand_for_engine)) else {
+            continue; // evaluate_hand now rejects duplicates: nothing to report
+        };
+        let verdicts = ask_both(&hand);
         let distinct: std::collections::BTreeSet<CardIdx> = hand.iter().copied().collect();
         findings.push(finding(
             "degenerate/duplicate-card-reaches-evaluate_hand",
             Severity::Latent,
             &hand,
             render(&ours),
-            format!(
-                "{} distinct physical cards were supplied; both references reject the input outright",
-                distinct.len()
-            ),
+            describe_with_third(&hand, &verdicts),
             format!(
                 "evaluate_hand accepts {} ({} distinct physical cards) and returns {}: {}. \
                  It validates neither the card count nor distinctness, so a dealing or \
                  shuffling defect is laundered into a plausible-looking winning hand \
-                 instead of trapping.",
+                 instead of trapping. {}.",
                 slice_to_string(&hand),
                 distinct.len(),
                 render(&ours),
-                note
+                note,
+                corroboration(&verdicts)
             ),
         ));
     }

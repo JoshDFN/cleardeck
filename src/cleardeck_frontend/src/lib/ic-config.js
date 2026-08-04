@@ -1,11 +1,15 @@
 // Centralized IC network + identity configuration.
 //
-// Single source of truth for the Internet Identity provider URL and the agent
-// gateway host. Previously these literals (and the isMainnet() helper) were
-// duplicated across auth.js, canisters.js, oisy.js and WalletButton.svelte, and
-// had already drifted (oisy.js used icp-api.io while the rest used ic0.app).
-// Keeping them here makes a future provider change a one-line edit and lets the
-// values be overridden via Vite env vars for instant rollback.
+// Single source of truth for:
+//   - which NETWORK this bundle was built for (compiled in, not sniffed),
+//   - the Internet Identity provider URL,
+//   - the agent gateway host,
+//   - the local replica gateway port,
+//   - the mainnet canister ids, as DISPLAY-ONLY text.
+//
+// Previously the II URL and the isMainnet() helper were duplicated across
+// auth.js, canisters.js, oisy.js and WalletButton.svelte, and had already
+// drifted (oisy.js used icp-api.io while the rest used ic0.app).
 //
 // Modern DFINITY guidance (icskills):
 //   - Internet Identity provider = https://id.ai   (II v2; replaces identity.internetcomputer.org)
@@ -13,27 +17,77 @@
 //
 // IMPORTANT: the II URL MUST include the /authorize path. The bare origin
 // (https://id.ai) opens id.ai account management and the AuthClient delegation
-// handshake never completes — locking users out of their funded session.
+// handshake never completes, locking users out of their funded session.
+
+// ---------------------------------------------------------------------------
+// Build target
+// ---------------------------------------------------------------------------
+//
+// docs/DEFECTS.md T-01: the bundle used to decide "am I local?" purely by
+// sniffing window.location.hostname, while the canister ids it talked to came
+// from a fallback chain that ended at the repo-root .env — which holds the
+// MAINNET ids. A local dev build therefore pointed a dev UI at the live
+// fund-holding canisters.
+//
+// The build target is now COMPILED IN by vite.config.js, which refuses to build
+// at all unless it is stated explicitly (DFX_NETWORK / ICP_NETWORK = local|ic).
+// The hostname sniff survives only as a last-resort fallback for a bundle built
+// by some other toolchain; it can no longer decide which canisters are wired.
 
 const MAINNET_HOSTNAMES = ['icp0.io', 'ic0.app', 'internetcomputer.org'];
 
-// Local replica host used for both the agent and (with a canister-id prefix) II.
-export const LOCAL_HOST = 'http://127.0.0.1:4943';
+/** @typedef {'local'|'ic'} IcNetwork */
 
-/**
- * True when the page is served from an IC mainnet origin.
- * NOTE: this tests where the PAGE is served, not where the agent connects.
- * @returns {boolean}
- */
-export function isMainnet() {
+/** @returns {IcNetwork|null} the target compiled in at build time, if any. */
+function compiledNetwork() {
+  const raw = import.meta.env.VITE_ICP_NETWORK || import.meta.env.DFX_NETWORK;
+  if (raw === 'ic' || raw === 'local') return raw;
+  return null;
+}
+
+/** @returns {boolean} true when the page is served from an IC mainnet origin. */
+function servedFromMainnetOrigin() {
   return typeof window !== 'undefined' &&
     MAINNET_HOSTNAMES.some((h) => window.location.hostname.includes(h));
 }
 
+/**
+ * The network this bundle talks to. Compiled in when known; otherwise inferred
+ * from the serving origin so an unlabelled bundle still behaves sanely.
+ * @type {IcNetwork}
+ */
+export const NETWORK = compiledNetwork() || (servedFromMainnetOrigin() ? 'ic' : 'local');
+
+/** True when this bundle was explicitly built for mainnet. */
+export const IS_MAINNET_BUILD = compiledNetwork() === 'ic';
+
+/** @returns {boolean} true when this bundle talks to IC mainnet. */
+export function isMainnet() {
+  return NETWORK === 'ic';
+}
+
 /** @returns {boolean} true in local development. */
 export function isLocal() {
-  return !isMainnet();
+  return NETWORK === 'local';
 }
+
+// ---------------------------------------------------------------------------
+// Hosts
+// ---------------------------------------------------------------------------
+
+/**
+ * Local replica gateway port. docs/DEFECTS.md T-03: this was hardcoded to 4943,
+ * but this project's managed network is pinned to 8077 in icp.yaml (8000 belongs
+ * to another project on the same machine), so an unmodified local build pointed
+ * its agent at a port nothing was listening on. It now comes from the build
+ * environment — the same place the canister ids come from.
+ */
+export const LOCAL_GATEWAY_PORT =
+  Number(import.meta.env.VITE_LOCAL_GATEWAY_PORT) || 4943;
+
+/** Local replica host used for both the agent and (with a canister-id prefix) II. */
+export const LOCAL_HOST =
+  import.meta.env.VITE_LOCAL_HOST || `http://127.0.0.1:${LOCAL_GATEWAY_PORT}`;
 
 // Mainnet agent gateway host (env-overridable for rollback).
 export const IC_HOST = import.meta.env.VITE_IC_HOST || 'https://icp-api.io';
@@ -47,4 +101,52 @@ export const II_URL = import.meta.env.VITE_II_URL || 'https://id.ai/authorize';
  */
 export function agentHost() {
   return isMainnet() ? IC_HOST : LOCAL_HOST;
+}
+
+// ---------------------------------------------------------------------------
+// Mainnet canister ids — DISPLAY ONLY
+// ---------------------------------------------------------------------------
+//
+// These are the live, fund-holding ClearDeck canisters. They are listed here so
+// the "Verify the Code" panel can show a user which canisters to audit on
+// mainnet — that display is legitimate and deliberately kept.
+//
+// They are NEVER used to wire an actor. canisters.js resolves its ids from the
+// build environment and treats any of these values as a build error on a local
+// build. Keep this list in sync with .icp/data/mappings/ic.ids.json.
+export const MAINNET_CANISTER_IDS = Object.freeze({
+  lobby: 'kpfcd-kyaaa-aaaaj-qor3a-cai',
+  history: 'kggj7-4qaaa-aaaaj-qor2q-cai',
+  frontend: 'kbhpl-riaaa-aaaaj-qor2a-cai',
+  table_1: 'kieex-haaaa-aaaaj-qor3q-cai',
+  table_2: 'lfkaz-iiaaa-aaaaj-qor4a-cai',
+  table_3: 'lclgn-fqaaa-aaaaj-qor4q-cai',
+  btc_table_1: 'qrhly-eaaaa-aaaaj-qousa-cai',
+});
+
+/** Every mainnet id, for the "did a local build wire a mainnet canister?" check. */
+export const MAINNET_ID_LIST = Object.freeze(Object.values(MAINNET_CANISTER_IDS));
+
+/**
+ * @param {unknown} id
+ * @returns {boolean} true if `id` is one of the live fund-holding canisters.
+ */
+export function isMainnetCanisterId(id) {
+  return typeof id === 'string' && MAINNET_ID_LIST.includes(id);
+}
+
+/**
+ * The `icp canister status` command for the network this bundle actually talks
+ * to. docs/DEFECTS.md T-02: a locally-wired build used to offer a Copy button
+ * that handed the user `icp canister status qrhly-… -e ic`, a mainnet command
+ * from a local dev build. The command now comes from the same runtime config as
+ * the wiring, so it can never disagree with it.
+ *
+ * @param {string|undefined} canisterId id to inspect; falls back to a sensible default
+ * @returns {string} a copy-pasteable icp command for THIS build's network
+ */
+export function statusCommandFor(canisterId) {
+  const env = isMainnet() ? 'ic' : 'local';
+  const id = canisterId || (isMainnet() ? MAINNET_CANISTER_IDS.lobby : '<LOCAL_CANISTER_ID>');
+  return `icp canister status ${id} -e ${env}`;
 }

@@ -12,6 +12,17 @@
   import { playSound, setSoundEnabled, isSoundEnabled } from "$lib/sounds.js";
   import logger from "$lib/logger.js";
   import { auth, isSignatureError, wallet } from "$lib/auth.js";
+  // docs/DEFECTS.md T-02: the "Verify the Code" panel used to hardcode
+  // `icp canister status qrhly-… -e ic` in both the visible <code> block and the
+  // Copy button, so a LOCAL dev build handed the user a mainnet command. The
+  // command now comes from the same config that wires the actors, so it can never
+  // disagree with what this build actually talks to. The mainnet ids further down
+  // the panel are still shown as text on purpose: that display is the point of
+  // the panel, and it is sourced from MAINNET_CANISTER_IDS rather than retyped.
+  import {
+    IS_MAINNET_BUILD, MAINNET_CANISTER_IDS, NETWORK, statusCommandFor,
+  } from "$lib/ic-config.js";
+  import { lobbyCanisterId } from "$lib/canisters";
   import { HttpAgent } from '@dfinity/agent';
   import { Principal } from '@dfinity/principal';
 
@@ -29,6 +40,13 @@
   let showHandHistory = $state(false);
   let showHowItWorks = $state(false);
   let showVerify = $state(false);
+
+  // The `icp canister status` command for the network THIS bundle talks to.
+  // On a mainnet build that is the live btc_table_1 with `-e ic`; on a local dev
+  // build it is the local lobby with `-e local`. docs/DEFECTS.md T-02.
+  const verifyStatusCommand = statusCommandFor(
+    IS_MAINNET_BUILD ? MAINNET_CANISTER_IDS.btc_table_1 : lobbyCanisterId,
+  );
 
   // Current avatar style from localStorage - passed to PokerTable
   let currentAvatarStyle = $state(typeof localStorage !== 'undefined' ? (localStorage.getItem('poker_avatar_style') || 'bottts') : 'bottts');
@@ -744,20 +762,37 @@
     </div>
   {/if}
 
-  <main>
-    {#if loading && view === 'lobby'}
-      <div class="loading-state">
-        <div class="spinner"></div>
-        <span>Loading tables...</span>
-      </div>
-    {/if}
+  <!--
+    docs/DEFECTS.md H-09. The "Loading tables..." block used to be a SIBLING of
+    <Lobby>, not an either/or branch, so while `loading` was true the spinner and
+    the fully rendered lobby were both on screen: ~230 px of layout that was in a
+    screenshot or not depending on when the shutter fired.
 
+    It is now a real either/or, and the spinner only stands in when there is
+    genuinely nothing to show yet (`tables.length === 0`) — a background refresh
+    of an already-populated lobby must not blank the list.
+
+    `data-lobby-state` exposes the settled/unsettled distinction to the
+    screenshot harness so it can wait on real state instead of a sleep.
+  -->
+  <main
+    data-view={view}
+    data-lobby-state={view !== 'lobby' ? 'n-a' : (loading && tables.length === 0 ? 'loading' : 'ready')}
+    data-lobby-tables={view === 'lobby' ? tables.length : ''}
+  >
     {#if view === 'lobby'}
-      <Lobby
-        {tables}
-        onJoinTable={joinTable}
-        onRefresh={loadTables}
-      />
+      {#if loading && tables.length === 0}
+        <div class="loading-state">
+          <div class="spinner"></div>
+          <span>Loading tables...</span>
+        </div>
+      {:else}
+        <Lobby
+          {tables}
+          onJoinTable={joinTable}
+          onRefresh={loadTables}
+        />
+      {/if}
     {:else}
       {@const tableCurrency = getTableCurrency(currentTableInfo)}
       <div class="game-layout">
@@ -880,9 +915,15 @@
       <h3>1. Check Deployed Hash</h3>
       <p>Query the IC to see the hash of the deployed canister:</p>
       <div class="code-block">
-        <code>icp canister status qrhly-eaaaa-aaaaj-qousa-cai -e ic</code>
-        <button class="copy-btn" onclick={() => navigator.clipboard.writeText('icp canister status qrhly-eaaaa-aaaaj-qousa-cai -e ic')}>Copy</button>
+        <code>{verifyStatusCommand}</code>
+        <button class="copy-btn" onclick={() => navigator.clipboard.writeText(verifyStatusCommand)}>Copy</button>
       </div>
+      {#if !IS_MAINNET_BUILD}
+        <p class="hash-note">
+          This is a <strong>{NETWORK}</strong> development build, so the command above targets
+          the local replica. The live mainnet canister IDs are listed below.
+        </p>
+      {/if}
     </div>
 
     <div class="verify-section">
@@ -906,7 +947,7 @@
         <tbody>
           <tr>
             <td>Lobby</td>
-            <td><code class="canister-id">kpfcd-kyaaa-aaaaj-qor3a-cai</code></td>
+            <td><code class="canister-id">{MAINNET_CANISTER_IDS.lobby}</code></td>
           </tr>
           <tr>
             <td colspan="2" class="hash-row"><code class="hash">0xff6c893de860c5bd8dae85d67344ee94619fb6faad6d68b3265c9a6fe5a2cef8</code></td>
@@ -920,7 +961,7 @@
           </tr>
           <tr>
             <td>History</td>
-            <td><code class="canister-id">kggj7-4qaaa-aaaaj-qor2q-cai</code></td>
+            <td><code class="canister-id">{MAINNET_CANISTER_IDS.history}</code></td>
           </tr>
           <tr>
             <td colspan="2" class="hash-row"><code class="hash">0xc9b1b78a6490cd2034b967dc9de11bb6377170e0e5ef96144b546da3a93dd8f9</code></td>

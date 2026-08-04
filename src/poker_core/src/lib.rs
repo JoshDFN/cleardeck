@@ -27,10 +27,13 @@ pub mod side_pots;
 
 pub use card::{create_deck, Card, Rank, Suit};
 pub use hand::{
-    check_straight, combinations, detect_straight, evaluate_five_cards, evaluate_hand,
-    get_straight_high, HandRank,
+    check_straight, combinations, detect_straight, evaluate_five_cards,
+    evaluate_five_cards_unchecked, evaluate_hand, evaluate_hand_unchecked, get_straight_high,
+    try_evaluate_five_cards, try_evaluate_hand, validate_distinct, validate_five_cards,
+    validate_hand_input, HandInputError, HandRank,
 };
 pub use shuffle::shuffle_deck;
 pub use side_pots::{
-    apply_side_pots, build_side_pots, build_side_pots_logged, Contribution, SidePot,
+    apply_side_pots, build_side_pots, build_side_pots_logged, build_side_pots_from_contributions,
+    split_pot_clockwise, total_contributed, uncalled_excess, Contribution, SidePot,
 };

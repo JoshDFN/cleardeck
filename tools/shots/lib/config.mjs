@@ -82,13 +82,52 @@ export const VIEWPORTS = {
   mobile: { name: 'mobile', width: 390, height: 844, deviceScaleFactor: 1, isMobile: true },
 };
 
-/** Third-party hosts the app pulls from. Cached to disk for determinism. */
-export const THIRD_PARTY_HOSTS = [
+/**
+ * Third-party hosts, split by whether replaying a cached response is HONEST.
+ *
+ * STATIC hosts serve immutable assets: a woff2 file and a generated avatar are
+ * the same bytes today and next month, so caching them to disk makes a run
+ * repeatable and offline-capable, and the screenshot tells no lie.
+ *
+ * VOLATILE hosts serve facts that were only true at the moment they were read.
+ * api.coingecko.com is a live market quote, and the app renders it as `~$12.34`
+ * next to a real on-chain balance. Replaying a cached quote publishes a stale
+ * number as a current one — a false claim in an artifact whose whole purpose is
+ * to be evidence. So volatile hosts are NEVER served from the cache:
+ *
+ *   default            fetch live, and record the quote + the time it was read
+ *                      into the manifest, so the number in the PNG is dated
+ *   fetch fails        fulfil 503, so the app shows its own "Failed to fetch
+ *                      prices" state — an honest absence, not a stale number
+ *   SHOTS_PRICE_FIXTURE  opt in to a deterministic placeholder for offline runs;
+ *                      the manifest and INDEX.md then say FIXTURE out loud
+ */
+export const THIRD_PARTY_STATIC_HOSTS = [
   'fonts.googleapis.com',
   'fonts.gstatic.com',
   'api.dicebear.com',
-  'api.coingecko.com',
 ];
+
+export const THIRD_PARTY_VOLATILE_HOSTS = ['api.coingecko.com'];
+
+/** All third-party hosts, for the "is this ours?" test. */
+export const THIRD_PARTY_HOSTS = [
+  ...THIRD_PARTY_STATIC_HOSTS,
+  ...THIRD_PARTY_VOLATILE_HOSTS,
+];
+
+/**
+ * Deterministic stand-in served for a volatile host when SHOTS_PRICE_FIXTURE=1.
+ * The values are obviously-not-a-quote round numbers so nobody can mistake a
+ * fixture screenshot for a live one.
+ */
+export const PRICE_FIXTURE_BODY = JSON.stringify({
+  'internet-computer': { usd: 10 },
+  bitcoin: { usd: 100000 },
+});
+
+/** True when the operator asked for the offline, deterministic price fixture. */
+export const USE_PRICE_FIXTURE = process.env.SHOTS_PRICE_FIXTURE === '1';
 
 /** How long to wait for on-chain state to satisfy a scene predicate. */
 export const STATE_TIMEOUT_MS = 60_000;

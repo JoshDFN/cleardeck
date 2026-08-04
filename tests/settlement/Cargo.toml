@@ -1,0 +1,53 @@
+[package]
+name = "settlement_oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "An INDEPENDENT settlement oracle for ClearDeck: given the facts of a hand it derives what each seat is owed from the rules of poker, and a harness that compares that against what the REAL table canister actually paid on PocketIC."
+
+# Deliberately DETACHED from the root workspace, for the same two reasons
+# tests/money_safety is:
+#   1. `pocket-ic` drags in tokio + reqwest + rustls, which must not enter the
+#      lockfile of a canister that custodies real ICP/ckBTC.
+#   2. This crate is owned by a different author than src/table_canister/**, so
+#      it must never require an edit to the shared root Cargo.toml / Cargo.lock.
+#
+# It carries its own lockfile and its own target dir, and is NOT picked up by
+# `cargo test --workspace`. See README.md.
+[workspace]
+
+[lib]
+name = "settlement_oracle"
+path = "src/lib.rs"
+
+[dependencies]
+# The evaluator ONLY. Wave 1 proved `poker_core`'s five-card ranking correct over
+# the whole C(52,5) space against three independent evaluator lineages, so using
+# it for RANKING is using a proven component. The oracle must NOT use
+# `poker_core::side_pots` (build_side_pots / apply_side_pots) or anything derived
+# from `determine_winners` -- that is the code under test. See src/oracle.rs.
+poker_core = { path = "../../src/poker_core" }
+
+pocket-ic = "11.0.0"
+candid = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"
+crc32fast = "1.3"
+hex = "0.4"
+
+[[test]]
+name = "oracle_rules"
+path = "tests/oracle_rules.rs"
+
+[[test]]
+name = "settlement"
+path = "tests/settlement.rs"
+
+[[test]]
+name = "disagreements"
+path = "tests/disagreements.rs"
+
+# PocketIC instances are heavy (one replica process each). Keep the test binaries
+# from fighting over CPU; see README.md for --test-threads guidance.
+[profile.test]
+opt-level = 1

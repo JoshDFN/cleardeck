@@ -7,98 +7,18 @@
 //! defect.
 
 use money_safety::invariants::*;
+use money_safety::scenario::{play_out_passively, play_out_with_betting, seat_players};
 use money_safety::table_api::*;
 use money_safety::world::*;
 use money_safety::{assert_holds, assert_violated};
 use std::time::Duration;
 
+mod classifier;
+mod seam;
+mod upgrade_across_versions;
+
 const ICP: u64 = 100_000_000;
 const FEE: u64 = 10_000;
-
-// ---------------------------------------------------------------------------
-// shared scaffolding
-// ---------------------------------------------------------------------------
-
-/// Fund `n` actors and seat them, then let the auto-deal delay pass.
-fn seat_players(world: &World, names: &[&str], escrow_each: u64) {
-    for (i, name) in names.iter().enumerate() {
-        let who = world.actor(name);
-        world
-            .fund_escrow(who, escrow_each)
-            .unwrap_or_else(|e| panic!("fund_escrow for {name} failed: {e:?}"));
-        world
-            .join_table(who, i as u8)
-            .unwrap_or_else(|e| panic!("join_table for {name} failed: {e:?}"));
-    }
-    world.advance(Duration::from_secs(4));
-}
-
-/// Drive the hand on the clock with `Check`, then `Call`, then `Fold`, whichever
-/// the engine accepts, until the hand is over or `budget` actions are spent.
-/// Deliberately passive: it produces showdowns with NO post-flop betting.
-fn play_out_passively(world: &World, budget: usize) {
-    for _ in 0..budget {
-        let t = world.table_state();
-        if !t.phase.hand_in_progress() {
-            return;
-        }
-        let Some(who) = t
-            .players
-            .get(t.action_on as usize)
-            .and_then(|p| p.as_ref())
-            .map(|p| p.principal)
-        else {
-            return;
-        };
-        if world.player_action(who, PlayerAction::Check).is_ok() {
-            continue;
-        }
-        if world.player_action(who, PlayerAction::Call).is_ok() {
-            continue;
-        }
-        if world.player_action(who, PlayerAction::Fold).is_ok() {
-            continue;
-        }
-        // Nothing legal: let the clock decide.
-        world.advance(Duration::from_secs(1));
-    }
-}
-
-/// Bet `amount` whenever the player on the clock can, otherwise call/check.
-/// This is what makes post-flop money exist.
-fn play_out_with_betting(world: &World, amount: u64, budget: usize) {
-    for _ in 0..budget {
-        let t = world.table_state();
-        if !t.phase.hand_in_progress() {
-            return;
-        }
-        let Some(who) = t
-            .players
-            .get(t.action_on as usize)
-            .and_then(|p| p.as_ref())
-            .map(|p| p.principal)
-        else {
-            return;
-        };
-        let post_flop = matches!(
-            t.phase,
-            GamePhase::Flop | GamePhase::Turn | GamePhase::River
-        );
-        if post_flop && world.player_action(who, PlayerAction::Bet(amount)).is_ok() {
-            continue;
-        }
-        if world.player_action(who, PlayerAction::Call).is_ok() {
-            continue;
-        }
-        if world.player_action(who, PlayerAction::Check).is_ok() {
-            continue;
-        }
-        if world.player_action(who, PlayerAction::Fold).is_ok() {
-            continue;
-        }
-        world.advance(Duration::from_secs(1));
-    }
-}
 
 // ---------------------------------------------------------------------------
 // M0 -- the harness itself
@@ -216,12 +136,19 @@ fn m1_conservation_holds_across_the_full_escrow_life_cycle() {
 
 /// M1b: `side_pots` is a breakdown of `pot`, so it must sum to `pot`.
 ///
-/// PINNED DEFECT. `advance_to_next_street` builds the breakdown unconditionally
-/// on the PreFlop -> Flop transition and nothing ever rebuilds it, so any
-/// post-flop money makes the breakdown stale. This is the mechanism behind
-/// docs/FINDING-01-chip-destruction.md.
+/// THIS TEST WAS INVERTED WHEN E-01 WAS FIXED. It used to be a pinned defect:
+/// `advance_to_next_street` built the breakdown once, on the PreFlop -> Flop
+/// transition, nothing ever rebuilt it, and any post-flop money therefore made it
+/// stale -- and that stale figure was what `determine_winners` paid out of, which
+/// is docs/FINDING-01-chip-destruction.md.
+///
+/// Two things changed. The breakdown is now refreshed after every action, so it
+/// cannot go stale at all; and it is display-only state that no payout reads,
+/// because the payout basis is rebuilt from the players' contributions at the
+/// moment money moves. So the assertion is now the opposite one: a post-flop bet
+/// must leave the breakdown in step with the pot.
 #[test]
-fn m1b_pot_breakdown_goes_stale_the_moment_there_is_post_flop_money() {
+fn m1b_pot_breakdown_tracks_the_pot_through_post_flop_betting() {
     let world = World::new(TableConfig::six_max_icp(), &["alice", "bob"]);
     seat_players(&world, &["alice", "bob"], 6 * ICP);
     world.start_new_hand(world.actor("alice")).expect("deal");
@@ -249,16 +176,16 @@ fn m1b_pot_breakdown_goes_stale_the_moment_there_is_post_flop_money() {
     assert_eq!(flop.phase, GamePhase::Flop, "should be on the flop");
     assert!(
         !flop.side_pots.is_empty(),
-        "the engine builds side_pots unconditionally on PreFlop -> Flop, even with nobody all-in"
+        "the engine builds side_pots on PreFlop -> Flop, even with nobody all-in"
     );
     assert_eq!(
         flop.side_pots_total(),
         flop.pot,
-        "at the moment it is built, the breakdown still agrees with the pot"
+        "at the moment it is built, the breakdown agrees with the pot"
     );
 
-    // Now put real money in post-flop, and STOP while the hand is still live so
-    // the stale breakdown is observable.
+    // Now put real money in post-flop, and STOP while the hand is still live, which
+    // is the only moment the breakdown can be observed at all.
     let bettor = flop
         .players
         .get(flop.action_on as usize)
@@ -274,18 +201,36 @@ fn m1b_pot_breakdown_goes_stale_the_moment_there_is_post_flop_money() {
         snap.table.phase.hand_in_progress(),
         "must still be mid-hand to observe the breakdown"
     );
+    assert_eq!(
+        snap.table.pot,
+        flop.pot + 30_000_000,
+        "the 30,000,000 really did go into the pot"
+    );
+    assert_eq!(
+        snap.table.side_pots_total(),
+        snap.table.pot,
+        "PINNED FIX (E-01): the breakdown must follow the pot within the street. It \
+         used to be frozen at the pre-flop total ({}) and that frozen figure was the \
+         payout basis, so everything wagered after the flop was paid to nobody. \
+         side_pots={:?}",
+        flop.pot,
+        snap.table.side_pots
+    );
     let vs = check_pot_breakdown(&snap);
-    let v = assert_violated(
+    assert_holds(
         &vs,
         Invariant::M1bPotBreakdown,
         "a hand with post-flop betting",
     );
-    assert_eq!(
-        v.severity,
-        Severity::BreakdownDrift,
-        "the drift must be classified as a breakdown defect, not as fund creation"
+
+    // And the money is still fully attributed, which is the other leg of M1b.
+    assert_eq!(snap.table.pot, snap.table.payout_basis_total());
+    println!(
+        "M1b: pot={} side_pots={} basis={}",
+        snap.table.pot,
+        snap.table.side_pots_total(),
+        snap.table.payout_basis_total()
     );
-    println!("M1b pinned: {}", v.detail);
 }
 
 // ---------------------------------------------------------------------------
@@ -523,6 +468,75 @@ fn m4_hostile_amounts_are_rejected_rather_than_clamped() {
     let vs = check_world(&world);
     assert_holds(&vs, Invariant::M4NoNegativeNoOverflow, "after hostile input");
     assert_holds(&vs, Invariant::M1Conservation, "after hostile input");
+}
+
+/// M4, cross-method: the canister must not report two different numbers for the
+/// same money.
+///
+/// `admin_get_all_balances()` and `get_balance()` are separate query methods over
+/// separate code paths, and `admin_get_table_chips()` and `get_table_state()` are
+/// another such pair. M1 and M2 are computed from the first of each pair; M1b and
+/// M3's sharp form are computed from the second. If a pair ever disagrees, those
+/// invariants stop being about the same table.
+///
+/// This replaces `escrow_total_is_exact`, which re-added the very list that
+/// `admin_get_all_balances` had just folded and compared the result against that
+/// call's own total -- a value against itself (docs/DEFECTS.md H-02/H-03).
+#[test]
+fn m4_the_canisters_two_views_of_the_same_money_agree() {
+    let world = World::new(TableConfig::six_max_icp(), &["alice", "bob", "carol"]);
+    let alice = world.actor("alice");
+
+    let check = |label: &str| {
+        let snap = world.snapshot();
+
+        // escrow: admin_get_all_balances vs get_balance, per actor.
+        for actor in &world.actors {
+            let via_admin = snap.escrow.get(&actor.principal).copied().unwrap_or(0);
+            let via_own = world.get_balance(actor.principal);
+            assert_eq!(
+                via_admin, via_own,
+                "{label}: admin_get_all_balances says {} owns {via_admin} but get_balance says \
+                 {via_own}",
+                actor.name
+            );
+        }
+        let entries_sum = snap
+            .escrow
+            .values()
+            .try_fold(0u64, |a: u64, v| a.checked_add(*v))
+            .expect("escrow entries must be addable without overflow");
+        assert_eq!(
+            snap.escrow_total, entries_sum,
+            "{label}: admin_get_all_balances reports total {} but its own entries sum to \
+             {entries_sum}",
+            snap.escrow_total
+        );
+
+        // chips: admin_get_table_chips vs the seats get_table_state returns.
+        assert_eq!(
+            snap.chips_total,
+            snap.table.chips_total(),
+            "{label}: admin_get_table_chips says {} but the seats from get_table_state sum to {}",
+            snap.chips_total,
+            snap.table.chips_total()
+        );
+
+        // And the snapshot-level invariant must agree.
+        let vs = check_world(&world);
+        assert_holds(&vs, Invariant::M4NoNegativeNoOverflow, label);
+    };
+
+    check("empty table");
+    seat_players(&world, &["alice", "bob", "carol"], 6 * ICP);
+    check("three players seated");
+    world.reload(alice, ICP).expect("reload");
+    check("after a reload moves escrow into chips");
+    world.start_new_hand(alice).expect("deal");
+    play_out_with_betting(&world, 20_000_000, 8);
+    check("mid-hand, with money in the pot");
+    play_out_passively(&world, 60);
+    check("after the hand settles");
 }
 
 // ---------------------------------------------------------------------------

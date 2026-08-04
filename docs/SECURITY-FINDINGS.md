@@ -3,42 +3,100 @@
 Findings that touch real user funds. Each entry states what was actually executed, so a
 reader can tell a demonstrated defect from a suspected one.
 
+> ## 🚨 STATUS, 2026-08-04: FINDING 10 WAS LIVE IN THE WORKING TREE, WAS DEMONSTRATED AS THEFT, AND IS NOW CLOSED
+>
+> **The thing this document warned about happened, was proved to be theft rather than a bug, and
+> was then fixed.** Read this in order; the sequence is the point.
+>
+> **1. It went live.** FINDING 06 (the `notify_deposit` decode bug) was fixed in the working tree
+> before FINDING 10 was, which is exactly the ordering [DEFECTS.md](DEFECTS.md#fix-ordering)
+> forbids. The harness caught it immediately (wave 2, harness-gate agent, working tree, NOT
+> mainnet):
+>
+> ```
+> cd tests/money_safety && cargo test --test invariants -- --nocapture \
+>   m6_a_deposit_block_is_credited_at_most_once
+>
+> MONEY-SAFETY: wasm under test sha256=32ed27488505b5f37591119ea0ad9fdef8d25d778ce4bd4d488c8b47a1c955ac
+> src/table_canister/src/lib.rs sha256=ed987cf1461b8e6d2d7ccc0b78a7a86e2390f1964fea003f6eeae7c1fd277d4f
+>
+> DOUBLE CREDIT: notify_deposit re-credited money that was already credited by another
+> path: [(4, 400000000)]. Escrow went 700000000 -> 1100000000 with NO new money on the ledger.
+> ```
+>
+> **2. It was carried through to a completed theft.** A double credit on its own is a bug. It
+> becomes theft when the invented balance leaves the canister as real ICP, and it does:
+> `dr00_theft_one_icrc2_deposit_credited_twice_then_withdrawn` in
+> `tests/money_safety/tests/deposit_replay.rs` deposits **3 ICP once** and ends with the attacker
+> **2.9997 ICP richer in her own on-ledger wallet**, funded out of another player's escrow. Full
+> transcript and the exploit in two calls: **[FINDING 10](#finding-10) below.**
+>
+> **3. It is closed.** `src/table_canister/src/lib.rs` now carries a single, documented
+> anti-replay record (the `DEPOSIT ANTI-REPLAY` section) with a stated invariant: *for every
+> ledger block index B, this canister credits escrow for B at most once over the entire lifetime
+> of its state.* Memory is still bounded, but the bound raises a monotonic watermark past whatever
+> it drops instead of forgetting it, so "forgotten" now means "permanently refused". Nine tests in
+> `tests/money_safety/tests/deposit_replay.rs` gate it, including the theft reproducer itself,
+> which is rebuilt from the current source on every run.
+>
+> **What is NOT closed:** an `install_code --mode reinstall` erases the anti-replay record along
+> with every balance, after which historical blocks really sent to this canister's account become
+> creditable again. See "the reinstall hazard" under [FINDING 10](#finding-10).
+>
 > ## ⛔ READ THIS FIRST — WHAT IS AT STAKE RIGHT NOW
 >
 > The mainnet table canisters custody **real ICP and real ckBTC**. Three of the findings below
 > are confirmed by execution to cause **permanent, unrecoverable loss of real user funds**, and
-> one is a **chips-from-nothing (fund-theft class) primitive** that is currently blocked only by
-> another bug.
+> one is a **chips-from-nothing (fund-theft class) primitive** that was blocked only by
+> another bug (**superseded by the status block above: it went live, was demonstrated as a
+> completed theft, and has since been closed. Item 2 below is kept for the history**).
 >
-> **1. Money is being destroyed in normal play, today.** FINDING 01: every showdown that follows
-> any post-flop betting pays the winner only the pre-flop pot. Everything wagered on the flop,
-> turn and river is debited from stacks and credited to nobody. The tokens stay inside the
-> canister and **cannot be withdrawn by anyone, including a controller** — `withdraw` pays
-> strictly against the caller's own escrow and no administrative withdrawal exists. FINDING 06
-> and FINDING 07 reach the same terminal state by other routes. On the deployed `table_1` and
-> `btc_table_1` a 30-second lull is enough to trigger it (FINDING 12).
+> **1. ~~Money is being destroyed in normal play, today.~~ FIXED 2026-08-04. FINDING 01, and
+> with it FINDING 02 and FINDING 05.** Every showdown that followed any post-flop betting used to
+> pay the winner only the pre-flop pot, and everything wagered on the flop, turn and river was
+> debited from stacks and credited to nobody — inside the canister, **withdrawable by nobody,
+> including a controller**. The payout basis is now built from the players' own contributions at
+> payout time, `state.pot` and the stored side-pot breakdown can no longer move a chip, and the
+> engine refuses to settle a hand whose awards do not equal what it collected. The exact hand from
+> this document (a 64,000,000 pot that paid 4,000,000) now pays 64,000,000, and an independent
+> settlement oracle driving the real canister agrees with it on all 17 of its deliberate hands,
+> having previously convicted four separate payout defects. See
+> [DEFECTS.md E-01](DEFECTS.md#e-01), [E-03](DEFECTS.md#e-03), [E-05](DEFECTS.md#e-05) and
+> [E-35](DEFECTS.md#e-35), and `FINDING-01-chip-destruction.md`.
 >
-> **2. FUND-THEFT CLASS, latent — FINDING 10.** A single on-ledger transfer can be credited to a
-> player's escrow **twice**, which is withdrawable ICP created from nothing. Two mechanisms:
-> `periodic_cleanup` bounds `VERIFIED_DEPOSITS` by *forgetting the oldest block indices*, and
-> `deposit()` never records the block index of the transfer it just made, so that block satisfies
-> every check `notify_deposit` performs. It is **not exploitable today** only because FINDING 06
-> makes `notify_deposit` fail before it can credit anything — a decode bug standing in for an
-> access control. **Fixing FINDING 06 without fixing FINDING 10 in the same change opens a live
-> path to mint withdrawable ICP.** The FINDING 10 write-up below assesses it as low-today /
-> medium-after; it is flagged here as fund-theft class because the post-fix impact is direct
-> creation of withdrawable funds, and because the fix ordering is what protects it.
+> **FINDING 07 still reaches the same terminal state by another route** (`admin_reinit_table`
+> strands every seated player's chips), and **FINDING 12 still ends a hand early** on a
+> 30-second lull on `table_1` / `btc_table_1` — it just no longer destroys the pot when it does.
 >
-> **3. Any seated player can move contested money into the deepest stack's pot** with one public
-> update call, or by simply disconnecting (FINDING 05 and FINDING 08). No special privilege, no
-> extreme values, ordinary stakes.
+> **2. FUND-THEFT, DEMONSTRATED, NOW FIXED. FINDING 10.** A single on-ledger transfer could be
+> credited to a player's escrow **twice** and the excess **withdrawn as real ICP**. Two mechanisms:
+> `periodic_cleanup` bounded `VERIFIED_DEPOSITS` by *forgetting the oldest block indices*, and
+> `deposit()` never recorded the block index of the transfer it just made, so that block satisfied
+> every check `notify_deposit` performs. It was unreachable only because FINDING 06 made
+> `notify_deposit` fail before it could credit anything, a decode bug standing in for an access
+> control. Both were fixed in the same change, in that order, as the fix ordering required. See the
+> status block above and [FINDING 10](#finding-10).
 >
-> Nothing here has been patched. Wave 1 deliberately froze engine behaviour so that ground truth
-> could be established first, and every reproducer is written to FAIL when its defect is fixed, so
-> a fix cannot land without updating this document in the same change.
+> **3. ~~Any seated player can move contested money into the deepest stack's pot~~ FIXED
+> 2026-08-04. FINDING 05 and FINDING 08.** It took one public update call, or simply
+> disconnecting: no special privilege, no extreme values, ordinary stakes. Vacating a seat
+> mid-hand deleted the record of what that player had put in while the money stayed in the pot,
+> and the difference was appended to the pot only the deepest stacks could win. A stake is now
+> recorded independently of seat occupancy (`TableState::departed_stakes`), so leaving the table
+> changes only whether the player can WIN the money, exactly as folding does. The settlement
+> oracle measured the redistribution end to end before the fix (20 chips out of an honest short
+> all-in's main pot, with every chip conserved) and measures zero now. See
+> [DEFECTS.md E-05](DEFECTS.md#e-05).
 >
-> **Do not fix FINDING 06 on its own. See the fix ordering in
-> [DEFECTS.md](DEFECTS.md#fix-ordering).**
+> Wave 1 deliberately froze engine behaviour so that ground truth could be established first, and
+> every reproducer is written to FAIL when its defect is fixed, so a fix cannot land without
+> updating this document in the same change. Wave 2 is fixing them: each finding's own **Status**
+> line below says whether it is still open. **FINDING 06 and FINDING 10 are FIXED**, together, in
+> that order. See the status block above.
+>
+> **The FINDING 06 / FINDING 10 fix ordering has been discharged.** It is preserved in
+> [DEFECTS.md](DEFECTS.md#fix-ordering) because the reason it existed is the clearest worked
+> example in this repo of why a decode bug is not an access control.
 
 **The single prioritised queue for all of this is [docs/DEFECTS.md](DEFECTS.md)**, which
 reconciles these findings with the harness and tooling defects found alongside them and gives each
@@ -47,27 +105,36 @@ work.
 
 | here | DEFECTS.md | severity |
 |---|---|---|
-| FINDING 01 | [E-01](DEFECTS.md#e-01) | critical |
-| FINDING 02 + FINDING 09 | [E-03](DEFECTS.md#e-03) | high |
+| FINDING 01 | [E-01](DEFECTS.md#e-01) | critical — **FIXED 2026-08-04** |
+| FINDING 02 + FINDING 09 | [E-03](DEFECTS.md#e-03) | high — **FIXED 2026-08-04** |
 | FINDING 03 | [E-08](DEFECTS.md#e-08) | medium |
 | FINDING 04 | [E-13](DEFECTS.md#e-13) | low |
-| FINDING 05 + FINDING 08 | [E-05](DEFECTS.md#e-05) | high |
+| FINDING 05 + FINDING 08 | [E-05](DEFECTS.md#e-05) | high — **FIXED 2026-08-04** |
 | FINDING 06 | [E-04](DEFECTS.md#e-04) | high |
 | FINDING 07 | [E-07](DEFECTS.md#e-07) | high |
-| FINDING 10 | [E-02](DEFECTS.md#e-02) | **fund-theft (latent)** |
+| FINDING 10 | [E-02](DEFECTS.md#e-02) | **fund-theft (demonstrated, FIXED)** |
 | FINDING 11 | [E-12](DEFECTS.md#e-12) | low |
 | FINDING 12 | [E-06](DEFECTS.md#e-06) | high |
 
 Detailed write-ups that predate this file live alongside it:
 
 - `docs/FINDING-01-chip-destruction.md` — CRITICAL, confirmed on a local replica: every
-  showdown with post-flop betting pays the winner only the pre-flop pot and permanently
-  destroys the rest.
+  showdown with post-flop betting paid the winner only the pre-flop pot and permanently destroyed
+  the rest. **FIXED 2026-08-04**; that document now opens with the fix, the gate that keeps it
+  fixed, and what was reverted in a copy of the repo to prove the gate can fail.
 - `docs/BACKEND-FUND-SAFETY-TODO.md`
 
 ---
 
 ## FINDING 02 — `state.pot` is the sole authority for side-pot totals, in both directions
+
+> **STATUS: FIXED 2026-08-04.** `state.pot` is no longer any authority for the payout: the
+> basis is built from the players' contributions (`poker_core::build_side_pots_from_contributions`,
+> which has no `total_pot` parameter to be overridden by and no float anywhere), and `state.pot` is
+> a cross-checked redundant accumulator. See [DEFECTS.md E-03](DEFECTS.md#e-03) for the fix, the
+> proof, and why the mismatch is reported as `CRITICAL:` rather than trapped. Read below for what
+> the defect WAS.
+
 
 **Severity:** HIGH. Mints chips from nothing in one direction, destroys them in the other,
 and skews the split toward the deepest stack in both.
@@ -248,6 +315,14 @@ ground truth is being established); the test documents it so a "fix" is a delibe
 
 ## FINDING 05 — `leave_table()` makes FINDING 02 Direction A ATTACKER-REACHABLE
 
+> **STATUS: FIXED 2026-08-04.** A vacated seat's stake is now recorded independently of seat
+> occupancy (`TableState::departed_stakes`) and stays in the payout basis, so all three doors
+> (`leave_table`, a post-fold `cash_out`, and a plain disconnect via `check_timeouts`) leave the
+> money exactly where folding does. Gated by `reg05` and `reg08` in
+> `tests/money_safety/tests/regressions.rs` and by the settlement oracle's `pinned_e05_*`. See
+> [DEFECTS.md E-05](DEFECTS.md#e-05). Read below for what the defect WAS.
+
+
 **Severity:** HIGH. Any seated player can, with one public update call and no special
 privilege, move contested money out of the pot a short stack is eligible for and into the
 pot only the deepest stack can win.
@@ -368,10 +443,23 @@ advertised deposit path. Not on the frontend's happy path (the frontend uses
 `claim_external_deposit`), so the blast radius is any wallet, script or integration that uses
 the `get_deposit_address()` + `notify_deposit(block_index)` flow the Candid interface still
 publishes.
-**Status:** CONFIRMED by execution against the real ledger wasm. Reproducer:
-`reg02_notify_deposit_cannot_decode_the_real_ledger_and_strands_the_money` in
-`tests/money_safety/tests/regressions.rs`.
+**Status:** CONFIRMED by execution against the real ledger wasm, then **FIXED** on 2026-08-04
+together with FINDING 10, in the required order. Both BUG A and BUG B below are fixed in
+`src/table_canister/src/lib.rs`; the gate that a legitimate transfer is now creditable *and*
+creditable only once is `dr01_notify_deposit_credits_a_real_transfer_exactly_once` in
+`tests/money_safety/tests/deposit_replay.rs`.
 **Where:** `notify_deposit`, `src/table_canister/src/lib.rs`
+
+> **The old reproducer fired, and has been inverted.** The wave-1 pin
+> `reg02_notify_deposit_cannot_decode_the_real_ledger_and_strands_the_money` was written to pass
+> only while this defect existed, and it duly failed the moment the decode was fixed, at
+> `tests/regressions.rs:178` with `notify_deposit unexpectedly returned Ok(...)`. Its owner has
+> since replaced it with `reg02_notify_deposit_can_read_the_real_ledger_and_never_fails_to_decode`,
+> which asserts the stronger property: **no rejection from `notify_deposit` may ever again be a
+> decode failure**, for a real Transfer block and for a block that is not a deposit for this
+> canister. That second half is what a "does it credit?" test cannot see, because a wrong
+> `Operation` shape decodes to `None` under Candid's `opt` rule and is reported as
+> "not a transfer". `cargo test --test regressions` is green.
 
 A user transfers ICP to the canister's account identifier and calls `notify_deposit(block)`.
 Real output from the harness:
@@ -530,6 +618,13 @@ seat 1 VACATES the seat  pot[0] = 100  eligible [0,2]     pot[1] = 350  eligible
 
 ## FINDING 09 (NEW) -- FINDING 02 Direction B is reached in ordinary play, and the canister says so
 
+> **STATUS: FIXED 2026-08-04, with FINDING 02.** The routine that logged
+> `BUG: Side pots (...) exceed total pot (...)` and settled anyway is off the payout path, and the
+> money-safety harness no longer tolerates that line: `documented::TOLERATED_SELF_REPORTS` is
+> empty, so any `BUG:`/`CRITICAL:` line from the canister now fails the run. See
+> [DEFECTS.md E-03](DEFECTS.md#e-03). Read below for what the defect WAS.
+
+
 **Severity:** HIGH. Upgrades FINDING 02 from "mechanism confirmed, reachability not
 demonstrated" to reachable, by the engine's own log line.
 **Status:** CONFIRMED. Observed in randomised play by the fuzzer against the real canister.
@@ -563,17 +658,28 @@ The precise op sequence that drives `state.pot` to 0 while contributions remain 
 isolated to a minimal reproducer yet. That is the one piece of outstanding work on this
 finding.
 
-## FINDING 10 (NEW, latent) -- pruning `VERIFIED_DEPOSITS` makes an old deposit block re-claimable
+<a id="finding-10"></a>
 
-**Severity:** LOW today because FINDING 06 makes `notify_deposit` fail before it can ever
-write to `VERIFIED_DEPOSITS`. MEDIUM the moment FINDING 06 is fixed, and it is a
-chips-from-nothing primitive, so it must be fixed in the SAME change.
-**Status:** code-read, not executed (it needs 10,000 successful deposits, which FINDING 06
-makes impossible today).
-**Where:** `periodic_cleanup`, `src/table_canister/src/lib.rs`
+## FINDING 10 -- a deposit block could be credited twice, and the excess withdrawn (FUND THEFT, FIXED)
 
-`VERIFIED_DEPOSITS` is the only thing that stops a deposit block being credited twice.
-`periodic_cleanup` caps it:
+**Severity:** **FUND THEFT.** Not "a bug that mints chips": a completed theft. Real ICP left the
+canister to an attacker's own ledger wallet in excess of everything she ever deposited, funded out
+of another player's escrow.
+**Status:** **DEMONSTRATED end to end, then FIXED**, both on 2026-08-04, in the same change and in
+the required order. Demonstrated against the **real mainnet ICP ledger wasm** (sha256
+`a47a915e…`) installed at `ryjl3-tyaaa-aaaaa-aaaba-cai`, the exact canister id the table canister
+hardcodes, on PocketIC. Not a mock and not a simulation of the ledger.
+**Where:** `notify_deposit`, `deposit`, `periodic_cleanup`, `VERIFIED_DEPOSITS`,
+`src/table_canister/src/lib.rs`. Fix: the `DEPOSIT ANTI-REPLAY` section of the same file.
+**Reproducers:** `tests/money_safety/tests/deposit_replay.rs` (ten tests, `dr00`…`dr09`; `dr08` is
+`#[ignore]`d for runtime, and has been executed and passed).
+
+### The two mechanisms
+
+Both turn one on-ledger movement into two escrow credits. `VERIFIED_DEPOSITS` was the only thing
+standing in the way, and each mechanism defeated it in a different way.
+
+**Mechanism (a): `periodic_cleanup` FORGOT block indices.**
 
 ```rust
 if deposits.len() > 10_000 {
@@ -586,21 +692,234 @@ if deposits.len() > 10_000 {
 }
 ```
 
-Once a block index has been forgotten, `notify_deposit` for that block passes the
-already-processed check again and credits the same on-ledger transfer a second time. The
-memory bound is legitimate; the mechanism for enforcing it is not. A monotonically increasing
-`min_unclaimable_block` watermark, rejecting anything at or below it, bounds memory without
-forgetting that a block was spent.
+Once an index was forgotten, `notify_deposit` for that block passed the already-processed check
+again and credited the same transfer a second time. The memory bound was legitimate, because an unbounded map eventually makes `pre_upgrade` fail to
+serialise, which bricks a canister with the funds inside. The mechanism for enforcing it, though,
+turned *spent* into *unknown*.
 
-Related, and also worth fixing in the same change: `deposit()` (the ICRC-2 pull) never records
-the block index of the transfer it just made, so once FINDING 06 is fixed, that transfer's
-block would satisfy every check `notify_deposit` performs. Its `from` is the caller's account
-and its `to` is the canister's account, which is exactly what `notify_deposit` verifies, and
-it ignores the `spender` field that distinguishes a `transfer_from`. That is a direct
-double-credit of the same money. It is not exploitable today only because of FINDING 06;
-`m6_a_deposit_block_is_credited_at_most_once` in
-`tests/money_safety/tests/invariants.rs` sweeps every block index after an ICRC-2 deposit and
-is written to fail the moment it becomes possible.
+**Mechanism (b): `deposit()` never recorded the block its own pull wrote.** `deposit(n)` performs
+`icrc2_transfer_from(from = caller, to = canister)` and credits `n`, discarding the block index the
+ledger returned. That block's `from` is the caller's account and its `to` is the canister's
+account, which is *exactly* the pair `notify_deposit` verifies, and `notify_deposit` ignored
+`spender`, the one field that says a `transfer_from` did it. So `notify_deposit(<that block>)`
+credited the same `n` again. This leg needs no pruning, no 10,000 deposits and no waiting: **two
+ordinary calls, no privilege, ordinary stakes.**
+
+Neither was reachable while FINDING 06 stood, because `notify_deposit` could not decode the
+ledger's reply at all. That is **a decode bug standing in for an access control**, and on
+2026-08-04 FINDING 06 was fixed first, which made mechanism (b) live in the working tree. The
+harness caught it in one run (transcript in the status block at the top of this file).
+
+### The theft, executed
+
+`dr00_theft_one_icrc2_deposit_credited_twice_then_withdrawn`. Two players, real ICP ledger. Bob is
+an ordinary honest player; his deposit is what actually gets stolen.
+
+```
+bob    deposit  20 ICP  (honest)                canister holds 23 ICP
+alice  deposit   3 ICP  (honest)  -> block 5    escrow(alice) = 3 ICP
+
+alice  notify_deposit(5)                        escrow(alice) = 6 ICP
+DR-00 double credit: block 5 credited twice. escrow 300000000 -> 600000000
+      while the canister's ledger balance stayed at 2300000000
+                                                ^ NOT ONE e8 OF NEW MONEY ARRIVED
+
+alice  withdraw(6 ICP)                          -> succeeds
+DR-00 THEFT: alice's own ledger wallet 1000000000000 -> 1000299970000
+      (profit 299970000 e8s) having deposited 300000000 once
+
+DR-00 SHORTFALL: bob's escrow is 2000000000 but the canister holds only 1700000000
+```
+
+Alice ends **2.9997 ICP richer in her own on-ledger wallet**: one whole deposit, less the three
+ledger fees the round trip costs her (`icrc2_approve`, `icrc2_transfer_from`, and the withdrawal
+transfer). Bob's escrow says 20 ICP and the canister holds 17, so **bob can no longer be paid what
+the canister says he owns.** That is the line between a bug and theft, and it was crossed.
+
+Reproduce:
+
+```
+cd tests/money_safety
+cargo test --test deposit_replay -- dr00 --nocapture
+```
+
+The test builds the vulnerable module **itself**, from the current source, by applying two
+reversals (`E02_REVERSALS` in that file) that remove exactly the two defences the fix added, and
+installs it with a real `install_code --mode reinstall`. So the reproducer does not depend on a
+saved binary and cannot rot into a story: if the fix is ever refactored such that a reversal no
+longer applies, the test fails and says which hunk, and a reader has to re-establish by hand that
+the hole is still shut.
+
+### The fix, and the invariant it guarantees
+
+`src/table_canister/src/lib.rs`, the `DEPOSIT ANTI-REPLAY` section. The invariant is stated there
+in words, at the code:
+
+> For every ledger block index B, this canister credits escrow for B **at most once over the
+> entire lifetime of its state.**
+
+Four parts:
+
+1. **One record, one writer.** `claim_deposit_block(block_index, who)` is the only writer of
+   `VERIFIED_DEPOSITS` and the only place the rule is expressed. All three doors,
+   `notify_deposit`, `deposit` and `verify_ckbtc_deposit`, must call it and see `Ok(())` before they
+   touch `BALANCES`, with **no `await` between the claim and the credit**, so the two cannot come
+   apart.
+2. **A monotonic watermark instead of forgetting.** A block index is refused if it is
+   `< DEPOSIT_WATERMARK` **or** present in `VERIFIED_DEPOSITS`. When the record exceeds its bound,
+   `bound_verified_deposits` raises the watermark past **exactly** the indices it is about to drop
+   and then drops them. Memory is still bounded; "forgotten" now means "permanently refused".
+   Both the set and the watermark are in `PersistentState`, so an upgrade carries them over.
+3. **`deposit()` records the block its pull wrote**, before crediting.
+4. **`notify_deposit` refuses a block whose `spender` is this canister's own account.** Such a
+   block can only have been written by our own `deposit()` pull, and this is the defence that
+   covers pulls made *before* part 3 existed. That matters, because the mainnet canisters already
+   hold state. The same check is on the ckBTC door (`verify_ckbtc_deposit`), which had it missing
+   in the first draft of this fix: `to.owner == canister` and `from.owner == caller` are both true
+   of a `transfer_from`, so without the `spender` test a pre-fix `deposit()` on a BTC table would
+   have stayed replayable. `dr00` would not have caught that, because it runs on an ICP table.
+
+### What the fix costs, stated plainly
+
+A raw transfer whose block index has fallen below the watermark can never be credited **even
+though it was never credited**. Reaching that state takes `MAX_VERIFIED_DEPOSITS` (10,000) later
+deposits recorded before the sender ever calls `notify_deposit`. The trade is deliberate and
+one-directional. A refused late deposit is **recoverable**: the ICP is still on the ledger in this
+canister's account, and the error message says so and quotes the block index. A double credit is
+**not** recoverable, because the invented balance leaves as somebody else's money.
+`dr07` pins both halves of that behaviour, and `dr08` pins them **at the shipped
+`MAX_VERIFIED_DEPOSITS` of 10,000**: 10,001 real `icrc2_transfer_from` calls through the real ICP
+ledger, 20 minutes of PocketIC, wasm sha256 `a7d1243e…`. Executed and green. The canister's own log
+line and the two refusals:
+
+```
+DR-08 after 10001 ICRC-2 deposits: watermark=0 recorded=10002
+[canister] deposit replay protection: watermark raised to 6
+           (dropped 2 of 10002 recorded block indices; they remain permanently uncreditable)
+DR-08 after the bound ran: watermark=6 recorded=10000
+
+DR-08 already credited block 2 refused: Deposit block 2 is below this table's deposit
+  replay-protection watermark (6) and can no longer be credited automatically. Your transfer is
+  still on the ledger in this canister's account. Contact the table operator and quote block
+  index 2. (Only reachable if more than 10000 later deposits were recorded before you claimed
+  this one.)
+DR-08 never claimed block 3 refused: <same, block 3>
+```
+
+Both refusals then survive a real `install_code --mode upgrade`, and the watermark is asserted never
+to move down. Block 2 was the credited raw transfer and block 3 the never-claimed one; the two
+indices the bound dropped were 2 and 5, so the floor landed at 6 and covers both.
+
+`get_deposit_replay_state() -> (watermark, recorded_block_count)` was added so an operator or a
+user can see whether a given block index is still claimable without guessing.
+
+### The reinstall hazard: OPEN, not fixed
+
+`install_code --mode reinstall` erases `VERIFIED_DEPOSITS` and `DEPOSIT_WATERMARK` along with every
+balance. After that the watermark is 0 and **every historical block that really was sent to this
+canister's main account becomes creditable again.** Each such block still only credits its own
+`from`, so total credits cannot exceed total deposits ever made. But the canister's holdings have
+since been reduced by withdrawals and payouts, so the replay would leave it owing more than it
+holds, i.e. a shortfall paid out of later depositors' money.
+
+This is **not** defended in code, deliberately: a reinstall already destroys all escrow, which is a
+strictly worse event, `post_upgrade` already panics rather than let a bad restore through, and
+`CLAUDE.md` already forbids reinstall on production canisters. Defending it properly needs a floor
+seeded from the ledger's chain length at install time, which `init` cannot do (no `await`), so it
+would need a controller-only monotonic setter. **If a production table canister is ever
+reinstalled, the anti-replay floor must be re-seeded before deposits are re-enabled.**
+
+A *fresh* canister is safe against the ledger's tens of millions of pre-existing blocks for a
+different and stronger reason, which does not depend on the watermark at all: `notify_deposit`
+requires the block's `to` to equal this canister's own account identifier, and no block written
+before this canister existed can name it.
+
+### A coverage gap, not a defect: the ckBTC door has no harness at all
+
+`grep -ri ckbtc tests/money_safety` returns nothing. The harness installs the real ICP ledger and
+only the ICP ledger, and `TableConfig` in `tests/money_safety/src/table_api.rs` has no BTC shape, so
+**`verify_ckbtc_deposit` is executed by no test in this repository.** Everything asserted about the
+ckBTC door here is by code inspection and by the fact that it shares `claim_deposit_block` with the
+ICP door. `btc_table_1` is deployed on mainnet.
+
+Closing it means pinning a real ckBTC ledger wasm (and, for the native-BTC path, the ckBTC minter)
+the way `wasms.rs` pins the ICP ledger, and giving `TableConfig` a BTC constructor. That is a
+harness change, in a file with a different owner, and is the largest remaining untested surface on
+the money paths.
+
+### A residual weakness this fix INTRODUCES: the watermark can be pushed up on purpose
+
+Stated plainly because it is new, and it is new because of the fix, not despite it.
+
+`deposit()` now records a block index on every call, and `deposit()` has **no rate limit at all**.
+That was already true before this change, and it is contrary to this project's own stated rule
+("All user-facing update calls should be rate-limited to prevent DoS", `CLAUDE.md`). Before the
+fix, `VERIFIED_DEPOSITS` only grew through `notify_deposit`, which *is* rate limited to 5 per
+minute per caller. So an attacker can now fill the record as fast as the ledger will take
+transfers:
+
+* 10,001 minimum deposits (20,000 e8s each) push `DEPOSIT_WATERMARK` past roughly 10,000 block
+  indices. The deposits themselves are withdrawable again, so the real cost is the ledger fee:
+  **about 1 ICP.**
+* Effect: any raw transfer whose block index is now below the watermark can no longer be credited
+  by `notify_deposit`. The victim's ICP is **not taken**: it sits in the canister's account, it is
+  operator-recoverable, and the error message quotes the block index. But a user who sent ICP and
+  waited is now blocked from claiming it themselves.
+
+It is griefing, not theft, and it is bounded by that: nothing about it lets the attacker withdraw
+anyone else's money. It is not defended here because every option costs something a security fix
+should not spend silently:
+
+* **Rate-limit `deposit()`.** The cleanest fix: 30/minute per caller would be invisible to a real
+  player and would turn "minutes" into hours. It needs a new rate-limit map and therefore a new
+  persisted field, and it touches the frontend's primary deposit path. This is the recommended
+  follow-up.
+* **Raise `MAX_VERIFIED_DEPOSITS`.** Raises the attacker's cost linearly (200,000 makes it ~20
+  ICP) at ~12 MB of heap and a bigger `pre_upgrade` blob. Changing the canister's memory
+  characteristics by 20x as a side effect of a replay fix is not a change to make without measuring
+  `pre_upgrade` on a real replica.
+* **Stop letting `deposit()`-recorded indices drive the watermark.** Correct in principle, because
+  a block written by our own pull is refused by the `spender` check whether or not it is in the
+  record. It needs a per-entry flag, which changes the persisted shape of `verified_deposits`, and
+  it splits "one record, one writer", the property that makes the fix auditable.
+
+### The other two deposit doors: audited, findings below
+
+Asked of each: can one on-ledger movement become two escrow credits, and can a concurrent pair of
+calls each credit the same movement?
+
+**`deposit()` (ICRC-2 approve + `transfer_from`).** Was the live theft primitive via mechanism (b);
+fixed by parts 3 and 4 above. On concurrency it was already safe, and for a reason outside this
+canister: two concurrent `deposit()` calls against one allowance are separated by the **ledger's**
+allowance accounting, not by anything here. `dr06` shows the second returning
+`Insufficient allowance. You approved 0.0000 ICP but tried to deposit 5.0000 ICP`. A new
+interleaving that the fix itself *introduces* is covered by `dr09`: a `notify_deposit` naming the
+block a concurrent `deposit()` is about to write can pass the cheap pre-flight check and resume
+after that block has been recorded. Across five round-offsets, one movement produced exactly one
+credit every time: once refused by the `spender` check, which does not depend on timing at all,
+and four times by the recorded block index.
+
+**`claim_external_deposit()` (subaccount sweep).** **No double-credit hole found, and nothing was
+changed.** It credits `balance - fee` where `balance` is read from the ledger for the caller's own
+derived subaccount, so there is no block index to replay and the amount is not caller-supplied. Two
+concurrent claims over one arrival are separated, again, by the **ledger**: both read the same
+balance, the first sweep empties the subaccount, and the second fails with
+`Sweep transfer failed: InsufficientFunds { balance: Nat(0) }` and credits nothing (`dr05`,
+observed). The sweep does write a ledger block whose `to` **is** the canister's main account, which
+is half of what `notify_deposit` wants. Its `from`, though, is
+`account_identifier(canister, deposit_subaccount(caller))`, not the caller's own account, so the
+sender check refuses it (`dr03`, asserted against the real block).
+
+Two things about this door are worth recording even though they are not double-credit holes:
+
+* It relies on the ledger rejecting the second sweep rather than on its own state. That is sound
+  here, but it is one `icrc1_transfer` failure-mode change away from not being sound, and unlike
+  the other two doors it has no durable record of its own. It is the door to re-audit if the
+  sweep is ever changed to transfer a *fixed* amount rather than the balance it just read.
+* If a second real deposit arrives between the first sweep and the second claim's transfer, the
+  second claim can sweep it using the **stale** amount it read earlier. That credits at most what
+  actually moved (`dr05` asserts `escrow <= moved`), so it is not creation. But the accounting is
+  approximate in a place where it does not need to be.
 
 ## FINDING 11 (NEW, low) -- dust at or below the transfer fee in a deposit subaccount can never be swept
 
@@ -755,3 +1074,229 @@ Two further boundaries:
   transfer had failed, the user's escrow stays debited with nothing delivered. Deliberately
   not claimed as demonstrated: the harness cannot yet hold a ledger reply open across an
   `install_code`.
+
+---
+
+## FINDING 13 (NEW, high) -- the E-05 fix pays a departed player's stake to whoever takes their chair
+
+Found 2026-08-04 by the wave-2 review, in the code the wave-2 payout fix introduced. **Every
+conservation invariant passes while this happens**: the plan awards exactly what it collected,
+the table's total value does not change, no chip is destroyed, and the canister logs no
+`CRITICAL:` line. What is wrong is WHO HAS THE MONEY.
+
+**Where** `src/table_canister/src/lib.rs`
+
+* `principal_of()` (line ~4102) resolves a payout's principal by looking the **seat** up first
+  and only falls back to `departed_stakes` when the chair is **empty**:
+
+  ```rust
+  fn principal_of(state: &TableState, seat: u8) -> Option<Principal> {
+      if let Some(p) = state.players.get(seat as usize).and_then(|p| p.as_ref()) {
+          return Some(p.principal);          // <-- the CURRENT occupant
+      }
+      state.departed_stakes.iter()
+          .find(|d| d.hand_number == state.hand_number && d.seat == seat)
+          .map(|d| d.principal)
+  }
+  ```
+
+* All three `Payout` construction sites (lines ~4000, ~4052, ~4080) take their principal from
+  it. So a `PayoutReason::Refund` of a **departed** stake at a chair that has since been
+  re-occupied names the **new occupant**, not the player the money belongs to.
+
+* `apply_payouts()` (line ~4185) has an arm written for exactly this case:
+
+  ```rust
+  (Some(occupant), Some(owed)) if occupant != owed => { /* pay `owed`'s escrow */ }
+  ```
+
+  It is **dead code**. `owed` came from `principal_of`, which returned `occupant`, so the two
+  sides of the comparison are the same value read from the same seat. Control falls through to
+  `(Some(occupant), _)`, which does `p.chips += payout.amount` -- the departed player's stake
+  is added to the stranger's stack.
+
+**The sequence** every step is an ordinary public API call:
+
+```
+seat 1 (alice) is in a live hand with 50 in the pot
+alice calls leave_table()      -> record_departed_stake(1, alice, 50); players[1] = None
+                                  alice's remaining STACK goes to her escrow; the 50 stays
+a stranger calls join_table(1)  -> seated SittingOut, no hole cards   (docs/DEFECTS.md E-36)
+the hand settles with no live claim on that layer
+                                -> plan_payouts refunds 50 to seat 1, named to the STRANGER
+                                -> apply_payouts credits the STRANGER's stack
+```
+
+**Reproducer** a host test driving the REAL `plan_payouts` / `determine_winners` over a real
+`TableState`, no replica needed. Observed output:
+
+```
+C3: alice's stake is owed to <alice>; the plan names Some(<stranger>)
+C3: stranger chips 7 -> 57;  alice escrow 0 -> 0
+plan.conserves() == true      // awarded == collected, exactly
+```
+
+Full test: `payout_tests::c3_a_departed_stake_is_paid_to_whoever_took_the_chair`, kept in the
+reviewer's scratch copy at
+`$SCRATCH/c3repo/src/table_canister/src/lib.rs`.
+
+**Reachability of each ingredient, against the real canister**
+
+* the refund-to-a-departed-player branch: reached by the money-safety fuzzer at 1200 steps,
+  which logged `refunded 2500000 to the escrow of toldy-...` and
+  `refunded 2000000 to the escrow of weeos-...`.
+* a chair re-occupied mid-hand: reached by the same fuzzer, which logged 296
+  `WARNING: seat 2 carries both a live stake and a departed stake` lines (E-36).
+
+The two were **not** observed composed in one hand, so this is filed as high rather than as
+demonstrated fund theft. Both ingredients are individually reachable through the public API
+with no special privilege.
+
+**Second variant, same root cause** two departed stakes at ONE seat owed to two DIFFERENT
+principals (alice leaves seat 1; a stranger takes it, bets via E-36, then leaves too).
+`principal_of`'s `.find()` returns the FIRST match, so the second player's refund is credited
+to the first player's escrow.
+
+**Suggested fix** carry the owner with the money instead of re-deriving it from the seat. The
+seat is not the identity: `Contribution` / `DepartedStake` already know whose chips these are,
+so `Payout.principal` should be populated from the stake that generated it, and a refund of a
+departed stake should always go to that stake's `principal`'s **escrow**, never to the chair.
+That also makes the `occupant != owed` arm reachable, which is what it was written for.
+
+**Why no existing gate catches it** the settlement oracle compares per-SEAT deltas, and the
+seat is paid the right amount -- it is the principal behind the seat that is wrong. The
+money-safety invariants are conservation-based and this conserves exactly. The builder's own
+2,000-case sweep in `every_settlement_pays_out_exactly_what_it_collected` never populates
+`departed_stakes`, so it cannot construct the state at all. A gate for this has to assert on
+PRINCIPALS, not on seats.
+
+---
+
+## FINDING 14 (NEW, high) -- two agents each added a persisted field that is not a Candid-compatible addition, and one of them destroys every chip at the table SILENTLY
+
+Found 2026-08-04 by the wave-2 coherence pass, reconciling `src/table_canister/src/lib.rs`
+after three agents edited different regions of it. Neither agent could see the other's field.
+The two together are worse than either alone, which is exactly the class of defect a coherence
+pass exists to find.
+
+**Where** `src/table_canister/src/lib.rs`
+
+| field | added by | Candid type | where it sits |
+|---|---|---|---|
+| `PersistentState::deposit_watermark` | the E-02 deposit anti-replay fix | `nat64` | top level of the persisted record |
+| `TableState::departed_stakes` | the E-05 payout-basis fix | `vec record {...}` | **nested inside** `PersistentState::table_state`, which is `opt TableState` |
+
+Both carry `#[serde(default)]` and both comments claim that makes them
+backward-compatible. **Candid does not honour `serde(default)`.** Only `opt`, `reserved` and
+`null` may be added to a record and still read state written before the field existed. A bare
+`nat64` or `vec` may not.
+
+### What each one does on `install_code --mode upgrade` from state written before wave 2
+
+Measured by encoding the pre-wave-2 record shape with `candid 0.10.20` -- the exact version the
+canister links -- and decoding it as the shipped shape. Probe:
+`$SCRATCH/candid-upgrade` (`cargo run`), observed output:
+
+```
+SHIPPED  (u64 watermark + vec departed_stakes): REFUSED  ...
+    wire_type: nat64, expect_type: nat64, field_name: Named("deposit_watermark")
+HALF-FIX (opt watermark + vec departed_stakes): DECODED  NewHalf { ..., table_state: None }
+OPT-BOTH (opt watermark + opt departed_stakes): DECODED  NewOpt { ..., table_state: Some(...) }
+```
+
+Read the middle line. That is the whole finding.
+
+### Executed end to end against the real canister
+
+Not only a decode probe. `m7_an_upgrade_from_the_previous_release_never_silently_loses_funds`
+(`tests/money_safety/tests/invariants/upgrade_across_versions.rs`, added by this pass and wired
+into the `invariants` target the gate already runs) builds the `801aa79` table canister from
+source, installs it on PocketIC with the real ICP ledger, seats two players with real money, and
+then does a genuine `install_code --mode upgrade` to the module under test.
+
+**On the tree as shipped** the upgrade is refused, with the exact error:
+
+```
+M7: on 5e12d25bf4d2 -> escrow 600000000, seated chips 400000000, pot 0
+Panicked at 'CRITICAL: Failed to restore state from stable memory:
+  "Custom(Fail to decode argument 0 ... Subtyping error: field deposit_watermark is not
+   optional field)". Upgrade REJECTED to protect user funds.'
+M7: the cross-version upgrade was REFUSED, which is the SAFE outcome, and nothing was lost.
+```
+
+**With ONLY `deposit_watermark` changed to `Option<u64>`** -- the exact remedy the deposit
+reviewer recommends, applied on its own, nothing else touched -- the same test reports:
+
+```
+M7: on 5e12d25bf4d2 -> escrow 600000000, seated chips 400000000, pot 0
+assertion `left == right` failed: an accepted cross-version upgrade DESTROYED SEATED CHIPS:
+  400000000 -> 0
+```
+
+**4 ICP of seated chips destroyed, the upgrade reported as successful, and no error anywhere.**
+Escrow survived (600000000, a separate top-level field), which is what makes the loss look
+partial and plausible rather than obviously catastrophic. That is the finding, executed.
+
+* **As shipped**, the top-level `nat64` makes the entire `stable_restore` fail, `post_upgrade`
+  panics, and the upgrade is **REJECTED**. That is loud and it is safe: the old code stays and
+  nothing is lost. The reviewer of the deposit work reproduced this against the real canister on
+  PocketIC (`Subtyping error: field deposit_watermark is not optional field`) and correctly
+  called the fix undeployable.
+
+* **The obvious remedy for that -- change only `deposit_watermark` to `Option<u64>` -- turns a
+  rejected upgrade into SILENT DESTRUCTION OF EVERY CHIP AT THE TABLE.** `table_state` is
+  `Option<TableState>`, and Candid's rule for `opt t` is that a value which cannot be read as
+  `t` decodes as **null**, not as an error. With `departed_stakes` still a bare `vec`, the whole
+  `TableState` becomes unreadable, so `table_state` silently arrives as `None` -- and
+  `post_upgrade` then takes its `else if let Some(config)` branch and calls
+  `init_table_state(config)`. Every seated player's `chips`, the live `pot`, the `side_pots`,
+  the hole cards and the shuffle commitment are gone, replaced by a fresh empty table. Escrow
+  `balances` survive, because they are a separate top-level field, so **the loss is exactly the
+  chips players had bought in with** and nothing in the log says so.
+
+This is the FINDING 01 failure mode (chips that exist and can never be claimed) reached through
+the deploy path instead of through a hand, and it is reached by applying the fix the previous
+reviewer recommended. Whoever lands that one-line change must land the other half in the same
+commit.
+
+**Not currently exploitable and not currently a live loss**, for two reasons that are both
+circumstantial: nobody has played on mainnet, so there are no chips at any table to destroy; and
+the shipped tree fails loudly rather than silently. It is filed high because the safe state is
+an accident of the *other* agent's mistake, and the first person to fix that mistake removes the
+accident.
+
+### Why no test could see it
+
+Every "survives an upgrade" assertion in `tests/money_safety` upgrades the new wasm **to
+itself**: `World::upgrade` reuses `self.table_wasm`. Same type on both sides of the wire, so the
+addition is never tested as an addition. There is no `upgrade_from(previous_release_wasm)`.
+Nothing in the repo installs a pre-wave-2 module and upgrades it.
+
+### The fix, in the order it must be applied
+
+1. `deposit_watermark: Option<u64>` **and** `departed_stakes: Option<Vec<DepartedStake>>`, in
+   one change. Either alone is worse than neither.
+2. `World::upgrade_from(old_wasm)` plus one test that installs the `801aa79` table canister,
+   buys chips in, upgrades to the current wasm and asserts seated chips, pot and escrow all
+   survive. Without that test the next persisted field repeats this exactly.
+3. A general guard, because (2) only protects fields that exist today: persist a redundant
+   flat-scalar digest of the table (`opt bool` present, `opt nat64` pot, `opt nat64` seated
+   chips) alongside `table_state`, and make `post_upgrade` panic when the digest says a table
+   was saved and `table_state` came back `None`. Flat `opt` scalars cannot themselves be
+   silently dropped, so that converts any future nested-field mistake from silent chip
+   destruction into a rejected upgrade. **This guard is implemented as of this pass** (see
+   `PersistentState::table_was_present` / `table_pot_at_save` / `table_seated_chips_at_save`).
+
+   **Read its limit carefully.** The guard can only fire when the SAVED state contains the
+   digest, and state written by `801aa79` does not. So it does nothing for the specific
+   old-to-current upgrade above -- which is why M7, not the guard, is what catches that -- and
+   everything for every upgrade from this commit onwards. It buys the next agent a rejected
+   upgrade instead of destroyed chips; it does not retro-fit safety onto state already written.
+
+Step 2 is done (M7). **Step 1 is NOT done and is the top of the wave-3 queue.**
+
+### Related, same root cause, lower stakes
+
+`docs/DEFECTS.md` E-10 (`PENDING_WITHDRAWALS` / `LAST_WITHDRAWAL` are not persisted at all) is
+the same blind spot seen from the other side: nobody has ever exercised an upgrade across a
+version boundary, so nothing about persistence is known to work.

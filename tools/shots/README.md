@@ -39,7 +39,13 @@ node tools/shots/run.mjs --scenes lobby,table-showdown
 node tools/shots/run.mjs --viewports desktop
 node tools/shots/run.mjs --skip-build --skip-deploy    # reuse the current dist + deploy
 SHOTS_DEBUG=1 node tools/shots/run.mjs                # stack traces on fatal errors
+SHOTS_PRICE_FIXTURE=1 node tools/shots/run.mjs        # offline: labelled placeholder prices
 ```
+
+**Finish with a full run.** A partial run rewrites `latest/manifest.json` and
+`latest/INDEX.md` to describe only the scenes it captured, while the other scenes' PNGs stay
+in `latest/`. The images are still correctly named, but the index beside them then
+under-reports the directory. Treat `latest/` as authoritative only after a full run.
 
 Exit code `0` = every scene captured **and** verified, `1` = at least one scene did not
 verify, `2` = the run could not start (replica down, build not wired, port in use…).
@@ -62,7 +68,25 @@ artifacts/screens/.thirdparty-cache/   cached fonts/avatars (see "Determinism")
 ```
 
 `FAILED-<scene>-<viewport>.png` is written instead when a scene throws, so a broken scene
-still leaves forensic evidence.
+still leaves forensic evidence. `UNVERIFIED-<scene>-<viewport>.png` is written when the page
+rendered fine but the scene's own `verify()` returned false — the canonical filename is
+reserved for state that actually passed its assertions, because that filename is what a
+reader treats as proof. Every variant of a (scene, viewport) is cleared from `latest/`
+before a run writes, so a verified PNG from an earlier commit cannot survive next to this
+run's `UNVERIFIED-` one.
+
+## The controller identity is resolved, not assumed
+
+Controller-only calls (`reset_table`, which is what makes a run idempotent) used to be
+signed as a hardcoded `cd-local-deployer`. That is an assumption, and on this machine it is
+false: `./scripts/dev.sh local-up` runs `icp deploy` with no `--identity`, so the canisters
+end up controlled by whatever identity happens to be the machine's **current default** —
+which may belong to an entirely unrelated project. `resolveControllerIdentity()` in
+`lib/ids.mjs` reads the real controller list off a local canister with
+`icp canister status` and picks a local identity that is actually in it (preferring
+`CONTROLLER_IDENTITY`, then the funders, then the current default), and fails with an
+explicit message listing what it tried if none qualifies. The identity actually used is
+recorded in the manifest as `controllerIdentity`.
 
 ## Scenes
 
@@ -158,10 +182,20 @@ talks to a port nothing is listening on.
   reads e.g. `40s`) instead of being screenshotted at an arbitrary instant.
 * Every scene **resets its table through the controller first**, so `hand_number` is always
   `1` for the hand in the shot — no drift across runs.
-* Third-party assets (Google Fonts, dicebear avatars, the CoinGecko price ticker) are cached
-  to `artifacts/screens/.thirdparty-cache/` on first run and replayed afterwards. This is
-  the only interception in the harness, it covers **non-canister** assets only, and it makes
+* Third-party **static** assets (Google Fonts, dicebear avatars) are cached to
+  `artifacts/screens/.thirdparty-cache/` on first run and replayed afterwards. This is the
+  only interception in the harness, it covers **non-canister** assets only, and it makes
   runs both repeatable and offline-capable.
+* Third-party **volatile facts** are never replayed. `api.coingecko.com` returns a live
+  market quote which the app renders as `~$12.34` beside a real on-chain balance; serving a
+  cached quote would publish a stale number as a current one, in an artifact whose whole
+  purpose is to be evidence. So the price is fetched live and recorded with its timestamp;
+  if the fetch fails the harness fulfils **503** so the app shows its own "Failed to fetch
+  prices" state (an honest absence, not a stale number); and `SHOTS_PRICE_FIXTURE=1` opts
+  into a deterministic placeholder that is labelled `fixture` in both `manifest.json` and
+  `INDEX.md`. Any pre-existing cached entry for a volatile host is purged at run start.
+  See `volatileThirdParty` in the manifest — that field is the provenance of every fiat
+  figure in the run.
 
 Residual, unavoidable variation: the **shuffle seed hash and revealed seed** differ every
 run (that is the point of provable fairness), and hole/board cards differ every hand

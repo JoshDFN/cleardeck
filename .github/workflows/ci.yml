@@ -47,8 +47,70 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+          # `poker_core`'s wasm32 golden replay is part of the default test run, so
+          # this job needs the canister's target too. See the wasm32-tests job.
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # `poker_core`'s wasm32 replay drives the module with Node, and its
+      # cross-language check runs the Python verifier in
+      # src/poker_core/tests/verify/ (python3 is preinstalled on ubuntu-latest).
       - run: cargo test --locked --workspace
+
+  wasm32-tests:
+    name: Engine tests on wasm32 (the target that runs the money)
+    runs-on: ubuntu-latest
+    # WHY THIS JOB EXISTS
+    #
+    # `usize` is 32 bits on wasm32-unknown-unknown and 64 bits on every machine a
+    # developer or CI runner tests on. The shipped shuffle reduced its 64-bit draw
+    # with `(draw as usize) % (i + 1)`, so the canister dealt from a DIFFERENT deck
+    # than the one every native test and every third-party reimplementation derived
+    # from the same revealed seed. 101 green native tests said nothing about it, and
+    # the "anyone can verify our shuffle" claim was false for the whole time it was
+    # published. See docs/FINDING-02-shuffle-not-verifiable.md.
+    #
+    # RULE: any pure function whose result feeds the deal or the money is tested on
+    # the target that actually runs it. This job replays the full golden fixture
+    # (shuffle, hand evaluation, straight detection, side pots) inside a
+    # wasm32-unknown-unknown module, and cross-checks it against two independent
+    # verifiers written from docs/SHUFFLE-SPEC.md in Python and JavaScript.
+    #
+    # It needs no wasm runtime: the module is driven by Node's plain WebAssembly
+    # API (wasm32-unknown-unknown has no WASI, so wasmtime could not run it).
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Replay the golden vectors inside a wasm32 module
+        run: cargo test --locked -p poker_core --test wasm32_golden -- --nocapture
+      - name: Sanity-check the wasm32 replay is not vacuous
+        # A harness that silently checks nothing is the failure mode to fear, so
+        # assert the module reports the full population from inside itself.
+        run: |
+          set -euo pipefail
+          wasm=target/wasm32-shuffle-harness/wasm32-unknown-unknown/release/wasm32_shuffle_harness.wasm
+          test -f "$wasm" || { echo "::error::wasm32 harness module was not built"; exit 1; }
+          out=$(node src/poker_core/tests/wasm32_harness/run.mjs "$wasm" check)
+          echo "$out"
+          echo "$out" | grep -qx 'counts: S=2000 E=3000 F=3000 D=6188 P=1500'
+      - name: Outsider verifiers reproduce the committed shuffle vectors
+        run: |
+          set -euo pipefail
+          python3 src/poker_core/tests/verify/verify_shuffle.py \
+            --vectors src/poker_core/tests/golden_vectors.txt | tee /tmp/py.txt
+          node src/poker_core/tests/verify/verify_shuffle.mjs \
+            --vectors src/poker_core/tests/golden_vectors.txt | tee /tmp/js.txt
+          grep -qx 'checked 2000 shuffle vectors, 0 mismatched' /tmp/py.txt
+          grep -qx 'checked 2000 shuffle vectors, 0 mismatched' /tmp/js.txt
 
   candid-check:
     name: Candid interface drift

@@ -79,6 +79,66 @@ export function readLocalIds() {
 }
 
 /**
+ * Resolves which local icp identity ACTUALLY controls a local canister.
+ *
+ * The harness used to hardcode `cd-local-deployer` as the controller. That is an
+ * assumption, not a fact: `./scripts/dev.sh local-up` runs `icp deploy` with no
+ * `--identity`, so the canisters end up controlled by whatever identity happens
+ * to be the machine's current default — which on this machine is a completely
+ * unrelated project's identity. Every controller-only call (`reset_table`, the
+ * thing that makes a screenshot run idempotent) then fails, and the lobby ends up
+ * with zero registered tables.
+ *
+ * So: read the real controller list off the canister and pick a local identity
+ * that is in it. Preference order is `preferred` first, then the rest of the
+ * candidates, then the current default identity.
+ *
+ * @param {string} canisterId a local canister to read the controller list from
+ * @param {object} [opts]
+ * @param {string} [opts.preferred] identity name to use if it qualifies
+ * @param {string[]} [opts.candidates] other identity names to consider
+ * @returns {{identity:string|null, controllers:string[], checked:Array<{identity:string,principal:string,isController:boolean}>}}
+ */
+export function resolveControllerIdentity(canisterId, { preferred, candidates = [] } = {}) {
+  assertNotMainnet(canisterId, 'canister id for controller lookup');
+  const status = icp(['canister', 'status', canisterId, '-e', 'local']);
+  const line = status.split('\n').find((l) => /^\s*Controllers:/.test(l)) || '';
+  const controllers = line
+    .replace(/^\s*Controllers:\s*/, '')
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const names = [];
+  for (const n of [preferred, ...candidates]) {
+    if (n && !names.includes(n)) names.push(n);
+  }
+
+  const checked = [];
+  for (const name of names) {
+    let principal;
+    try {
+      principal = icp(['identity', 'principal', '--identity', name]).trim();
+    } catch {
+      continue; // identity does not exist on this machine
+    }
+    const isController = controllers.includes(principal);
+    checked.push({ identity: name, principal, isController });
+    if (isController) return { identity: name, controllers, checked };
+  }
+
+  // Last resort: the current default identity, whatever it is called.
+  try {
+    const principal = icp(['identity', 'principal']).trim();
+    const isController = controllers.includes(principal);
+    checked.push({ identity: '(default)', principal, isController });
+    if (isController) return { identity: null, controllers, checked };
+  } catch { /* nothing else to try */ }
+
+  return { identity: undefined, controllers, checked };
+}
+
+/**
  * The frontend asset canister is created by `icp deploy -e local frontend`, so
  * it may not be in the mapping yet. `icp canister list` prints names only, so we
  * re-read the mapping after the deploy instead of parsing CLI output.

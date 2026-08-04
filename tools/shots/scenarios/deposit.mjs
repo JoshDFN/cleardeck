@@ -32,29 +32,73 @@ export default {
     await devLogin(page, HERO_PLAYER);
     await enterTable(page, tableDisplayName(ctx, TABLE));
 
-    // The wallet panel can start collapsed on a narrow viewport.
+    // The wallet panel can start collapsed, so try the toggle first.
     const deposit = page.locator('.wallet-action-btn.deposit');
-    if (!(await deposit.isVisible().catch(() => false))) {
+    if (!(await deposit.first().isVisible().catch(() => false))) {
       const toggle = page.locator('.panel-toggle');
-      if (await toggle.isVisible().catch(() => false)) await toggle.click();
+      if (await toggle.first().isVisible().catch(() => false)) await toggle.first().click();
     }
-    await deposit.first().waitFor({ timeout: 30_000 });
+
+    // THE ENTRY POINT MAY NOT EXIST AT THIS VIEWPORT, and that is a real product
+    // defect rather than something for the harness to wait out:
+    //
+    //   `showDepositModal` in routes/+page.svelte is set from exactly ONE place,
+    //   PokerTable's `onShowDeposit`, whose button lives in
+    //   `.feed-container.right`. PokerTable's `@media (max-width: 900px)` sets
+    //   `.feed-container { display: none }`. So at 390px there is no way to open
+    //   the deposit modal at all — the primary ICRC-2 approve + deposit funding
+    //   flow has no mobile entry point.
+    //
+    // Rather than hang for 30s and throw, detect it, and let verify() report an
+    // UNVERIFIED artifact that says exactly why.
+    const reachable = await deposit.first().isVisible().catch(() => false);
+    if (!reachable) {
+      return { depositEntryPointReachable: false };
+    }
+
     await deposit.first().click();
     await page.waitForSelector('.modal-content', { timeout: 30_000 });
     await page.waitForSelector('#deposit-modal-title', { timeout: 30_000 });
     await settle(page);
+    return { depositEntryPointReachable: true };
   },
 
   async verify(ctx, page) {
-    const title = ((await page.locator('#deposit-modal-title').textContent()) || '')
-      .replace(/\s+/g, ' ').trim();
     const modal = await page.locator('.modal-content').count();
+    const title = modal
+      ? ((await page.locator('#deposit-modal-title').textContent()) || '')
+        .replace(/\s+/g, ' ').trim()
+      : '';
     const sourceToggle = await page.locator('.wallet-source-toggle button').allTextContents();
+    const panelPresent = (await page.locator('.wallet-panel').count()) > 0;
+    const panelVisible = await page.locator('.wallet-panel').first().isVisible().catch(() => false);
+    const viewport = page.viewportSize();
+
+    if (modal === 0) {
+      return {
+        verified: false,
+        checks: {
+          modals: 0,
+          viewportWidth: viewport?.width ?? null,
+          walletPanelInDom: panelPresent,
+          walletPanelVisible: panelVisible,
+          reason:
+            'the deposit modal has NO entry point at this viewport: its only trigger is '
+            + "PokerTable's wallet-panel Deposit button, inside .feed-container.right, which "
+            + 'PokerTable hides with `@media (max-width: 900px) { .feed-container { display: none } }`',
+        },
+        notes:
+          `deposit modal UNREACHABLE at ${viewport?.width ?? '?'}px: the only trigger is inside `
+          + '.feed-container, hidden below 900px. This is an app defect, not a staging failure.',
+      };
+    }
+
     return {
-      verified: modal >= 1 && /deposit/i.test(title),
+      verified: /deposit/i.test(title),
       checks: {
         modals: modal,
         title,
+        viewportWidth: viewport?.width ?? null,
         walletSources: sourceToggle.map((t) => t.replace(/\s+/g, ' ').trim()).filter(Boolean),
       },
       notes: title,

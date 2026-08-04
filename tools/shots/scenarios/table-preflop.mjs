@@ -57,30 +57,60 @@ export default {
     await openApp(page);
     await devLogin(page, HERO_PLAYER);
     await enterTable(page, tableDisplayName(ctx, TABLE));
-    await page.waitForSelector('.turn-indicator.my-turn', { timeout: 30_000 });
-    await page.waitForSelector('.actions .action-btn', { timeout: 30_000 });
-    // Land the countdown on the same digits every run.
-    const timer = await stabilizeTimer(page, '.turn-timer', this.timerTarget, 12_000);
+
+    // `.actions:not(.disabled)` is the VIEWPORT-INDEPENDENT "it is my turn"
+    // signal: PokerTable.svelte writes `class:disabled={!isMyTurn ||
+    // !gameInProgress || actionPending}` on the action bar, and the action bar is
+    // never hidden by a media query.
+    //
+    // The old wait was on `.turn-indicator.my-turn`, which lives inside
+    // `.feed-container.left`. At <=900px PokerTable sets `.feed-container {
+    // display: none }`, so on a 390px viewport that element is invisible and the
+    // wait could only ever time out. That is not just a harness problem: the
+    // action COUNTDOWN (`.turn-timer`) is inside the same hidden container, so a
+    // mobile player has no visible action clock at all.
+    await page.waitForSelector('.actions:not(.disabled) .action-btn', { timeout: 30_000 });
+
+    // Land the countdown on the same digits every run — but only where the app
+    // actually renders one. Absence is recorded, never silently tolerated.
+    const timerPresent = (await page.locator('.turn-timer').count()) > 0
+      && (await page.locator('.turn-timer').first().isVisible().catch(() => false));
+    const timer = timerPresent
+      ? await stabilizeTimer(page, '.turn-timer', this.timerTarget, 12_000)
+      : { matched: false, value: null, absent: true };
     await settle(page);
     return { timer };
   },
 
   async verify(ctx, page) {
-    const myTurn = await page.locator('.turn-indicator.my-turn').count();
     const buttons = await page.locator('.actions .action-btn').allTextContents();
+    const actionBarLive = (await page.locator('.actions:not(.disabled)').count()) === 1;
     const heroCards = await page.locator('.player-nameplate.highlight-me').count();
     const phaseText = ((await page.locator('.phase-indicator').first().textContent()) || '').trim();
     const facedown = await page.locator('.community-cards .card').count();
+    // Recorded, not asserted: at <=900px these are hidden by a media query.
+    const turnIndicatorVisible = await page.locator('.turn-indicator.my-turn').first()
+      .isVisible().catch(() => false);
+    const actionClockVisible = await page.locator('.turn-timer').first()
+      .isVisible().catch(() => false);
     return {
-      verified: myTurn === 1 && buttons.length >= 3 && phaseText.toLowerCase().includes('pre'),
+      verified: actionBarLive && buttons.length >= 3 && phaseText.toLowerCase().includes('pre'),
       checks: {
-        myTurnBanner: myTurn,
+        actionBarLive,
         actionButtons: buttons.map((b) => b.trim()).filter(Boolean),
         heroNameplate: heroCards,
         phaseText,
         communityCardSlots: facedown,
+        turnIndicatorVisible,
+        actionClockVisible,
+        actionClockNote: actionClockVisible
+          ? 'action countdown is on screen'
+          : 'NO visible action countdown at this viewport: .turn-timer lives in '
+            + '.feed-container, which PokerTable hides below 900px',
       },
-      notes: `action buttons: ${buttons.map((b) => b.trim()).filter(Boolean).join(' / ')}`,
+      notes:
+        `action buttons: ${buttons.map((b) => b.trim()).filter(Boolean).join(' / ')}`
+        + `; action clock ${actionClockVisible ? 'visible' : 'HIDDEN at this viewport'}`,
     };
   },
 };

@@ -194,6 +194,7 @@ fn mid_hand(stakes: &[(u64, u64, bool)]) -> TableState {
         first_hand: false,
         auto_deal_at: None,
         last_action: None,
+        departed_stakes: Vec::new(),
     }
 }
 

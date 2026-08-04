@@ -49,6 +49,34 @@ pub struct Actor {
     pub principal: Principal,
 }
 
+/// Reads the module hash the replica reports for `canister` and hard-fails unless
+/// it is exactly `expected_sha256`.
+///
+/// The IC module hash IS the sha256 of the wasm, so this closes the loop between
+/// "the bytes the harness built" and "the code the replica executes". Without it,
+/// `install_canister` succeeding is only evidence that *some* module installed.
+fn assert_installed_module_is(
+    pic: &PocketIc,
+    canister: Principal,
+    controller: Principal,
+    expected_sha256: &str,
+    stage: &str,
+) {
+    let status = pic
+        .canister_status(canister, Some(controller))
+        .unwrap_or_else(|e| panic!("canister_status after {stage} was rejected: {e:?}"));
+    let installed = status
+        .module_hash
+        .map(hex::encode)
+        .unwrap_or_else(|| "<empty canister>".to_string());
+    assert_eq!(
+        installed, expected_sha256,
+        "after {stage} the replica is running module {installed} but the harness built \
+         {expected_sha256}. Every invariant result would be a statement about a binary that is not \
+         in this tree. Refusing to continue (docs/DEFECTS.md H-01)."
+    );
+}
+
 /// Everything the invariants read, captured at one instant.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
@@ -139,7 +167,8 @@ impl World {
         );
 
         // --- the table canister under test ----------------------------------
-        let table_wasm = wasms::table_canister_wasm();
+        let module = wasms::table_canister_module();
+        let table_wasm = module.bytes.clone();
         let table = pic.create_canister_with_settings(Some(controller), None);
         pic.add_cycles(table, 100_000_000_000_000);
         pic.install_canister(
@@ -148,6 +177,10 @@ impl World {
             encode_one(&config).expect("table init arg encode"),
             Some(controller),
         );
+        // The module the replica is actually running must be the module this
+        // harness just built. Anything else and the result cannot be attributed
+        // to the source tree (docs/DEFECTS.md H-01).
+        assert_installed_module_is(&pic, table, controller, &module.sha256, "install");
 
         Self {
             pic,
@@ -514,6 +547,49 @@ impl World {
 
     /// A real `install_code --mode upgrade` with the same wasm: exactly what
     /// `scripts/deploy-mainnet.sh` does. Runs `pre_upgrade` then `post_upgrade`.
+    /// Install `wasm` on the table canister with `--mode install`, replacing what is
+    /// there, and stop tracking the module hash as "the module under test".
+    ///
+    /// Only for cross-version upgrade tests: install an OLD release, create state
+    /// with it, then call [`World::upgrade`] to move to the module under test. See
+    /// docs/DEFECTS.md H-16.
+    pub fn reinstall_module(&mut self, wasm: Vec<u8>) -> Result<(), String> {
+        let arg = encode_one(&self.config).expect("install arg encode");
+        self.pic
+            .reinstall_canister(self.table, wasm.clone(), arg, Some(self.controller))
+            .map_err(|r| format!("{r:?}"))?;
+        self.table_wasm = wasm;
+        Ok(())
+    }
+
+    /// Upgrade to the module under test, whatever is currently installed.
+    ///
+    /// [`World::upgrade`] asserts the post-upgrade module hash equals the module the
+    /// harness built, which is right for new-to-new but is exactly what makes it
+    /// unable to test an upgrade FROM an older module. This one upgrades to the
+    /// module under test and returns the raw outcome, so a caller can assert on a
+    /// REJECTED upgrade as well as on a successful one.
+    pub fn upgrade_to_module_under_test(&mut self) -> Result<(), String> {
+        let arg = encode_one(&self.config).expect("upgrade arg encode");
+        let wasm = wasms::table_canister_wasm();
+        let out = self
+            .pic
+            .upgrade_canister(self.table, wasm.clone(), arg, Some(self.controller))
+            .map_err(|r| format!("{r:?}"));
+        if out.is_ok() {
+            self.table_wasm = wasm;
+            self.upgrades += 1;
+            assert_installed_module_is(
+                &self.pic,
+                self.table,
+                self.controller,
+                wasms::table_canister_sha256(),
+                "cross-version upgrade",
+            );
+        }
+        out
+    }
+
     pub fn upgrade(&mut self) -> Result<(), String> {
         let arg = encode_one(&self.config).expect("upgrade arg encode");
         let wasm = self.table_wasm.clone();
@@ -523,6 +599,13 @@ impl World {
             .map_err(|r| format!("{r:?}"));
         if out.is_ok() {
             self.upgrades += 1;
+            assert_installed_module_is(
+                &self.pic,
+                self.table,
+                self.controller,
+                wasms::table_canister_sha256(),
+                "upgrade",
+            );
         }
         out
     }

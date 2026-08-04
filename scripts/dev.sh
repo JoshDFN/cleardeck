@@ -417,30 +417,69 @@ cmd_local_status() { cmd_doctor; }
 # purpose). Everything here runs with no replica and no network access beyond a
 # cached ledger download.
 
+# Run "$@" but kill it after $1 seconds. macOS has no coreutils `timeout`, and the
+# settlement oracle can HANG rather than fail (docs/DEFECTS.md H-22: its
+# rewind-and-re-deal search is unbounded, so a deck that stops varying spins
+# forever). A gate that hangs is worse than one that fails, because a hang looks
+# like a slow job.
+with_timeout() {
+  local secs="$1"; shift
+  ( "$@" ) & local pid=$!
+  ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) & local wd=$!
+  wait "$pid"; local rc=$?
+  kill "$wd" 2>/dev/null
+  if [ "$rc" -ge 128 ]; then
+    printf '    %sTIMED OUT%s after %ss: %s\n' "$E" "$R" "$secs" "$*" >&2
+  fi
+  return "$rc"
+}
+
 cmd_test() {
   local failed=()
 
-  step "[1/4] cargo test --workspace"
+  step "[1/5] cargo test --workspace"
   cargo test --workspace || failed+=("cargo test --workspace")
 
-  step "[2/4] table_canister wasm build"
+  step "[2/5] table_canister wasm build"
   cmd_wasm || failed+=("wasm build")
 
-  step "[3/4] differential fast subset (tools/differential)"
+  step "[3/5] differential fast subset (tools/differential)"
   ( cd tools/differential && cargo test ) || failed+=("differential fast subset")
 
-  step "[4/4] money-safety fast subset (tests/money_safety)"
+  step "[4/5] money-safety fast subset (tests/money_safety)"
   announce_wasm
   (
     cd tests/money_safety
     export CLEARDECK_TABLE_WASM="$WASM_PATH"
     cargo test --test invariants  -- --test-threads=2 &&
     cargo test --test regressions -- --test-threads=2 &&
+    # deposit_replay carries the E-02 FUND-THEFT reproducer and the ten regressions
+    # that keep it shut. It is a cargo-auto-discovered target, so for the whole of
+    # wave 2 it was named by NO make target and run by nobody: the project's only
+    # proven fund-theft primitive had its gate outside the gate. Named explicitly
+    # here so that cannot recur silently -- if the file is renamed, this line fails.
+    cargo test --test deposit_replay -- --test-threads=2 &&
     MONEY_FUZZ_SEEDS="${CLEARDECK_SMOKE_FUZZ_SEEDS:-1}" \
     MONEY_FUZZ_STEPS="${CLEARDECK_SMOKE_FUZZ_STEPS:-40}" \
     MONEY_FUZZ_SHRINK=10 \
       cargo test --test fuzz
   ) || failed+=("money-safety fast subset")
+
+  # THE SETTLEMENT ORACLE IS IN THE DEFAULT GATE ON PURPOSE.
+  #
+  # It is the ONLY harness in the repo that measures per-seat chip deltas against
+  # an independently derived answer, and therefore the only one that convicts a
+  # payout that lands the right totals at the WRONG SEAT. Measured by the coherence
+  # pass: a mutation that credits 99% of every pot to the winner and 1% to another
+  # seated player -- while RECORDING the correct winner and the correct amount --
+  # leaves money-safety `invariants` at 30/30 green and `regressions` at 6/6 green,
+  # and is caught here. For the whole of wave 2 this suite lived behind its own
+  # `make settlement` that no default target and no CI job invoked.
+  step "[5/5] settlement oracle (tests/settlement)"
+  with_timeout 900 sh -c 'cd tests/settlement && cargo test --test settlement -- --test-threads=1' \
+    || failed+=("settlement oracle")
+  with_timeout 300 sh -c 'cd tests/settlement && cargo test --test disagreements -- --test-threads=1' \
+    || failed+=("settlement pinned reproducers")
 
   step "result"
   if [ ${#failed[@]} -eq 0 ]; then
@@ -528,6 +567,14 @@ Run '$0 local-up' first. This harness deliberately does not start the replica."
 # engine is fixed. They are NOT part of `test`, because a suite that is red by
 # design teaches everyone to ignore red. This target inverts them: it succeeds
 # while they still fail, and tells you the moment one goes green.
+#
+# This list covers the EVALUATOR defects only. The payout defects (docs/DEFECTS.md
+# E-01, E-03, E-05, E-35) were fixed in wave 2, so their markers were inverted into
+# gates and live where the suite already runs them, not here:
+#   `test`        reg01/reg05/reg08/reg09 + seam_a + m1b (tests/money_safety), and
+#                 payout_tests (src/table_canister/src/lib.rs)
+#   `settlement`  pinned_e01 / pinned_e05 / pinned_odd_chips + a per-hand gate on
+#                 every hand the oracle drives
 
 DEFECT_MARKERS=(
   defect_detect_straight_returns_the_best_straight
@@ -703,6 +750,41 @@ cmd_selftest() {
 }
 
 # ---------------------------------------------------------------------------
+# cmd: settlement   (appended -- owner: tests/settlement/**)
+# ---------------------------------------------------------------------------
+#
+# The independent settlement oracle. Derives what each seat is OWED from the rules
+# of poker and compares that against what the real canister actually paid, hand by
+# hand, on PocketIC.
+#
+# It builds and identifies its own wasm (tests/settlement/src/wasms.rs) rather than
+# trusting $WASM_PATH, and refuses to run against an artifact older than its
+# sources, so it is deliberately NOT wired through wasm_env/announce_wasm.
+
+cmd_settlement() {
+  local scope="${1:-all}"
+
+  step "settlement oracle: its own rules (no replica)"
+  ( cd tests/settlement && cargo test --test oracle_rules ) || return 1
+
+  step "settlement oracle: golden reproducers of every disagreement (no replica)"
+  ( cd tests/settlement && cargo test --test disagreements -- golden ) || return 1
+
+  if [ "$scope" = "fast" ]; then
+    ok "fast settlement subset passed (skipped the PocketIC comparison runs)"
+    return 0
+  fi
+
+  step "settlement oracle: the comparison harness vs the REAL canister"
+  ( cd tests/settlement && cargo test --test settlement -- --test-threads=1 --nocapture ) || return 1
+
+  step "settlement oracle: the payout defects it found, pinned as FIXED"
+  ( cd tests/settlement && cargo test --test disagreements -- pinned --test-threads=1 --nocapture ) || return 1
+
+  ok "settlement oracle run complete"
+}
+
+# ---------------------------------------------------------------------------
 # cmd: help
 # ---------------------------------------------------------------------------
 
@@ -722,6 +804,10 @@ ${B}ClearDeck dev entry point${R}   (make <target> works for all of these)
                   No replica needed.
   ${B}fuzz${R}            LONG: 9 seeds x 600 hostile steps against the real canister
                   and the real ICP ledger on PocketIC
+  ${B}settlement${R}      the independent settlement oracle: derives what each seat is
+                  OWED from the rules of poker and compares it against what the
+                  real canister paid, hand by hand. 'settlement fast' skips the
+                  PocketIC runs and keeps the rules + golden reproducers.
   ${B}diff-full${R}       exhaustive evaluator differential (all C(52,5) x 3 evaluators)
   ${B}shots${R}           screenshot the real UI against the real local canisters
                   (requires local-up)
@@ -750,6 +836,7 @@ main() {
     wasm)           cmd_wasm ;;
     test)           cmd_test ;;
     fuzz)           cmd_fuzz ;;
+    settlement)     cmd_settlement "$@" ;;
     diff-full)      cmd_diff_full "$@" ;;
     shots)          cmd_shots "$@" ;;
     known-defects)  cmd_known_defects ;;

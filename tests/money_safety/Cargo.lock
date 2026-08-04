@@ -938,6 +938,7 @@ dependencies = [
  "crc32fast",
  "hex",
  "pocket-ic",
+ "poker_core",
  "serde",
  "serde_json",
  "sha2",
@@ -1081,6 +1082,15 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "wslpath",
+]
+
+[[package]]
+name = "poker_core"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "serde",
+ "sha2",
 ]
 
 [[package]]

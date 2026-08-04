@@ -11,7 +11,7 @@ DEV := ./scripts/dev.sh
 
 .DEFAULT_GOAL := help
 .PHONY: help doctor local-up local-status wasm test fuzz diff-full diff-full-sevens \
-        shots known-defects hygiene selftest phe-venv check
+        settlement settlement-fast shots known-defects hygiene selftest phe-venv check
 
 help:            ## show this help
 	@$(DEV) help
@@ -32,6 +32,12 @@ test:            ## FAST gate: workspace + differential fast + money-safety fast
 
 fuzz:            ## LONG: 9 seeds x 600 hostile steps vs the real canister + real ICP ledger
 	@$(DEV) fuzz
+
+settlement:      ## independent settlement oracle: what each seat is OWED vs what the canister paid
+	@$(DEV) settlement $(ARGS)
+
+settlement-fast: ## settlement oracle without the PocketIC runs (rules + golden reproducers)
+	@$(DEV) settlement fast
 
 diff-full:       ## exhaustive evaluator differential (all C(52,5) x 3 evaluators)
 	@$(DEV) diff-full $(ARGS)

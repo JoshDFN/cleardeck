@@ -23,6 +23,13 @@ name = "money_safety"
 path = "src/lib.rs"
 
 [dependencies]
+# The REAL pure engine the canister links, host-built. Used ONLY as an oracle: the
+# seam tests re-evaluate each showdown hand from the cards the canister revealed and
+# compare against the rank the canister recorded, which is what makes "the canister
+# actually consulted evaluate_hand" a checkable claim rather than an assumption
+# (docs/DEFECTS.md H-04, mutation 6). `HandRank` and `Card` are also the exact
+# Candid types on the canister's wire, so there is no second mirror to drift.
+poker_core = { path = "../../src/poker_core" }
 pocket-ic = "11.0.0"
 candid = "0.10"
 serde = { version = "1.0", features = ["derive"] }
@@ -31,10 +38,12 @@ sha2 = "0.10"
 crc32fast = "1.3"
 hex = "0.4"
 
-[[test]]
-name = "invariants"
-path = "tests/invariants.rs"
-
+# `tests/invariants/main.rs` is picked up by cargo's own target auto-discovery as
+# the test target named `invariants`, so `cargo test --test invariants` -- the exact
+# command `scripts/dev.sh test` runs -- still names it. It is a DIRECTORY so the
+# seam tests and the classifier tests are part of the gate instead of sitting in a
+# target nobody invokes. Declaring it explicitly here as well would collide with the
+# auto-discovered target, so it is deliberately absent.
 [[test]]
 name = "regressions"
 path = "tests/regressions.rs"

@@ -14,7 +14,47 @@ import {
   STATE_TIMEOUT_MS,
   TABLE_CONFIGS,
 } from './config.mjs';
-import { icp } from './ids.mjs';
+import { icp, resolveControllerIdentity } from './ids.mjs';
+
+/**
+ * Identity used for controller-only calls. Resolved once per process against the
+ * real controller list of a real local canister (see resolveControllerIdentity),
+ * because `local-up` deploys as the machine's current default identity, not
+ * necessarily CONTROLLER_IDENTITY.
+ *
+ * `null` means "use the current default identity" (pass no --identity).
+ * @type {{identity: string|null}|null}
+ */
+let controllerCache = null;
+
+/**
+ * @param {string} canisterId a local canister the caller must control
+ * @returns {string[]} the `--identity <name>` argv fragment, possibly empty
+ */
+function controllerArgs(canisterId) {
+  if (!controllerCache) {
+    const found = resolveControllerIdentity(canisterId, {
+      preferred: CONTROLLER_IDENTITY,
+      candidates: FUNDER_IDENTITIES,
+    });
+    if (found.identity === undefined) {
+      throw new Error(
+        `No local icp identity controls ${canisterId}.\n` +
+          `  controllers on the canister: ${found.controllers.join(', ') || '(none reported)'}\n` +
+          `  identities tried: ${found.checked.map((c) => `${c.identity}=${c.principal}`).join(', ')}\n` +
+          'Controller-only calls (reset_table) cannot be made, so scenes cannot be reset.\n' +
+          `Redeploy the local backend as ${CONTROLLER_IDENTITY}, or add it as a controller.`,
+      );
+    }
+    controllerCache = { identity: found.identity };
+  }
+  return controllerCache.identity ? ['--identity', controllerCache.identity] : [];
+}
+
+/** @returns {string} the controller identity in use, for the run manifest. */
+export function controllerIdentityInUse() {
+  return controllerCache ? (controllerCache.identity ?? '(default)') : '(not resolved yet)';
+}
 import { ledgerActor, optional, tableActor, unwrap, variantKey } from './agent.mjs';
 import { devPlayer } from './identities.mjs';
 
@@ -49,7 +89,7 @@ export function resetTable(tableName, canisterId) {
   if (!cfg) throw new Error(`No config literal known for table "${tableName}"`);
   const out = icp([
     'canister', 'call', canisterId, 'reset_table', configLiteral(cfg),
-    '-e', ENV, '--identity', CONTROLLER_IDENTITY,
+    '-e', ENV, ...controllerArgs(canisterId),
   ]);
   if (!/Ok/.test(out)) throw new Error(`reset_table(${tableName}) did not return Ok: ${out}`);
   return out.trim();

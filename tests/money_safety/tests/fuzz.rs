@@ -98,7 +98,7 @@ fn hostile_sequences_never_create_chips_double_pay_or_lose_state_across_an_upgra
         // Shrink every NEW violation to a minimal reproducer.
         let blocking: Vec<Violation> = violations
             .iter()
-            .filter(|v| !v.severity.is_documented_defect())
+            .filter(|v| !money_safety::documented::is_documented(v))
             .cloned()
             .collect();
         let mut seen: Vec<String> = Vec::new();
@@ -134,6 +134,7 @@ fn hostile_sequences_never_create_chips_double_pay_or_lose_state_across_an_upgra
         harness: "tests/money_safety -- ClearDeck money-safety harness (M1..M6)",
         ledger: "REAL mainnet ICP ledger installed at ryjl3-tyaaa-aaaaa-aaaba-cai",
         ledger_sha256: wasms::ICP_LEDGER_SHA256,
+        table_wasm_sha256: wasms::table_canister_sha256(),
         runs,
         minimal_reproducers: reproducers.clone(),
         totals: Totals {

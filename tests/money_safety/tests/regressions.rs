@@ -16,20 +16,29 @@ use std::time::Duration;
 const ICP: u64 = 100_000_000;
 
 // ---------------------------------------------------------------------------
-// REG-01 -- FINDING 01: every showdown with post-flop money destroys it
+// REG-01 -- FINDING 01 / E-01 is FIXED. This is the gate that keeps it fixed.
 // ---------------------------------------------------------------------------
 
-/// The shortest sequence that permanently destroys real user funds.
+/// The sequence that used to permanently destroy real user funds, now asserting
+/// the opposite.
 ///
-/// Two players, one hand, one post-flop bet that is called, then the board runs
-/// out to a showdown. The winner is paid the PRE-FLOP pot only; everything
-/// wagered on the flop, turn and river is debited from the stacks and credited to
-/// nobody. The tokens stay in the canister on the ledger, and because `withdraw`
-/// pays strictly against the caller's own escrow and there is no administrative
-/// withdrawal function anywhere in the canister, they can never be recovered by
-/// anyone -- including a controller.
+/// THE EXACT HAND FROM THE FINDING. Heads-up, blinds 1,000,000 / 2,000,000. The
+/// pre-flop bets are levelled at 2,000,000 each, then 30,000,000 is bet and called
+/// on the flop, then it is checked down to a showdown. The pot is 64,000,000.
+///
+/// What used to happen: `state.side_pots` was built once, at the PreFlop -> Flop
+/// transition, when the pot was 4,000,000. `determine_winners` only rebuilt it "if
+/// empty", which it never was, so the winner was credited 4,000,000 and
+/// `state.pot = 0` discarded the other 60,000,000. The tokens stayed inside the
+/// canister on the ledger; `withdraw` pays strictly against the caller's own escrow
+/// and there is no administrative withdrawal anywhere in the canister, so they could
+/// never be recovered by anyone, including a controller.
+///
+/// What this test asserts now: the winner receives the WHOLE 64,000,000, chip
+/// conservation across the hand is exact to the e8, and the breakdown the engine
+/// publishes while the hand is live tracks the money instead of freezing.
 #[test]
-fn reg01_a_showdown_with_post_flop_betting_destroys_the_post_flop_money() {
+fn reg01_a_showdown_with_post_flop_betting_pays_out_every_e8() {
     let world = World::new(TableConfig::heads_up_icp(), &["alice", "bob"]);
     let alice = world.actor("alice");
     let bob = world.actor("bob");
@@ -66,8 +75,9 @@ fn reg01_a_showdown_with_post_flop_betting_destroys_the_post_flop_money() {
         "side_pots is built at the PreFlop -> Flop transition and matches the pot then"
     );
 
-    // One bet, one call: 1 ICP each into the pot post-flop.
-    let bet = ICP;
+    // One bet, one call: 30,000,000 each into the pot post-flop, which is the
+    // finding's own scenario and makes the pot exactly 64,000,000.
+    let bet = 30_000_000;
     world
         .player_action(on_clock(&world.table_state()), PlayerAction::Bet(bet))
         .expect("post-flop bet");
@@ -81,10 +91,13 @@ fn reg01_a_showdown_with_post_flop_betting_destroys_the_post_flop_money() {
         preflop_pot + 2 * bet,
         "the pot really did grow by the post-flop money"
     );
+    assert_eq!(after_bet.pot, 64_000_000, "the finding's exact pot");
     assert_eq!(
         after_bet.side_pots_total(),
-        frozen_breakdown,
-        "but the payout basis did NOT grow -- this is the defect"
+        after_bet.pot,
+        "PINNED FIX (E-01): the breakdown must grow with the pot. It used to stay at \
+         the pre-flop {frozen_breakdown} for the rest of the hand, and that frozen \
+         figure was what the winner was paid out of."
     );
 
     // Check everything down to the river, forcing a showdown.
@@ -116,52 +129,82 @@ fn reg01_a_showdown_with_post_flop_betting_destroys_the_post_flop_money() {
 
     let destroyed = total_before as i128 - after.internal_total() as i128;
     assert_eq!(
-        destroyed,
-        (2 * bet) as i128,
-        "exactly the post-flop money must have been destroyed: pre-flop pot {}, post-flop {} \
-         each, total before {}, total after {}",
+        destroyed, 0,
+        "PINNED FIX (E-01): not one e8 may be destroyed. {} was destroyed by this exact \
+         hand before the fix, which is the whole post-flop pot (pre-flop pot {}, \
+         post-flop {} each). total before {}, total after {}",
+        2 * bet,
         preflop_pot,
         bet,
         total_before,
         after.internal_total()
     );
 
-    // And it is unreachable: the canister holds it on the ledger but owes it to
-    // nobody.
-    let vs = check_world(&world);
-    let m1 = vs
+    // The winner was paid the WHOLE pot, not the pre-flop part of it.
+    let history = world
+        .hand_history(after.table.hand_number)
+        .expect("the hand is in the history");
+    let awarded: u64 = history
+        .winners
         .iter()
-        .find(|v| v.invariant == Invariant::M1Conservation)
-        .expect("M1 must be violated");
-    assert_eq!(m1.severity, Severity::FundDestruction);
-    assert_eq!(m1.delta_e8s, (2 * bet) as i128);
-    println!("REG-01: {}", m1.detail);
+        .fold(0u64, |a, w| a.saturating_add(w.amount));
+    assert_eq!(
+        awarded, 64_000_000,
+        "the winner must be credited all 64,000,000. Before the fix this was \
+         4,000,000 -- the pre-flop pot -- and the rest was credited to nobody. \
+         winners={:?}",
+        history.winners
+    );
+
+    // And nothing is stranded: the canister holds exactly what it owes.
+    let vs = check_world(&world);
+    assert!(
+        !vs.iter().any(|v| v.invariant == Invariant::M1Conservation),
+        "M1 used to see {} e8s stranded on the ledger owed to nobody. Nothing may be \
+         stranded now: {:?}",
+        2 * bet,
+        vs
+    );
+    println!(
+        "REG-01: pot {} collected, {} awarded, {} destroyed",
+        after_bet.pot, awarded, destroyed
+    );
 }
 
 // ---------------------------------------------------------------------------
-// REG-02 -- notify_deposit cannot decode the real ICP ledger
+// REG-02 -- the notify_deposit DECODE path (E-04 / FINDING 06)
 // ---------------------------------------------------------------------------
 
-// The two reply shapes live in the library so this file stays readable and so a
-// reader can diff them directly: see src/legacy_ledger_shapes.rs.
+// The two reply shapes live in the library so a reader can diff them directly:
+// see src/legacy_ledger_shapes.rs.
 use money_safety::legacy_ledger_shapes::{as_declared_by_the_canister, as_the_real_ledger_returns_it};
 
-/// `notify_deposit` can NEVER credit a deposit against the real ICP ledger, and
-/// the ICP a user sent through the advertised deposit address is stranded in the
-/// canister forever.
+/// E-04 / FINDING 06 is FIXED (2026-08-04). This is now the gate that keeps it fixed.
 ///
-/// Root cause, isolated to a single field type: the canister declares the ledger's
-/// `AccountIdentifier` as `record { hash : blob }`, but the real ledger returns a
-/// bare `blob`. Every `query_blocks` reply therefore fails to decode, and
-/// `notify_deposit` returns "Failed to decode ledger response" for every block,
-/// forever.
+/// What the defect WAS, isolated to a single field type: the canister declared the
+/// ledger's `AccountIdentifier` as `record { hash : blob }` while the real ledger
+/// returns a bare `blob`, and it asked `Response::candid::<(QueryBlocksResponse,)>`
+/// for a tuple the reply never contains. So every `query_blocks` reply failed to
+/// decode, `notify_deposit` returned `"Failed to decode ledger response"` for every
+/// block forever, and ICP sent through the advertised deposit address was stranded.
+///
+/// What this test asserts now: the decode path works, for the ordinary Transfer
+/// block AND for a block that is NOT a deposit for this canister. The second half is
+/// the part a "does it credit?" test cannot see -- if the declared `Operation`
+/// variant is wrong, Candid's `opt` rule decodes it to `None` with no error, and the
+/// canister reports "not a transfer" for a block it simply could not read. So the
+/// gate is on the REASON, not just on success: no rejection may ever again be a
+/// decode failure.
+///
+/// The crediting semantics (exactly once, no replay, concurrency) are covered by
+/// `tests/deposit_replay.rs` dr01-dr09 and are deliberately not duplicated here.
 #[test]
-fn reg02_notify_deposit_cannot_decode_the_real_ledger_and_strands_the_money() {
+fn reg02_notify_deposit_can_read_the_real_ledger_and_never_fails_to_decode() {
     let mut world = World::new(TableConfig::six_max_icp(), &["alice", "bob"]);
     let alice = world.actor("alice");
+    let bob = world.actor("bob");
 
-    // A user follows the documented flow: transfer to the canister's account,
-    // then call notify_deposit.
+    // --- part 1: the ordinary flow the Candid interface advertises ----------
     let sent = 5 * ICP;
     let block = world
         .raw_transfer_to_canister(alice, sent)
@@ -172,36 +215,66 @@ fn reg02_notify_deposit_cannot_decode_the_real_ledger_and_strands_the_money() {
         "the canister really holds the user's ICP"
     );
 
-    let outcome = world.notify_deposit(alice, block);
-    let message = match &outcome {
-        Err(OpError::Err(m)) => m.clone(),
-        other => panic!(
-            "notify_deposit unexpectedly returned {other:?}. If it now SUCCEEDS the defect has \
-             been fixed -- update docs/SECURITY-FINDINGS.md and this test together."
-        ),
-    };
-    assert!(
-        message.contains("Failed to decode ledger response"),
-        "expected the decode failure, got: {message}"
-    );
+    let credited = world.notify_deposit(alice, block).unwrap_or_else(|e| {
+        panic!(
+            "REGRESSION of E-04 / FINDING 06: notify_deposit({block}) failed with {e:?}. A user who \
+             followed the documented get_deposit_address + notify_deposit flow has just had real \
+             ICP stranded in the canister with no way to recover it."
+        )
+    });
+    world.note_raw_deposit_credited(sent);
     assert_eq!(
-        world.get_balance(alice),
-        0,
-        "the user was credited nothing for real money the canister now holds"
+        credited, sent,
+        "notify_deposit must credit exactly what arrived on the ledger"
     );
+    assert_eq!(world.get_balance(alice), sent);
 
-    // The money is unreachable: withdraw pays strictly against escrow.
-    assert!(
-        world.withdraw(alice, ICP).is_err(),
-        "the user cannot withdraw money they really sent"
-    );
-    assert_eq!(
-        world.ledger_balance(world.table, None),
-        sent,
-        "and it is still sitting in the canister"
-    );
+    // --- part 2: blocks that are NOT a deposit for this canister ------------
+    // Each of these must be REFUSED, and refused for the right reason. A decode
+    // failure here would mean the canister cannot read the block at all, which is
+    // the E-04 shape wearing a different error message.
+    let approve_block = world
+        .approve(bob, 3 * ICP)
+        .expect("icrc2_approve writes an Approve block to the ledger");
+    let elsewhere = world
+        .transfer_to_deposit_subaccount(bob, 2 * ICP)
+        .expect("a transfer to a per-player deposit subaccount");
 
-    // --- root cause, isolated -----------------------------------------------
+    for (what, b) in [
+        ("an icrc2_approve block", approve_block),
+        ("a transfer to somebody else's deposit subaccount", elsewhere),
+        ("a block that does not exist yet", 10_000u64),
+    ] {
+        let before = world.get_balance(alice);
+        let outcome = world.notify_deposit(alice, b);
+        let message = match &outcome {
+            Err(OpError::Err(m)) => m.clone(),
+            Err(OpError::Trap(t)) => panic!("{what} (block {b}) TRAPPED instead of returning Err: {t}"),
+            Ok(v) => panic!(
+                "{what} (block {b}) CREDITED {v} to a caller it does not belong to. That is \
+                 withdrawable ICP created from nothing."
+            ),
+        };
+        assert!(
+            !message.contains("Failed to decode"),
+            "{what} (block {b}) was refused with a DECODE failure: {message:?}. The canister \
+             cannot read this block, so it cannot be distinguishing \"not yours\" from \"could \
+             not parse\" -- that is E-04 (docs/DEFECTS.md E-04)."
+        );
+        assert_eq!(
+            world.get_balance(alice),
+            before,
+            "{what} must not move escrow"
+        );
+        println!("REG-02 {what} (block {b}) -> refused: {message}");
+    }
+
+    // --- part 3: the root cause, still isolable -----------------------------
+    // These two decode attempts are statements about the LEDGER's reply, not about
+    // the canister: `src/legacy_ledger_shapes.rs` is a frozen copy of the shapes the
+    // canister used to declare, and the ledger wasm is pinned by sha256. They are
+    // kept because they are the whole diagnosis in six lines, and because they show
+    // the corrected shape is the one the canister must keep using.
     let args = as_declared_by_the_canister::GetBlocksArgs {
         start: block,
         length: 1,
@@ -216,52 +289,26 @@ fn reg02_notify_deposit_cannot_decode_the_real_ledger_and_strands_the_money() {
         )
         .expect("query_blocks itself is fine");
 
-    // BUG A -- the tuple mis-decode. `Response::candid::<R>()` in ic-cdk 0.19 is
-    // `decode_one::<R>()`, so asking for `(QueryBlocksResponse,)` asks the decoder
-    // for ONE value of type `record { 0 : QueryBlocksResponse }`. The reply holds
-    // one value of type `QueryBlocksResponse`. It can never match.
-    let as_the_canister_asks =
-        candid::decode_one::<(as_declared_by_the_canister::QueryBlocksResponse,)>(&raw);
+    // BUG A -- `Response::candid::<(QueryBlocksResponse,)>` asks the decoder for ONE
+    // value of type `record { 0 : QueryBlocksResponse }`; the reply holds one value
+    // of type `QueryBlocksResponse`.
     assert!(
-        as_the_canister_asks.is_err(),
-        "BUG A appears to be fixed: decode_one::<(QueryBlocksResponse,)> now succeeds. Update \
-         docs/SECURITY-FINDINGS.md and this test together."
+        candid::decode_one::<(as_declared_by_the_canister::QueryBlocksResponse,)>(&raw).is_err(),
+        "the tuple mis-decode no longer fails, so the pinned ledger reply shape has changed and \
+         this diagnosis needs revisiting"
     );
-    // The error carries the whole reply as hex; keep the readable part only.
-    let bug_a = format!("{:?}", as_the_canister_asks.err());
-    let bug_a_reason = bug_a
-        .rfind("is not a tuple type")
-        .map(|i| {
-            let tail = &bug_a[..i + "is not a tuple type".len()];
-            let head = tail.rfind("Subtyping error").unwrap_or(0);
-            tail[head..].replace('\n', " ").replace("  ", " ")
-        })
-        .unwrap_or_else(|| bug_a.chars().take(160).collect());
-    println!("REG-02 BUG A -- decode_one::<(QueryBlocksResponse,)> failed: {bug_a_reason}");
-
-    // BUG B -- even decoded as ONE value, the canister's declared shapes silently
-    // lose the transaction. `AccountIdentifier` is declared as
-    // `record { hash : blob }` but the ledger returns a bare `blob`, so the
-    // `Operation` variant does not match and `opt Operation` decodes to NULL under
-    // Candid's opt rule. No error, no trap: `operation` is simply None, and
-    // notify_deposit's next branch says "Transaction is not a transfer".
+    // BUG B -- with `AccountIdentifier = record { hash : blob }` the Operation
+    // variant does not match and `opt Operation` decodes to NULL. No error, no trap.
     let declared = candid::decode_one::<as_declared_by_the_canister::QueryBlocksResponse>(&raw)
         .expect("as one value the outer record does decode");
-    assert_eq!(declared.blocks.len(), 1);
     assert!(
         declared.blocks[0].transaction.operation.is_none(),
-        "BUG B appears to be fixed: the declared Operation shape now matches the ledger. Update \
-         docs/SECURITY-FINDINGS.md and this test together."
+        "the OLD declared Operation shape now matches the ledger, so BUG B was a different \
+         mechanism than recorded; revisit docs/SECURITY-FINDINGS.md FINDING 06"
     );
-    println!(
-        "REG-02 BUG B -- with the canister's declared types the operation decodes to {:?}",
-        declared.blocks[0].transaction.operation
-    );
-
-    // With `AccountIdentifier = blob` the SAME bytes yield the real transfer.
+    // And with `AccountIdentifier = blob` the SAME bytes yield the real transfer.
     let corrected = Decode!(&raw, as_the_real_ledger_returns_it::QueryBlocksResponse)
         .expect("with AccountIdentifier = blob the SAME bytes decode cleanly");
-    assert_eq!(corrected.blocks.len(), 1);
     match &corrected.blocks[0].transaction.operation {
         Some(as_the_real_ledger_returns_it::Operation::Transfer(t)) => {
             assert_eq!(t.amount.e8s, sent);
@@ -270,33 +317,41 @@ fn reg02_notify_deposit_cannot_decode_the_real_ledger_and_strands_the_money() {
         other => panic!("expected a Transfer, got {other:?}"),
     }
 
-    // M1 sees exactly this money as stranded, once the harness stops excusing it
-    // as an outstanding raw deposit.
-    world.note_raw_deposit_credited(sent);
+    // --- part 4: and the money is no longer stranded ------------------------
     let vs = check_world(&world);
-    let m1 = vs
-        .iter()
-        .find(|v| v.invariant == Invariant::M1Conservation)
-        .expect("M1 must flag the stranded money");
-    assert_eq!(m1.delta_e8s, sent as i128);
-    println!("REG-02: {}", m1.detail);
+    money_safety::assert_no_new_violations(&vs, "after a notified raw deposit");
+    assert!(
+        world.withdraw(alice, 2 * ICP).is_ok(),
+        "the credited deposit must be withdrawable: the whole point of FINDING 06 was that it \
+         was not"
+    );
 }
 
 // ---------------------------------------------------------------------------
 // REG-05 -- FINDING 05: leave_table mid-hand orphans the leaver's stake
 // ---------------------------------------------------------------------------
 
-/// `leave_table` mid-hand removes the seat, so the leaver's `total_bet_this_hand`
-/// vanishes from the contribution list while their money stays in `pot`. The
-/// bet-level split then has an unattributed remainder, which
-/// `poker_core::build_side_pots` appends to the LAST (highest) bet level -- the
-/// pot only the deepest stacks can win.
+/// E-05 / FINDING 05 is FIXED. This is the gate that keeps it fixed.
 ///
-/// `cash_out` reaches the same state by a different door: it refuses only for
-/// players who have NOT folded, so a player who folds first can vacate the seat
-/// mid-hand too.
+/// What the defect WAS: `leave_table` mid-hand removed the seat, so the leaver's
+/// `total_bet_this_hand` vanished from the contribution list while their money
+/// stayed in `pot`. The bet-level split then had an unattributed remainder, which
+/// `poker_core::build_side_pots` appended to the LAST (highest) bet level -- the pot
+/// only the deepest stacks can win. An honest short-stacked all-in lost part of the
+/// main pot it was entitled to, and every chip was conserved, so no conservation
+/// invariant could see it.
+///
+/// `cash_out` reached the same state by a different door: it refuses only players
+/// who have NOT folded, so a player who folds first -- or is folded by the action
+/// timer without calling anything -- can vacate the seat mid-hand too. Both doors
+/// are exercised here.
+///
+/// What this test asserts now: after the departure, every e8 in the pot is still
+/// attributed. `leave_table` and `cash_out` record the stake in
+/// `TableState::departed_stakes`, which is part of the payout basis and independent
+/// of whether the chair is occupied.
 #[test]
-fn reg05_vacating_a_seat_mid_hand_orphans_the_leavers_stake() {
+fn reg05_a_vacated_seats_stake_stays_in_the_payout_basis() {
     let mut proved = 0;
     for door in ["leave_table", "fold_then_cash_out"] {
         let world = World::new(TableConfig::six_max_icp(), &["alice", "bob", "carol"]);
@@ -374,20 +429,36 @@ fn reg05_vacating_a_seat_mid_hand_orphans_the_leavers_stake() {
         assert_eq!(
             after.pot as i128 - after.wagered_total() as i128,
             stake as i128,
-            "{door}: exactly the leaver's stake ({stake}) is now unattributed"
+            "{door}: the leaver's stake ({stake}) is no longer credited to a SEATED \
+             player, which is the precondition the fix has to survive"
+        );
+        assert_eq!(
+            after.departed_total(),
+            stake,
+            "{door}: PINNED FIX (E-05): the stake must be recorded against the seat that \
+             left. departed_stakes={:?}",
+            after.departed_stakes
+        );
+        assert_eq!(
+            after.pot,
+            after.payout_basis_total(),
+            "{door}: PINNED FIX (E-05): every e8 in the pot must still be attributed, so \
+             the bet-level split allocates all of it. It used to lose exactly {stake}, \
+             which then reappeared in the pot only the deepest stacks could win."
         );
 
         let vs = check_pot_breakdown(&world.snapshot());
-        let orphan = vs
-            .iter()
-            .find(|v| v.delta_e8s == stake as i128)
-            .unwrap_or_else(|| panic!("{door}: M1b must flag the orphaned stake: {vs:?}"));
-        println!("REG-05 ({door}): {}", orphan.detail);
+        assert!(
+            vs.is_empty(),
+            "{door}: M1b must be satisfied after the departure. It used to flag {stake} \
+             as orphaned: {vs:?}"
+        );
+        println!("REG-05 ({door}): {stake} recorded, pot {} fully attributed", after.pot);
         proved += 1;
     }
     assert!(
         proved > 0,
-        "at least one door into the orphaned-stake state must have been demonstrated"
+        "at least one door out of an occupied seat mid-hand must have been exercised"
     );
 }
 
@@ -493,19 +564,34 @@ fn reg08_a_timed_out_player_can_cash_out_mid_hand_and_orphan_their_stake() {
     assert_eq!(
         vacated.pot as i128 - vacated.wagered_total() as i128,
         stake as i128,
-        "exactly the timed-out player's stake ({stake}) is now unattributed, so the bet-level \
-         split will hand it to the highest bet level instead of the pot the short stacks can win"
+        "the timed-out player's stake ({stake}) is no longer credited to a SEATED \
+         player: that is the precondition, and it is reached without the player \
+         calling anything but cash_out"
+    );
+    assert_eq!(
+        vacated.departed_total(),
+        stake,
+        "PINNED FIX (E-05): a player folded by the ACTION TIMER and then cashed out \
+         mid-hand must still have their stake in the payout basis. \
+         departed_stakes={:?}",
+        vacated.departed_stakes
+    );
+    assert_eq!(
+        vacated.pot,
+        vacated.payout_basis_total(),
+        "PINNED FIX (E-05): the pot must remain fully attributed. It used to lose \
+         exactly {stake} here, which the split then handed to the highest bet level \
+         instead of the pot the short stacks could win."
     );
 
     let vs = check_pot_breakdown(&world.snapshot());
-    let orphan = vs
-        .iter()
-        .find(|v| v.delta_e8s == stake as i128)
-        .unwrap_or_else(|| panic!("M1b must flag the orphaned stake: {vs:?}"));
-    println!("REG-08: {}", orphan.detail);
+    assert!(
+        vs.is_empty(),
+        "M1b must be satisfied after the timed-out player cashes out. It used to flag \
+         {stake} as orphaned: {vs:?}"
+    );
+    println!("REG-08: {stake} recorded, pot {} fully attributed", vacated.pot);
 
-    // Conservation still holds at this instant: the money has not been misallocated
-    // yet, it is only mis-ATTRIBUTED. The loss happens at payout.
     let vs = check_world(&world);
     assert!(
         vs.iter().all(|v| v.severity != Severity::FundCreation),
@@ -529,10 +615,15 @@ fn reg08_a_timed_out_player_can_cash_out_mid_hand_and_orphan_their_stake() {
 /// showdown in one message.
 ///
 /// Nobody folded, nobody was all-in, and nobody chose to check down. The turn and
-/// the river are simply dealt and the hand is settled, out of the stale pre-flop
-/// `side_pots` breakdown, which is FINDING 01. So a 30-second lull with a failing
-/// heartbeat both removes the remaining betting rounds and destroys whatever was
-/// already wagered post-flop.
+/// the river are simply dealt and the hand is settled.
+///
+/// E-06 -- the forced settlement -- is STILL LIVE and this test still pins it. What
+/// changed is the cost: the settlement used to come out of the stale pre-flop
+/// `side_pots` breakdown (FINDING 01 / E-01), so a 30-second lull with a failing
+/// heartbeat both removed the remaining betting rounds AND destroyed everything
+/// already wagered post-flop. Since the E-01 fix it destroys nothing, and the tail
+/// of this test asserts that. Losing the rest of the hand's betting to a
+/// disconnection is still wrong, and still E-06.
 ///
 /// The harness found this while building REG-08: the first version of that test
 /// used a 30 s timeout and the hand ended before the folded player could cash out.
@@ -618,11 +709,28 @@ fn reg09_one_timeout_with_no_heartbeats_runs_the_whole_board_out_and_settles() {
     println!(
         "REG-09: pot was {pot_before}, {destroyed} e8s destroyed by the forced settlement"
     );
-    assert!(
-        destroyed > 0,
-        "the forced settlement must have destroyed the post-flop money (FINDING 01): \
-         before {total_before}, after {}",
+    // E-06 -- the forced settlement itself -- is STILL LIVE: one 30-second lull
+    // still deals the turn and the river and settles the hand for everybody. What
+    // changed with the E-01 fix is what that costs. The settlement used to pay out
+    // of the frozen pre-flop breakdown, so the whole post-flop pot was destroyed;
+    // this run used to report 200,000,000 e8s gone.
+    assert_eq!(
+        destroyed, 0,
+        "PINNED FIX (E-01): a forced settlement must still pay out every e8 it \
+         collected. before {total_before}, after {}, pot was {pot_before}",
         after.internal_total()
+    );
+    let history = world
+        .hand_history(after.table.hand_number)
+        .expect("the forced hand is in the history");
+    let awarded: u64 = history
+        .winners
+        .iter()
+        .fold(0u64, |a, w| a.saturating_add(w.amount));
+    assert_eq!(
+        awarded, pot_before,
+        "the forced showdown must award the whole pot it collected. winners={:?}",
+        history.winners
     );
 }
 

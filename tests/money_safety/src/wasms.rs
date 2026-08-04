@@ -9,8 +9,10 @@
 //!   defect in the deposit/withdraw path. The module is pinned by sha256.
 
 use sha2::{Digest, Sha256};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 /// Pinned build of the mainnet ICP ledger (`ledger-canister.wasm.gz`).
 ///
@@ -115,31 +117,149 @@ fn download(url: &str) -> Vec<u8> {
     bytes
 }
 
-/// The table canister module under test.
+/// Where `cargo build -p table_canister --target wasm32-unknown-unknown --release`
+/// puts the module, relative to the repo root. There is exactly one such path and
+/// the harness both builds into it and reads from it, so "the artifact" and "the
+/// artifact under test" cannot be two different files.
+pub const TABLE_WASM_REL: &str = "target/wasm32-unknown-unknown/release/table_canister.wasm";
+
+/// The table canister module under test, together with its identity.
+#[derive(Debug)]
+pub struct TableModule {
+    pub bytes: Vec<u8>,
+    /// Lowercase hex sha256 of `bytes`. This is also the IC module hash, so it can
+    /// be compared against `canister_status().module_hash` after installation.
+    pub sha256: String,
+    pub path: PathBuf,
+}
+
+static TABLE_MODULE: OnceLock<TableModule> = OnceLock::new();
+
+/// The module under test. Built from the checked-out source on first use, once
+/// per test binary, and announced on fd 2 before anything else can run.
 ///
-/// Resolution order:
-///   1. `$CLEARDECK_TABLE_WASM`.
-///   2. an existing release build in the shared `target/`.
-///   3. `cargo build -p table_canister --target wasm32-unknown-unknown --release`,
-///      into a harness-private target dir so it cannot collide with a build another
-///      process is running in the shared one.
+/// There is NO stale-artifact resolution path. `docs/DEFECTS.md` H-01: the old
+/// resolution order preferred an existing `target/.../table_canister.wasm` with no
+/// freshness check whatsoever, so with a 10x-credit fund-theft bug in `lib.rs` and
+/// a pristine wasm at that path all ten invariant tests reported `ok`; deleting
+/// that one file made the identical source go 7/10 red. A harness that can report
+/// green about a binary it never built is worse than no harness.
+pub fn table_canister_module() -> &'static TableModule {
+    TABLE_MODULE.get_or_init(build_table_canister)
+}
+
 pub fn table_canister_wasm() -> Vec<u8> {
-    if let Ok(path) = std::env::var("CLEARDECK_TABLE_WASM") {
-        return std::fs::read(&path)
-            .unwrap_or_else(|e| panic!("CLEARDECK_TABLE_WASM={path} could not be read: {e}"));
+    table_canister_module().bytes.clone()
+}
+
+/// Lowercase hex sha256 of the module under test.
+pub fn table_canister_sha256() -> &'static str {
+    &table_canister_module().sha256
+}
+
+/// The git ref whose table canister counts as "the previous release" for
+/// cross-version upgrade testing. `801aa79` is the wave-1 baseline: the last commit
+/// before any wave-2 field was added to `PersistentState` or `TableState`.
+pub const PREVIOUS_RELEASE_REF: &str = "801aa79";
+
+static PREVIOUS_RELEASE: OnceLock<TableModule> = OnceLock::new();
+
+/// The table canister as of [`PREVIOUS_RELEASE_REF`], built from source.
+///
+/// # Why this exists (docs/DEFECTS.md H-16, SECURITY-FINDINGS.md FINDING 14)
+///
+/// `World::upgrade` reuses `self.table_wasm`, so every "survives an upgrade"
+/// assertion in this harness upgrades the new module TO ITSELF. Same Candid type on
+/// both sides of the wire, so a record-field addition is never tested as an
+/// addition -- and adding a field to a persisted record is the one upgrade change
+/// that can silently destroy funds. Two wave-2 agents each added a field that is
+/// not a Candid-compatible addition, and nothing in the suite could see it.
+///
+/// Built by `git archive <ref> | tar -x` into `target/money-safety/`, then compiled
+/// there, rather than by checking a binary into the repo: a fixture nobody can
+/// rebuild rots into a story about a lost file.
+pub fn previous_release_table_canister() -> &'static TableModule {
+    PREVIOUS_RELEASE.get_or_init(build_previous_release)
+}
+
+fn build_previous_release() -> TableModule {
+    let root = repo_root();
+    let tree = cache_dir().join(format!("old-release-{PREVIOUS_RELEASE_REF}"));
+    let path = tree.join(TABLE_WASM_REL);
+
+    if !tree.join("Cargo.toml").exists() {
+        std::fs::create_dir_all(&tree).expect("cannot create the old-release tree");
+        let archive = Command::new("git")
+            .current_dir(&root)
+            .args(["archive", PREVIOUS_RELEASE_REF])
+            .output()
+            .expect("could not run git archive");
+        assert!(
+            archive.status.success(),
+            "git archive {PREVIOUS_RELEASE_REF} failed: {}",
+            String::from_utf8_lossy(&archive.stderr)
+        );
+        let mut tar = Command::new("tar")
+            .args(["-x", "-C"])
+            .arg(&tree)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("could not run tar");
+        tar.stdin
+            .as_mut()
+            .expect("tar stdin")
+            .write_all(&archive.stdout)
+            .expect("could not pipe the archive into tar");
+        assert!(tar.wait().expect("tar wait").success(), "tar -x failed");
     }
 
-    let shared = repo_root()
-        .join("target/wasm32-unknown-unknown/release")
-        .join("table_canister.wasm");
-    if shared.exists() {
-        return std::fs::read(&shared).expect("table_canister.wasm unreadable");
-    }
-
-    let private_target = cache_dir().join("cargo-target");
     let status = Command::new("cargo")
-        .current_dir(repo_root())
-        .env("CARGO_TARGET_DIR", &private_target)
+        .current_dir(&tree)
+        .args([
+            "build",
+            "-p",
+            "table_canister",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--release",
+        ])
+        .status()
+        .expect("could not run cargo to build the previous release");
+    assert!(
+        status.success(),
+        "building the {PREVIOUS_RELEASE_REF} table canister FAILED, so no cross-version upgrade \
+         can be tested. Tree: {}",
+        tree.display()
+    );
+
+    let bytes = std::fs::read(&path).expect("previous-release wasm could not be read");
+    let sha256 = sha256_hex(&bytes);
+    announce(&format!(
+        "MONEY-SAFETY: PREVIOUS release ({PREVIOUS_RELEASE_REF}) sha256={sha256} bytes={}",
+        bytes.len()
+    ));
+    TableModule {
+        bytes,
+        sha256,
+        path,
+    }
+}
+
+fn build_table_canister() -> TableModule {
+    let root = repo_root();
+    let path = root.join(TABLE_WASM_REL);
+
+    // ALWAYS build. Not "build if missing": build.
+    //
+    // The shared target dir is used deliberately rather than a harness-private
+    // one, because it is the path `scripts/dev.sh` exports as
+    // $CLEARDECK_TABLE_WASM and the path `icp deploy` installs from. Having one
+    // artifact is what makes "the sha256 printed by this harness" and "the sha256
+    // of the deployed module" the same claim. Cargo takes a file lock on the
+    // target dir, so a concurrent build in another process serialises rather
+    // than corrupting.
+    let status = Command::new("cargo")
+        .current_dir(&root)
         .args([
             "build",
             "-p",
@@ -150,12 +270,78 @@ pub fn table_canister_wasm() -> Vec<u8> {
         ])
         .status()
         .expect("could not run cargo to build the table canister");
-    assert!(status.success(), "building table_canister for wasm32 failed");
+    assert!(
+        status.success(),
+        "building table_canister for wasm32-unknown-unknown FAILED. The money-safety harness \
+         refuses to run against any binary it did not just build from this tree (docs/DEFECTS.md \
+         H-01), so there is nothing to test. Fix the build."
+    );
 
-    let built = private_target
-        .join("wasm32-unknown-unknown/release")
-        .join("table_canister.wasm");
-    std::fs::read(&built).expect("cargo reported success but produced no table_canister.wasm")
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+        panic!(
+            "cargo reported success but {} could not be read: {e}",
+            path.display()
+        )
+    });
+    let sha256 = sha256_hex(&bytes);
+
+    announce(&format!(
+        "MONEY-SAFETY: wasm under test sha256={sha256} bytes={} path={}",
+        bytes.len(),
+        path.display()
+    ));
+
+    // $CLEARDECK_TABLE_WASM does not select the artifact any more -- it is a
+    // cross-check. If a caller points it somewhere else, the two must be the same
+    // module or the run is meaningless.
+    if let Ok(declared) = std::env::var("CLEARDECK_TABLE_WASM") {
+        let declared = PathBuf::from(declared);
+        if declared.canonicalize().ok() != path.canonicalize().ok() {
+            let other = std::fs::read(&declared).unwrap_or_else(|e| {
+                panic!(
+                    "CLEARDECK_TABLE_WASM={} could not be read: {e}",
+                    declared.display()
+                )
+            });
+            let other_sha = sha256_hex(&other);
+            assert_eq!(
+                other_sha,
+                sha256,
+                "CLEARDECK_TABLE_WASM points at a DIFFERENT module than the one this harness just \
+                 built from the checked-out source.\n  declared {} sha256={other_sha}\n  built    \
+                 {} sha256={sha256}\nRefusing to run: the result could not be attributed to either \
+                 binary. Rebuild with `./scripts/dev.sh wasm` and re-run.",
+                declared.display(),
+                path.display()
+            );
+        }
+    }
+
+    TableModule {
+        bytes,
+        sha256,
+        path,
+    }
+}
+
+/// Emit a line that survives `cargo test`'s per-test output capture.
+///
+/// libtest replaces the capture target used by `print!`/`eprint!`, so a banner
+/// written with those macros is only visible when the test that happened to
+/// trigger it FAILS -- exactly backwards for an identity banner. Writing to fd 2
+/// through `/dev/stderr` bypasses the capture, so the sha256 appears on every run,
+/// passing or failing, before any test result.
+fn announce(line: &str) {
+    let direct = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/stderr")
+        .and_then(|mut f| {
+            writeln!(f, "{line}")?;
+            f.flush()
+        });
+    if direct.is_err() {
+        eprintln!("{line}");
+    }
 }
 
 /// Path to a PocketIC **server** binary compatible with the `pocket-ic` crate.

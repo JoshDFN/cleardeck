@@ -1,6 +1,33 @@
-# FINDING 01 — CRITICAL: every showdown destroys all post-flop money
+# FINDING 01 — CRITICAL: every showdown destroyed all post-flop money
 
-**Status:** confirmed by reproduction on a local replica, 2026-08-04
+> ## STATUS: FIXED, 2026-08-04
+>
+> Fixed in wave 2 together with docs/DEFECTS.md E-03, E-05 and E-35, which are three more
+> doors into the same mistake: the money was paid out of a SEPARATE ACCOUNT of the pot that
+> could drift away from what the players actually put in.
+>
+> The payout basis is now built from the players' contributions at payout time, every time
+> (`plan_payouts` → `poker_core::build_side_pots_from_contributions`), `state.side_pots` is
+> display-only state that no payout reads, and `apply_payouts` traps rather than settle a plan
+> whose awards do not equal what the hand collected.
+>
+> The reproduction below is now a GATE:
+> `tests/money_safety/tests/regressions.rs::reg01_a_showdown_with_post_flop_betting_pays_out_every_e8`
+> drives this exact hand (blinds 1M/2M, 30,000,000 bet and called on the flop, checked to
+> showdown, 64,000,000 pot) and asserts the winner is credited all 64,000,000 with nothing
+> destroyed. The independent settlement oracle (`make settlement`) agrees with the engine on
+> all 17 of its deliberate hands, having previously convicted this shape as D-01 and D-02.
+>
+> **The section "The fix (not yet applied)" at the end of this document is kept as written,
+> for the record. It was the plan; it is what was done.** Steps 1 and 2 were followed exactly;
+> step 3 was implemented by refreshing `state.side_pots` after every action instead of writing
+> to a separate field, which achieves the same thing (the breakdown is display state, and it is
+> never stale).
+>
+> **Read this document as the evidence of what the defect WAS.** The write-up in
+> docs/DEFECTS.md E-01 carries the fix, the proof, and the markers that were inverted.
+
+**Status:** confirmed by reproduction on a local replica, 2026-08-04; FIXED 2026-08-04
 **Severity:** CRITICAL — permanent, unrecoverable loss of real user funds
 **Affects:** every hand that reaches a showdown after any post-flop betting
 **Present in:** `src/table_canister/src/lib.rs` at `HEAD`, byte-identical to commit

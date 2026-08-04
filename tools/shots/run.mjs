@@ -22,12 +22,14 @@ import { readLocalIds, requireId } from './lib/ids.mjs';
 import { buildFrontend, deployFrontend } from './lib/frontend-build.mjs';
 import { startGatewayProxy } from './lib/proxy.mjs';
 import { lobbyActor, optional } from './lib/agent.mjs';
+import { controllerIdentityInUse } from './lib/table-driver.mjs';
 import { devPlayerPrincipal } from './lib/identities.mjs';
 import {
-  burst, gitDirty, gitShortSha, runDirs, shoot, writeIndex, writeManifest,
+  burst, clearLatestVariants, gitDirty, gitShortSha, runDirs, shoot, writeIndex, writeManifest,
 } from './lib/capture.mjs';
 import {
-  getAppOrigin, launchBrowser, newContext, setAppOrigin, watchCanisterCalls, watchPage,
+  getAppOrigin, launchBrowser, newContext, resetThirdPartyObservations, setAppOrigin,
+  thirdPartyObservations, watchCanisterCalls, watchPage,
 } from './lib/browser.mjs';
 import { scenesByName } from './scenarios/index.mjs';
 
@@ -80,6 +82,36 @@ async function resolveTableNames(ids) {
   return { names, lobbyTableCount: tables.length };
 }
 
+/**
+ * Condenses the volatile third-party log into something a reader can act on.
+ *
+ * `mode` is the honest label for every fiat figure in the run:
+ *   live         a real quote, read at `observedAt`
+ *   fixture      SHOTS_PRICE_FIXTURE=1; the number is a placeholder
+ *   unavailable  the quote could not be read, so the app shows no price
+ *   none         nothing on a volatile host was ever requested
+ *
+ * @param {Array<object>} observations
+ */
+function summariseVolatile(observations) {
+  const modes = [...new Set(observations.map((o) => o.mode))];
+  const mode = modes.length === 0 ? 'none' : modes.length === 1 ? modes[0] : `mixed(${modes.join('+')})`;
+  return {
+    mode,
+    requestCount: observations.length,
+    fiatFiguresAreLiveQuotes: mode === 'live',
+    note:
+      mode === 'live'
+        ? 'every fiat figure in this run is a real quote, dated below'
+        : mode === 'fixture'
+          ? 'SHOTS_PRICE_FIXTURE=1 — every fiat figure in this run is a PLACEHOLDER, not a market price'
+          : mode === 'unavailable'
+            ? 'the price feed could not be read; the app renders its own no-price state, no stale number was shown'
+            : 'no volatile third-party request was made in this run (no fiat figure on screen)',
+    observations,
+  };
+}
+
 async function runScene(scene, viewportName, ctx, browser, dirs) {
   const vp = VIEWPORTS[viewportName];
   const wantsVideo = Boolean(scene.video) && viewportName === 'desktop';
@@ -87,6 +119,13 @@ async function runScene(scene, viewportName, ctx, browser, dirs) {
   if (videoDir) fs.mkdirSync(videoDir, { recursive: true });
 
   log(`\n▸ ${scene.name} [${viewportName}]  ${scene.title}`);
+
+  // Retire every filename this (scene, viewport) could previously have claimed in
+  // the stable mirror, BEFORE anything is written. A full run also wipes latest/
+  // up front, but a partial run does not, and a verified PNG left over from an
+  // earlier commit is exactly the artifact a reader would trust.
+  clearLatestVariants(dirs.latestDir, scene.name, viewportName);
+
   const setup = await scene.setup(ctx);
   log(`  on-chain: ${setup.notes}`);
 
@@ -243,6 +282,7 @@ async function main() {
   };
 
   log('\n[6/6] capture');
+  resetThirdPartyObservations();
   const browser = await launchBrowser({ log });
   const sceneResults = [];
   try {
@@ -296,12 +336,18 @@ async function main() {
     localCanisterIds: ids,
     lobbyTableNames: tableNames,
     heroPrincipal: devPlayerPrincipal(HERO_PLAYER),
+    // Which identity signed the controller-only calls (reset_table). Resolved
+    // from the canister's real controller list, not assumed.
+    controllerIdentity: controllerIdentityInUse(),
     auth:
       "the app's own local-dev login (WalletButton 'Dev Login' -> auth.devLogin), a deterministic " +
       'Ed25519 identity; every canister call is really signed by it. Local Internet Identity is ' +
       'not available on this replica (network descriptor has ii:false).',
     bundleWiring: buildProof,
     proxyStats: proxy.stats(),
+    // Provenance of every live-fact third-party response. Any fiat figure in a
+    // PNG traces to one of these; a cached quote is never replayed as live.
+    volatileThirdParty: summariseVolatile(thirdPartyObservations()),
     viewports: args.viewports.map((v) => VIEWPORTS[v]),
     scenes: sceneResults,
   };

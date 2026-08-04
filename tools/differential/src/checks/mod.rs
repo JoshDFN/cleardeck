@@ -17,13 +17,16 @@
 //!   hands/second) run over the WHOLE five-card space rather than a sample, so the
 //!   headline claim is "three independently-implemented evaluators agree on every
 //!   hand". Needs `CLEARDECK_PHE_PYTHON`; degrades to "unavailable" without it.
-//! * [`degenerate`]: inputs the references cannot even represent (fewer than
-//!   five cards, more than five cards into the five-card entry point, duplicate
-//!   cards), where the only available oracle is the poker rulebook.
+//! * [`degenerate`]: inputs a well-behaved evaluator should refuse (fewer than five
+//!   cards, more than five cards into the five-card entry point, duplicate cards).
+//!   Both references are ASKED what they do with each one via
+//!   [`reference_probe`], because the measured answer is usually "it ranked it
+//!   anyway" -- see docs/DEFECTS.md H-05.
 
 pub mod degenerate;
 pub mod exhaustive;
 pub mod pairs;
+pub mod reference_probe;
 pub mod sevens;
 pub mod sevens_exhaustive;
 pub mod third_exhaustive;

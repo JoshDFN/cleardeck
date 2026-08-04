@@ -1,0 +1,35 @@
+# WASM32 golden-vector harness.
+#
+# A cdylib for `wasm32-unknown-unknown` -- the exact target the table canister is
+# compiled to -- that replays the committed golden vectors INSIDE the wasm module
+# and can regenerate the shuffle family from there. `run.mjs` drives it with
+# Node's plain `WebAssembly` API; there is no wasm-bindgen, no WASI and no
+# external runtime to install.
+#
+# Deliberately NOT a member of the root workspace: a `cdylib` for a foreign target
+# has no business in the canister build graph. The empty `[workspace]` table below
+# makes this directory its own workspace root, so `cargo build` at the repo root
+# never sees it. It lives under `src/poker_core/tests/` because `cargo` only
+# auto-discovers test targets from `tests/*.rs`, never from subdirectories.
+#
+# Driven by `src/poker_core/tests/wasm32_golden.rs`. Do not run it by hand except
+# for debugging.
+
+[package]
+name = "wasm32_shuffle_harness"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+poker_core = { path = "../.." }
+
+[profile.release]
+# Keep the module small and the build quick; none of this is shipped.
+opt-level = "s"
+panic = "abort"

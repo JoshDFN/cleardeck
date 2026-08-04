@@ -263,25 +263,56 @@ fn pairwise_sign_agrees_with_both_references() {
     );
 }
 
+/// The degenerate probe set must report EXACTLY the defects that are still live --
+/// no more (a new id means a real path regressed) and no fewer (a missing id means a
+/// probe stopped probing, which is how a harness quietly becomes decoration).
+///
+/// Since the E-09 validation landed, each probe emits a finding only while the engine
+/// still ACCEPTS the input it is testing, so a fixed leg makes its id DISAPPEAR. That
+/// is what makes this an equality assertion and not a subset one.
 #[test]
-fn degenerate_probe_set_still_finds_exactly_the_known_defects() {
+fn degenerate_probe_set_reports_exactly_the_defects_that_are_still_live() {
     let out = degenerate::run();
     let ids: Vec<&str> = out.findings.iter().map(|f| f.id.as_str()).collect();
-    // Any NEW id here means a real board length or a five-card path regressed.
-    let expected = [
+
+    // Still live: detect_straight returns the WEAKEST straight when handed more than
+    // five ranks. Unreachable from evaluate_hand today, so it is not a live money
+    // bug, but it is not fixed either.
+    const STILL_LIVE: &[&str] = &["degenerate/detect_straight-prefers-the-wheel"];
+
+    // Fixed 2026-08-04 by the input-validation boundary in poker_core. If any of
+    // these comes back, the validation regressed and duplicate or short-board inputs
+    // are being ranked again.
+    const FIXED: &[&str] = &[
         "degenerate/fewer-than-five-cards-returns-empty-highcard",
         "degenerate/evaluate_five_cards-fabricates-a-hand-from-more-than-five-cards",
         "degenerate/duplicate-cards-are-silently-ranked",
         "degenerate/duplicate-card-reaches-evaluate_hand",
-        "degenerate/detect_straight-prefers-the-wheel",
     ];
-    for id in ids.iter() {
+
+    for id in FIXED {
         assert!(
-            expected.contains(id),
-            "unexpected degenerate finding {id}; a real board-length path may have regressed"
+            !ids.contains(id),
+            "{id} is back. poker_core is ranking an input it had started refusing, so a \
+             duplicate or short-board hand can decide a pot again (docs/DEFECTS.md E-09). \
+             All findings: {ids:?}"
         );
     }
-    // The flop (5-card) and turn (6-card) probes must NOT produce findings.
+    for id in STILL_LIVE {
+        assert!(
+            ids.contains(id),
+            "{id} produced NO finding. Either the defect was fixed -- in which case move it to \
+             FIXED here and update docs/DEFECTS.md -- or the probe stopped probing. Findings: \
+             {ids:?}"
+        );
+    }
+    assert_eq!(
+        ids, STILL_LIVE,
+        "the degenerate probe set reported something unexpected. Findings: {ids:?}"
+    );
+
+    // The flop (5-card) and turn (6-card) probes are legitimate boards and must NEVER
+    // produce a finding.
     assert!(
         !ids.contains(&"degenerate/flop-only-five-cards"),
         "evaluate_hand broke on a 5-card board"
@@ -290,6 +321,20 @@ fn degenerate_probe_set_still_finds_exactly_the_known_defects() {
         !ids.contains(&"degenerate/turn-only-six-cards"),
         "evaluate_hand broke on a 6-card board"
     );
+
+    // And every finding must quote a MEASURED reference answer, not a claim about
+    // one (docs/DEFECTS.md H-05). The probe module renders every verdict as
+    // "rs_poker <verb> ...; poker 0.7.0 <verb> ...".
+    for f in &out.findings {
+        for says in &f.reference_says {
+            assert!(
+                says.contains("rs_poker") && says.contains("poker 0.7.0")
+                    || says.starts_with("Some("),
+                "finding {} carries a reference claim that names no reference call: {says:?}",
+                f.id
+            );
+        }
+    }
 }
 
 /// The `--exhaustive-sevens` path, over a slice of the seven-card space.
@@ -408,64 +453,96 @@ fn regression_shared_board_chop_is_a_chop_in_all_three() {
     assert_eq!(pk.eval7(&a).strength, pk.eval7(&b).strength);
 }
 
-// ---- characterisation tests: TODAY'S WRONG ANSWERS, pinned ----------------
+// ---- E-09: the input-validation boundary --------------------------------
 //
-// Each pair below is (characterises_*, defect_*_is_fixed). The first is green now
-// and asserts an answer the harness proved wrong; the second is `#[ignore]`d and
-// asserts what the fix wave owes. When the fix lands, delete the first and
-// un-ignore the second.
+// Each pair below is (characterises_*, defect_*_is_fixed). The `characterises_*`
+// test is part of `make test` and states what the engine does NOW; the
+// `defect_*_is_fixed` twin is `#[ignore]`d and is what `make known-defects` runs, so
+// it must STAY `#[ignore]`d (that target invokes it with `--ignored --exact` and
+// reports "ran 0 tests" -- a stale marker -- for anything it cannot find that way).
+//
+// 2026-08-04, wave 2: FOUR of the five E-09 legs have been FIXED in `poker_core`.
+// `evaluate_hand` and `evaluate_five_cards` now validate the card count AND
+// distinctness and refuse (`try_*` return `HandInputError`; the panicking aliases
+// panic with "IMPOSSIBLE HAND"). The four `characterises_*` tests below were
+// asserting the OLD wrong answers, so they went red the moment the fix landed;
+// they now assert the REFUSAL, which is what protects the fix from regressing.
+// `make known-defects` will report those four markers GREEN, which is its designed
+// "this defect is fixed" signal. The fifth leg, `detect_straight` preferring the
+// wheel, is still live and still pinned.
 
-/// FIX WAVE: `evaluate_hand` should refuse (or be unreachable) with fewer than
-/// five cards instead of returning a rank that is `Ord`-EQUAL for every player.
+/// FIXED (was: `evaluate_hand` returned `HandRank::HighCard([])` below five cards,
+/// which is `Ord`-EQUAL for every player and `Ord`-LESS than every real hand, so any
+/// showdown reached before the flop chopped instead of erroring).
+///
+/// `evaluate_hand` must now REFUSE a board that cannot make a five-card hand.
 #[test]
 fn characterises_defect_short_board_returns_empty_high_card() {
     for spec in ["Ah Kd", "Ah Kd Qc", "Ah Kd Qc Js"] {
         let hand = parse_hand(spec).unwrap();
-        assert_eq!(
-            ours_hand(&hand),
-            HandRank::HighCard(Vec::new()),
-            "board {spec} no longer returns HighCard([]): update the finding"
+        let hole = (to_cleardeck(hand[0]), to_cleardeck(hand[1]));
+        let board: Vec<poker_core::Card> = hand[2..].iter().map(|&c| to_cleardeck(c)).collect();
+        let refused = poker_core::try_evaluate_hand(&hole, &board);
+        assert!(
+            refused.is_err(),
+            "board {spec} has {} community card(s) and cannot make a five-card hand, but \
+             try_evaluate_hand returned {refused:?}. A rank here compares between players and \
+             decides a pot (docs/DEFECTS.md E-09).",
+            board.len()
+        );
+        // And the panicking alias the canister calls must not paper over it.
+        assert!(
+            std::panic::catch_unwind(|| poker_core::evaluate_hand(&hole, &board)).is_err(),
+            "evaluate_hand accepted the short board {spec}"
         );
     }
-    // The consequence, spelled out: two different players chop.
-    let p1 = parse_hand("Ah Kd Qc").unwrap();
-    let p2 = parse_hand("2h 3d Qc").unwrap();
-    assert_eq!(
-        ours_cmp(&ours_hand(&p1), &ours_hand(&p2)),
-        std::cmp::Ordering::Equal,
-        "AK and 32 must currently compare EQUAL on a short board"
-    );
 }
 
+/// MARKER, run by `make known-defects` with `--ignored --exact`. Stays `#[ignore]`d
+/// (that target reports "ran 0 tests" -- a stale marker -- for anything it cannot
+/// find that way); GREEN here means the defect is fixed.
+///
+/// It must therefore assert the FIXED behaviour with a call that does not itself
+/// panic. `ours_hand` now panics on a short board, and a panicking marker reads as
+/// "still red", which made `make known-defects` report 5 of 5 defects present when
+/// four had been fixed.
 #[test]
-#[ignore = "known defect: evaluate_hand returns HighCard([]) below five cards; un-ignore when the fix wave lands"]
+#[ignore = "known-defects marker: GREEN means evaluate_hand refuses a short board"]
 fn defect_short_board_is_fixed() {
-    let p1 = parse_hand("Ah Kd Qc").unwrap();
-    let p2 = parse_hand("2h 3d Qc").unwrap();
-    assert_ne!(
-        ours_cmp(&ours_hand(&p1), &ours_hand(&p2)),
-        std::cmp::Ordering::Equal,
-        "a short board must not make every hand equal"
+    let hand = parse_hand("Ah Kd Qc").unwrap();
+    let hole = (to_cleardeck(hand[0]), to_cleardeck(hand[1]));
+    let board: Vec<poker_core::Card> = hand[2..].iter().map(|&c| to_cleardeck(c)).collect();
+    assert!(
+        poker_core::try_evaluate_hand(&hole, &board).is_err(),
+        "a board that cannot make a five-card hand must be refused, not ranked"
     );
 }
 
-/// FIX WAVE: `evaluate_five_cards` must not accept more than five cards. Today it
-/// tests the flush on one suit and the straight on ALL ranks independently, so it
-/// invents a straight flush that is not in the cards.
+/// FIXED (was: `evaluate_five_cards` accepted more than five cards and tested the
+/// flush on one suit and the straight on ALL ranks independently, so it reported
+/// `StraightFlush(7)` for `2h 3h 4h 5h 9h 6c 7c`, a hand that contains no straight
+/// flush at all).
+///
+/// `evaluate_five_cards` must now refuse anything that is not exactly five cards.
 #[test]
 fn characterises_defect_evaluate_five_cards_fabricates_a_straight_flush() {
-    // 2h 3h 4h 5h 9h is a 9-high heart flush; 3-4-5-6-7 is a straight only once
-    // the offsuit 6c and 7c are included. There is NO straight flush here.
-    let seven_cards = parse_hand("2h 3h 4h 5h 9h 6c 7c").unwrap();
-    assert_eq!(
-        ours_five_cards_raw(&seven_cards),
-        HandRank::StraightFlush(7),
-        "the seven-card misuse no longer fabricates StraightFlush(7): update the finding"
-    );
-    let six_cards = parse_hand("2h 3h 4h 5h 9h 6c").unwrap();
-    assert_eq!(ours_five_cards_raw(&six_cards), HandRank::StraightFlush(6));
+    for spec in ["2h 3h 4h 5h 9h 6c 7c", "2h 3h 4h 5h 9h 6c"] {
+        let hand = parse_hand(spec).unwrap();
+        let converted: Vec<poker_core::Card> = hand.iter().map(|&c| to_cleardeck(c)).collect();
+        let refused = poker_core::try_evaluate_five_cards(&converted);
+        assert!(
+            refused.is_err(),
+            "evaluate_five_cards ranks exactly five cards, but was handed {} and returned \
+             {refused:?} for {spec}",
+            hand.len()
+        );
+    }
 
-    // The correct answer, per both references, is a flush.
+    // And the reason it mattered: the best REAL hand in those cards is a flush, so
+    // the fabricated straight flush would have beaten every genuine hand at the
+    // table. Both references still say flush, so the fix did not change the answer
+    // for a legitimate seven-card evaluation.
+    let seven_cards = parse_hand("2h 3h 4h 5h 9h 6c 7c").unwrap();
     let rs = RsPokerOracle;
     let pk = PokerCrateOracle::new();
     let seven_arr: [CardIdx; 7] = seven_cards.clone().try_into().unwrap();
@@ -473,75 +550,86 @@ fn characterises_defect_evaluate_five_cards_fabricates_a_straight_flush() {
     assert_eq!(pk.eval7(&seven_arr).category, Category::Flush);
 }
 
+/// MARKER (see `defect_short_board_is_fixed`). GREEN means the defect is fixed.
 #[test]
-#[ignore = "known defect: evaluate_five_cards accepts >5 cards and fabricates a straight flush; un-ignore when the fix wave lands"]
+#[ignore = "known-defects marker: GREEN means evaluate_five_cards refuses more than five cards"]
 fn defect_evaluate_five_cards_rejects_more_than_five_cards() {
-    let seven_cards = parse_hand("2h 3h 4h 5h 9h 6c 7c").unwrap();
-    let got = ours_five_cards_raw(&seven_cards);
-    assert_ne!(
-        got,
-        HandRank::StraightFlush(7),
-        "evaluate_five_cards must not report a straight flush that is not in the cards"
+    let seven: Vec<poker_core::Card> = parse_hand("2h 3h 4h 5h 9h 6c 7c")
+        .unwrap()
+        .iter()
+        .map(|&c| to_cleardeck(c))
+        .collect();
+    assert!(
+        poker_core::try_evaluate_five_cards(&seven).is_err(),
+        "evaluate_five_cards ranks exactly five cards; seven must be refused, not ranked \
+         (it used to report StraightFlush(7), a hand not present in those cards)"
     );
 }
 
-/// FIX WAVE: a hand containing the same card twice is physically impossible and
-/// must not be laundered into a plausible rank.
+/// FIXED (was: `evaluate_five_cards` ranked `Ah Ah Ah Ah Ah` as
+/// `Flush([14,14,14,14,14])` and `Kh Kh Kd Kd Qs` as `FourOfAKind(13,12)`).
+///
+/// A hand containing the same physical card twice must be refused. Note from
+/// docs/DEFECTS.md H-05 why this had to be fixed HERE and could not be delegated:
+/// `rs_poker` ranks `Ah Ah Ah Ah Ah` as `StraightFlush(0)` and `phevaluator` returns
+/// its out-of-range sentinel `0`, so no reference would have caught it either. That
+/// claim is itself measured, in `checks::reference_probe`.
 #[test]
 fn characterises_defect_duplicate_cards_are_ranked_silently() {
-    assert_eq!(
-        ours_five_cards_raw(&parse_hand("Ah Ah Ah Ah Ah").unwrap()),
-        HandRank::Flush(vec![14, 14, 14, 14, 14]),
-        "five identical aces no longer rank as a flush: update the finding"
-    );
-    assert_eq!(
-        ours_five_cards_raw(&parse_hand("Ah Ah Ah Ah Kh").unwrap()),
-        HandRank::FourOfAKind(14, 13)
-    );
-    assert_eq!(
-        ours_five_cards_raw(&parse_hand("Kh Kh Kd Kd Qs").unwrap()),
-        HandRank::FourOfAKind(13, 12)
-    );
+    for spec in ["Ah Ah Ah Ah Ah", "Ah Ah Ah Ah Kh", "Kh Kh Kd Kd Qs"] {
+        let hand = parse_hand(spec).unwrap();
+        let converted: Vec<poker_core::Card> = hand.iter().map(|&c| to_cleardeck(c)).collect();
+        let refused = poker_core::try_evaluate_five_cards(&converted);
+        assert!(
+            refused.is_err(),
+            "{spec} is physically impossible but evaluate_five_cards returned {refused:?}"
+        );
+    }
 }
 
+/// MARKER (see `defect_short_board_is_fixed`). GREEN means the defect is fixed.
 #[test]
-#[ignore = "known defect: evaluate_five_cards ranks duplicate cards; un-ignore when the fix wave lands"]
+#[ignore = "known-defects marker: GREEN means evaluate_five_cards refuses duplicate cards"]
 fn defect_duplicate_cards_are_rejected() {
-    let got = ours_five_cards_raw(&parse_hand("Ah Ah Ah Ah Ah").unwrap());
-    assert_ne!(
-        got,
-        HandRank::Flush(vec![14, 14, 14, 14, 14]),
-        "five copies of the ace of hearts must not rank as a flush"
+    let five: Vec<poker_core::Card> = parse_hand("Ah Ah Ah Ah Ah")
+        .unwrap()
+        .iter()
+        .map(|&c| to_cleardeck(c))
+        .collect();
+    assert!(
+        poker_core::try_evaluate_five_cards(&five).is_err(),
+        "five copies of the ace of hearts must be refused, not ranked as a flush"
     );
 }
 
-/// FIX WAVE: `evaluate_hand`, the function `table_canister::determine_winners`
-/// calls: validates neither the card count nor distinctness, so a duplicated card
-/// lets the 21-subset loop build a five-card hand out of four physical cards.
+/// FIXED (was: `evaluate_hand` -- the function `table_canister::determine_winners`
+/// calls -- validated neither the card count nor distinctness, so hole cards
+/// `Ah Ah` on the board `Kh Qh Jh 2c 3d` produced `Flush([14,14,13,12,11])`: a
+/// five-card flush built from only FOUR physical cards).
 #[test]
 fn characterises_defect_duplicate_card_reaches_evaluate_hand() {
-    // Hole cards Ah + Ah, board Kh Qh Jh 2c 3d. There are only FOUR hearts here,
-    // yet the engine reports a five-card flush that counts the ace of hearts twice.
-    let fabricated_flush = parse_hand("Ah Ah Kh Qh Jh 2c 3d").unwrap();
-    assert_eq!(
-        ours_hand(&fabricated_flush),
-        HandRank::Flush(vec![14, 14, 13, 12, 11]),
-        "the duplicated-hole-card flush changed: update the finding"
-    );
-
-    // A hole card that also appears on the board.
-    let dup_on_board = parse_hand("Ah Kh Ah 2c 3d 4s 5h").unwrap();
-    assert_eq!(ours_hand(&dup_on_board), HandRank::Straight(5));
+    for spec in ["Ah Ah Kh Qh Jh 2c 3d", "Ah Kh Ah 2c 3d 4s 5h"] {
+        let hand = parse_hand(spec).unwrap();
+        let hole = (to_cleardeck(hand[0]), to_cleardeck(hand[1]));
+        let board: Vec<poker_core::Card> = hand[2..].iter().map(|&c| to_cleardeck(c)).collect();
+        let refused = poker_core::try_evaluate_hand(&hole, &board);
+        assert!(
+            refused.is_err(),
+            "{spec} repeats a physical card but try_evaluate_hand returned {refused:?}"
+        );
+    }
 }
 
+/// MARKER (see `defect_short_board_is_fixed`). GREEN means the defect is fixed.
 #[test]
-#[ignore = "known defect: evaluate_hand accepts duplicate cards and builds a five-card hand from four; un-ignore when the fix wave lands"]
+#[ignore = "known-defects marker: GREEN means evaluate_hand refuses duplicate cards"]
 fn defect_evaluate_hand_rejects_duplicate_cards() {
-    let fabricated_flush = parse_hand("Ah Ah Kh Qh Jh 2c 3d").unwrap();
-    assert_ne!(
-        ours_hand(&fabricated_flush),
-        HandRank::Flush(vec![14, 14, 13, 12, 11]),
-        "a flush must use five distinct physical cards"
+    let hand = parse_hand("Ah Ah Kh Qh Jh 2c 3d").unwrap();
+    let hole = (to_cleardeck(hand[0]), to_cleardeck(hand[1]));
+    let board: Vec<poker_core::Card> = hand[2..].iter().map(|&c| to_cleardeck(c)).collect();
+    assert!(
+        poker_core::try_evaluate_hand(&hole, &board).is_err(),
+        "a flush must use five distinct physical cards; a repeated card must be refused"
     );
 }
 
