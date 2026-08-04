@@ -1,0 +1,42 @@
+[package]
+name = "cleardeck-differential"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Differential hand-evaluator harness: ClearDeck's poker_core vs two independent mature reference evaluators"
+
+# DELIBERATELY ITS OWN WORKSPACE.
+# `tools/differential` must NEVER become a member of the repo-root workspace:
+# the reference evaluators (`rs_poker`, `poker`) and the report serialiser
+# (`serde_json`) are heavyweight host-only dev dependencies, and pulling them
+# into the workspace would put them in the root `Cargo.lock` that the
+# reproducible wasm32 canister build resolves against.
+[workspace]
+
+[dependencies]
+# The REAL engine the deployed table canister runs. Path dependency on the
+# workspace member, so there is no vendored copy to drift.
+poker_core = { path = "../../src/poker_core" }
+
+# Reference evaluator A: rs_poker 5.x. Independent lineage -- its own
+# perfect-hash tables generated in its build.rs. `default-features = false`
+# drops the arena/tokio/serde/omaha feature stack; we only want `core`.
+rs_poker = { version = "5.0.0", default-features = false }
+
+# Reference evaluator B: poker 0.7. Independent lineage -- a Rust port of the
+# `treys` Python package's Cactus Kev + Senzee lookup tables.
+poker = { version = "0.7.0", default-features = false }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+# nothing extra: the fast subset is plain `cargo test`
+
+[profile.release]
+opt-level = 3
+debug = false
+# The exhaustive sweep is ~2.6M evaluations x 3 evaluators; keep debug_assertions
+# OFF here so `rs_poker`'s internal debug_assert! does not dominate runtime.
+debug-assertions = false
+overflow-checks = true
