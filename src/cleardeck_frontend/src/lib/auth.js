@@ -5,14 +5,10 @@ import { Principal } from '@dfinity/principal';
 import { Ed25519KeyIdentity } from '@dfinity/identity';
 import { idlFactory as ledgerIdlFactory } from './ledger.did.js';
 import logger from './logger.js';
+import { isLocal, agentHost, II_URL } from './ic-config.js';
 
-// Helper to detect if we're on IC mainnet
-function isMainnetHostname() {
-    return typeof window !== 'undefined' &&
-        (window.location.hostname.includes('icp0.io') ||
-         window.location.hostname.includes('ic0.app') ||
-         window.location.hostname.includes('internetcomputer.org'));
-}
+// Mainnet detection + the II provider / agent-host literals are centralized in
+// ./ic-config.js (id.ai/authorize + icp-api.io), env-overridable for rollback.
 
 // For local dev, we can use a deterministic identity based on a seed
 // This avoids the II passkey issues in local development
@@ -115,11 +111,10 @@ function createAuthStore() {
                         return state;
                     }
 
-                    // Use local II for local dev, production II for mainnet
-                    const isLocal = !isMainnetHostname();
-                    const identityProvider = isLocal
+                    // Use local II for local dev, production II (id.ai) for mainnet
+                    const identityProvider = isLocal()
                         ? `http://${import.meta.env.CANISTER_ID_INTERNET_IDENTITY}.localhost:4943`
-                        : 'https://identity.internetcomputer.org';
+                        : II_URL;
 
                     state.authClient.login({
                         identityProvider,
@@ -166,8 +161,7 @@ function createAuthStore() {
         // Dev login - uses a deterministic identity for local testing
         // This bypasses II entirely, useful when local II has issues
         async devLogin(seed = 'dev-player-1') {
-            const isLocal = !isMainnetHostname();
-            if (!isLocal) {
+            if (!isLocal()) {
                 throw new Error('Dev login only available in local development');
             }
 
@@ -194,15 +188,14 @@ function createAuthStore() {
                         return state;
                     }
 
-                    const isLocal = !isMainnetHostname();
-                    const host = isLocal ? 'http://127.0.0.1:4943' : 'https://ic0.app';
+                    const host = agentHost();
 
                     const agent = new HttpAgent({
                         host,
                         identity: state.identity,
                     });
 
-                    if (isLocal) {
+                    if (isLocal()) {
                         agent.fetchRootKey().then(() => resolve(agent)).catch(reject);
                     } else {
                         resolve(agent);
@@ -267,11 +260,11 @@ function createWalletStore() {
 
             try {
                 const agent = await auth.getAgent();
-                const isLocal = !isMainnetHostname();
-                const ledgerId = isLocal ? LOCAL_LEDGER_ID : LEDGER_CANISTER_ID;
+                const local = isLocal();
+                const ledgerId = local ? LOCAL_LEDGER_ID : LEDGER_CANISTER_ID;
 
                 // Skip balance fetch if no local ledger is configured
-                if (isLocal && !import.meta.env.CANISTER_ID_LEDGER) {
+                if (local && !import.meta.env.CANISTER_ID_LEDGER) {
                     set({
                         balance: BigInt(0),
                         isLoading: false,

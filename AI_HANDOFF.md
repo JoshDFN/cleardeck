@@ -59,7 +59,7 @@ cleardeck/
 │       │           ├── HandHistory.svelte
 │       │           └── ShuffleProof.svelte
 │       └── package.json
-├── dfx.json                         # Canister config & init args
+├── icp.yaml                         # Canister config & init args (icp-cli)
 ├── Cargo.toml                       # Rust workspace
 └── Dockerfile                       # Reproducible builds
 ```
@@ -127,22 +127,18 @@ fn shuffle_deck(deck: &mut Vec<Card>, seed: &[u8]) {
 
 ---
 
-## Table Configuration (dfx.json)
+## Table Configuration (icp.yaml)
 
-```json
-"table_1": {
-  "init_arg": "(record {
-    small_blind = 1000000 : nat64;      // 0.01 ICP
-    big_blind = 2000000 : nat64;        // 0.02 ICP
-    min_buy_in = 200000000 : nat64;     // 2 ICP (100 BB)
-    max_buy_in = 1000000000 : nat64;    // 10 ICP (500 BB)
-    max_players = 2 : nat8;             // Heads-up
-    action_timeout_secs = 30 : nat64;
-    time_bank_secs = 30 : nat64;
-    ante = 0 : nat64;
-    currency = variant { ICP }
-  })"
-}
+```yaml
+- name: table_1
+  recipe:
+    type: "@dfinity/rust@v3.2.0"
+    configuration:
+      package: table_canister
+      candid: src/table_canister/table_canister.did
+      shrink: true
+  init_args:
+    value: '(record { small_blind = 1000000 : nat64; big_blind = 2000000 : nat64; min_buy_in = 200000000 : nat64; max_buy_in = 1000000000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; time_bank_secs = 30 : nat64; ante = 0 : nat64; currency = variant { ICP } })'
 ```
 
 For BTC tables, use `currency = variant { BTC }` and satoshi values.
@@ -201,25 +197,27 @@ verify_hand_shuffle : (hand_id: nat64) -> (Result<bool, text>);
 
 ## Common Development Commands
 
+> Build/deploy use **icp-cli** (`icp`), not `dfx`. See `docs/MODERNIZATION.md`.
+> Mainnet backend deploys are **upgrade-only**; prefer `scripts/deploy-mainnet.sh`.
+
 ```bash
 # Build frontend
 npm run build
 
-# Deploy to mainnet
-export DFX_WARNING=-mainnet_plaintext_identity
-dfx deploy frontend --network ic
+# Deploy to mainnet (upgrade-only; reads .icp/data/mappings/ic.ids.json)
+IDENTITY=cleardeck-prod ./scripts/deploy-mainnet.sh
 
-# Deploy specific canister
-dfx deploy table_1 --network ic
+# Deploy a specific canister (UPGRADE — never reinstall a fund canister)
+icp deploy -e ic table_1 --identity cleardeck-prod --mode upgrade
 
-# Check table state
-dfx canister call table_1 get_public_state --network ic
+# Check table state (uncertified query)
+icp canister call table_1 get_public_state -e ic --query
 
 # Check player balances
-dfx canister call table_1 admin_get_all_balances --network ic
+icp canister call table_1 admin_get_all_balances -e ic --query
 
 # Update table config
-dfx canister call table_1 admin_update_config '(record { ... })' --network ic
+icp canister call table_1 admin_update_config '(record { ... })' -e ic --identity cleardeck-prod
 
 # Hot reload frontend
 cd src/cleardeck_frontend && npm run dev
@@ -284,19 +282,22 @@ $effect(() => {
 
 ### Adding a New Table Type
 
-1. Add config in `dfx.json`:
-```json
-"table_4": {
-  "candid": "src/table_canister/table_canister.did",
-  "package": "table_canister",
-  "type": "rust",
-  "init_arg": "(record { ... })"
-}
+1. Add a canister entry in `icp.yaml`:
+```yaml
+  - name: table_4
+    recipe:
+      type: "@dfinity/rust@v3.2.0"
+      configuration:
+        package: table_canister
+        candid: src/table_canister/table_canister.did
+        shrink: true
+    init_args:
+      value: '(record { ... })'
 ```
 
 2. Register in lobby after deploy:
 ```bash
-dfx canister call lobby register_table '(principal "<id>", record { ... })'
+icp canister call lobby register_table '(principal "<id>", record { ... })' -e ic --identity cleardeck-prod
 ```
 
 ### Adding New Game Features
@@ -319,9 +320,9 @@ The table canister's `lib.rs` contains all game logic:
 ## Deployment Checklist
 
 - [ ] Build frontend: `npm run build`
-- [ ] Deploy: `dfx deploy frontend --network ic`
-- [ ] Check cycles: `dfx canister status <id> --network ic`
-- [ ] Test authentication
+- [ ] Deploy (upgrade-only): `IDENTITY=cleardeck-prod ./scripts/deploy-mainnet.sh`
+- [ ] Check cycles: `icp canister status <id> -e ic`
+- [ ] Test authentication (id.ai sign-in)
 - [ ] Test deposit/withdraw flow
 - [ ] Monitor for errors
 

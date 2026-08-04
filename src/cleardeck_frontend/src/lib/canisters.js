@@ -4,6 +4,7 @@ import { idlFactory as tableIdlFactory } from 'declarations/table_1/table_1.did.
 import { idlFactory as historyIdlFactory } from 'declarations/history/history.did.js';
 import { building } from '$app/environment';
 import { auth } from './auth.js';
+import { agentHost, isLocal } from './ic-config.js';
 
 // Network timeout in milliseconds (30 seconds)
 const NETWORK_TIMEOUT_MS = 30000;
@@ -28,9 +29,17 @@ function withTimeout(promise, timeoutMs, errorMessage = 'Request timed out') {
 
 const buildingOrTesting = building || process.env.NODE_ENV === "test";
 
-// Canister IDs from environment
-export const lobbyCanisterId = import.meta.env.CANISTER_ID_LOBBY || process.env.CANISTER_ID_LOBBY;
-export const historyCanisterId = import.meta.env.CANISTER_ID_HISTORY || process.env.CANISTER_ID_HISTORY;
+// Canister IDs from environment. The deploy scripts export VITE_CANISTER_ID_*
+// from .icp/data/mappings (icp-cli has no dfx-style .env writer); legacy dfx
+// wrote CANISTER_ID_*. Read both so the build works under either toolchain.
+export const lobbyCanisterId =
+    import.meta.env.VITE_CANISTER_ID_LOBBY ||
+    import.meta.env.CANISTER_ID_LOBBY ||
+    process.env.CANISTER_ID_LOBBY;
+export const historyCanisterId =
+    import.meta.env.VITE_CANISTER_ID_HISTORY ||
+    import.meta.env.CANISTER_ID_HISTORY ||
+    process.env.CANISTER_ID_HISTORY;
 
 // Get current auth state
 function getAuthState() {
@@ -42,15 +51,9 @@ function getAuthState() {
 
 // Create an agent - uses authenticated identity if available, anonymous otherwise
 async function createAgent() {
-    // Detect if we're on mainnet by checking the hostname
-    // If the page is served from icp0.io, ic0.app, or internetcomputer.org, we're on mainnet
-    const isMainnet = typeof window !== 'undefined' &&
-        (window.location.hostname.includes('icp0.io') ||
-         window.location.hostname.includes('ic0.app') ||
-         window.location.hostname.includes('internetcomputer.org'));
-
-    const isLocal = !isMainnet;
-    const host = isLocal ? "http://127.0.0.1:4943" : "https://ic0.app";
+    // Network host + mainnet detection are centralized in ./ic-config.js
+    // (mainnet agent host = https://icp-api.io, env-overridable).
+    const host = agentHost();
 
     const authState = getAuthState();
 
@@ -68,7 +71,7 @@ async function createAgent() {
     const agent = new HttpAgent(agentOptions);
 
     // Fetch root key for local development (required for certificate verification)
-    if (isLocal) {
+    if (isLocal()) {
         await agent.fetchRootKey();
     }
 

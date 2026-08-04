@@ -10,8 +10,17 @@
 # dfx temporary files
 .dfx/
 
-# generated files
+# icp-cli: cache (local replicas + build cache) is ephemeral and regenerated.
+# .icp/data holds the durable mainnet canister-id mapping
+# (.icp/data/mappings/ic.ids.json) the CLI reads, so it IS committed.
+.icp/cache/
+
+# generated files. icp-cli has no `generate` step (unlike dfx), so the frontend's
+# committed Candid bindings under src/declarations must be tracked. Other
+# declarations dirs (build artifacts) stay ignored.
 **/declarations/
+!/src/declarations/
+!/src/declarations/**
 
 # rust
 target/

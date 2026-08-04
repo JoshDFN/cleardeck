@@ -1,0 +1,6 @@
+# Pinned so CI, the reproducible Docker build, and local dev all use the same
+# compiler. Keep the channel in sync with RUST_TOOLCHAIN in .github/workflows/*.
+[toolchain]
+channel = "1.90.0"
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

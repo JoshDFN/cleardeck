@@ -100,8 +100,8 @@ You can verify that the deployed canisters match this source code:
 ### Quick Verification
 
 ```bash
-# Check the deployed WASM hash
-dfx canister info kpfcd-kyaaa-aaaaj-qor3a-cai --network ic
+# Check the deployed WASM hash (controller-only)
+icp canister status kpfcd-kyaaa-aaaaj-qor3a-cai -e ic
 
 # Build locally and compare
 docker build -t cleardeck-verify .
@@ -112,7 +112,7 @@ docker run --rm cleardeck-verify
 
 1. **Get the deployed hash:**
    ```bash
-   dfx canister info <canister-id> --network ic | grep "Module hash"
+   icp canister status <canister-id> -e ic | grep -i "module hash"
    ```
 
 2. **Build from source in Docker:**
@@ -141,9 +141,11 @@ rustup target add wasm32-unknown-unknown
 nvm install 18 && nvm use 18
 ```
 
-**DFX (Internet Computer SDK)**
+**icp-cli (Internet Computer SDK)**
 ```bash
-sh -ci "$(curl -fsSL https://internetcomputer.org/install.sh)"
+npm i -g @icp-sdk/icp-cli@1.0.0
+# Local canister builds also need ic-wasm:
+cargo install ic-wasm
 ```
 
 ### Quick Start
@@ -157,20 +159,20 @@ cd cleardeck
 npm install
 
 # Start local replica
-dfx start --background
+icp network start
 
-# Deploy everything
-dfx deploy
+# Deploy everything to the local environment
+icp deploy -e local
 
-# Open the URL printed by dfx deploy
+# Open the URL printed by icp deploy
 ```
 
 ### Development Mode (Hot Reload)
 
 ```bash
 # Terminal 1: Start replica and deploy backend
-dfx start --background
-dfx deploy lobby table_1 table_2 table_3 history
+icp network start
+icp deploy -e local lobby table_1 table_2 table_3 history
 
 # Terminal 2: Start frontend dev server
 cd src/cleardeck_frontend
@@ -201,7 +203,7 @@ cleardeck/
 │               ├── Lobby.svelte
 │               ├── DepositModal.svelte
 │               └── ...
-├── dfx.json                     # Canister configuration
+├── icp.yaml                     # Canister configuration (icp-cli manifest)
 ├── Cargo.toml                   # Rust workspace
 └── Dockerfile                   # Reproducible builds
 ```
@@ -284,40 +286,22 @@ For Bitcoin tables, we use ckBTC (chain-key Bitcoin):
 
 ## Table Configuration
 
-Defined in `dfx.json`:
+Defined in `icp.yaml` — each table instance carries its own `init_args.value`:
 
-```json
-{
-  "table_1": {
-    "init_arg": "(record {
-      small_blind = 1000000 : nat64;      // 0.01 ICP
-      big_blind = 2000000 : nat64;        // 0.02 ICP
-      min_buy_in = 200000000 : nat64;     // 2 ICP
-      max_buy_in = 1000000000 : nat64;    // 10 ICP
-      max_players = 2 : nat8;             // Heads-up
-      action_timeout_secs = 30 : nat64;
-      time_bank_secs = 30 : nat64;
-      currency = variant { ICP }
-    })"
-  }
-}
+```yaml
+- name: table_1 # Heads-Up, 0.01/0.02 ICP
+  recipe:
+    type: "@dfinity/rust@v3.2.0"
+    configuration:
+      package: table_canister
+      candid: src/table_canister/table_canister.did
+      shrink: true
+  init_args:
+    value: '(record { small_blind = 1000000 : nat64; big_blind = 2000000 : nat64; min_buy_in = 200000000 : nat64; max_buy_in = 1000000000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })'
 ```
 
-**BTC Table:**
-```json
-{
-  "btc_table_1": {
-    "init_arg": "(record {
-      small_blind = 100 : nat64;          // 100 sats
-      big_blind = 200 : nat64;            // 200 sats
-      min_buy_in = 10000 : nat64;         // 10,000 sats
-      max_buy_in = 100000 : nat64;        // 100,000 sats
-      max_players = 2 : nat8;
-      currency = variant { BTC }
-    })"
-  }
-}
-```
+**BTC table:** same shape with satoshi values and `currency = variant { BTC }`
+(`small_blind = 100`, `big_blind = 200`, `min_buy_in = 10000`, `max_buy_in = 100000`).
 
 ---
 
@@ -383,41 +367,28 @@ verify_hand_shuffle : (hand_id: nat64) -> (Result<bool, text>);
 
 ## Deploying to Mainnet
 
-### 1. Get Cycles
-```bash
-# Create identity
-dfx identity new cleardeck-prod
-dfx identity use cleardeck-prod
+> ⚠️ These canisters hold **real funds**. Backend canisters are **upgraded**,
+> never reinstalled. `icp` maps canister names → the live mainnet IDs via
+> `.icp/data/mappings/ic.ids.json` (committed) — verify it before deploying or
+> `icp` may create new canisters. See `.github/workflows/README.md`.
 
-# Need ~5T cycles
-dfx cycles balance --network ic
+### Recommended: use the deploy script (forces `--mode upgrade`)
+```bash
+IDENTITY=cleardeck-prod ./scripts/deploy-mainnet.sh
+# FIRST deploy only (runs the lobby/history wiring once):
+CONFIGURE=1 IDENTITY=cleardeck-prod ./scripts/deploy-mainnet.sh
 ```
 
-### 2. Create & Deploy Canisters
+### Manual equivalents
 ```bash
-# Create canisters
-dfx canister create --all --network ic
-
-# Deploy
-dfx deploy --network ic
+icp cycles balance -e ic --identity cleardeck-prod                 # need ~5T cycles
+icp deploy -e ic <canister> --identity cleardeck-prod --mode upgrade
+icp canister call history authorize_table '(principal "<table-id>")' \
+  -e ic --identity cleardeck-prod
 ```
 
-### 3. Authorize Tables
-```bash
-# Get table IDs
-dfx canister id table_1 --network ic
-
-# Authorize in history
-dfx canister call history authorize_table \
-  '(principal "<table-id>")' --network ic
-```
-
-### 4. Fund Tables
-Table canisters need ICP/ckBTC for paying withdrawal fees:
-```bash
-# Send 1 ICP for withdrawal fees
-dfx ledger transfer <table-account-id> --amount 1.0 --network ic
-```
+Table canisters need a little ICP/ckBTC for withdrawal fees — transfer to each
+table's account with `icp token transfer` (or your wallet).
 
 ---
 
@@ -461,8 +432,8 @@ This project is designed to be forked, studied, and extended. **Everything was b
 |-------------|--------------|
 | **Rust** | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | **Wasm target** | `rustup target add wasm32-unknown-unknown` |
-| **Node.js 18+** | `nvm install 18` |
-| **DFX SDK** | `sh -ci "$(curl -fsSL https://internetcomputer.org/install.sh)"` |
+| **Node.js 20+** | `nvm install 20` |
+| **icp-cli** | `npm i -g @icp-sdk/icp-cli@1.0.0` (local builds also need `cargo install ic-wasm`) |
 | **Claude Code** | [Download](https://claude.ai/download) (optional, for AI development) |
 
 ### Quick Start (Local)
@@ -476,13 +447,12 @@ cd cleardeck
 npm install
 
 # Start local IC replica
-dfx start --background
+icp network start
 
-# Deploy all canisters
-dfx deploy
+# Deploy all canisters to the local environment
+icp deploy -e local
 
-# Open the URL printed by dfx deploy
-# Usually: http://127.0.0.1:4943/?canisterId=...
+# Open the URL printed by icp deploy
 ```
 
 ### Continue Building with Claude Code

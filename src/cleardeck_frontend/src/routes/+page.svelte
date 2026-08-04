@@ -880,8 +880,8 @@
       <h3>1. Check Deployed Hash</h3>
       <p>Query the IC to see the hash of the deployed canister:</p>
       <div class="code-block">
-        <code>dfx canister info qrhly-eaaaa-aaaaj-qousa-cai --network ic</code>
-        <button class="copy-btn" onclick={() => navigator.clipboard.writeText('dfx canister info qrhly-eaaaa-aaaaj-qousa-cai --network ic')}>Copy</button>
+        <code>icp canister status qrhly-eaaaa-aaaaj-qousa-cai -e ic</code>
+        <button class="copy-btn" onclick={() => navigator.clipboard.writeText('icp canister status qrhly-eaaaa-aaaaj-qousa-cai -e ic')}>Copy</button>
       </div>
     </div>
 
@@ -901,7 +901,7 @@
 
     <div class="canister-ids">
       <h3>Deployed Canister Hashes</h3>
-      <p class="hash-note">Verify with: <code>dfx canister info &lt;ID&gt; --network ic</code></p>
+      <p class="hash-note">Verify with: <code>icp canister status &lt;ID&gt; -e ic</code></p>
       <table>
         <tbody>
           <tr>

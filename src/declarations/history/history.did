@@ -1,0 +1,123 @@
+type ActionRecord = record {
+  "principal" : principal;
+  action : PlayerAction;
+  seat : nat8;
+  timestamp : nat64;
+  phase : text;
+};
+type Card = record { rank : Rank; suit : Suit };
+type HandHistoryRecord = record {
+  small_blind : nat64;
+  dealer_seat : nat8;
+  ante : nat64;
+  hand_number : nat64;
+  flop : opt record { Card; Card; Card };
+  hand_id : nat64;
+  rake : nat64;
+  turn : opt Card;
+  table_id : principal;
+  actions : vec ActionRecord;
+  total_pot : nat64;
+  players : vec PlayerHandRecord;
+  big_blind : nat64;
+  timestamp : nat64;
+  went_to_showdown : bool;
+  shuffle_proof : ShuffleProofRecord;
+  river : opt Card;
+  winners : vec WinnerRecord;
+};
+type HandRank = variant {
+  StraightFlush : nat8;
+  Straight : nat8;
+  Pair : record { nat8; blob };
+  FullHouse : record { nat8; nat8 };
+  TwoPair : record { nat8; nat8; nat8 };
+  HighCard : blob;
+  ThreeOfAKind : record { nat8; blob };
+  Flush : blob;
+  RoyalFlush;
+  FourOfAKind : record { nat8; nat8 };
+};
+type HandSummary = record {
+  player_count : nat8;
+  hand_number : nat64;
+  hand_id : nat64;
+  table_id : principal;
+  total_pot : nat64;
+  timestamp : nat64;
+  went_to_showdown : bool;
+  winners : vec WinnerRecord;
+};
+type PlayerAction = variant {
+  Bet : nat64;
+  PostBlind : nat64;
+  Call : nat64;
+  Fold;
+  Raise : nat64;
+  AllIn : nat64;
+  Check;
+};
+type PlayerHandRecord = record {
+  final_hand_rank : opt HandRank;
+  "principal" : principal;
+  seat : nat8;
+  hole_cards : opt record { Card; Card };
+  amount_won : nat64;
+  ending_chips : nat64;
+  starting_chips : nat64;
+  position : text;
+};
+type PlayerStats = record {
+  biggest_pot_won : nat64;
+  "principal" : principal;
+  showdowns_won : nat64;
+  hands_won : nat64;
+  total_winnings : int64;
+  hands_played : nat64;
+  showdowns_total : nat64;
+};
+type Rank = variant {
+  Ace;
+  Six;
+  Ten;
+  Two;
+  Eight;
+  Seven;
+  Five;
+  Four;
+  Jack;
+  King;
+  Nine;
+  Three;
+  Queen;
+};
+type Result = variant { Ok; Err : text };
+type Result_1 = variant { Ok : nat64; Err : text };
+type Result_2 = variant { Ok : bool; Err : text };
+type ShuffleProofRecord = record {
+  timestamp : nat64;
+  seed_hash : text;
+  revealed_seed : text;
+};
+type Suit = variant { Diamonds; Hearts; Clubs; Spades };
+type WinnerRecord = record {
+  "principal" : principal;
+  hand_rank : opt HandRank;
+  seat : nat8;
+  pot_type : text;
+  amount : nat64;
+};
+service : () -> {
+  authorize_table : (principal) -> (Result);
+  get_authorized_tables : () -> (vec principal) query;
+  get_hand : (nat64) -> (opt HandHistoryRecord) query;
+  get_hands_by_player : (principal, nat64, nat64) -> (vec HandSummary) query;
+  get_hands_by_table : (principal, nat64, nat64) -> (vec HandSummary) query;
+  get_player_stats : (principal) -> (opt PlayerStats) query;
+  get_recent_hands : (nat64) -> (vec HandSummary) query;
+  get_table_hand_count : (principal) -> (nat64) query;
+  get_total_hands : () -> (nat64) query;
+  record_hand : (HandHistoryRecord) -> (Result_1);
+  revoke_table : (principal) -> (Result);
+  verify_hand_shuffle : (nat64) -> (Result_2) query;
+}

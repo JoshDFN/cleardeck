@@ -1,31 +1,41 @@
-# Reproducible build environment for IC canisters
-# This allows anyone to verify the deployed WASM matches the source code
+# Reproducible build environment for IC canisters (icp-cli)
+# Lets anyone verify the deployed WASM matches the source code.
 #
 # Build: docker build -t cleardeck-build .
 # Run:   docker run --rm cleardeck-build
 #
 # The output WASM hashes should match what's deployed on mainnet.
-# Check deployed hashes with: dfx canister info <canister-id> --network ic
+# Check deployed hashes with: icp canister status <canister-id> -e ic
+#
+# NOTE: deploys now use `icp build` (the @dfinity/rust recipe: cargo build +
+#       ic-wasm shrink + candid metadata), NOT `dfx build`. The first icp deploy
+#       re-establishes the verified module-hash baseline; hashes built here will
+#       only match canisters deployed via the same recipe/CLI version.
 
 FROM ghcr.io/dfinity/icp-dev-env:latest
 
 WORKDIR /build
 
-# Copy source files
-COPY Cargo.toml Cargo.lock ./
+# Pin the CLI used for the reproducible build (must match the deploy CLI).
+RUN npm i -g @icp-sdk/icp-cli@1.0.0
+
+# Copy the manifest + Rust sources (the @dfinity/rust recipe builds from Cargo).
+COPY icp.yaml Cargo.toml Cargo.lock ./
 COPY src/table_canister ./src/table_canister
 COPY src/lobby_canister ./src/lobby_canister
 COPY src/history_canister ./src/history_canister
-COPY dfx.json ./
 
-# Build all canisters
-RUN dfx build --check
+# Build all canisters via the icp recipe (cargo + ic-wasm shrink + candid metadata).
+RUN icp build -e ic
 
-# Output the WASM hashes for verification
+# Output the WASM hashes for verification. The deployed module hash corresponds
+# to the post-shrink wasm produced by the recipe; print every produced wasm so
+# the matching artifact can be identified.
 RUN echo "=== WASM Module Hashes ===" && \
-    echo "Compare these with deployed canisters using:" && \
-    echo "  dfx canister info <canister-id> --network ic" && \
+    echo "Compare with deployed canisters using: icp canister status <id> -e ic" && \
     echo "" && \
-    for wasm in .dfx/local/canisters/*/*.wasm; do \
-        echo "$(basename $(dirname $wasm)): $(sha256sum $wasm | cut -d' ' -f1)"; \
-    done
+    find . -name '*.wasm' \( -path '*release*' -o -path '*.icp*' \) ! -path '*/deps/*' 2>/dev/null \
+        | sort -u \
+        | while read -r wasm; do \
+            echo "$(basename "$wasm"): $(sha256sum "$wasm" | cut -d' ' -f1)"; \
+          done

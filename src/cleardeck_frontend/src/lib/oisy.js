@@ -17,6 +17,7 @@ import { IcrcWallet } from '@dfinity/oisy-wallet-signer/icrc-wallet';
 import { Principal } from '@dfinity/principal';
 import { Actor, HttpAgent } from '@dfinity/agent';
 import logger from './logger.js';
+import { isMainnet, IC_HOST } from './ic-config.js';
 
 // OISY Wallet URLs
 const OISY_MAINNET_URL = 'https://oisy.com/sign';
@@ -26,13 +27,7 @@ const OISY_STAGING_URL = 'https://staging.oisy.com/sign';
 const ICP_LEDGER_CANISTER = 'ryjl3-tyaaa-aaaaa-aaaba-cai';
 const CKBTC_LEDGER_CANISTER = 'mxzaz-hqaaa-aaaar-qaada-cai';
 
-// Helper to detect mainnet
-function isMainnet() {
-    return typeof window !== 'undefined' &&
-        (window.location.hostname.includes('icp0.io') ||
-         window.location.hostname.includes('ic0.app') ||
-         window.location.hostname.includes('internetcomputer.org'));
-}
+// Mainnet detection + the agent host (icp-api.io) are centralized in ./ic-config.js.
 
 // OISY wallet store
 function createOisyStore() {
@@ -62,7 +57,7 @@ function createOisyStore() {
 
             try {
                 const url = isMainnet() ? OISY_MAINNET_URL : OISY_STAGING_URL;
-                const host = isMainnet() ? 'https://icp-api.io' : 'http://localhost:4943';
+                const host = isMainnet() ? IC_HOST : 'http://localhost:4943';
 
                 logger.info('Connecting to OISY wallet at:', url, 'with host:', host);
 
@@ -167,7 +162,7 @@ function createOisyStore() {
 
             try {
                 const url = isMainnet() ? OISY_MAINNET_URL : OISY_STAGING_URL;
-                const host = isMainnet() ? 'https://icp-api.io' : 'http://localhost:4943';
+                const host = isMainnet() ? IC_HOST : 'http://localhost:4943';
 
                 logger.info('Connecting to OISY wallet (ICRC) at:', url, 'with host:', host);
 
@@ -303,7 +298,7 @@ function createOisyStore() {
 
             try {
                 // Create an anonymous agent for balance queries
-                const host = isMainnet() ? 'https://ic0.app' : 'http://127.0.0.1:4943';
+                const host = isMainnet() ? IC_HOST : 'http://127.0.0.1:4943';
                 const agent = new HttpAgent({ host });
 
                 if (!isMainnet()) {

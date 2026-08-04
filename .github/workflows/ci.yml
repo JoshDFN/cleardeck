@@ -1,0 +1,104 @@
+name: CI
+
+# Read-only build/test/lint gate. Touches no funds, no mainnet, no secrets.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '20'
+  # Keep in sync with rust-toolchain.toml.
+  RUST_TOOLCHAIN: '1.90.0'
+
+jobs:
+  build-canisters:
+    name: Build canisters (wasm32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Build all canisters (release wasm)
+        run: cargo build --locked --release --target wasm32-unknown-unknown
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canister-wasms
+          path: target/wasm32-unknown-unknown/release/*.wasm
+          retention-days: 1
+
+  test:
+    name: Cargo tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: cargo test --locked --workspace
+
+  candid-check:
+    name: Candid interface drift
+    runs-on: ubuntu-latest
+    needs: build-canisters
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: cargo install candid-extractor --locked
+      - name: Extract candid from wasm and diff committed .did
+        # WARN-ONLY for now: the committed .did may differ cosmetically from
+        # candid-extractor output. Reconcile the committed .did once, then change
+        # the final line to `exit $fail` to HARD-FAIL on real interface drift —
+        # candid drift can trap a fund-holding canister at runtime.
+        run: |
+          cargo build --locked --release --target wasm32-unknown-unknown
+          fail=0
+          declare -A MAP=(
+            [lobby_canister]=src/lobby_canister/lobby_canister.did
+            [table_canister]=src/table_canister/table_canister.did
+            [history_canister]=src/history_canister/history_canister.did
+          )
+          for crate in "${!MAP[@]}"; do
+            candid-extractor "target/wasm32-unknown-unknown/release/$crate.wasm" > "/tmp/$crate.did"
+            if ! diff -u "${MAP[$crate]}" "/tmp/$crate.did"; then
+              echo "::warning::Candid drift in $crate — committed .did differs from exported interface"
+              fail=1
+            fi
+          done
+          echo "candid drift status: $fail (0 = clean)"
+          exit 0   # TODO: change to `exit $fail` after one-time reconciliation
+
+  build-frontend:
+    name: Build frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+      - run: npm ci
+      - name: Build frontend (declarations are committed under src/declarations)
+        run: npm --workspace src/cleardeck_frontend run build
+        env:
+          DFX_NETWORK: ic
+          # Placeholder IDs: the bundle resolves real IDs at deploy time from .env.
+          VITE_CANISTER_ID_LOBBY: aaaaa-aa
+          VITE_CANISTER_ID_HISTORY: aaaaa-aa
