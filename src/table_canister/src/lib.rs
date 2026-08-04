@@ -135,56 +135,19 @@ impl Currency {
     }
 }
 
-#[derive(Clone, Copy, Debug, CandidType, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Suit {
-    Hearts,
-    Diamonds,
-    Clubs,
-    Spades,
-}
-
-#[derive(Clone, Copy, Debug, CandidType, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Rank {
-    Two = 2,
-    Three = 3,
-    Four = 4,
-    Five = 5,
-    Six = 6,
-    Seven = 7,
-    Eight = 8,
-    Nine = 9,
-    Ten = 10,
-    Jack = 11,
-    Queen = 12,
-    King = 13,
-    Ace = 14,
-}
-
-impl Rank {
-    fn value(&self) -> u8 {
-        *self as u8
-    }
-}
-
-#[derive(Clone, Copy, Debug, CandidType, Deserialize, PartialEq, Eq)]
-pub struct Card {
-    pub suit: Suit,
-    pub rank: Rank,
-}
-
-#[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum HandRank {
-    HighCard(Vec<u8>),
-    Pair(u8, Vec<u8>),
-    TwoPair(u8, u8, u8),
-    ThreeOfAKind(u8, Vec<u8>),
-    Straight(u8),
-    Flush(Vec<u8>),
-    FullHouse(u8, u8),
-    FourOfAKind(u8, u8),
-    StraightFlush(u8),
-    RoyalFlush,
-}
+// ============================================================================
+// POKER PRIMITIVES -- re-exported from the `poker_core` crate
+// ============================================================================
+// `Suit`, `Rank`, `Card` and `HandRank` used to be declared here. They now live
+// in `src/poker_core` so that unit tests, differential harnesses and fuzzers can
+// link the REAL engine instead of re-implementing it (which is exactly what
+// tests/unit_tests.rs used to do, and the two copies had already diverged).
+//
+// These are `pub use`, not private imports, so this canister's Candid surface is
+// byte-for-byte unchanged. `poker_core` keeps every derive, field name, variant
+// name and variant ORDER identical -- they are on the Candid wire and in this
+// canister's stable-memory serialisation, and it custodies real ICP/ckBTC.
+pub use poker_core::{Card, HandRank, Rank, Suit};
 
 #[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
 pub enum PlayerAction {
@@ -311,11 +274,9 @@ pub struct TableState {
     pub last_action: Option<LastActionInfo>, // Last action taken - for UI display
 }
 
-#[derive(Clone, Debug, CandidType, Deserialize)]
-pub struct SidePot {
-    pub amount: u64,
-    pub eligible_players: Vec<u8>,
-}
+// `SidePot` also lives in `poker_core` now (see the re-export note above); the
+// pot-splitting maths that produces it has to be testable off-chain.
+pub use poker_core::SidePot;
 
 #[derive(Clone, Debug, CandidType, Deserialize)]
 pub struct HandResult {
@@ -2262,259 +2223,21 @@ fn init_table_state(config: TableConfig) {
 }
 
 // ============================================================================
-// DECK & SHUFFLING
+// DECK, SHUFFLING & HAND EVALUATION -- moved to the `poker_core` crate
 // ============================================================================
-
-/// Creates a standard 52-card deck in a fixed order (Hearts, Diamonds, Clubs, Spades)
-/// Each suit contains cards 2-A in ascending order
-fn create_deck() -> Vec<Card> {
-    let suits = [Suit::Hearts, Suit::Diamonds, Suit::Clubs, Suit::Spades];
-    let ranks = [
-        Rank::Two, Rank::Three, Rank::Four, Rank::Five, Rank::Six,
-        Rank::Seven, Rank::Eight, Rank::Nine, Rank::Ten,
-        Rank::Jack, Rank::Queen, Rank::King, Rank::Ace,
-    ];
-
-    let mut deck = Vec::with_capacity(52);
-    for suit in suits {
-        for rank in ranks {
-            deck.push(Card { suit, rank });
-        }
-    }
-    deck
-}
-
-/// Shuffles the deck using Fisher-Yates algorithm with SHA256 hash chaining.
-///
-/// This is a deterministic shuffle - the same seed always produces the same deck order.
-/// The algorithm is provably fair because:
-/// 1. The seed comes from IC's VRF (Verifiable Random Function)
-/// 2. SHA256 hash chaining ensures each swap is unpredictable without the seed
-/// 3. Anyone can verify by re-running this function with the revealed seed
-///
-/// # Algorithm
-/// For each position i from 51 down to 1:
-///   1. Hash(previous_hash || i) to get deterministic randomness
-///   2. Select position j = random_value mod (i+1)
-///   3. Swap cards at positions i and j
-fn shuffle_deck(deck: &mut Vec<Card>, seed: &[u8]) {
-    let mut hash_input = seed.to_vec();
-
-    for i in (1..deck.len()).rev() {
-        let mut hasher = Sha256::new();
-        hasher.update(&hash_input);
-        hasher.update(&[i as u8]);
-        let hash_result = hasher.finalize();
-
-        // SHA256 always produces 32 bytes, so this slice is always valid
-        let random_value = u64::from_le_bytes([
-            hash_result[0], hash_result[1], hash_result[2], hash_result[3],
-            hash_result[4], hash_result[5], hash_result[6], hash_result[7],
-        ]);
-        let j = (random_value as usize) % (i + 1);
-
-        deck.swap(i, j);
-        hash_input = hash_result.to_vec();
-    }
-}
-
-// ============================================================================
-// HAND EVALUATION
-// ============================================================================
-
-/// Evaluates a player's best 5-card hand from their 2 hole cards and up to 5 community cards.
-///
-/// Generates all possible 5-card combinations from the 7 available cards and returns
-/// the highest-ranking hand according to standard poker hand rankings:
-/// Royal Flush > Straight Flush > Four of a Kind > Full House > Flush >
-/// Straight > Three of a Kind > Two Pair > One Pair > High Card
-fn evaluate_hand(hole_cards: &(Card, Card), community: &[Card]) -> HandRank {
-    let mut all_cards: Vec<Card> = Vec::with_capacity(7);
-    all_cards.push(hole_cards.0);
-    all_cards.push(hole_cards.1);
-    all_cards.extend_from_slice(community);
-
-    // Generate all 5-card combinations and find the best
-    let mut best_rank: Option<HandRank> = None;
-
-    for combo in combinations(&all_cards, 5) {
-        let rank = evaluate_five_cards(&combo);
-        match &best_rank {
-            None => best_rank = Some(rank),
-            Some(current) if rank > *current => best_rank = Some(rank),
-            _ => {}
-        }
-    }
-
-    best_rank.unwrap_or(HandRank::HighCard(vec![]))
-}
-
-fn combinations(cards: &[Card], k: usize) -> Vec<Vec<Card>> {
-    let mut result = Vec::new();
-    let n = cards.len();
-    if k > n {
-        return result;
-    }
-
-    let mut indices: Vec<usize> = (0..k).collect();
-
-    loop {
-        result.push(indices.iter().map(|&i| cards[i]).collect());
-
-        let mut i = k;
-        while i > 0 {
-            i -= 1;
-            if indices[i] != i + n - k {
-                break;
-            }
-        }
-
-        if i == 0 && indices[0] == n - k {
-            break;
-        }
-
-        indices[i] += 1;
-        for j in (i + 1)..k {
-            indices[j] = indices[j - 1] + 1;
-        }
-    }
-
-    result
-}
-
-fn evaluate_five_cards(cards: &[Card]) -> HandRank {
-    let mut ranks: Vec<u8> = cards.iter().map(|c| c.rank.value()).collect();
-    ranks.sort_by(|a, b| b.cmp(a)); // Sort descending
-
-    let mut suits: HashMap<Suit, u8> = HashMap::new();
-    let mut rank_counts: HashMap<u8, u8> = HashMap::new();
-
-    for card in cards {
-        *suits.entry(card.suit).or_insert(0) += 1;
-        *rank_counts.entry(card.rank.value()).or_insert(0) += 1;
-    }
-
-    let is_flush = suits.values().any(|&count| count >= 5);
-    let is_straight = check_straight(&ranks);
-    let straight_high = if is_straight { get_straight_high(&ranks) } else { 0 };
-
-    // Royal Flush
-    if is_flush && is_straight && straight_high == 14 {
-        return HandRank::RoyalFlush;
-    }
-
-    // Straight Flush
-    if is_flush && is_straight {
-        return HandRank::StraightFlush(straight_high);
-    }
-
-    // Count pairs, trips, quads
-    let mut pairs: Vec<u8> = Vec::new();
-    let mut trips: Vec<u8> = Vec::new();
-    let mut quads: Vec<u8> = Vec::new();
-
-    for (&rank, &count) in &rank_counts {
-        match count {
-            4 => quads.push(rank),
-            3 => trips.push(rank),
-            2 => pairs.push(rank),
-            _ => {}
-        }
-    }
-
-    pairs.sort_by(|a, b| b.cmp(a));
-    trips.sort_by(|a, b| b.cmp(a));
-
-    // Four of a Kind
-    if !quads.is_empty() {
-        let kicker = ranks.iter().find(|&&r| r != quads[0]).copied().unwrap_or(0);
-        return HandRank::FourOfAKind(quads[0], kicker);
-    }
-
-    // Full House
-    if !trips.is_empty() && !pairs.is_empty() {
-        return HandRank::FullHouse(trips[0], pairs[0]);
-    }
-
-    // Flush
-    if is_flush {
-        return HandRank::Flush(ranks.clone());
-    }
-
-    // Straight
-    if is_straight {
-        return HandRank::Straight(straight_high);
-    }
-
-    // Three of a Kind
-    if !trips.is_empty() {
-        let kickers: Vec<u8> = ranks.iter()
-            .filter(|&&r| r != trips[0])
-            .take(2)
-            .copied()
-            .collect();
-        return HandRank::ThreeOfAKind(trips[0], kickers);
-    }
-
-    // Two Pair
-    if pairs.len() >= 2 {
-        let kicker = ranks.iter()
-            .find(|&&r| r != pairs[0] && r != pairs[1])
-            .copied()
-            .unwrap_or(0);
-        return HandRank::TwoPair(pairs[0], pairs[1], kicker);
-    }
-
-    // One Pair
-    if pairs.len() == 1 {
-        let kickers: Vec<u8> = ranks.iter()
-            .filter(|&&r| r != pairs[0])
-            .take(3)
-            .copied()
-            .collect();
-        return HandRank::Pair(pairs[0], kickers);
-    }
-
-    // High Card
-    HandRank::HighCard(ranks)
-}
-
-/// Detects if ranks form a straight and returns the high card.
-/// Returns Some(high_card) if straight found, None otherwise.
-/// Handles wheel (A-2-3-4-5) as a special case with high card 5.
-fn detect_straight(ranks: &[u8]) -> Option<u8> {
-    let mut sorted: Vec<u8> = ranks.to_vec();
-    sorted.sort_by(|a, b| b.cmp(a));
-    sorted.dedup();
-
-    if sorted.len() < 5 {
-        return None;
-    }
-
-    // Check for wheel (A-2-3-4-5) first - it's the lowest straight
-    // Must check before regular straights since A-5-4-3-2 window won't match
-    if sorted.contains(&14) && sorted.contains(&5) && sorted.contains(&4)
-        && sorted.contains(&3) && sorted.contains(&2) {
-        return Some(5); // Wheel's high card is 5
-    }
-
-    // Check for regular straight (highest first)
-    for window in sorted.windows(5) {
-        if window[0] - window[4] == 4 {
-            return Some(window[0]);
-        }
-    }
-
-    None
-}
-
-fn check_straight(ranks: &[u8]) -> bool {
-    detect_straight(ranks).is_some()
-}
-
-fn get_straight_high(ranks: &[u8]) -> u8 {
-    detect_straight(ranks).unwrap_or(0)
-}
+// `create_deck`, `shuffle_deck`, `combinations`, `evaluate_hand`,
+// `evaluate_five_cards`, `detect_straight`, `check_straight` and
+// `get_straight_high` now live in `src/poker_core`. Their behaviour is pinned by
+// `src/poker_core/tests/golden_vectors.rs`, which replays vectors captured from
+// this file before the move -- including the provably-fair shuffle, whose output
+// for a revealed seed is a public commitment to every hand already played.
+//
+// Only the entry points this canister actually calls are imported. `combinations`,
+// `evaluate_five_cards`, `detect_straight`, `check_straight` and
+// `get_straight_high` were private helpers here before the move (never part of
+// the Candid surface) and are reached through `evaluate_hand` inside
+// `poker_core`; they stay `pub` there for the test and fuzz harnesses.
+use poker_core::{create_deck, evaluate_hand, shuffle_deck, Contribution};
 
 // ============================================================================
 // GAME FLOW
@@ -3438,121 +3161,44 @@ fn advance_to_next_street(state: &mut TableState) {
 
 /// Calculate side pots when there are all-in players
 /// This should be called before showdown or when all betting is complete
+///
+/// Thin adapter: the pot-splitting maths lives in
+/// `poker_core::side_pots::build_side_pots` so it can be tested, fuzzed and
+/// differentially compared off-chain. This function only marshals table state in
+/// and out. `poker_core::apply_side_pots` preserves the original early-return
+/// (when nobody has bet this hand the previous side pots are left untouched).
 fn calculate_side_pots(state: &mut TableState) {
-    // Collect ALL players who bet this hand (including folded) with their bets
-    let mut all_contributions: Vec<(u8, u64, bool)> = Vec::new(); // (seat, bet, has_folded)
-
-    for (i, player) in state.players.iter().enumerate() {
-        if let Some(ref p) = player {
-            if p.total_bet_this_hand > 0 {
-                all_contributions.push((i as u8, p.total_bet_this_hand, p.has_folded));
-            }
-        }
+    let contributions = collect_contributions(&state.players);
+    let total_pot = state.pot;
+    let warnings = poker_core::apply_side_pots(&mut state.side_pots, &contributions, total_pot);
+    for warning in warnings {
+        ic_cdk::println!("{}", warning);
     }
+}
 
-    if all_contributions.is_empty() {
-        return;
-    }
-
-    // Get unique bet levels, sorted ascending
-    let mut bet_levels: Vec<u64> = all_contributions.iter()
-        .map(|(_, bet, _)| *bet)
-        .collect();
-    bet_levels.sort();
-    bet_levels.dedup();
-
-    state.side_pots.clear();
-    let mut processed_amount = 0u64;
-
-    for level in bet_levels {
-        let contribution_per_player = level.saturating_sub(processed_amount);
-
-        if contribution_per_player == 0 {
-            continue;
-        }
-
-        // Calculate pot amount from all players who contributed at least up to this level
-        let pot_amount: u64 = all_contributions.iter()
-            .filter(|(_, bet, _)| *bet >= level)
-            .map(|_| contribution_per_player)
-            .fold(0u64, |acc, x| acc.saturating_add(x));
-
-        // Add contributions from players who bet less than this level but more than processed
-        let partial_contributions: u64 = all_contributions.iter()
-            .filter(|(_, bet, _)| *bet > processed_amount && *bet < level)
-            .map(|(_, bet, _)| bet.saturating_sub(processed_amount))
-            .fold(0u64, |acc, x| acc.saturating_add(x));
-
-        let total_pot = pot_amount.saturating_add(partial_contributions);
-
-        // Eligible players are only those who haven't folded and bet at least this level
-        let eligible_players: Vec<u8> = all_contributions.iter()
-            .filter(|(_, bet, folded)| !*folded && *bet >= level)
-            .map(|(seat, _, _)| *seat)
-            .collect();
-
-        if total_pot > 0 && !eligible_players.is_empty() {
-            state.side_pots.push(SidePot {
-                amount: total_pot,
-                eligible_players,
-            });
-        } else if total_pot > 0 && eligible_players.is_empty() {
-            // Edge case: all eligible players folded - money goes to last pot
-            // If no last pot exists, we need to find any player still in the hand
-            if let Some(last_pot) = state.side_pots.last_mut() {
-                last_pot.amount = last_pot.amount.saturating_add(total_pot);
-            } else {
-                // No existing side pot - find any non-folded player to create a pot for
-                let any_eligible: Vec<u8> = all_contributions.iter()
-                    .filter(|(_, _, folded)| !*folded)
-                    .map(|(seat, _, _)| *seat)
-                    .collect();
-                if !any_eligible.is_empty() {
-                    state.side_pots.push(SidePot {
-                        amount: total_pot,
-                        eligible_players: any_eligible,
-                    });
-                }
-                // If truly no one is eligible (everyone folded), pot is dead - this shouldn't happen
-            }
-        }
-
-        processed_amount = level;
-    }
-
-    // Verify total matches state.pot - if not, adjust last pot
-    let total_side_pots: u64 = state.side_pots.iter()
-        .map(|sp| sp.amount)
-        .fold(0u64, |acc, x| acc.saturating_add(x));
-
-    if total_side_pots < state.pot {
-        // Add remaining pot to last pot (or first eligible pot)
-        let remaining = state.pot.saturating_sub(total_side_pots);
-        if let Some(last_pot) = state.side_pots.last_mut() {
-            last_pot.amount = last_pot.amount.saturating_add(remaining);
-        }
-    } else if total_side_pots > state.pot {
-        // SANITY CHECK: Side pots should never exceed total pot
-        // This indicates a bug - log it and cap to prevent creating chips from nothing
-        ic_cdk::println!("BUG: Side pots ({}) exceed total pot ({}). Capping to pot amount.",
-            total_side_pots, state.pot);
-        // Proportionally reduce all side pots to match total pot
-        if total_side_pots > 0 {
-            let ratio = state.pot as f64 / total_side_pots as f64;
-            let mut distributed: u64 = 0;
-            let pot_count = state.side_pots.len();
-            for (i, side_pot) in state.side_pots.iter_mut().enumerate() {
-                if i == pot_count - 1 {
-                    // Last pot gets remainder to avoid rounding errors
-                    side_pot.amount = state.pot.saturating_sub(distributed);
-                } else {
-                    let adjusted = (side_pot.amount as f64 * ratio) as u64;
-                    side_pot.amount = adjusted;
-                    distributed = distributed.saturating_add(adjusted);
-                }
-            }
-        }
-    }
+/// Collect ALL players who bet this hand (including folded) with their bets.
+///
+/// `pub` only so `tests/unit_tests.rs` can pin it; it is not an update/query
+/// method, so it is not part of the Candid surface.
+///
+/// NOTE: the seat recorded is the INDEX into `players`, matching the original
+/// implementation, which enumerated the seat vector rather than reading
+/// `Player::seat`. Empty seats and players who bet nothing are dropped -- the
+/// "bet nothing" filter is load-bearing, because an empty contribution list makes
+/// `apply_side_pots` leave the existing side pots untouched.
+pub fn collect_contributions(players: &[Option<Player>]) -> Vec<Contribution> {
+    players
+        .iter()
+        .enumerate()
+        .filter_map(|(i, player)| match player {
+            Some(p) if p.total_bet_this_hand > 0 => Some(Contribution::new(
+                i as u8,
+                p.total_bet_this_hand,
+                p.has_folded,
+            )),
+            _ => None,
+        })
+        .collect()
 }
 
 fn end_hand_single_winner(state: &mut TableState) {

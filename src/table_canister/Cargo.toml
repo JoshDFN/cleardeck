@@ -14,6 +14,9 @@ path = "tests/unit_tests.rs"
 sha2 = "0.10"
 
 [dependencies]
+# The pure poker engine. Lives in its own crate so tests, differential
+# harnesses and fuzzers link the REAL code instead of re-implementing it.
+poker_core = { path = "../poker_core" }
 candid = "0.10"
 ic-cdk = "0.19"
 ic-cdk-timers = "1"

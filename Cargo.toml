@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "src/poker_core",
     "src/lobby_canister",
     "src/table_canister",
     "src/history_canister",

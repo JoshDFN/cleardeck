@@ -16,6 +16,16 @@
 # `assets` sync step type that v2.1.0 emitted, so v2.1.0 now fails to render at
 # all (every `icp` command in this project errored, not just deploys).
 
+# The default gateway port 8000 is regularly taken by another local icp-cli
+# project on a shared dev machine, and `icp network start` refuses to share it.
+# Pin our own port so bringing up the ClearDeck stack never requires stopping
+# somebody else's replica.
+networks:
+  - name: local
+    mode: managed
+    gateway:
+      port: 8077
+
 canisters:
   # --- Table registry -------------------------------------------------------
   - name: lobby

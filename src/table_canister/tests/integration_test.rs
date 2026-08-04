@@ -1,8 +1,14 @@
 // Integration tests for table canister
 //
 // NOTE: True integration tests for Internet Computer canisters require
-// either the IC replica or PocketIC framework. The unit tests in unit_tests.rs
-// cover the core poker logic (hand evaluation, deck operations, side pots).
+// either the IC replica or PocketIC framework.
+//
+// Where the poker logic is tested now:
+// - src/poker_core/tests/unit_tests.rs      hand evaluation, deck, shuffle, side pots,
+//                                          against the REAL engine rather than a copy
+// - src/poker_core/tests/golden_vectors.rs  behaviour lock vs the pre-refactor engine
+// - src/table_canister/tests/unit_tests.rs  the seam between this canister and
+//                                          poker_core (type identity, side-pot adapter)
 //
 // For full canister integration testing, use:
 // - dfx start --background && dfx deploy
