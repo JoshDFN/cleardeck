@@ -63,6 +63,7 @@
       case 'allin': return '★';
       case 'blind': return '◐';
       case 'phase': return '→';
+      case 'showdown': return '◆';
       case 'winner': return '♛';
       default: return '•';
     }
@@ -79,6 +80,7 @@
       case 'allin': return 'action-allin';
       case 'blind': return 'action-blind';
       case 'phase': return 'action-phase';
+      case 'showdown': return 'action-showdown';
       case 'winner': return 'action-winner';
       default: return '';
     }
@@ -146,10 +148,19 @@
           <div class="action-content">
             {#if action.type === 'phase'}
               <span class="phase-text">{action.text}</span>
+            {:else if action.type === 'showdown'}
+              <!-- The hand that was turned up, in words. No amount: the pot that
+                   moved is the NEXT line, and one number belongs in one place. -->
+              <span class="player-name">{getPlayerName(action.seat)}</span>
+              <span class="showdown-text">{action.text}</span>
             {:else if action.type === 'winner'}
               <span class="winner-name">{getPlayerName(action.seat)}</span>
               <span class="action-text">won</span>
-              <span class="action-amount">{formatChips(action.amount)}</span>
+              <!-- SIGNED, like the delta chip on the pod. The log is where a
+                   player reconstructs a session, and "24.00" does not say
+                   whether it arrived or left. Same token, same value, same
+                   assertion; it just states its direction. -->
+              <span class="action-amount">+{formatChips(action.amount)}</span>
             {:else}
               <span class="player-name">{getPlayerName(action.seat)}</span>
               <span class="action-text">{action.text}</span>
@@ -440,6 +451,22 @@
   .action-blind .action-icon {
     background: rgba(168, 85, 247, 0.2);
     color: #c084fc;
+  }
+
+  /* Showdown reveal — the named hand, one step below a win in weight */
+  .action-showdown {
+    background: rgba(126, 226, 184, 0.07);
+    border-left-color: rgba(126, 226, 184, 0.45);
+  }
+
+  .action-showdown .action-icon {
+    background: rgba(126, 226, 184, 0.2);
+    color: #7ee2b8;
+  }
+
+  .showdown-text {
+    color: #9ef0c8;
+    font-weight: 600;
   }
 
   /* Winner */

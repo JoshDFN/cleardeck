@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ARTIFACTS_DIR, REPO_ROOT } from './config.mjs';
+import { assertPageHealthy } from './page-health.mjs';
 
 /** Short git sha of the working tree's HEAD (used as the artifact directory). */
 export function gitShortSha() {
@@ -78,8 +79,17 @@ export function clearLatestVariants(latestDir, scene, viewport) {
  * Writes `<scene>-<viewport>.png` at exactly the viewport size, plus a
  * `-full.png` full-page variant (ClearDeck pages are taller than any viewport
  * because of the disclaimer banner and footer).
+ *
+ * A PAGE THAT THREW IS NOT PHOTOGRAPHED. `assertPageHealthy` runs before any
+ * byte is written, for the canonical and the UNVERIFIED name alike, because a
+ * page whose effects were torn down by an uncaught exception is showing a state
+ * the application never intended and no filename can carry that caveat. The
+ * throw lands in run.mjs's per-scene catch, which writes `FAILED-*.png`, sets
+ * `verified: false`, and puts the error text in the manifest. See
+ * `page-health.mjs` for the defect that made this necessary.
  */
 export async function shoot(page, { scene, viewport, shaDir, latestDir }) {
+  assertPageHealthy(page, { scene, viewport });
   const base = `${scene}-${viewport}`;
   const files = [];
 
@@ -142,8 +152,13 @@ export function writeIndex(shaDir, latestDir, manifest) {
         '',
       ]
       : []),
-    '| scene | viewport | file | agrees with chain | money figures | notes |',
-    '| --- | --- | --- | --- | --- | --- |',
+    // "money figures" alone is a numerator with no denominator, which is how a
+    // scene once reported 14/14 agreement while the largest money string on the
+    // screen was wrong by 5x. The census columns are the denominator: how many
+    // numbers the page renders, how many are matched to a canister value, how
+    // many are declared non-monetary, and how many nothing accounts for.
+    '| scene | viewport | file | agrees with chain | money figures | tokens on screen | chain-matched | allowlisted | UNASSERTED | notes |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
   for (const s of manifest.scenes) {
     for (const shot of s.shots) {
@@ -163,13 +178,17 @@ export function writeIndex(shaDir, latestDir, manifest) {
       const money = Object.entries(shot.checks || {})
         .filter(([k]) => k === 'chain' || k.startsWith('chain_'))
         .reduce((n, [, v]) => n + (Number(v?.moneyFiguresChecked) || 0), 0);
+      const census = shot.checks?.tokenCensus;
+      const cell = (v) => (census ? String(v) : '-');
       lines.push(
         `| ${s.scene} | ${shot.viewport} | \`${shot.files[0]}\` | ` +
-          `${verdict} | ${money} | ${(shot.notes || s.notes || '').replace(/\|/g, '/')} |`,
+          `${verdict} | ${money} | ${cell(census?.totalTokensOnScreen)} | ` +
+          `${cell(census?.chainMatched)} | ${cell(census?.allowlisted)} | ` +
+          `${cell(census?.unasserted)} | ${(shot.notes || s.notes || '').replace(/\|/g, '/')} |`,
       );
     }
     if (s.shots.length === 0) {
-      lines.push(`| ${s.scene} | - | (failed) | NO | 0 | ${(s.error || '').replace(/\|/g, '/')} |`);
+      lines.push(`| ${s.scene} | - | (failed) | NO | 0 | - | - | - | - | ${(s.error || '').replace(/\|/g, '/')} |`);
     }
   }
   lines.push('');

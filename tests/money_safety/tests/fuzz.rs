@@ -87,6 +87,21 @@ fn hostile_sequences_never_create_chips_double_pay_or_lose_state_across_an_upgra
             report.documented_findings.len(),
             report.max_stranded_e8s
         );
+        eprintln!(
+            "money-fuzz: seed {seed:#x} M8 ATTRIBUTION: {} hand(s) finished, {} measured by \
+             principal, {} of those also checked against the independent settlement oracle{}",
+            report.attribution.hands_seen,
+            report.attribution.hands_measured,
+            report.attribution.hands_oracle_checked,
+            if report.attribution.declined.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; declined: {:?}",
+                    report.attribution.declined
+                )
+            }
+        );
         for f in &report.documented_findings {
             documented_sigs.push(f.signature.clone());
             eprintln!(
@@ -146,6 +161,41 @@ fn hostile_sequences_never_create_chips_double_pay_or_lose_state_across_an_upgra
     };
     let path = write_report(&report);
     eprintln!("money-fuzz: report written to {}", path.display());
+
+    // THE INSTRUMENT MUST HAVE SPOKEN.
+    //
+    // M8 declines hands it cannot attribute -- somebody deposited mid-hand, the
+    // harness did not see enough of the sequence -- and a declining gate is
+    // indistinguishable from a passing one unless somebody counts. Half of the
+    // hands a run completes is a low bar and it is deliberately low: the point is
+    // to fail loudly if the recorder ever stops reconstructing stakes at all,
+    // which is what would happen if the engine changed how `total_bet_this_hand`
+    // or `departed_stakes` behave.
+    let hands_seen: u64 = report.runs.iter().map(|r| r.attribution.hands_seen).sum();
+    let measured: u64 = report.runs.iter().map(|r| r.attribution.hands_measured).sum();
+    let oracled: u64 = report
+        .runs
+        .iter()
+        .map(|r| r.attribution.hands_oracle_checked)
+        .sum();
+    eprintln!(
+        "money-fuzz: M8 PRINCIPAL ATTRIBUTION ran on {measured} of the {hands_seen} hand(s) this \
+         run completed; {oracled} of them were also checked against the independent settlement \
+         oracle"
+    );
+    assert!(
+        hands_seen == 0 || measured * 2 >= hands_seen,
+        "M8 PRINCIPAL ATTRIBUTION could only be measured on {measured} of {hands_seen} completed \
+         hands. The gate is not measuring what it claims to; see the per-run `declined` counts in \
+         {} and the reconstruction in tests/money_safety/src/hand_attribution.rs.",
+        path.display()
+    );
+    assert!(
+        hands_seen < 4 || oracled > 0,
+        "{hands_seen} hands completed and NOT ONE was checked against the independent settlement \
+         oracle. The three oracle-free legs compare the canister against its own record, which a \
+         self-consistent misdirection -- a plan that names the wrong live player -- passes."
+    );
 
     assert!(
         reproducers.is_empty(),

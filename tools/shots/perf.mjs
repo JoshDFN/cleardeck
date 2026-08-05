@@ -50,6 +50,7 @@ import {
 } from './lib/browser.mjs';
 import { prepareTable } from './scenarios/_shared.mjs';
 import { gitShortSha } from './lib/capture.mjs';
+import { startLoadWatch } from './lib/load-watch.mjs';
 
 const log = (m) => console.log(m);
 
@@ -717,6 +718,12 @@ async function main() {
     log,
   };
 
+  // WHAT ELSE THE MACHINE WAS DOING. Five agents share this laptop; the wave-3
+  // numbers were taken with cargo builds and extra PocketIC instances running,
+  // which inflates every latency here by an unknown amount. Sampled throughout
+  // and recorded in the JSON, so a reader can judge the run instead of trusting
+  // the word "quiet". See lib/load-watch.mjs.
+  const loadWatch = startLoadWatch({ everyMs: 10_000 });
   const browser = await launchBrowser({ log });
   const out = {
     startedAt: new Date().toISOString(),
@@ -798,9 +805,11 @@ async function main() {
   }
 
   out.finishedAt = new Date().toISOString();
+  out.machineLoad = loadWatch.stop();
+  log(`\nload while measuring: ${out.machineLoad.verdict}`);
   fs.mkdirSync(path.dirname(args.json), { recursive: true });
   fs.writeFileSync(args.json, JSON.stringify(out, null, 2));
-  log(`\nwrote ${path.relative(REPO_ROOT, args.json)}`);
+  log(`wrote ${path.relative(REPO_ROOT, args.json)}`);
   return 0;
 }
 

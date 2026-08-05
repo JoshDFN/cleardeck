@@ -162,3 +162,195 @@ pub fn expect_all_flat<'a>(
 ) -> BTreeMap<Principal, i128> {
     who.into_iter().map(|p| (*p, 0i128)).collect()
 }
+
+// ===========================================================================
+// M8 ON AN ORDINARY HAND
+// ===========================================================================
+//
+// Everything above needs a caller who already knows the answer, which is why it
+// only ever ran on two hand-written fixtures. What follows takes a
+// [`HandAttribution`] -- measured by `crate::hand_attribution` from the snapshots
+// the fuzzer already takes -- and asks the same question of EVERY hand.
+//
+// Four legs, deliberately of different kinds, because the misdirection defects
+// they convict are of different kinds:
+//
+//   1. `value_delta_matches_the_recorded_award`
+//        the canister paid the person its own record names. Convicts everything on
+//        the APPLY side, where the plan and the history are right and the money
+//        goes somewhere else -- including a `push_winner` that merges two people's
+//        money into one name, which is the same defect seen from the record.
+//   2. `value_delta_matches_the_settlement_oracle`
+//        the person paid is the person the RULES name. Convicts the defects that
+//        are internally consistent: a plan that names the wrong live player, or
+//        that lets a folded seat win a layer.
+//   3. `no_free_money_for_a_principal_that_staked_nothing` (see above; applied
+//        per hand here)
+//   4. `a_relinquished_stake_cannot_profit`
+//        somebody who folded, or who left the chair, can get their own uncalled
+//        money back and nothing else. No oracle needed.
+//
+// Legs 1, 3 and 4 need no derivation of the settlement at all. Leg 2 does, and
+// it is skipped -- counted, never silently -- on hands the rules of poker do not
+// define an answer for.
+
+use crate::hand_attribution::HandAttribution;
+
+/// Every attribution leg that applies to this hand.
+///
+/// Returns nothing at all for a hand the harness could not fully observe. That is
+/// deliberate and it is why [`HandAttribution::complete`] exists: reporting a
+/// misattribution from an incomplete reconstruction would teach a reader to
+/// ignore this invariant.
+pub fn check_hand_attribution(a: &HandAttribution) -> Vec<Violation> {
+    if !a.is_measurable() {
+        return Vec::new();
+    }
+    let mut out = check_award_reaches_the_person_it_names(a);
+    out.extend(check_no_free_money_in_hand(a));
+    out.extend(check_relinquished_cannot_profit(a));
+    out.extend(check_against_the_oracle(a));
+    out
+}
+
+/// LEG 1. What the canister's own hand history says it paid a person must be what
+/// that person's escrow and chips actually did.
+///
+/// ```text
+///   value_after - value_before  ==  awarded_to_them - what_they_staked
+/// ```
+///
+/// Both sides are measured, and neither is computed by the payout code: the left
+/// from `admin_get_all_balances` + `get_table_state`, the right from the hand
+/// history and from `total_bet_this_hand`/`departed_stakes`. A defect that credits
+/// the right amount to the wrong wallet moves the left side and not the right.
+pub fn check_award_reaches_the_person_it_names(a: &HandAttribution) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for who in a.everyone() {
+        let measured = a.measured.get(&who).copied().unwrap_or(0);
+        let claimed = a.claimed.get(&who).copied().unwrap_or(0) as i128;
+        let staked = a.staked.get(&who).copied().unwrap_or(0) as i128;
+        let expected = claimed - staked;
+        if measured == expected {
+            continue;
+        }
+        out.push(Violation::new(
+            Invariant::M8PrincipalAttribution,
+            "value_delta_matches_the_recorded_award",
+            Severity::Misattribution,
+            measured - expected,
+            &a.phase,
+            format!(
+                "hand #{}: the canister's own record says it paid {who} {claimed} e8s against a \
+                 stake of {staked}, so their escrow+chips should have moved {expected:+}. It \
+                 moved {measured:+}. Somebody has money the record does not say they have, and \
+                 the totals can still balance to the e8. See docs/SECURITY-FINDINGS.md \
+                 FINDING 13. staked={:?} claimed={:?} measured={:?}",
+                a.hand_number, a.staked, a.claimed, a.measured
+            ),
+        ));
+    }
+    out
+}
+
+/// LEG 2. The person paid must be the person the RULES OF POKER name.
+///
+/// The oracle is `settlement_oracle::oracle`, the independent derivation written
+/// for `tests/settlement`: it never calls `determine_winners`, `plan_payouts` or
+/// `poker_core::side_pots`. Silent on hands it cannot rule on -- those are counted
+/// by the watch, not swallowed.
+pub fn check_against_the_oracle(a: &HandAttribution) -> Vec<Violation> {
+    let Some(oracle) = a.oracle.as_ref() else {
+        return Vec::new();
+    };
+    if !oracle.anomalies.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for who in a.everyone() {
+        let measured = a.measured.get(&who).copied().unwrap_or(0);
+        let owed = oracle.net.get(&who).copied().unwrap_or(0);
+        if measured == owed {
+            continue;
+        }
+        out.push(Violation::new(
+            Invariant::M8PrincipalAttribution,
+            "value_delta_matches_the_settlement_oracle",
+            Severity::Misattribution,
+            measured - owed,
+            &a.phase,
+            format!(
+                "hand #{}: the rules of poker owe {who} {owed:+} e8s across this hand and the \
+                 canister moved them {measured:+}. Every total may balance and the record may \
+                 agree with itself: what is wrong is WHO HAS THE MONEY. oracle={:?} \
+                 measured={:?} staked={:?}",
+                a.hand_number, oracle.net, a.measured, a.staked
+            ),
+        ));
+    }
+    out
+}
+
+/// LEG 3. [`check_no_free_money`], applied to one measured hand.
+pub fn check_no_free_money_in_hand(a: &HandAttribution) -> Vec<Violation> {
+    let staked: BTreeSet<Principal> = a
+        .staked
+        .iter()
+        .filter(|(_, amount)| **amount > 0)
+        .map(|(who, _)| *who)
+        .collect();
+    let mut out = Vec::new();
+    for who in a.everyone() {
+        let delta = a.measured.get(&who).copied().unwrap_or(0);
+        if staked.contains(&who) || delta <= 0 {
+            continue;
+        }
+        out.push(Violation::new(
+            Invariant::M8PrincipalAttribution,
+            "no_free_money_for_a_principal_that_staked_nothing",
+            Severity::Misattribution,
+            delta,
+            &a.phase,
+            format!(
+                "hand #{}: principal {who} staked NOTHING and came out of it {delta:+} e8s \
+                 richer. You cannot win money from a hand you did not play. \
+                 See docs/SECURITY-FINDINGS.md FINDING 13.",
+                a.hand_number
+            ),
+        ));
+    }
+    out
+}
+
+/// LEG 4. Somebody who gave up their claim cannot come out ahead.
+///
+/// Folding gives up the claim; so does leaving the chair. Such a player can be
+/// handed back money nobody covered -- an uncalled bet, or their whole stake when
+/// no layer has a claimant -- and that is the most they can ever receive. A net
+/// GAIN means they were paid out of somebody else's stake.
+///
+/// No oracle, no settlement derivation, no knowledge of the cards.
+pub fn check_relinquished_cannot_profit(a: &HandAttribution) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for who in &a.relinquished_only {
+        let delta = a.measured.get(who).copied().unwrap_or(0);
+        if delta <= 0 {
+            continue;
+        }
+        out.push(Violation::new(
+            Invariant::M8PrincipalAttribution,
+            "a_relinquished_stake_cannot_profit",
+            Severity::Misattribution,
+            delta,
+            &a.phase,
+            format!(
+                "hand #{}: principal {who} folded or left the chair -- every stake of theirs in \
+                 this hand was given up -- and they came out {delta:+} e8s AHEAD. A relinquished \
+                 stake can only ever be handed its own money back; a profit is somebody else's \
+                 stake. staked={:?} claimed={:?}",
+                a.hand_number, a.staked, a.claimed
+            ),
+        ));
+    }
+    out
+}

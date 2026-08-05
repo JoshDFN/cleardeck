@@ -728,6 +728,11 @@ width figure is right; the conclusion does not survive an area comparison, and a
 
 ### 9.3 The bar this file was missing most: **mobile**
 
+> **Read §9.5 before quoting any "today" figure from this section.** The wave-4 coherence pass
+> re-measured all three bars below on the shipping build. BAR 22's figure is superseded (the
+> 42.9–52.1% reported in wave 4 was measured with the protected notices hidden; shipping is
+> **16.4–18.3%**), BAR 23 is now clear, and BAR 24's *reference* figure does not reproduce.
+
 Sections 1–8 contain no numeric mobile bar at all. That is the single biggest omission in this
 document, because mobile is where ClearDeck loses by the largest margin in the whole corpus.
 
@@ -764,21 +769,182 @@ PokerStars 42.7%, WPT Global 35.6%.
 ### 9.4 A bar for the lobby, which this file also never had
 
 Section 3 and section 5 discuss the lobby only in prose, so no reviewer could adjudicate the scene.
-Measured: time-to-first-choice, as the y position of the first table row over the viewport height.
+This section replaces the prose with numbers, and every threshold below names the capture it was
+derived from.
 
-| client | first row at | rows above the fold |
-|---|---|---|
-| PokerStars `web-ps-wpd2-1` (732×552) | 34.4% | 24 |
-| PokerNow `lobby-community-1` (1512×945) | **36.1%** (y≈341, measured here) | 7 |
-| WPT Global `web-wpt-tphB-1` (1127×798) | 26.6% | 5 |
-| **ClearDeck desktop (1440×900)** | **88.4%** (y=796, `getBoundingClientRect`) | **1** |
-| **ClearDeck mobile (390×844)** | **119%** (y=1004) | **0** |
+**Definitions, so two people measure the same thing.**
 
-> **BAR 25 (new).** The first table row starts **within the top 45% of the viewport** at desktop,
-> and **above the fold** on a phone. Today: 88.4% and 119%. Every reference client is between 26.6%
-> and 36.5%.
+* **First row at** — the y of the *top border* of the first table row (desktop grid) or first table
+  card (phone), over the viewport height. ClearDeck: `getBoundingClientRect().top` of
+  `tbody tr:first-child`, read in the real browser the screenshot harness drives. Reference
+  clients: pixel inspection of the capture, relative to the **client window**, gutter cropped
+  (§0.1).
+* **Rows fully visible** — rows whose top *and* bottom are inside the viewport with no scrolling.
+  A row you can see the first line of is not a row you can compare.
+* **Data fields per row** — distinct facts the row states about the table, not counting the action
+  button.
 
-### 9.5 Bars this file still cannot adjudicate
+#### 9.4.1 What the reference clients do
+
+| client | capture | window | first row at | rows fully visible | data fields per row | master/detail preview |
+|---|---|---|---|---|---|---|
+| WPT Global | `wptglobal/web-wpt-tphB-1.png` | 1127×798 | y≈212, **26.6%** | 5 (every table it had) | **4** — name, table id, stake, players | yes: stadium, `+` on every empty seat, "Click on an empty seat to sit at the table" |
+| PokerStars | `pokerstars/web-ps-wpd2-1.png` | 732×552 | y≈190, **34.4%** | **24** | **9** — Table, Stakes, Game, Type, Plrs, Wait, Avg Pot, Plrs/Flop, H/hr | yes: seated-player list, `Play Now`, `Observe` |
+| PokerNow | `pokernow/lobby-community-1.png` | 1512×945 | y≈341, **36.1%** | 7 (8th clipped) | **4** — Game, Blinds, Buy-in (Min/Max), Players | no |
+
+Reference band **26.6% – 36.1%**, median 34.4%. Two of the three ship a preview pane; the widest
+data grid is 9 columns and the narrowest is 4. All three put filters/tabs above the list and
+**clip none of them**: WPT Global's five stake tabs (`MICRO LOW MID HIGH OPEN SEATS`) and its three
+game tabs are each fully rendered at 1127 px.
+
+~~**There is no real mobile lobby capture in the corpus**~~ — **THIS WAS FALSE. Corrected by the
+wave-4 coherence pass, 2026-08-05; see [DEFECTS.md D-04](DEFECTS.md#d-04).** The paragraph that
+stood here searched `INDEX.json` for `scene == 'lobby-mobile'`, found only two WPT Global App Store
+creatives, and concluded that no mobile lobby bar could be set — for exactly the metric ClearDeck
+fails worst.
+
+`pokerstars/web-ps-gipsy-2.png` is a real one. It is indexed `client=pokerstars`,
+`real_gameplay=true`, `capture_type: "third-party review (real client screenshots)"`, notes
+"Real PokerStars mobile client: lobby list, Spin&Go table, store", and it is filed
+`scene == 'mobile-portrait'`, which is why the query missed it. Its left panel is a complete phone
+screen — app top bar, tournament lobby list, bottom tab bar — and it measures cleanly with a row
+luminance-step detector over the panel:
+
+| client | capture | screen | first row at | rows fully visible | row pitch |
+|---|---|---|---|---|---|
+| **PokerStars mobile** | `pokerstars/web-ps-gipsy-2.png` (left panel) | rows 0..567, **568 px** | y ≈ 116, **20.4%** | **4** (a 5th clipped by the tab bar) | ~85 px, **15.0%** |
+
+The WPT Global phone creative is still only evidence of *intent*, and the intent it shows is
+unambiguous: banner, one tab strip, one filter row, then the list — **no hero**.
+
+#### 9.4.2 What ClearDeck did, and what it does now
+
+Both rows measured on the real local canisters through the screenshot harness's browser, three
+tables registered, signed out.
+
+| capture | viewport | first row at | rows fully visible | data fields |
+|---|---|---|---|---|
+| before (wave-3 critic) | 1440×900 | y=796, **88.4%** | **1** of 3 | 7 in the row + 18 in the preview |
+| **after (this pass)** | 1440×900 | y=370, **41.1%** | **3** of 3 | unchanged |
+| before (wave-3 critic) | 390×844 | y=1004, **119%** | **0** of 3 | 6 in the card (preview hidden) |
+| **after (this pass)** | 390×844 | y=543, **64.3%** | **1** of 3 | unchanged |
+
+**The floor neither the lobby nor this bar can move.** The disclaimer banner and the app header are
+`+page.svelte`, and the disclaimer is protected copy. Measured at the same moment as the rows
+above, they occupy **160 + 83 = 243 px of a 900 px desktop viewport (27.0%)** and **268 + 120 =
+388 px of an 844 px phone (46.0%)**. So on a phone *no* lobby layout can reach the reference band:
+46.0% is the arithmetic floor before `Lobby.svelte` paints a pixel, and every threshold below is
+therefore expressed as **the lobby's own furniture**, which is the only part the lobby owns.
+
+> **CORRECTION (wave-4 coherence pass).** That paragraph charges the protected copy **2.9× what it
+> costs.** The 268 px is the whole banner block; the paragraph carrying the four notices
+> `make hygiene` enforces (`.banner-warning`) is **109.5 px** on a phone and **55.5 px** on
+> desktop. The remainder is `.banner-info` ("No middleman, no house…", 90 px) and `.banner-ai`
+> ("This entire project was built 100% by AI", 19.5 px) plus padding, and **no rule protects
+> either**. The true protected floor is **109.5 + 119.5 = 229 px = 27.1%** on a phone, not 46.0%,
+> and **55.5 px = 6.2%** of a 900 px desktop viewport, not 17.8%. The 20–43% band is therefore
+> reachable on a phone without weakening one protected word, and BAR 25's stated derivation and
+> BAR 26's 243 px subtraction both inherit the same conflation. Left in place because the bars
+> themselves are still where the work should aim; the *reasoning under them* is what is wrong.
+
+#### 9.4.3 The bars
+
+> **BAR 25 (restated numerically).** **Desktop: the first table row starts within the top 43% of
+> the viewport.** The observed reference range is 26.6% – 36.1%; the bar is set 6.9 points looser
+> than the widest of them, and that slack is exactly the price of the protected disclaimer, which
+> none of the three reference clients carries and which alone is 17.8% of a 900 px viewport. Note
+> what the floor implies: **27.0% is unreachable-from-below even with zero lobby furniture**, so
+> the bar is really "spend under 16 points of viewport on furniture". Today: **41.1%**. Was 88.4%.
+> (The wave-3 critic recorded PokerNow at 36.5% for the same capture; re-measured here at y≈341 of
+> 945 = 36.1%. Either way it is the widest reference.)
+
+> **BAR 26 (new).** **The lobby's own furniture above the first row is ≤ 140 px at desktop and
+> ≤ 160 px at 390 px wide** — heading, counts, filters, controls, any warning strip, and the column
+> header row, everything between the app header and the first row. Derived from BAR 25 minus the
+> 243 px floor (0.43 × 900 − 243 = 144 px), and applied to the phone as the same absolute budget
+> because the furniture does not get cheaper on a smaller screen. Today: **127 px** desktop
+> (bar 56 + drift strip 26 + column header 34 + 11 px of padding), **155 px** phone.
+
+> **BAR 27 (new).** **At least 3 table rows fully visible without scrolling, or every table that
+> exists, whichever is smaller.** Three is the smallest number that lets a player *compare* rather
+> than read one and scroll; the references do far better (PokerStars 24, PokerNow 7) and WPT Global
+> shows all 5 it has. Today: **3 of 3** at desktop, **1 of 3** on the phone — the phone fails this
+> bar and the reason is arithmetic, not layout: a 195 px card cannot fit twice below 543 px on an
+> 844 px screen. It clears once the 388 px of protected chrome above the lobby is revisited, or the
+> card is redesigned below ~150 px.
+
+> **BAR 28 (new).** **No filter, tab or control may be clipped at any viewport.** WPT Global renders
+> all five stake tabs and all three game tabs at 1127 px; nothing in the corpus scroll-clips a
+> filter. Before this pass ClearDeck's phone filter strip measured `scrollWidth 434` against
+> `clientWidth 366` under `overflow-x: auto`, slicing "Micro" mid-word. Today the strip wraps:
+> `scrollWidth 366 == clientWidth 366`, nothing cut.
+
+> **BAR 29 (new).** **A row states at least 4 facts about its table, and the desktop lobby ships a
+> master/detail preview.** 4 is the floor set by both PokerNow and WPT Global; the preview is what
+> two of the three desktop references ship. ClearDeck states **7** in the row (name, currency +
+> format tags, stakes, buy-in range, seat occupancy incl. sitting-out, hands dealt, live phase +
+> pot) and **18** in the preview, so this bar is a floor to defend, not a gap. **Compressing the
+> lobby must never be paid for with this bar** — the wave-3 rebuild moved furniture and deleted no
+> field.
+
+> **BAR 30 (new).** **Every price on the lobby screen comes from the table contract.** Not a
+> reference-derived bar — a correctness one, and it is here because it is a lobby-layout trap: the
+> lobby canister's registered *name* carries a stakes string (`init_microstakes_tables` bakes
+> table_1's blinds into all three names), so a row could read `9-Max - 0.01/0.02` with `0.10/0.20`
+> in the Stakes cell 222 px to its right. The name is still quoted verbatim — it is the table's
+> registered identity — but any figure inside it that the contract contradicts is struck through
+> and flagged, so exactly one figure on the row reads as a price and it is the contract's.
+
+> **BAR 31 (new, wave-4 coherence pass).** **Mobile: the first table row starts within the top 45%
+> of the screen, and at least 2 rows are fully visible.** Anchored on the one real mobile lobby
+> capture in the corpus, PokerStars at **20.4% with 4 rows** (§9.4.1). The bar is set 24.6 points
+> looser than the reference because ClearDeck carries 229 px of genuinely protected chrome that
+> PokerStars does not (see the correction above); it is *not* set at the reference, because nobody
+> should pretend that gap is closable this wave. Today: **first row at y = 543 = 64.3%, 1 of 3 rows
+> fully visible.** Fails on both halves.
+
+### 9.5 Wave-4 coherence pass: bars superseded, and the mobile table restated
+
+> **BAR 22 is unchanged as a bar (≥ 40% portrait playing surface) and its "today" figure is
+> restated.** §9.3 recorded 19.7–21.1%; wave 4 recorded 42.9–52.1%. **Both are wrong for the
+> shipping build.** The 42.9–52.1% was measured in a configuration where the four protected
+> notices were hidden from the table view, which [DEFECTS.md T-20](DEFECTS.md#t-20) establishes is
+> not shippable. Measured on the shipping build with the notices on screen:
+>
+> | variant | notices on screen | 6-max | 9-max |
+> |---|---|---|---|
+> | **shipping now** | 4 of 4 | 199.1×358.7 = **18.3%** | 188.2×339.2 = **16.4%** |
+> | wave 4 as built | 0 of 4 | 335.4×604.3 = 51.9% | 304.2×548.1 = 42.7% |
+> | `3253b67` geometry, notices on screen | 4 of 4 | 238.9×341.3 = **20.9%** | 238.9×341.3 = **20.9%** |
+> | PokerNow, real capture | n/a | 313×548 = **52.1%** | — |
+>
+> Against PokerNow the shipping build is **2.9:1 behind**, and it is a regression on the geometry
+> it replaced. The aspect is not the bug — a 0.555 felt is the right shape only when there is
+> height to spend, and at a bound height a narrower felt has less area. The vertical budget is the
+> bug: [DEFECTS.md T-19](DEFECTS.md#t-19) (0.918 zoom-out, 411.8 px `.header-right`) and the
+> 173.5 px three-row table header. Full A/B in [WAVE-04.md §4](WAVE-04.md).
+
+> **BAR 23 (felt wholly inside the viewport) is CLEAR.** Independently re-measured this pass on
+> both viewports and at both densities: `offFrame: []` for `.pot-display`, `.community-cards`,
+> every `.player-nameplate`, `.action-dock` and `.board-cluster`, with `scrollY = 0` on arrival.
+
+> **BAR 24 (money glyphs ≥ 12 px in portrait) is NOT cleared, and its reference figure is wrong.**
+> Measured digit ink is 11–12 px, with two 9-max pods at **11 px**, under the bar's own floor. The
+> `16.4 / 14.4 px` figures reported in wave 4 are computed `font-size`, not glyph ink. Separately,
+> the bar's reference ("PokerNow portrait's 15 px") is **not reproducible**: independent detectors
+> read 8 px on every PokerNow stack and 12 px on its largest money glyph anywhere in that capture.
+> Ours does beat PokerNow's stacks by ~50% on ink; it does not clear 12 px everywhere.
+
+> **BAR 32 (new).** **No element may occlude a figure a player acts on.** Not a
+> reference-derived bar — a defect-derived one, and the sharpest thing the wave-4 walk found:
+> `artifacts/screens/latest/table-showdown-mobile.png` renders the winner's `100.00%` equity as a
+> visible **`0%`**, because the hero's own card covers the rest of the badge, and the award chip
+> covers the winner's revealed pair ([DEFECTS.md T-22](DEFECTS.md#t-22),
+> [T-23](DEFECTS.md#t-23)). A truncated percentage that reads as a plausible different percentage
+> is worse than showing nothing. **This bar is only adjudicable in pixels**: every gate in the repo
+> reads `textContent` and every one of them called those scenes verified.
+
+### 9.6 Bars this file still cannot adjudicate
 
 Stated so a future reader does not mistake silence for a pass:
 

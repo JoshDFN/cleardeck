@@ -323,6 +323,49 @@
     return max === 2 ? 'Heads-up' : `${max}-max`;
   }
 
+  // ---------------------------------------------------------------------------
+  // The row NAME is a money figure
+  // ---------------------------------------------------------------------------
+
+  /**
+   * A "<sb>/<bb>" pair anywhere in a registered table name.
+   *
+   * `init_microstakes_tables` in the lobby canister bakes table_1's blinds into
+   * ALL THREE names ("6-Max - 0.01/0.02" on a table that charges 0.05/0.10), so
+   * the largest string on a row can quote a price the contract does not charge —
+   * 222 px from a Stakes cell reading the real one. Two prices, one row.
+   */
+  const NAME_STAKES_RE = /(\d[\d.,]*)\s*\/\s*(\d[\d.,]*)/;
+
+  /** Whitespace-insensitive compare of two rendered "a/b" quotes. */
+  const sameQuote = (a, b) => String(a).replace(/\s+/g, '') === String(b).replace(/\s+/g, '');
+
+  /**
+   * Splits a registered name around the price it quotes, and says whether that
+   * price is the one the TABLE contract enforces.
+   *
+   * The name text itself is never rewritten or elided: it is the lobby
+   * canister's registered identity for this table and it stays on screen,
+   * character for character. What changes is that a figure the contract
+   * contradicts is struck through and labelled, so nothing on the row reads as a
+   * price except the figures taken from the table contract.
+   */
+  function nameQuote(table) {
+    const name = String(table?.name ?? '');
+    const m = NAME_STAKES_RE.exec(name);
+    if (!m) return { before: name, quoted: null, after: '', stale: false, chain: null };
+    const cfg = effectiveConfig(table);
+    const currency = currencyOf(table);
+    const chain = formatBlinds(cfg.small_blind, cfg.big_blind, currency);
+    return {
+      before: name.slice(0, m.index),
+      quoted: m[0],
+      after: name.slice(m.index + m[0].length),
+      stale: !sameQuote(m[0], chain),
+      chain,
+    };
+  }
+
   async function copyText(text, key) {
     try {
       await navigator.clipboard.writeText(text);
@@ -395,6 +438,7 @@
   const seatsTaken = $derived(tables.reduce((n, t) => n + Number(t.player_count), 0));
   const seatsTotal = $derived(tables.reduce((n, t) => n + Number(effectiveConfig(t).max_players), 0));
   const driftedTables = $derived(tables.filter((t) => configDrift(t).length > 0).length);
+  const staleNames = $derived(tables.filter((t) => nameQuote(t).stale).length);
   const handsRunning = $derived(
     tables.filter((t) => isDealing(liveOf(t) ? tagOf(liveOf(t).phase) : null)).length,
   );
@@ -492,177 +536,117 @@
 
 <div class="lobby" data-lobby-live={liveLoaded ? 'ready' : 'pending'}>
 
-  {#if !signedIn}
-    <!-- The signed-out first impression. Three claims, all of them checkable:
-         no rake is a property of the payout code, the commitment is published
-         per hand, and the whole stack is canisters. No rake leads, because it
-         is the one thing a rake-funded client structurally cannot copy. -->
-    <section class="intro">
-      <div class="intro-copy">
-        <p class="eyebrow">No Limit Hold'em · on the Internet Computer</p>
-        <h1>Poker you can check.</h1>
-        <p class="intro-lead">
-          The deck is committed before the deal and revealed after it, so anyone can
-          re-derive the shuffle from the hand history. Every table is a smart contract
-          with an address you can query while signed out.
-        </p>
-        <div class="intro-actions">
-          <button class="btn primary" onclick={signIn} disabled={signingIn}>
-            {signingIn ? 'Connecting…' : 'Connect wallet'}
-          </button>
-          <button class="btn ghost" onclick={() => showHow = true}>How it works</button>
-        </div>
-        {#if signInError}
-          <p class="intro-error">{signInError}</p>
-        {/if}
-        <p class="intro-note">
-          No wallet needed to look around: every table, seat map, live board and deck
-          commitment below is readable while signed out.
-        </p>
-      </div>
-
-      <div class="intro-proof">
-        <div class="headline-claim">
-          <span class="headline-figure">0%</span>
-          <span class="headline-title">Rake. Every pot, every stake.</span>
-          <span class="headline-body">
-            There is no house cut anywhere in the payout code. Whatever goes into a pot
-            is paid back out to players, down to the last e8.
-          </span>
-        </div>
-        <ul class="claims">
-          <li>
-            <span class="claim-figure">SHA-256</span>
-            <span class="claim-title">Committed deck</span>
-            <span class="claim-body">The shuffle-seed hash is published before a card moves, the seed itself after the hand.</span>
-          </li>
-          <li>
-            <span class="claim-figure">On-chain</span>
-            <span class="claim-title">No server</span>
-            <span class="claim-body">This page, the lobby and every table are canisters. Each has an address you can query.</span>
-          </li>
-        </ul>
-      </div>
-    </section>
-  {:else}
-    <div class="intro-slim">
-      <span class="slim-chip strong">0% rake</span>
-      <span class="slim-chip">Committed deck</span>
-      <span class="slim-chip">On-chain settlement</span>
-      <button class="link-btn" onclick={() => showHow = true}>How it works</button>
-    </div>
-  {/if}
-
-  <header class="bar">
-    <div class="bar-title">
-      <h2>Cash games</h2>
-      <p class="bar-sub">
-        <strong>{tables.length}</strong>
-        {tables.length === 1 ? 'table' : 'tables'}
-        <span class="sep">·</span>
-        <strong>{seatsTaken}</strong> of {seatsTotal} seats taken
-        {#if handsRunning > 0}
-          <span class="sep">·</span>
-          <strong class="hot">{handsRunning}</strong> {handsRunning === 1 ? 'hand' : 'hands'} in play
-        {/if}
-        <span class="sep">·</span>
-        <span class="norake">no rake on any of them</span>
-      </p>
-    </div>
-
-    <div class="bar-actions">
-      <div class="seg" role="group" aria-label="Row density">
-        <button
-          class:on={density === 'comfortable'}
-          onclick={() => setDensity('comfortable')}
-          title="Comfortable rows"
-          aria-label="Comfortable rows"
-          aria-pressed={density === 'comfortable'}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/>
-          </svg>
-        </button>
-        <button
-          class:on={density === 'compact'}
-          onclick={() => setDensity('compact')}
-          title="Compact rows"
-          aria-label="Compact rows"
-          aria-pressed={density === 'compact'}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
-          </svg>
-        </button>
-      </div>
-      <button class="btn ghost icon" onclick={refreshAll} aria-label="Refresh tables">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M23 4v6h-6M1 20v-6h6"/>
-          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-        </svg>
-        Refresh
-      </button>
-    </div>
-  </header>
-
-  <div class="filters">
-    <button class="pill" class:on={!openSeatsOnly} onclick={() => openSeatsOnly = false}>All tables</button>
-    <button class="pill" class:on={openSeatsOnly} onclick={() => openSeatsOnly = true}>Open seats</button>
-
-    {#if currenciesPresent.length > 1}
-      <span class="filter-gap"></span>
-      <button class="pill" class:on={currencyFilter === 'all'} onclick={() => currencyFilter = 'all'}>Any currency</button>
-      {#each currenciesPresent as code}
-        <button class="pill" class:on={currencyFilter === code} onclick={() => currencyFilter = code}>{code}</button>
-      {/each}
-    {/if}
-
-    {#if tiersPresent.length > 1}
-      <span class="filter-gap"></span>
-      <button class="pill" class:on={stakeFilter === 'all'} onclick={() => stakeFilter = 'all'}>Any stake</button>
-      {#each tiersPresent as tier}
-        <button class="pill" class:on={stakeFilter === tier} onclick={() => stakeFilter = tier}>{tier}</button>
-      {/each}
-    {/if}
-
-    {#if filtersActive}
-      <button class="pill clear" onclick={clearFilters}>Clear</button>
-    {/if}
-  </div>
-
-  {#if liveLoaded && driftedTables > 0}
-    <!-- One statement of the problem, at the top, instead of the same warning
-         shouted in every money cell. The figures below are always the table
-         contract's; it is the NAME the lobby canister registered that is stale. -->
-    <p class="notice warn">
-      <strong>
-        {driftedTables} of {tables.length}
-        {driftedTables === 1 ? 'table is' : 'tables are'} registered in the lobby canister
-        with figures its own contract does not enforce.
-      </strong>
-      Every number in this list is read from the <em>table</em> contract, because that is
-      what it will charge you. Only the name comes from the lobby canister, and for those
-      tables the name still quotes the old stakes.
-    </p>
-  {/if}
-
-  {#if tables.length > 0 && liveLoaded && seatsTaken === 0}
-    <div class="notice go">
-      <div>
-        <strong>Nobody is seated yet.</strong>
-        Take a seat and the hand starts the moment a second player joins you. Sitting down
-        costs nothing until you buy in, and the pot is never raked.
-      </div>
-      {#if cheapestTable}
-        <button class="btn primary sm" onclick={() => openTable(cheapestTable)}>
-          Open {cheapestTable.name}
-        </button>
-      {/if}
-    </div>
-  {/if}
-
+  <!-- THE LIST IS THE FIRST THING. docs/DESIGN-BAR.md §9.4: every reference
+       client puts its first table row between 26.6% and 36.1% of the viewport,
+       and this lobby used to put it at 88.4%. Nothing is deleted to get there —
+       the heading, the counts, the filters and the drift warning all moved
+       INSIDE the list pane, and the signed-out pitch moved BELOW the list, where
+       a visitor reads it after seeing that the tables are real. -->
   <div class="board">
     <div class="list-pane">
+      <header class="pane-bar">
+        <div class="pane-title">
+          <h2>Cash games</h2>
+          <p class="pane-sub">
+            <strong>{tables.length}</strong>
+            {tables.length === 1 ? 'table' : 'tables'}
+            <span class="sep">·</span>
+            <strong>{seatsTaken}</strong> of {seatsTotal} seats taken
+            {#if handsRunning > 0}
+              <span class="sep">·</span>
+              <strong class="hot">{handsRunning}</strong> {handsRunning === 1 ? 'hand' : 'hands'} in play
+            {/if}
+            <span class="sep">·</span>
+            <span class="norake">0% rake</span>
+          </p>
+        </div>
+
+        <!-- WRAPS, never scrolls. At 390 px the strip measured scrollWidth 434
+             against clientWidth 366 with `overflow-x: auto`, which sliced "Micro"
+             mid-word and put "Low" off-screen behind a fade. WPT Global renders
+             all five of its stake tabs at 1127 px and clips none of them
+             (docs/DESIGN-BAR.md BAR 28); a wrapped pill is legible, a sliced one
+             is not. -->
+        <div class="filters">
+          <button class="pill" class:on={!openSeatsOnly} onclick={() => openSeatsOnly = false}>All tables</button>
+          <button class="pill" class:on={openSeatsOnly} onclick={() => openSeatsOnly = true}>Open seats</button>
+
+          {#if currenciesPresent.length > 1}
+            <span class="filter-gap"></span>
+            <button class="pill" class:on={currencyFilter === 'all'} onclick={() => currencyFilter = 'all'}>Any currency</button>
+            {#each currenciesPresent as code}
+              <button class="pill" class:on={currencyFilter === code} onclick={() => currencyFilter = code}>{code}</button>
+            {/each}
+          {/if}
+
+          {#if tiersPresent.length > 1}
+            <span class="filter-gap"></span>
+            <button class="pill" class:on={stakeFilter === 'all'} onclick={() => stakeFilter = 'all'}>Any stake</button>
+            {#each tiersPresent as tier}
+              <button class="pill" class:on={stakeFilter === tier} onclick={() => stakeFilter = tier}>{tier}</button>
+            {/each}
+          {/if}
+
+          {#if filtersActive}
+            <button class="pill clear" onclick={clearFilters}>Clear</button>
+          {/if}
+        </div>
+
+        <div class="pane-actions">
+          <div class="seg" role="group" aria-label="Row density">
+            <button
+              class:on={density === 'comfortable'}
+              onclick={() => setDensity('comfortable')}
+              title="Comfortable rows"
+              aria-label="Comfortable rows"
+              aria-pressed={density === 'comfortable'}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/>
+              </svg>
+            </button>
+            <button
+              class:on={density === 'compact'}
+              onclick={() => setDensity('compact')}
+              title="Compact rows"
+              aria-label="Compact rows"
+              aria-pressed={density === 'compact'}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+              </svg>
+            </button>
+          </div>
+          <!-- Icon only, like the density control beside it. The words cost 52 px
+               of the one row this bar is allowed, and the row is what keeps the
+               first table 400 px higher up the page. Name, tooltip and hover
+               label are all still there for anyone who needs them. -->
+          <button class="btn ghost icon" onclick={refreshAll} title="Refresh tables" aria-label="Refresh tables">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M23 4v6h-6M1 20v-6h6"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      {#if liveLoaded && driftedTables > 0}
+        <!-- One statement of the problem, attached to the list it is about,
+             instead of the same warning shouted in every money cell. The figures
+             below are always the table contract's; it is the lobby canister's
+             REGISTRATION — including the stakes baked into the name — that is
+             stale, and each stale name is struck through where it appears. -->
+        <p class="drift-strip">
+          <strong>
+            {driftedTables === 1
+              ? `1 of ${tables.length} lobby records quotes figures its table contract does not charge.`
+              : `${driftedTables} of ${tables.length} lobby records quote figures their table contracts do not charge.`}
+          </strong>
+          Every figure below is what the <em>contract</em> charges{#if staleNames > 0}; the stale
+          {staleNames === 1 ? 'name is' : 'names are'} struck through{/if}.
+        </p>
+      {/if}
+
       {#if tables.length === 0}
         <div class="empty">
           <h3>The lobby canister is reporting no tables.</h3>
@@ -739,6 +723,7 @@
               {@const isFull = filled >= Number(cfg.max_players)}
               {@const now = nowOf(table)}
               {@const hands = handsOf(table)}
+              {@const nameq = nameQuote(table)}
               {@const isSelected = selectedTable && String(selectedTable.id) === String(table.id)}
               <tr
                 class:selected={isSelected}
@@ -754,11 +739,27 @@
                 onfocus={() => select(table)}
               >
                 <td class="c-table">
-                  <!-- Rendered verbatim: this string is the lobby canister's
-                       registered name and it is the key the screenshot harness
-                       matches a row on. When it is stale, say so next to the
-                       money it misquotes rather than editing it. -->
-                  <span class="table-name">{table.name}</span>
+                  <!-- THE NAME IS NEVER REWRITTEN. This string is the lobby
+                       canister's registered identity for the table (and the key
+                       the screenshot harness matches a row on), so every
+                       character of it stays on screen. What it must not do is
+                       READ AS A PRICE when the contract charges something else:
+                       `init_microstakes_tables` baked table_1's blinds into all
+                       three names, so "9-Max - 0.01/0.02" sat 222 px from a
+                       Stakes cell reading 0.10/0.20. The quoted figure is struck
+                       through and labelled, leaving exactly one live price on
+                       the row and it comes from the table contract. -->
+                  <span class="name-line">
+                    {#if nameq.stale}
+                      <span
+                        class="table-name"
+                        title="The lobby canister registered this table as “{table.name}”. Its own contract charges {nameq.chain} {unitOf(currency)}, so the figure in the name is struck through: it is the lobby's stale record, not this table's price."
+                      >{nameq.before}<s class="stale-quote">{nameq.quoted}</s>{nameq.after}</span>
+                      <span class="stale-flag">stale name</span>
+                    {:else}
+                      <span class="table-name">{table.name}</span>
+                    {/if}
+                  </span>
                   <span class="tags">
                     <span class="tag currency currency-tag" class:btc={currency === 'BTC'}>
                       {#if currency === 'BTC'}
@@ -828,6 +829,24 @@
           </tbody>
         </table>
 
+        {#if seatsTaken === 0}
+          <!-- Under the list, not above it. It is an invitation, not a warning,
+               and putting it above the rows cost 63 px of the one thing this
+               screen is for. -->
+          <div class="nudge">
+            <div>
+              <strong>Nobody is seated yet.</strong>
+              Take a seat and the hand starts the moment a second player joins you. Sitting down
+              costs nothing until you buy in, and the pot is never raked.
+            </div>
+            {#if cheapestTable}
+              <button class="btn primary sm" onclick={() => openTable(cheapestTable)}>
+                Open {cheapestTable.name}
+              </button>
+            {/if}
+          </div>
+        {/if}
+
         <!-- The columns a rake-funded client shows that this one does not, and
              why. Stating the gap is better than estimating it: none of these is
              recorded on-chain, so no client could compute them from this engine. -->
@@ -837,6 +856,7 @@
           each row from its own table contract, re-read every {LIVE_POLL_MS / 1000} seconds.
           Average pot, players-per-flop, hands-per-hour and waiting lists are
           <strong>not recorded on-chain</strong>, so they are absent here rather than estimated.
+          <button class="link-btn" onclick={() => showHow = true}>How it works</button>
         </p>
       {/if}
     </div>
@@ -855,15 +875,30 @@
       {@const lastPot = lastPotOf(selectedTable)}
       {@const commitment = opt(view?.shuffle_proof)?.seed_hash ?? null}
       {@const contractId = canisterIdOf(selectedTable)}
+      {@const nameq = nameQuote(selectedTable)}
       <aside class="preview" aria-label="Table preview">
         <div class="preview-head">
           <div class="preview-heading">
-            <h3>{selectedTable.name}</h3>
+            <!-- Same rule as the row: the registered name is quoted in full, and
+                 a figure inside it that the contract contradicts is struck out
+                 rather than left to argue with the Blinds fact 90 px below. -->
+            <h3>
+              {#if nameq.stale}
+                {nameq.before}<s class="stale-quote">{nameq.quoted}</s>{nameq.after}
+                <span class="stale-flag">stale name</span>
+              {:else}
+                {selectedTable.name}
+              {/if}
+            </h3>
             <p class="preview-sub">
               {tableFormat(selectedTable)} · No Limit Hold'em ·
               {stakeTier(cfg.small_blind, currency)} stakes
             </p>
             {#if drift.length > 0}
+              <!-- No figure of its own. The blinds it would restate are already
+                   on screen in the Blinds fact below, where the screenshot
+                   harness's token census asserts them against the contract; a
+                   second copy here was 2 money tokens asserted by nothing. -->
               <p class="preview-drift">
                 Lobby record disagrees on {drift.join(', ')}. Shown: the table's own.
               </p>
@@ -946,6 +981,7 @@
           <strong>0% rake.</strong> {lastPot === null
             ? 'Whatever this table collects is paid straight back out.'
             : `All ${formatAmount(lastPot, currency)} ${unitOf(currency)} of the last pot went to the winner.`}
+          <button class="link-btn" onclick={(e) => { e.stopPropagation(); showHow = true; }}>How it works</button>
         </p>
 
         <div class="proofs" class:two-up={Boolean(commitment) && Boolean(contractId)}>
@@ -986,6 +1022,74 @@
     {/if}
   </div>
 
+  {#if !signedIn}
+    <!-- The signed-out pitch, in full, UNDER the tables it is a claim about.
+         Three claims, all of them checkable: no rake is a property of the payout
+         code, the commitment is published per hand, and the whole stack is
+         canisters. No rake leads, because it is the one thing a rake-funded
+         client structurally cannot copy.
+
+         It reads better here than it did above the list. Every claim it makes is
+         demonstrated by the rows and the preview a visitor has already scrolled
+         past — three live tables, real seat maps, a live board and a deck
+         commitment, all of it readable while signed out. Nothing was cut to move
+         it: this is the same section, word for word. -->
+    <section class="intro">
+      <div class="intro-copy">
+        <p class="eyebrow">No Limit Hold'em · on the Internet Computer</p>
+        <h1>Poker you can check.</h1>
+        <p class="intro-lead">
+          The deck is committed before the deal and revealed after it, so anyone can
+          re-derive the shuffle from the hand history. Every table is a smart contract
+          with an address you can query while signed out.
+        </p>
+        <div class="intro-actions">
+          <button class="btn primary" onclick={signIn} disabled={signingIn}>
+            {signingIn ? 'Connecting…' : 'Connect wallet'}
+          </button>
+          <button class="btn ghost" onclick={() => showHow = true}>How it works</button>
+        </div>
+        {#if signInError}
+          <p class="intro-error">{signInError}</p>
+        {/if}
+        <p class="intro-note">
+          No wallet needed to look around: every table, seat map, live board and deck
+          commitment above is readable while signed out.
+        </p>
+      </div>
+
+      <div class="intro-proof">
+        <div class="headline-claim">
+          <span class="headline-figure">0%</span>
+          <span class="headline-title">Rake. Every pot, every stake.</span>
+          <span class="headline-body">
+            There is no house cut anywhere in the payout code. Whatever goes into a pot
+            is paid back out to players, down to the last e8.
+          </span>
+        </div>
+        <ul class="claims">
+          <li>
+            <span class="claim-figure">SHA-256</span>
+            <span class="claim-title">Committed deck</span>
+            <span class="claim-body">The shuffle-seed hash is published before a card moves, the seed itself after the hand.</span>
+          </li>
+          <li>
+            <span class="claim-figure">On-chain</span>
+            <span class="claim-title">No server</span>
+            <span class="claim-body">This page, the lobby and every table are canisters. Each has an address you can query.</span>
+          </li>
+        </ul>
+      </div>
+    </section>
+  {:else}
+    <div class="intro-slim">
+      <span class="slim-chip strong">0% rake</span>
+      <span class="slim-chip">Committed deck</span>
+      <span class="slim-chip">On-chain settlement</span>
+      <button class="link-btn" onclick={() => showHow = true}>How it works</button>
+    </div>
+  {/if}
+
   <p class="foot">
     Texas Hold'em No Limit. <strong>No rake is taken from any pot on any table.</strong>
     Every deal is verifiable from the hand history.
@@ -997,10 +1101,14 @@
 {/if}
 
 <style>
+  /* The top pad is a real budget line, not a taste call. The disclaimer banner
+     and the app header own 243 px of a 900 px desktop viewport (268 + 120 of an
+     844 px phone) before this component paints a pixel, so everything above the
+     first table row is measured against what is left. */
   .lobby {
     max-width: 1320px;
     margin: 0 auto;
-    padding: 22px 20px 32px;
+    padding: 10px 20px 32px;
     color: #e6e8ec;
   }
 
@@ -1049,7 +1157,7 @@
     color: #fff;
   }
 
-  .btn.icon { padding: 9px 14px; font-weight: 500; }
+  .btn.icon { padding: 7px 9px; font-weight: 500; }
   .btn.sm { padding: 8px 14px; font-size: 12.5px; white-space: nowrap; }
   .btn.wide { width: 100%; }
   .btn:disabled { opacity: 0.55; cursor: progress; }
@@ -1080,13 +1188,14 @@
 
   /* ------------------------------------------------------ signed-out intro */
 
+  /* Below the list now (see the markup note), so the margin is on top. */
   .intro {
     display: grid;
     grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
     gap: 30px;
     align-items: center;
     padding: 20px 24px 21px;
-    margin-bottom: 18px;
+    margin-top: 18px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 16px;
     background:
@@ -1222,9 +1331,9 @@
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
-    margin-bottom: 18px;
-    padding-bottom: 14px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
   }
 
   .slim-chip {
@@ -1245,41 +1354,63 @@
     color: #7bf0d8;
   }
 
-  /* ----------------------------------------------------------------- header */
+  /* ------------------------------------------------- the list pane's own bar
 
-  .bar {
+     Heading, counts, filters and the density/refresh controls on ONE row inside
+     the pane. Measured before: three stacked blocks ABOVE the pane, 56 + 35 + 63
+     px of content and 34 px of margins between them = 188 px. Measured after:
+     one 56 px row plus a 26 px drift strip = 82 px, inside the pane, no margins.
+     Nothing was removed from them except the word "Refresh". */
+
+  .pane-bar {
     display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 16px;
+    align-items: center;
+    gap: 8px 12px;
     flex-wrap: wrap;
-    margin-bottom: 11px;
+    padding: 6px 12px;
+    background: rgba(0, 0, 0, 0.16);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
   }
 
-  .bar h2 {
-    margin: 0 0 5px;
-    font-size: 21px;
+  /* Heading OVER counts, not beside them. Side by side the block measured 442 px
+     and the row wanted 442 + 383 (filters) + 178 (controls) + gaps in an 884 px
+     pane, so the bar wrapped to two rows and cost 33 px. Stacked, and with the
+     Refresh label dropped, the row measures 240 + 383 + 109 = 732 px and fits. */
+  .pane-title {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    min-width: 0;
+    margin-right: auto;
+    order: 1;
+  }
+
+  .pane-title h2 {
+    margin: 0;
+    font-size: 16px;
     font-weight: 700;
     letter-spacing: -0.01em;
     color: #fff;
+    white-space: nowrap;
   }
 
-  .bar-sub {
+  .pane-sub {
     margin: 0;
-    font-size: 13px;
+    font-size: 12px;
     color: #7d8492;
   }
 
-  .bar-sub strong { color: #dfe3ea; font-weight: 600; }
-  .bar-sub .hot { color: #00d4aa; }
-  .bar-sub .sep { color: #3a3f49; margin: 0 5px; }
+  .pane-sub strong { color: #dfe3ea; font-weight: 600; }
+  .pane-sub .hot { color: #00d4aa; }
+  .pane-sub .sep { color: #3a3f49; margin: 0 5px; }
 
   .norake {
     color: #00d4aa;
     font-weight: 600;
   }
 
-  .bar-actions { display: flex; align-items: center; gap: 8px; }
+  .pane-actions { display: flex; align-items: center; gap: 8px; order: 3; }
 
   /* PokerStars ships row density as a strip of small icon buttons rather than
      words (docs/DESIGN-BAR.md); at three tables the words were costing more
@@ -1300,7 +1431,7 @@
     border: none;
     color: #6f7683;
     font: inherit;
-    padding: 6px 9px;
+    padding: 5px 8px;
     border-radius: 7px;
     cursor: pointer;
   }
@@ -1313,16 +1444,16 @@
   .filters {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 6px;
     flex-wrap: wrap;
-    margin-bottom: 11px;
+    order: 2;
   }
 
   .filter-gap {
     width: 1px;
-    height: 18px;
+    height: 16px;
     background: rgba(255, 255, 255, 0.09);
-    margin: 0 6px;
+    margin: 0 2px;
   }
 
   .pill {
@@ -1330,8 +1461,8 @@
     border: 1px solid rgba(255, 255, 255, 0.07);
     color: #7d8492;
     font: inherit;
-    font-size: 12.5px;
-    padding: 7px 14px;
+    font-size: 12px;
+    padding: 5px 11px;
     border-radius: 999px;
     cursor: pointer;
     white-space: nowrap;
@@ -1348,35 +1479,39 @@
 
   .pill.clear { color: #9aa2ae; text-decoration: underline; text-underline-offset: 3px; border-color: transparent; }
 
-  /* --------------------------------------------------------------- notices */
+  /* ------------------------------------------- the two in-pane status strips */
 
-  .notice {
-    margin: 0 0 12px;
-    padding: 11px 15px;
-    border-radius: 11px;
-    font-size: 12.5px;
-    line-height: 1.55;
+  /* Full-bleed inside the pane and one line deep at desktop width, rather than a
+     63 px card with its own margins sitting between the visitor and the list.
+     Same statement, attached to the thing it is a statement about. */
+  .drift-strip {
+    margin: 0;
+    padding: 5px 12px;
+    font-size: 11px;
+    line-height: 1.38;
     color: #9aa2ae;
-  }
-
-  .notice.warn {
-    border: 1px solid rgba(240, 180, 41, 0.24);
     background: rgba(240, 180, 41, 0.07);
+    border-bottom: 1px solid rgba(240, 180, 41, 0.22);
   }
 
-  .notice.warn strong { color: #f0b429; }
-  .notice.warn em { color: #dfe3ea; font-style: normal; font-weight: 600; }
+  .drift-strip strong { color: #f0b429; font-weight: 600; }
+  .drift-strip em { color: #dfe3ea; font-style: normal; font-weight: 600; }
 
-  .notice.go {
+  .nudge {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    border: 1px solid rgba(0, 212, 170, 0.2);
+    margin: 0;
+    padding: 11px 15px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: #9aa2ae;
+    border-top: 1px solid rgba(0, 212, 170, 0.2);
     background: rgba(0, 212, 170, 0.055);
   }
 
-  .notice.go strong { color: #00d4aa; }
+  .nudge strong { color: #00d4aa; }
 
   /* ------------------------------------------------------------- the board */
 
@@ -1425,7 +1560,7 @@
     letter-spacing: 0.09em;
     text-transform: uppercase;
     color: #666d79;
-    padding: 13px 16px;
+    padding: 9px 16px;
   }
 
   .sort { cursor: pointer; }
@@ -1455,8 +1590,8 @@
   .tables-list tbody tr.btc.selected { box-shadow: inset 3px 0 0 #f7931a; }
   .tables-list tbody tr:focus-visible { outline: 2px solid #00d4aa; outline-offset: -2px; }
 
-  .tables-list td { padding: 15px 16px; vertical-align: middle; }
-  .tables-list.compact td { padding: 9px 16px; }
+  .tables-list td { padding: 13px 16px; vertical-align: middle; }
+  .tables-list.compact td { padding: 8px 16px; }
   .tables-list.compact .tags { display: none; }
 
   .c-table { width: 30%; }
@@ -1471,8 +1606,16 @@
      turns a scannable list into a ragged one; `table-layout: auto` widens the
      column to honour the nowrap instead. The text itself is never altered —
      it is the lobby canister's registered name. */
+  .name-line {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 0;
+  }
+
   .table-name {
     display: block;
+    min-width: 0;
     color: #fff;
     font-weight: 600;
     font-size: 14.5px;
@@ -1480,6 +1623,30 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* A struck figure is not a price. The characters stay (this is the lobby
+     canister's registered name and it is quoted verbatim), but nothing on the
+     row reads as this table's stakes except the Stakes cell, which is the table
+     contract's. */
+  .stale-quote {
+    color: #a98436;
+    text-decoration: line-through;
+    text-decoration-thickness: 1.5px;
+    font-weight: 500;
+  }
+
+  .stale-flag {
+    flex: none;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #f0b429;
+    background: rgba(240, 180, 41, 0.12);
+    border-radius: 4px;
+    padding: 1px 5px;
+    white-space: nowrap;
   }
 
   /* Quiet, and in the money column, because that is the cell the stale record
@@ -1520,11 +1687,8 @@
   .tag.currency.btc { background: rgba(247, 147, 26, 0.16); color: #f7931a; }
   .btc-mark { font-size: 12px; line-height: 1; }
 
-  .tag.stale {
-    background: rgba(240, 180, 41, 0.14);
-    color: #f0b429;
-    cursor: help;
-  }
+  /* `.tag.stale` used to live here with no markup to match it. The stale-record
+     treatment is `.stale-quote` / `.stale-flag` above, on the name itself. */
 
   .num {
     font-variant-numeric: tabular-nums;
@@ -2014,59 +2178,80 @@
   /* Below this the grid stops being readable, so each row becomes a card.
      The <table> element is kept — one <tr> per table, whatever the layout. */
   @media (max-width: 760px) {
-    .lobby { padding: 10px 12px 24px; }
+    .lobby { padding: 6px 12px 24px; }
 
-    /* The disclaimer banner and the app header already own ~370 px of a
-       390x844 phone, so the intro has to earn every pixel: the supporting
-       claims collapse from cards to chips and keep only their headline, while
-       0% rake keeps its display figure because it is the reason to be here. */
-    .intro { padding: 15px 15px 17px; margin-bottom: 12px; border-radius: 14px; gap: 14px; }
+    /* The intro used to sit ABOVE the list, where the disclaimer banner and the
+       app header had already spent 388 px of an 844 px phone, so it hid its own
+       supporting sentences to buy space it never got back — the first card still
+       landed at 119% of the viewport. It sits below the list now, where nothing
+       above the fold is competing with it, so every sentence it used to drop on
+       a phone is back. */
+    .intro { padding: 15px 15px 17px; margin-top: 14px; border-radius: 14px; gap: 16px; }
     .eyebrow { font-size: 9.5px; letter-spacing: 0.09em; margin-bottom: 6px; }
     .intro h1 { font-size: 25px; margin-bottom: 6px; }
     .intro-lead { font-size: 13px; margin-bottom: 12px; }
-    .intro-note { display: none; }
 
-    .headline-claim { padding: 10px 13px; column-gap: 12px; }
+    .headline-claim { padding: 11px 13px; column-gap: 12px; }
     .headline-figure { font-size: 30px; }
     .headline-title { font-size: 13px; }
-    .headline-body { display: none; }
 
-    .claims { display: flex; flex-wrap: wrap; gap: 6px; }
+    /* One phone-width bar per claim, not two columns of 74 px. */
+    .claims li { grid-template-columns: 62px minmax(0, 1fr); column-gap: 11px; }
+    .claim-figure { font-size: 12.5px; }
 
-    .claims li {
-      display: inline-flex;
-      align-items: baseline;
-      gap: 6px;
-      padding: 5px 11px;
-      border-radius: 999px;
+    /* Heading, counts and Refresh on one wrapped row; the filter strip below it.
+       No horizontal scroller anywhere: see .filters. */
+    .pane-bar {
+      padding: 0 0 8px;
+      gap: 8px 10px;
+      background: none;
+      border-bottom: none;
     }
 
-    .claim-body { display: none; }
-    .claim-figure { font-size: 11.5px; }
-    .claim-title { font-size: 11.5px; color: #9aa2ae; }
-
-    /* Keep Refresh on the title's row: a phone cannot spare 46 px for a
-       toolbar of its own before the first table card. */
-    .bar { align-items: flex-start; flex-wrap: nowrap; gap: 10px; margin-bottom: 9px; }
-    .bar-title { min-width: 0; }
-    .bar-actions { flex: none; }
+    /* `1 1 0` (not `auto`) so the block shrinks, and Refresh is re-ordered ahead
+       of the filter strip so it shares the heading's row instead of taking a
+       31 px row of its own. */
+    .pane-title { flex: 1 1 0; min-width: 0; gap: 0; }
+    .pane-title h2 { font-size: 15px; }
+    .pane-sub { font-size: 11px; }
+    .pane-actions { flex: none; order: 2; }
     .seg { display: none; }
 
-    .notice { font-size: 12px; padding: 10px 13px; margin-bottom: 10px; }
-    .notice.go { flex-direction: column; align-items: stretch; gap: 10px; }
-
+    /* WRAPS. At 390 px the pills measured scrollWidth 434 against clientWidth
+       366 under `overflow-x: auto`, so "Micro" was sliced mid-word and "Low" was
+       off-screen behind a fade. Now scrollWidth == clientWidth == 366: the
+       tighter pill fits all five on one line at this width, and anything that
+       does not fit wraps to a second line rather than being cut. */
     .filters {
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      padding-bottom: 4px;
-      margin-bottom: 9px;
-      scrollbar-width: none;
-      /* The strip scrolls, so the last pill is faded rather than guillotined. */
-      -webkit-mask-image: linear-gradient(to right, #000 88%, transparent 100%);
-      mask-image: linear-gradient(to right, #000 88%, transparent 100%);
+      flex: 1 1 100%;
+      flex-wrap: wrap;
+      gap: 6px;
+      overflow: visible;
+      order: 3;
     }
 
-    .filters::-webkit-scrollbar { display: none; }
+    .filter-gap { display: none; }
+    .pill { font-size: 11.5px; padding: 5px 10px; }
+
+    .drift-strip {
+      padding: 6px 9px;
+      margin-bottom: 8px;
+      font-size: 10.5px;
+      line-height: 1.36;
+      border: 1px solid rgba(240, 180, 41, 0.24);
+      border-radius: 10px;
+    }
+
+    .nudge {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+      margin-top: 2px;
+      padding: 11px 13px;
+      font-size: 12px;
+      border: 1px solid rgba(0, 212, 170, 0.2);
+      border-radius: 11px;
+    }
 
     .list-pane { background: none; border: none; border-radius: 0; overflow: visible; }
     .tables-list, .tables-list tbody { display: block; width: 100%; }
@@ -2076,8 +2261,8 @@
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 2px 12px;
-      padding: 13px 14px;
-      margin-bottom: 9px;
+      padding: 10px 12px;
+      margin-bottom: 7px;
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 12px;
       background: rgba(255, 255, 255, 0.022);
@@ -2093,12 +2278,12 @@
     .c-seats { grid-column: 2; grid-row: 2; margin-top: 8px; text-align: right; }
     /* Kept in the DOM (the harness reads both against the table contract) but
        folded into the buy-in line below, so the card stays four rows tall. */
-    .c-buyin { grid-column: 1 / -1; grid-row: 3; margin-top: 7px; }
+    .c-buyin { grid-column: 1 / -1; grid-row: 3; margin-top: 6px; }
     /* Specificity has to beat `.tables-list td { display: block }` above. */
     .tables-list .c-hands { display: none; }
     .c-now {
       grid-column: 1 / -1; grid-row: 4;
-      margin-top: 9px; padding-top: 9px !important;
+      margin-top: 8px; padding-top: 8px !important;
       border-top: 1px solid rgba(255, 255, 255, 0.06);
     }
     .tables-list.compact .tags { display: flex; }

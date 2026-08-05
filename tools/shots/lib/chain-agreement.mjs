@@ -33,7 +33,8 @@
 // verdict was won.
 
 import { Principal } from '@dfinity/principal';
-import { ledgerBalance, tableActorFor } from './table-driver.mjs';
+import { ledgerBalance, ledgerTransferFee, tableActorFor } from './table-driver.mjs';
+import { BTC_MIN_DEPOSIT_SATS as BTC_MIN_DEPOSIT, ICP_MIN_DEPOSIT_E8S as ICP_MIN_DEPOSIT } from './config.mjs';
 import { historyActor, lobbyActor, optional, variantKey } from './agent.mjs';
 import {
   checkFigure, checkPlainNumber, foldFigures, parseDisplayedAmount,
@@ -44,6 +45,10 @@ import {
 } from './dom-scrape.mjs';
 import { devPlayerPrincipal } from './identities.mjs';
 import { thirdPartyObservations } from './browser.mjs';
+import {
+  bestCategoryName, exactEquity, heroEquityVsRandom, MC_TOLERANCE_POINTS, ORACLE_TRIALS,
+  toCard as toOracleCard,
+} from './equity-oracle.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -70,18 +75,24 @@ export async function readTableTruth(tableId, playerNum) {
 
     const seats = view.players.map((p, i) => {
         const player = optional(p);
-        return player
-            ? {
-                index: i,
-                occupied: true,
-                chips: Number(player.chips),
-                currentBet: Number(player.current_bet),
-                folded: player.has_folded,
-                allIn: player.is_all_in,
-                isSelf: player.is_self,
-                displayName: optional(player.display_name),
-            }
-            : { index: i, occupied: false };
+        if (!player) return { index: i, occupied: false };
+        // `hole_cards : opt record { Card; Card }` crosses the wire as
+        // `[] | [[Card, Card]]`, so `[0]` is the WHOLE PAIR (docs/DEFECTS.md
+        // T-09). Absent for anyone the canister will not show this viewer, which
+        // is exactly the information the equity oracle is allowed to use.
+        const pair = optional(player.hole_cards);
+        return {
+            index: i,
+            occupied: true,
+            chips: Number(player.chips),
+            currentBet: Number(player.current_bet),
+            folded: player.has_folded,
+            allIn: player.is_all_in,
+            isSelf: player.is_self,
+            status: variantKey(player.status),
+            holeCards: Array.isArray(pair) && pair.length >= 2 ? [pair[0], pair[1]] : null,
+            displayName: optional(player.display_name),
+        };
     });
 
     return {
@@ -109,6 +120,9 @@ export async function readTableTruth(tableId, playerNum) {
         smallBlind: Number(view.config.small_blind),
         bigBlind: Number(view.config.big_blind),
         handNumber: Number(view.hand_number),
+        // The Candid board, kept alongside the display strings so the equity
+        // oracle can rank real cards rather than re-parse glyphs off the screen.
+        boardCards: view.community_cards,
         winners: view.last_hand_winners.map((w) => ({
             seat: Number(w.seat),
             amount: Number(w.amount),
@@ -214,6 +228,197 @@ function checkRatio(label, potE8s, callE8s, domText) {
 
 const call0 = (x) => !Number.isFinite(Number(x)) || Number(x) === 0;
 
+/**
+ * THE EQUITY BADGES, RECOMPUTED FROM THE CANISTER'S OWN CARDS.
+ *
+ * The client puts a percentage next to a player at the all-in and the showdown.
+ * The canister exposes no equity, so there is nothing to compare it with — but
+ * "nothing to compare it with" is not a licence to allowlist a decimal on the
+ * felt. It is recomputed here from `get_table_view()`'s cards, by a second
+ * lineage (lib/equity-oracle.mjs ranks all 21 five-card subsets; the client does
+ * one direct 7-card pass), and the screen has to match it.
+ *
+ * WHICH MODE IS LEGAL IS ALSO CHECKED, and that is the security-relevant half:
+ * a per-opponent equity may only appear when the CANISTER revealed every live
+ * hand. If the screen shows a solid (non-modelled) badge while `hole_cards` is
+ * `None` for a live opponent, the client is claiming to know something the
+ * canister did not tell it, and the scene fails.
+ *
+ * @param {object} truth @param {object} dom @param {object[]} figures out-param
+ * @returns {string[]} structural problems
+ */
+function equityProblems(truth, dom, figures) {
+    const problems = [];
+    const shown = dom.seats.filter((s) => s.equityText);
+    if (shown.length === 0 && !dom.equityMethodText && !dom.heroHandText) return problems;
+
+    const board = (truth.boardCards || []).map(toOracleCard);
+    if (board.some((c) => c === null)) return ['equity check: a board card did not decode'];
+
+    // Live = the canister's own deal predicate, in the same two phases the
+    // client uses (see PokerTable.svelte `isInHand`). Mid-hand that is
+    // `Active && !folded`; at showdown `status` may already have been moved on
+    // by an auto-deal that refused to deal, so the cards decide instead —
+    // `hole_cards` is non-null at showdown exactly for the players this hand was
+    // dealt to and who did not fold.
+    const showdownPhase = truth.phase === 'Showdown' || truth.phase === 'HandComplete';
+    const live = truth.seats.filter((s) => s.occupied && !s.folded
+        && (showdownPhase ? Array.isArray(s.holeCards) : s.status === 'Active'));
+    const revealed = live.filter((s) => Array.isArray(s.holeCards));
+    const heroSeat = truth.mySeat;
+    const hero = heroSeat === null ? null : truth.seats[heroSeat];
+    const everyLiveHandRevealed = live.length >= 2 && revealed.length === live.length;
+
+    // ---- the mode the client chose has to be the mode it is entitled to ----
+    for (const s of shown) {
+        if (!s.equityModelled && !everyLiveHandRevealed) {
+            problems.push(
+                `seat ${s.index} shows a NON-modelled equity "${s.equityText}" but the canister has `
+                + `revealed only ${revealed.length} of ${live.length} live hands — the client is claiming `
+                + 'knowledge it was not given',
+            );
+        }
+        if (!everyLiveHandRevealed && s.index !== heroSeat) {
+            problems.push(
+                `seat ${s.index} is not the viewer and its cards are hidden, yet an equity is shown for it`,
+            );
+        }
+    }
+
+    if (everyLiveHandRevealed) {
+        // EXACT, both sides. Post-flop this is at most C(45,2) = 990 runouts and
+        // with a complete board it is one, so the comparison is on the nose.
+        const hands = revealed.map((s) => s.holeCards.map(toOracleCard));
+        if (hands.some((h) => h.some((c) => c === null))) return ['equity check: a hole card did not decode'];
+        const oracle = exactEquity(hands, board);
+        revealed.forEach((s, i) => {
+            const domSeat = dom.seats[s.index];
+            if (!domSeat?.equityText) {
+                problems.push(`seat ${s.index} is live with cards up but shows no equity badge`);
+                return;
+            }
+            figures.push(checkPlainNumber(
+                `seat ${s.index} equity vs independent exact enumeration (${oracle.trials} runouts)`,
+                Math.round(oracle.share[i] * 10000) / 100, domSeat.equityText, { unit: '%' },
+            ));
+        });
+        const total = oracle.share.reduce((a, b) => a + b, 0);
+        if (Math.abs(total - 1) > 1e-9) {
+            problems.push(`equity oracle does not sum to 1 (${total}) — the split is wrong`);
+        }
+    } else if (hero && Array.isArray(hero.holeCards) && shown.length > 0) {
+        // The MODEL. Two independent Monte Carlos, compared inside a stated
+        // tolerance rather than for equality — see MC_TOLERANCE_POINTS.
+        const heroCards = hero.holeCards.map(toOracleCard);
+        if (heroCards.some((c) => c === null)) return ['equity check: a hero card did not decode'];
+        const opponents = live.length - 1;
+        const oracle = heroEquityVsRandom(heroCards, board, opponents, ORACLE_TRIALS);
+        const domSeat = dom.seats[heroSeat];
+        const screenPct = Number(String(domSeat.equityText).replace(/[^\d.]/g, ''));
+        const oraclePct = oracle ? oracle.equity * 100 : null;
+        const delta = oraclePct === null ? null : Math.abs(screenPct - oraclePct);
+        const ok = delta !== null && delta <= MC_TOLERANCE_POINTS;
+        figures.push({
+            label: `seat ${heroSeat} modelled equity vs independent Monte Carlo (${ORACLE_TRIALS} trials)`,
+            chain: oraclePct === null ? null : Math.round(oraclePct * 100) / 100,
+            domText: domSeat.equityText,
+            agrees: ok,
+            discriminates2x: true,
+            ok,
+            detail: ok
+                ? `screen ${screenPct}% vs independent ${oraclePct.toFixed(2)}% `
+                  + `(|d| ${delta.toFixed(3)} <= ${MC_TOLERANCE_POINTS.toFixed(3)} points, 5 sigma)`
+                : `DISAGREES: screen ${screenPct}% vs independent `
+                  + `${oraclePct === null ? 'n/a' : oraclePct.toFixed(2)}% (tolerance `
+                  + `${MC_TOLERANCE_POINTS.toFixed(3)} points)`,
+        });
+        if (!/\bvs\s+\d+\s+random\b/i.test(dom.equityMethodText || '')) {
+            problems.push(
+                'a MODELLED equity is on screen but the method line does not say "vs N random": '
+                + `"${dom.equityMethodText}"`,
+            );
+        }
+        if (!new RegExp(`vs ${opponents} random`, 'i').test(dom.equityMethodText || '')) {
+            problems.push(
+                `the method line does not name ${opponents} random opponent(s) but ${live.length} `
+                + `player(s) are live: "${dom.equityMethodText}"`,
+            );
+        }
+    }
+
+    // ---- the method line has to state a real method ----------------------
+    if (dom.equityMethodText && !/\b(exact|monte carlo)\b/i.test(dom.equityMethodText)) {
+        problems.push(`equity is on screen but no method is stated: "${dom.equityMethodText}"`);
+    }
+
+    // ---- the hand-strength readout ---------------------------------------
+    problems.push(...heroHandProblems(truth, dom, board, hero));
+
+    return problems;
+}
+
+/**
+ * The shape the client must print for each category.
+ *
+ * A `includes(category)` test would be worthless here: "Straight Flush, Ten
+ * high" contains "Flush" AND "Straight", and "Two Pair, Aces and Nines"
+ * contains "Pair". Each category therefore has an ANCHORED pattern, so naming a
+ * two pair "Pair of Aces" fails instead of passing on a substring.
+ */
+const RANK_WORDS = '(?:two|three|four|five|six|seven|eight|nine|ten|jack|queen|king|ace)';
+const HAND_PHRASE = {
+    'Royal Flush': /^royal flush$/,
+    'Straight Flush': /^straight flush, .+ high$/,
+    'Four of a Kind': /^four of a kind, /,
+    'Full House': /^full house, .+ full of /,
+    Flush: /^flush, .+ high$/,
+    Straight: /^straight, .+ high$/,
+    'Three of a Kind': /^three of a kind, /,
+    'Two Pair': /^two pair, .+ and /,
+    Pair: /^pair of /,
+    'High Card': new RegExp(`^${RANK_WORDS} high$`),
+};
+
+/**
+ * "Your hand · Two Pair, Nines and Twos", re-derived from the canister's cards.
+ *
+ * Pre-flop there is no five-card hand, so the client names the HOLDING instead
+ * and that is checked too: the two rank words and suited/offsuit all come
+ * straight out of `hole_cards`, so a client that mislabels its own hand is
+ * caught on the one scene where the board is empty.
+ */
+function heroHandProblems(truth, dom, board, hero) {
+    if (!dom.heroHandText) return [];
+    if (!hero || !Array.isArray(hero.holeCards)) {
+        return [`a "your hand" readout is on screen ("${dom.heroHandText}") but the canister sent `
+            + 'no hole cards for the viewer'];
+    }
+    const phrase = dom.heroHandText.replace(/^.*?·\s*/, '').trim().toLowerCase();
+    const hole = hero.holeCards.map(toOracleCard);
+    if (hole.some((c) => c === null)) return ['equity check: a hero hole card did not decode'];
+
+    if (board.length < 3) {
+        // Pre-flop: the holding, named. "Pocket Queens" or "Queen-Six offsuit".
+        const [hi, lo] = [...hole].sort((a, b) => b.rank - a.rank);
+        const word = (r) => Object.entries({
+            Two: 2, Three: 3, Four: 4, Five: 5, Six: 6, Seven: 7, Eight: 8, Nine: 9,
+            Ten: 10, Jack: 11, Queen: 12, King: 13, Ace: 14,
+        }).find(([, v]) => v === r)?.[0].toLowerCase();
+        const plural = { six: 'sixes' };
+        const expected = hi.rank === lo.rank
+            ? `pocket ${plural[word(hi.rank)] ?? `${word(hi.rank)}s`}`
+            : `${word(hi.rank)}-${word(lo.rank)} ${hi.suit === lo.suit ? 'suited' : 'offsuit'}`;
+        return phrase === expected ? []
+            : [`"your hand" says "${phrase}" but the canister dealt the viewer ${expected}`];
+    }
+
+    const category = bestCategoryName([...hole, ...board]);
+    const pattern = HAND_PHRASE[category];
+    if (!pattern) return [`equity check: no expected phrase for category ${category}`];
+    return pattern.test(phrase) ? []
+        : [`"your hand" says "${phrase}" but the canister's cards rank as ${category}`];
+}
+
 /** Non-money structural facts that keep the seat mapping honest. */
 function mappingChecks(truth, dom) {
     const problems = [];
@@ -287,7 +492,7 @@ function compare(truth, dom, opts) {
         // "(A + B betting)" — design-agnostic: whatever the two legs are, they
         // must add up to the real pot, and the second must be the real live bets.
         if (dom.potBreakdownText) {
-            const nums = dom.potBreakdownText.match(/-?[\d.,]+\s*[KM]?/g) || [];
+            const nums = dom.potBreakdownText.match(/-?\d[\d.,]*\s*[KM]?/g) || [];
             if (nums.length >= 2) {
                 figures.push(checkSum('pot breakdown sums to get_pot()', truth.pot, [nums[0], nums[1]], currency));
                 figures.push(checkFigure('pot breakdown "betting" leg vs sum(current_bet)', sumBets(truth), nums[1], { currency }));
@@ -377,7 +582,7 @@ function compare(truth, dom, opts) {
 
     // ---- pot odds strip --------------------------------------------------
     if (dom.potOddsText) {
-        const nums = dom.potOddsText.match(/-?[\d.,]+\s*[KM]?/g) || [];
+        const nums = dom.potOddsText.match(/-?\d[\d.,]*\s*[KM]?/g) || [];
         if (nums.length >= 2) {
             figures.push(checkFigure('pot-odds "Call X" vs call_amount', truth.callAmount, nums[0], { currency }));
             figures.push(checkFigure('pot-odds "to win Y" vs get_pot()', truth.pot, nums[1], { currency }));
@@ -425,7 +630,7 @@ function compare(truth, dom, opts) {
         } else {
             const mine = truth.mySeat === null ? undefined : truth.winners.find((w) => w.seat === truth.mySeat);
             const shown = mine ?? truth.winners[0];
-            const nums = dom.winnerText.match(/-?[\d.,]+\s*[KM]?/g) || [];
+            const nums = dom.winnerText.match(/-?\d[\d.,]*\s*[KM]?/g) || [];
             // "Seat N wins X" leads with the seat number; "You won X" does not.
             const amountText = mine ? nums[0] : nums[1];
             if (!mine && nums.length >= 1 && Number(nums[0]) !== truth.winners[0].seat + 1) {
@@ -436,6 +641,35 @@ function compare(truth, dom, opts) {
     } else if (handComplete && truth.winners.length > 0 && opts.requireWinnerBanner) {
         structural.push(`canister has ${truth.winners.length} winner(s) for hand ${truth.handNumber} but no winner banner is on screen`);
     }
+
+    // ---- the delta chip on the winner's pod ------------------------------
+    // `+24.00` under a winner's stack is the amount that seat just received. It
+    // is MONEY, at a pod, and it is the one figure from which a player recovers
+    // what changed -- so it is asserted per seat against that seat's own entry
+    // in last_hand_winners, not against "some winner".
+    for (const seat of dom.seats) {
+        if (!seat.awardText) continue;
+        const won = truth.winners.find((w) => w.seat === seat.index);
+        if (!won) {
+            structural.push(
+                `seat ${seat.index} shows an award chip "${seat.awardText}" but is not in last_hand_winners`,
+            );
+            continue;
+        }
+        figures.push(checkFigure(
+            `seat ${seat.index} award chip vs last_hand_winners`,
+            won.amount, seat.awardText.replace(/^\+/, ''), { currency },
+        ));
+    }
+    for (const w of truth.winners) {
+        const seat = dom.seats[w.seat];
+        if (handComplete && seat && seat.occupied && !seat.awardText) {
+            structural.push(`canister paid seat ${w.seat} ${w.amount} but that pod shows no award chip`);
+        }
+    }
+
+    // ---- equity, recomputed ----------------------------------------------
+    structural.push(...equityProblems(truth, dom, figures));
 
     // ---- structure that keeps the mapping honest -------------------------
     structural.push(...mappingChecks(truth, dom));
@@ -773,11 +1007,30 @@ export async function assertLobbyAgreement(ctx, page) {
                     minBuyIn: Number(v.config.min_buy_in),
                     maxBuyIn: Number(v.config.max_buy_in),
                     maxPlayers: Number(v.config.max_players),
+                    ante: Number(v.config.ante),
+                    actionTimeoutSecs: Number(v.config.action_timeout_secs),
+                    timeBankSecs: Number(v.config.time_bank_secs),
                 }
                 : null;
             entry.livePlayerCount = Number(count);
             entry.livePot = Number(pot);
             entry.livePhase = v ? variantKey(v.phase) : null;
+            // Everything the PREVIEW PANE renders, straight from the same view.
+            entry.handNumber = v ? Number(v.hand_number) : null;
+            entry.lastPot = v && v.last_hand_winners.length
+                ? v.last_hand_winners.reduce((n, w) => n + Number(w.amount), 0)
+                : null;
+            entry.seated = v
+                ? v.players
+                    .map((p, i) => ({ seat: i, player: optional(p) }))
+                    .filter((s) => s.player)
+                    .map((s) => ({
+                        seat: s.seat,
+                        name: optional(s.player.display_name),
+                        chips: Number(s.player.chips),
+                    }))
+                : [];
+            entry.board = v ? v.community_cards.map((c) => cardToText(c)) : [];
         } catch (e) {
             entry.tableError = String(e.message || e).split('\n')[0];
         }
@@ -814,7 +1067,7 @@ export async function assertLobbyAgreement(ctx, page) {
         const cfg = entry.tableConfig ?? entry.lobbyConfig;
 
         // "0.05/0.10"
-        const stakeNums = (row.stakesText || '').match(/-?[\d.,]+\s*[KM]?/g) || [];
+        const stakeNums = (row.stakesText || '').match(/-?\d[\d.,]*\s*[KM]?/g) || [];
         if (stakeNums.length >= 2) {
             figures.push(checkFigure(`lobby "${row.name}" small blind (vs TABLE canister config)`, cfg.smallBlind, stakeNums[0], { currency: cur }));
             figures.push(checkFigure(`lobby "${row.name}" big blind (vs TABLE canister config)`, cfg.bigBlind, stakeNums[1], { currency: cur }));
@@ -826,7 +1079,7 @@ export async function assertLobbyAgreement(ctx, page) {
         }
 
         // "10.00 - 50.00"
-        const buyInNums = (row.buyInText || '').match(/-?[\d.,]+\s*[KM]?/g) || [];
+        const buyInNums = (row.buyInText || '').match(/-?\d[\d.,]*\s*[KM]?/g) || [];
         if (buyInNums.length >= 2) {
             figures.push(checkFigure(`lobby "${row.name}" min buy-in (vs TABLE canister config)`, cfg.minBuyIn, buyInNums[0], { currency: cur }));
             figures.push(checkFigure(`lobby "${row.name}" max buy-in (vs TABLE canister config)`, cfg.maxBuyIn, buyInNums[1], { currency: cur }));
@@ -913,6 +1166,121 @@ export async function assertLobbyAgreement(ctx, page) {
         }
     }
 
+    // ---- THE PREVIEW PANE -------------------------------------------------
+    // A second money surface, beside the list and larger than it: a live pot, the
+    // seated players' stacks, a facts list quoting blinds/buy-in/ante/last pot,
+    // and a sentence repeating that pot. The token census (lib/token-census.mjs)
+    // is what proved none of it was asserted — 16 numbers on the lobby screen
+    // that no check had ever looked at, including a 155.00 ICP pot figure.
+    const pv = dom.preview;
+    if (pv && pv.present) {
+        const entry = byName.get(pv.heading) ?? byName.get(pv.selectedRowName);
+        if (!entry) {
+            structural.push(
+                `the preview pane is showing "${pv.heading}", which is not a table the lobby `
+                + 'canister registered, so nothing on it could be compared with a canister',
+            );
+        } else {
+            const cur = entry.currency;
+            const cfg = entry.tableConfig ?? entry.lobbyConfig;
+            const label = (what) => `lobby preview ${what}`;
+
+            // The heading is `selectedTable.name` — the same stale lobby string
+            // that priced the table header 5x and 10x wrong (T-11), rendered here
+            // at 15px beside a facts list quoting the real blinds.
+            const headStakes = /(\d[\d.,]*)\s*\/\s*(\d[\d.,]*)/.exec(pv.heading || '');
+            if (headStakes && entry.tableConfig) {
+                figures.push(checkFigure(
+                    `lobby preview heading "${pv.heading}" quotes a small blind`,
+                    entry.tableConfig.smallBlind, headStakes[1], { currency: cur },
+                ));
+                figures.push(checkFigure(
+                    `lobby preview heading "${pv.heading}" quotes a big blind`,
+                    entry.tableConfig.bigBlind, headStakes[2], { currency: cur },
+                ));
+            }
+
+            // The mini-felt's live pot, bracketed the same way the row's is.
+            if (pv.feltPotText) {
+                const stable = potsBefore.get(entry.name) === entry.livePot;
+                const check = checkFigure(
+                    'lobby preview live pot vs get_pot()', entry.livePot, pv.feltPotText, { currency: cur },
+                );
+                if (stable) figures.push(check);
+                else advisory.push(`${check.label}: pot moved during the scrape; ${check.detail}`);
+            }
+
+            // Every seated player's stack, in the order the client renders them
+            // (occupied seats, ascending).
+            for (let i = 0; i < pv.seated.length; i += 1) {
+                const chain = entry.seated[i];
+                if (!chain) {
+                    structural.push(
+                        `the preview lists ${pv.seated.length} seated player(s) but the table `
+                        + `canister reports ${entry.seated.length}`,
+                    );
+                    break;
+                }
+                figures.push(checkFigure(
+                    `lobby preview seat ${chain.seat} stack`, chain.chips, pv.seated[i].stackText,
+                    { currency: cur },
+                ));
+            }
+
+            // The facts list, read by its own <dt> labels rather than by position.
+            const fact = (name) => pv.factByLabel?.[name] ?? null;
+            const twoNumbers = (text) => (String(text ?? '').match(/-?\d[\d.,]*\s*[KM]?/g) || []);
+
+            const blinds = twoNumbers(fact('Blinds'));
+            if (blinds.length >= 2) {
+                figures.push(checkFigure(label('fact "Blinds" small blind'), cfg.smallBlind, blinds[0], { currency: cur }));
+                figures.push(checkFigure(label('fact "Blinds" big blind'), cfg.bigBlind, blinds[1], { currency: cur }));
+            } else if (fact('Blinds') !== null) {
+                structural.push(`preview fact "Blinds" has no two numbers: "${fact('Blinds')}"`);
+            }
+
+            const buyIn = twoNumbers(fact('Buy-in'));
+            if (buyIn.length >= 2) {
+                figures.push(checkFigure(label('fact "Buy-in" minimum'), cfg.minBuyIn, buyIn[0], { currency: cur }));
+                figures.push(checkFigure(label('fact "Buy-in" maximum'), cfg.maxBuyIn, buyIn[1], { currency: cur }));
+            } else if (fact('Buy-in') !== null) {
+                structural.push(`preview fact "Buy-in" has no range: "${fact('Buy-in')}"`);
+            }
+
+            if (fact('Ante') !== null) {
+                figures.push(checkFigure(label('fact "Ante"'), cfg.ante ?? 0, fact('Ante'), {
+                    currency: cur, allowAbsentWhenZero: true,
+                }));
+            }
+
+            // The clock is seconds, not money — but it is a promise about how long
+            // a player has to act on money, so it is compared like everything else.
+            const clock = twoNumbers(fact('Clock'));
+            if (clock.length >= 2 && entry.tableConfig) {
+                figures.push(checkPlainNumber(label('fact "Clock" action timeout'), entry.tableConfig.actionTimeoutSecs, clock[0], { unit: 's' }));
+                figures.push(checkPlainNumber(label('fact "Clock" time bank'), entry.tableConfig.timeBankSecs, clock[1], { unit: 's' }));
+            }
+
+            if (fact('Hands dealt') !== null && /\d/.test(fact('Hands dealt')) && entry.handNumber !== null) {
+                figures.push(checkPlainNumber(label('fact "Hands dealt"'), entry.handNumber, fact('Hands dealt')));
+            }
+
+            // The last pot, quoted twice: once in the facts list and once in the
+            // rake line. Both are asserted, because both are read.
+            if (fact('Last pot') !== null && /\d/.test(fact('Last pot'))) {
+                figures.push(checkFigure(label('fact "Last pot"'), entry.lastPot, fact('Last pot'), { currency: cur }));
+            }
+            if (pv.rakeLineText && /\d/.test(pv.rakeLineText.replace(/0%/, ''))) {
+                const amount = (pv.rakeLineText.replace(/0%/, '').match(/-?\d[\d.,]*\s*[KM]?/g) || [])[0];
+                if (amount !== undefined) {
+                    figures.push(checkFigure('lobby preview rake line last pot', entry.lastPot, amount, { currency: cur }));
+                }
+            }
+        }
+    } else if (dom.rowCount > 0) {
+        advisory.push('no preview pane on screen; its money figures were not asserted this run');
+    }
+
     const folded = foldFigures(figures);
     const ok = folded.ok && structural.length === 0;
     return {
@@ -928,11 +1296,15 @@ export async function assertLobbyAgreement(ctx, page) {
                 name: e.name, lobbyConfig: e.lobbyConfig, tableConfig: e.tableConfig ?? null,
                 livePlayerCount: e.livePlayerCount ?? null,
                 renderedFaithfullyFromLobbyRecord: e.renderedFaithfullyFromLobbyRecord ?? null,
+                handNumber: e.handNumber ?? null,
+                livePot: e.livePot ?? null,
+                lastPot: e.lastPot ?? null,
+                seated: e.seated ?? [],
             })),
-            onScreen: dom.rows,
+            onScreen: { rows: dom.rows, preview: dom.preview ?? null },
         },
         notes: ok
-            ? `lobby: ${folded.checked} money figures (blinds + buy-ins) all equal the canisters'`
+            ? `lobby: ${folded.checked} money figures (rows + preview pane) all equal the canisters'`
             : `LOBBY CHAIN DISAGREEMENT: ${[...folded.mismatches, ...structural].slice(0, 4).join(' | ')}`,
     };
 }
@@ -966,7 +1338,29 @@ export async function assertDepositAgreement(ctx, page, opts) {
         ledgerBalance(heroPrincipal),
     ]);
     const wallet = Number(walletE8s);
-    const dom = await scrapeDeposit(page);
+
+    // THE MODAL FILLS ITSELF IN ASYNCHRONOUSLY, SO ONE SCRAPE IS A COIN FLIP.
+    // `loadPrices()` is an un-awaited fetch fired from onMount, and the fiat span
+    // only renders once `walletBalance` is non-zero AND `priceLoading` is false.
+    // A single early scrape therefore saw no `.usd-value`, reported "a live quote
+    // was served but the modal shows no fiat figure", and left the figure that
+    // WAS on screen a moment later compared with nothing — which is exactly the
+    // hole this pass exists to close, so it is closed here too. The scrape is
+    // retried until the modal has settled (balance present, and a fiat figure
+    // present whenever a quote was served), and the last snapshot is the one
+    // asserted. The token census then re-reads the page independently, so a
+    // figure that appears after even this loop still cannot slip through: it
+    // would be counted as UNASSERTED.
+    const priceServed = servedIcpUsd();
+    let dom = await scrapeDeposit(page);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+        const settled = dom.found.modal
+            && dom.cryptoBalances.length > 0
+            && (!priceServed || priceServed.mode === 'unavailable' || dom.usdValues.length > 0);
+        if (settled) break;
+        await sleep(ATTEMPT_GAP_MS);
+        dom = await scrapeDeposit(page);
+    }
 
     const figures = [];
     const structural = [];
@@ -989,6 +1383,33 @@ export async function assertDepositAgreement(ctx, page, opts) {
         ));
     }
 
+    // THE FEE AND THE MINIMUM ARE MONEY FIGURES TOO.
+    // `.minimum-notice` states "Minimum deposit: 0.0002 ICP (Network fee: 0.0001
+    // ICP)". Both numbers are typed into DepositModal.svelte as literals, and a
+    // player uses them to decide how much to send: quote a fee below the real one
+    // and their deposit silently costs more than the screen said. The fee is read
+    // LIVE from the ledger (`icrc1_fee`), and the minimum is checked against the
+    // constant the table canister actually enforces
+    // (src/table_canister/src/lib.rs:1525, mirrored in lib/config.mjs).
+    if (dom.minimumNotice && /\d/.test(dom.minimumNotice)) {
+        const nums = dom.minimumNotice.match(/-?\d[\d.,]*\s*[KM]?/g) || [];
+        const fee = await ledgerTransferFee();
+        const minimum = truth.currency === 'BTC' ? BTC_MIN_DEPOSIT : ICP_MIN_DEPOSIT;
+        if (nums.length >= 2) {
+            figures.push(checkFigure(
+                'deposit modal "Minimum deposit" vs the minimum the table canister enforces',
+                minimum, nums[0], { currency: truth.currency },
+            ));
+            figures.push(checkFigure(
+                'deposit modal "Network fee" vs the ledger\'s own icrc1_fee()',
+                Number(fee), nums[1], { currency: truth.currency },
+            ));
+        } else {
+            structural.push(`the deposit modal's minimum/fee notice has fewer than two numbers: "${dom.minimumNotice}"`);
+        }
+    }
+
+    // Re-read after the settle loop: a quote can land between the two.
     const quote = servedIcpUsd();
     if (dom.usdValues.length === 0) {
         if (quote && quote.mode !== 'unavailable') {
@@ -1024,8 +1445,27 @@ export async function assertDepositAgreement(ctx, page, opts) {
                 ledgerBalanceE8s: wallet,
                 tableEscrowBalanceE8s: truth.balance,
                 icpUsdQuote: quote,
+                // HOW OLD THE PRICE IN THE PNG WAS. `loadPrices()` fires once from
+                // the modal's onMount and is never refreshed, and the client prints
+                // no "as of" anywhere, so the fiat figure is presented as current
+                // however long the modal has been open. The age is recorded here so
+                // the artifact states it even though the screen does not. See the
+                // DepositModal finding in docs/RESPONSIVENESS.md §8.
+                fiatQuoteAgeMsAtAssertion: quote
+                    ? Date.now() - Date.parse(quote.observedAt)
+                    : null,
+                fiatIsRefreshedWhileOpen: false,
+                fiatShowsItsOwnAge: false,
             },
-            onScreen: { cryptoBalances: dom.cryptoBalances, usdValues: dom.usdValues, priceError: dom.priceError },
+            onScreen: {
+                cryptoBalances: dom.cryptoBalances,
+                usdValues: dom.usdValues,
+                minimumNotice: dom.minimumNotice ?? null,
+                // Always null today: DepositModal.svelte sets `priceError` and never
+                // renders it, so a failed quote shows the player an empty "()" rather
+                // than saying the price could not be read.
+                priceError: dom.priceError,
+            },
         },
         notes: ok
             ? `deposit modal: ${folded.checked} money figures equal the ledger + the served quote`

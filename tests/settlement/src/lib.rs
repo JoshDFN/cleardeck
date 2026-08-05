@@ -52,7 +52,7 @@ pub mod wasms;
 pub mod world;
 
 pub use coverage::{Coverage, Features};
-pub use observe::{HandComparison, HandRecord, HandRecorder, SeatCompare};
+pub use observe::{ClaimCompare, HandComparison, HandRecord, HandRecorder, PrincipalCompare, SeatCompare};
 pub use oracle::{settle, Anomaly, Award, AwardReason, HandFacts, SeatStake, Settlement};
 pub use scenarios::Bench;
 pub use world::{OpError, World};

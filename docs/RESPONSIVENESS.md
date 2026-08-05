@@ -17,11 +17,101 @@ NOT MEASURED and stay empty.
 
 ---
 
+## 0. What the machine was doing, because last time nobody said
+
+Every number in the wave-3 version of this document was measured while four other agents were
+using the same laptop — cargo builds, extra PocketIC instances, other screenshot runs. None of
+that was recorded, so none of those figures could be compared with anything, including with
+themselves next wave.
+
+The measurement now **samples the machine while it measures the app** (`tools/shots/lib/load-watch.mjs`),
+and the samples are in the JSON next to the timings. Conditions for the run reported in §1:
+
+| | |
+| --- | --- |
+| machine | Apple M4 Max, 16 cores, 128 GiB, darwin 25.3.0 |
+| 1-minute load average during the run | 2.84 – 3.46, i.e. **0.18 – 0.22 per core** (12 samples, 10 s apart) |
+| total CPU across all processes | 120 – 395 % of 1600 % available |
+| cargo / rustc builds running | **none**, in any sample |
+| other browser-driving run | **impossible during the measurement.** The app hardcodes `127.0.0.1:4943`, so the port shim is exclusive: only one screenshot-or-perf run can exist at a time. This one waited for the previous agent's run to release the port and then held it for the whole measurement |
+| local replica | 66 – 79 processes of the managed network — that is the system under test, not contention |
+| also present | one idle 8-hour-old standalone PocketIC test server (7 processes, ~9 % of one core) left by another agent's test harness |
+
+**Exclusive access to this laptop was not available and is not claimed.** What is claimed is
+the specific, recorded state above, and one structural fact: the 4943 shim cannot be shared, so
+no other browser was driving this replica while the stopwatch was running.
+
+### What changed on a quiet machine: almost nothing
+
+This is the useful result, and it is not the expected one.
+
+| measure | wave 3 (unstated load) | wave 4 (§0 conditions) | delta |
+| --- | ---: | ---: | --- |
+| action feedback p50 | 15.1 ms | **15.3 ms** | +0.2 ms |
+| action feedback p95 | 16.3 ms | 16.8 ms | +0.5 ms |
+| `player_action` returns p50 | 190.2 ms | **207.0 ms** | +16.8 ms |
+| `player_action` returns p95 | 473.4 ms | 481.0 ms | +7.6 ms |
+| settled visible state p50 (money-moving) | 257.9 ms | **356.7 ms** | +98.8 ms |
+| settled visible state p95 (money-moving) | 464.2 ms | 481.0 ms | +16.8 ms |
+| lobby FMP p50 | 201.0 ms | **198.2 ms** | −2.8 ms |
+| lobby FMP p95 | 250.8 ms | 287.3 ms | +36.5 ms |
+| table entry → on-chain state p50 | 303.7 ms | **301.4 ms** | −2.3 ms |
+| frame interval p50 / p95 | 8.3 / 9.9 ms | 8.3 / 9.7 ms | — |
+| frames over 20 ms | 0 of 1816 | **0 of 1869** | — |
+
+Nothing moved by more than noise, and the two figures that moved most got **worse**, not
+better. So the wave-3 numbers were not materially inflated by machine load: what they were
+measuring — a local consensus round plus a 500 ms poll — does not care much about a laptop
+that is 20 % busy. The 99 ms rise in the settled-state median is a sampling artifact of where
+the 500 ms poll happened to land across 20 money-moving actions (§5), not a regression: the
+p95 of the same measure moved 17 ms, and `pollWaitAfterCallReturnedMs` is p50 **33.6 ms**,
+p95 **684.7 ms** — the same bimodal shape as before.
+
+The honest conclusion: **re-running on a quiet machine did not buy accuracy, it bought a
+stated denominator.** The dominant term is the replica, and the way to make these numbers
+better is §5.1, not a quieter laptop.
+
+Raw output with every sample and every load reading:
+`artifacts/perf/perf-desktop-wave4.json`.
+
+### Mobile, re-run — and NOT on a quiet machine, which the record says out loud
+
+The mobile re-run could not be given the same conditions: it waited on the port shim for
+another agent's screenshot run, and a cargo build started during it. Its own record says so,
+in the file, in these words:
+
+```
+1-minute load stayed at or under 0.28 per core (peak 4.44 across 16 cores);
+a cargo/rustc BUILD was running; ANOTHER harness process was on the same replica
+for part of this run
+```
+
+| measure (390×844) | wave 3 | wave 4, conditions above |
+| --- | ---: | ---: |
+| lobby FMP p50 | 207.8 ms | 219.1 ms |
+| click → on-chain state p50 | 309 ms | 382.5 ms |
+| action feedback p50 | 15.0 ms | 15.3 ms |
+| `player_action` returns p50 | — | 198.8 ms |
+| settled visible state p50 (money-moving) | — | 364.2 ms |
+
+Read the two load-affected rows (FMP, click→state) as **ceilings**, not as the app getting
+slower: the run that produced them shared the machine with a compiler. The action-feedback
+figure is local UI state and is unaffected, which is itself a small piece of evidence that
+the load did not touch the client-side path. Raw output:
+`artifacts/perf/perf-mobile-wave4.json`.
+
+---
+
 ## 1. The four numbers
 
 Desktop, 1440×900, headless Chromium via Playwright, against the managed local network
-(gateway `http://localhost:8077`). Medians and 95th percentiles are **nearest-rank**, so every
-value printed is an observation that actually happened rather than an interpolation.
+(gateway `http://localhost:8077`), under the load conditions stated in §0. Medians and 95th
+percentiles are **nearest-rank**, so every value printed is an observation that actually
+happened rather than an interpolation.
+
+> The table immediately below is the **wave-3** run, kept because §4's reference comparison and
+> §7's gates were derived from it. The wave-4 re-measurement is the middle column of the
+> comparison table in §0 and the raw JSON named in §6.
 
 | what | n | p50 | p95 | worst |
 | --- | ---: | ---: | ---: | ---: |
@@ -119,13 +209,26 @@ hardware. It has not been.
 The task asked for whatever comparable numbers can honestly be obtained. Here is exactly what
 was and was not obtainable.
 
+**How to read the provenance tags**, which are now on every cell rather than implied:
+
+* **MEASURED** — this rig, this browser, the client's own timing APIs. A number.
+* **BOUND FROM A RECORDING** — *not* a measurement. Derived from a frame capture whose sample
+  interval is far coarser than the thing being timed, so it can only say "no longer than the
+  sample interval". Comparing it with a MEASURED median is not a comparison.
+* **NOT MEASURED** — no instrument was ever pointed at it. Empty on purpose.
+
 | client | how | FCP | LCP | idle frame interval | click→ack | action→settled | animation cadence |
 | --- | --- | ---: | ---: | ---: | --- | --- | --- |
-| **ClearDeck** | localhost, real canisters | 152 ms (p95 180) | 152 ms (p95 180) | 8.3 ms (n=592) | 15.1 ms | 257.9 ms | 8.3 ms, 0 janky frames |
-| **PokerNow** | public internet, no account | 684 ms (p95 1656) | 744 ms (p95 2056) | 8.3 ms (n=479) | NOT MEASURED | ≤ 0.70 s (bound, see below) | NOT MEASURED |
+| **ClearDeck** | localhost, real canisters | MEASURED 152 ms (p95 180) | MEASURED 152 ms (p95 180) | MEASURED 8.3 ms (n=592) | MEASURED 15.1 ms | MEASURED 257.9 ms | MEASURED 8.3 ms, 0 janky frames |
+| **PokerNow** | public internet, no account | MEASURED 684 ms (p95 1656) | MEASURED 744 ms (p95 2056) | MEASURED 8.3 ms (n=479) | NOT MEASURED | **BOUND FROM A RECORDING: ≤ 0.70 s** — a ceiling read off a capture sampled every 0.70 s, not a timing | NOT MEASURED |
 | **PokerStars** | — | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
 | **GGPoker** | — | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
 | **WPT Global** | — | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+
+**No cell in this table is an estimate.** Nine cells are measurements, one is an explicit
+upper bound whose derivation is below, and the rest are empty. If a later wave adds a figure
+inferred from a video, a vendor claim or a review, it belongs in a row tagged **ESTIMATED**
+with the source named — never in an untagged cell beside a measurement.
 
 **The load columns are not a race.** ClearDeck's 152 ms is a loopback fetch from a replica on
 the same machine. PokerNow's 684 ms crossed the public internet to a CDN. Comparing them as
@@ -150,9 +253,18 @@ captured in any sample**:
 | pot awarded, table cleared for the next hand | `t=+123.41 s` pot `300` | `t=+124.11 s` pot `0` | ≤ 0.70 s |
 
 So PokerNow's bet-to-pot collection and its pot award each complete inside 0.70 s. ClearDeck's
-comparable figure — opponent's call to winner banner on screen — is p50 **474.8 ms**, inside
-that bound, with a p95 of 994.4 ms that is outside it. That is the most that recording
-supports; it does not support a frame-rate comparison and none is offered.
+comparable figure — opponent's call to winner banner on screen — is p50 **474.8 ms** in wave 3
+and **467.6 ms** in the wave-4 re-run, inside that bound, with a p95 of 990.9 ms that is only
+just inside it. That is the most that recording supports; it does not support a frame-rate
+comparison and none is offered.
+
+**This is a ceiling, not a time, and the asymmetry runs against us.** PokerNow's true figure
+could be 50 ms or 690 ms — the recording cannot tell, and 0.70 s is simply how often the
+camera blinked. ClearDeck's 467.6 ms is a median of five measured transitions. A reader who
+reads "467.6 ms vs ≤ 0.70 s" as "ClearDeck is faster" has been misled by the layout, which is
+why the cell in the table above is tagged **BOUND FROM A RECORDING** and this paragraph exists.
+The only way to turn it into a comparison is a capture of PokerNow at a frame rate finer than
+the transition being timed, which this environment cannot produce.
 
 **Why the native clients are empty.** The reference corpus
 (`$SCRATCH/reference/INDEX.json`, 438 files) contains, for PokerStars, GGPoker and WPT Global,
@@ -205,7 +317,25 @@ node tools/shots/perf-reference.mjs --loads 10 --idle-ms 4000 \
   --json artifacts/perf/perf-reference.json
 ```
 
-Raw output, including every individual sample, is in `artifacts/perf/`.
+Raw output, including every individual sample, is in `artifacts/perf/`. The wave-4 re-runs are
+`perf-desktop-wave4.json` and `perf-mobile-wave4.json`.
+
+**Every run now records the machine.** `machineLoad` in the JSON carries the CPU model and core
+count, a load-average sample every 10 s, the count of cargo/rustc, PocketIC, icp-cli and
+harness processes at each sample, and a one-line verdict. Nothing has to be remembered or
+claimed after the fact:
+
+```bash
+node -e 'import("./tools/shots/lib/load-watch.mjs").then(m=>console.log(m.sampleLoad()))'
+jq .machineLoad.verdict artifacts/perf/perf-desktop-wave4.json
+```
+
+Writing that sampler produced two of its own corrections, both worth knowing before trusting a
+`ps`-based load figure on macOS: matching the whole command line counted the
+`/bin/zsh -c "node …perf.mjs"` wrapper as a second harness process (so a run reported
+contention that did not exist), and the managed network's binary lives under
+`…/Library/Application Support/…`, so splitting the `comm` column on whitespace loses it
+entirely and reports **zero** replica processes on a machine running 73.
 
 **Time base.** Every timestamp is `performance.now()` taken *inside the page*. Click times are
 the browser's own `event.timeStamp` on the real click, not the time the driver issued it.
@@ -237,13 +367,53 @@ These are re-runnable gates, not a one-off report. The re-run commands in §6 wr
 JSON shape every time, so a later wave can diff them. Suggested thresholds, set from the worst
 observation here rather than from the median:
 
-| gate | threshold | today |
-| --- | ---: | ---: |
-| action feedback p95 | ≤ 33 ms (two frames) | 16.3 ms |
-| settled visible state p95, money-moving | ≤ 1000 ms | 464.2 ms |
-| lobby FMP p95 | ≤ 500 ms | 250.8 ms |
-| table on-chain state p95 | ≤ 1500 ms | 759.2 ms |
-| frames over 34 ms during the showdown transition | 0 | 0 |
+| gate | threshold | wave 3 | wave 4 |
+| --- | ---: | ---: | ---: |
+| action feedback p95 | ≤ 33 ms (two frames) | 16.3 ms | 16.8 ms |
+| settled visible state p95, money-moving | ≤ 1000 ms | 464.2 ms | 481.0 ms |
+| lobby FMP p95 | ≤ 500 ms | 250.8 ms | 287.3 ms |
+| table on-chain state p95 | ≤ 1500 ms | 759.2 ms | 741.7 ms |
+| frames over 34 ms during the showdown transition | 0 | 0 | 0 |
 
 None of these is wired into `./scripts/dev.sh` yet. That is one target away and is the obvious
-next step for whoever owns the gate script.
+next step for whoever owns the gate script. **A gate on these numbers must read
+`machineLoad.verdict` too**, or the first busy-laptop run will trip it and teach everyone to
+ignore it.
+
+---
+
+## 8. Freshness: the one number on screen that is never re-read
+
+Everything above measures how fast the screen catches up with the chain. One figure never
+catches up at all, and it is the only figure on screen that is not on-chain: the **fiat
+conversion in the deposit modal**.
+
+`DepositModal.svelte` calls `loadPrices()` once, from `onMount`, un-awaited. There is no
+refresh, no `as of` label, no age, and no expiry. A modal left open renders
+
+```
+Your ICP Wallet Balance   0.0006 ICP  (~$0.0013)
+```
+
+with the same price an hour later, presented exactly as it was presented one second after the
+fetch. The crypto figure beside it is re-read from the ledger; the dollar figure is a snapshot
+wearing the same styling. On top of that, `priceError` is assigned when the fetch fails and is
+**rendered nowhere** — no `.price-error` element exists in the component — so a failed quote
+prints an empty `()` rather than saying the price could not be read.
+
+The screenshot harness cannot fix the client, so it does the next best thing and dates the
+number: `checks.chain_deposit.onChain` now carries `icpUsdQuote` (the quote actually served,
+with the time it was read), `fiatQuoteAgeMsAtAssertion`, and two flags that are `false` today —
+`fiatIsRefreshedWhileOpen` and `fiatShowsItsOwnAge`. It also never replays a cached quote: a
+volatile host is fetched live, or fulfilled 503 so the app shows its own no-price state, or
+explicitly labelled `FIXTURE` in the manifest and in `INDEX.md`
+(`tools/shots/lib/config.mjs`, `lib/browser.mjs`).
+
+**The fix, for whoever owns `DepositModal.svelte`** — three small changes, in order of value:
+
+1. render the age: `(~$0.0013 · price read 14 s ago)`, from the timestamp of the fetch;
+2. re-fetch on an interval while the modal is open (60 s is finer than any use of this
+   number), and drop the figure entirely once it is older than, say, five minutes;
+3. render `priceError` — `{#if priceError}<span class="price-error">price unavailable</span>{/if}` —
+   so a failed quote is an honest absence rather than empty parentheses. The harness already
+   scrapes `.price-error`; the selector has simply never matched anything.

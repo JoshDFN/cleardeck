@@ -496,3 +496,67 @@ fn the_oracle_would_not_agree_with_the_worst_hand_winning() {
     // That is exactly why this oracle has to exist.
     assert_eq!(deltas[&0] + deltas[&1], 0);
 }
+
+// ===========================================================================
+// THE BUILD IS PINNED, NOT INHERITED (docs/DEFECTS.md H-21)
+// ===========================================================================
+
+/// The sha256 this crate prints is a claim about the CODE only if the build
+/// cannot be steered from outside. Cargo exports `RUSTUP_TOOLCHAIN`, which
+/// OVERRIDES `rust-toolchain.toml`, and `CARGO_TARGET_DIR`, which would send the
+/// output somewhere else while the harness went on hashing whatever stale bytes
+/// were left at the path it reads.
+#[test]
+fn the_canister_build_pins_its_toolchain_and_its_output_directory() {
+    use settlement_oracle::wasms::{
+        parse_toolchain_channel, pinned_table_canister_build, pinned_toolchain, repo_root,
+    };
+    use std::collections::BTreeMap;
+
+    // The parser must survive an ordinary manifest. Written with `?` instead of
+    // `continue` it returns None on the first line that is not the pin -- the
+    // section header -- and every build refuses to start. That is not a
+    // hypothetical: it is what the first version of this function did, and the
+    // baseline run of the planted-bug matrix is what found it.
+    assert_eq!(
+        parse_toolchain_channel("# comment\n[toolchain]\nchannel = \"1.90.0\"\n").as_deref(),
+        Some("1.90.0")
+    );
+    assert_eq!(parse_toolchain_channel("[toolchain]\nprofile=\"minimal\"\n"), None);
+
+    let root = repo_root();
+    let poison = [
+        ("RUSTUP_TOOLCHAIN", "1.96.1"),
+        ("CARGO_TARGET_DIR", "/tmp/somewhere-else"),
+        ("RUSTFLAGS", "-C opt-level=0"),
+    ];
+    for (k, v) in poison {
+        std::env::set_var(k, v);
+    }
+    let cmd = pinned_table_canister_build(&root);
+    let overrides: BTreeMap<String, Option<String>> = cmd
+        .get_envs()
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().to_string(),
+                v.map(|v| v.to_string_lossy().to_string()),
+            )
+        })
+        .collect();
+    for (k, _) in poison {
+        std::env::remove_var(k);
+    }
+
+    assert_eq!(
+        overrides.get("RUSTUP_TOOLCHAIN"),
+        Some(&Some(pinned_toolchain(&root))),
+        "the pinned toolchain must WIN over an inherited one: {overrides:?}"
+    );
+    for (key, planted) in poison.iter().skip(1) {
+        assert_eq!(
+            overrides.get(*key).cloned().flatten(),
+            None,
+            "{key} (planted {planted:?}) reaches the canister build: {overrides:?}"
+        );
+    }
+}

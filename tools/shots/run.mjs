@@ -33,6 +33,7 @@ import {
 } from './lib/browser.mjs';
 import { scenesByName } from './scenarios/index.mjs';
 import { DRIFT_TARGETS, injectDrift, requestedDrift } from './lib/drift.mjs';
+import { assertEveryTokenAccountedFor } from './lib/token-census.mjs';
 
 const log = (msg) => console.log(msg);
 
@@ -113,6 +114,40 @@ function summariseVolatile(observations) {
   };
 }
 
+/**
+ * Every figure any agreement surface compared this scene, flattened.
+ *
+ * A scene can assert against several surfaces (the table behind a modal, and the
+ * modal), and `withAgreement` namespaces them as `chain`, `chain_deposit`, and so
+ * on. The census needs all of them in one list, so the checks tree is walked for
+ * anything shaped like a figure list rather than hardcoding the key names — a new
+ * surface is then covered the day it is added.
+ *
+ * @param {object} checks the scene's verification.checks
+ * @returns {Array<{label:string, chain:number|null, screen:string|null, ok:boolean, detail:string}>}
+ */
+function figuresFrom(checks) {
+  const out = [];
+  const walk = (node, depth) => {
+    if (!node || typeof node !== 'object' || depth > 4) return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+      return;
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'figures' && Array.isArray(value)) {
+        for (const f of value) {
+          if (f && typeof f === 'object' && typeof f.label === 'string') out.push(f);
+        }
+        continue;
+      }
+      walk(value, depth + 1);
+    }
+  };
+  walk(checks, 0);
+  return out;
+}
+
 async function runScene(scene, viewportName, ctx, browser, dirs) {
   const vp = VIEWPORTS[viewportName];
   const wantsVideo = Boolean(scene.video) && viewportName === 'desktop';
@@ -189,6 +224,25 @@ async function runScene(scene, viewportName, ctx, browser, dirs) {
     }
 
     verification = await scene.verify(ctx, page);
+
+    // THE INVERTED GATE, RUN CENTRALLY SO NO SCENE CAN FORGET IT.
+    // `scene.verify` produces a LIST of figures it chose to compare. That list
+    // has no denominator: the wave-3 critic rewrote the header stakes pill to
+    // "9.99/19.98" and the run still reported "14 money figures on screen all
+    // equal the canister's". So after every scene has had its say, every numeric
+    // token the page renders is enumerated and each one must be either matched to
+    // one of those figures or declared non-monetary in the reviewed allowlist.
+    const census = await assertEveryTokenAccountedFor(
+      page, figuresFrom(verification.checks), { scene: scene.name, viewport: viewportName },
+    );
+    verification = {
+      verified: verification.verified && census.ok,
+      checks: { ...verification.checks, tokenCensus: census.checks },
+      notes: census.ok
+        ? `${verification.notes}; ${census.notes}`
+        : `${census.notes} || ${verification.notes}`,
+    };
+
     // A PNG under the canonical name is EVIDENCE: someone browsing artifacts/
     // will read `table-showdown-desktop.png` as proof of a verified showdown. A
     // soft `verified:false` (the action clock expired mid-staging, say) must

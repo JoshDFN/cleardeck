@@ -248,6 +248,74 @@ shutter fires first. After this pass's re-run the same scene captured the *live*
 stamped with its deck position and a tick, "7 of 7 cards" — **and the gate would have accepted
 either.** That is H-24, and it is a real hole.
 
+#### H-24 is closed, and both halves of it were measured
+
+The scene now asserts the **verdict** instead of the scaffolding: `.headline.good`, four of four
+rungs `.done`, the two hashes identical *and* equal to the `seed_hash` re-read over Candid in the
+harness process, the hole cards compared as text across three independent sources (derived here vs
+dealt by the canister vs painted on the felt), every board cell ticked, `N of N` in the tally, and
+52 slots in the deck grid. The grid is expanded, counted and collapsed again with an in-page
+`el.click()` so the published PNG is framed exactly as before.
+
+Both states were then measured on the real canisters, with the *same* scene script:
+
+| | pre-fix (guard off, `JSON.stringify(lastAction.action)` restored) | fixed |
+|---|---|---|
+| subtitle | "Re-deriving your cards locally" (frozen) | "Checked in your browser, not by us" |
+| rungs done | **2 of 4** | 4 of 4 |
+| derived-vs-dealt pairs | **0** | 2 |
+| tally | **absent** | "7 of 7 cards" |
+| `.headline` | **never appears** | `.headline.good` |
+| uncaught page errors | **90** `Do not know how to serialize a BigInt` | 0 |
+| **old assertion** (`.proof-item >= 2`, `.hash.revealed >= 1`) | **PASSES** | passes |
+| **new assertion** | FAILS (45 s timeout waiting for a verdict) | passes |
+
+The old gate certifies the dead panel; the new one cannot. Separately, `table-facing-bet` staged in
+that same pre-fix state now fails with *"threw 7 uncaught error(s) while it was being staged"* —
+`shoot()` refuses to photograph a page that threw (`tools/shots/lib/page-health.mjs`), so the class
+is caught in **every** scene, not just this one.
+
+### Seam 10 — "nobody chose the deck after seeing hole cards" was not proven
+
+The fairness panel listed that under **Proven**. It is not, and the difference matters more here
+than anywhere else in the product, because this panel's whole value is that it does not ask to be
+believed.
+
+**What the browser actually establishes**, and it does establish it:
+
+1. the revealed 32 bytes hash (WebCrypto SHA-256, in this tab) to the commitment the table published
+   for this hand;
+2. all seven cards the player saw sit at exactly the deck positions that seed and the published
+   shuffle rule put them at;
+3. therefore the deck was **fully determined by the commitment** — change one card and (1) breaks.
+
+**What it does not establish** is *when* the commitment came into existence. The panel prints
+`proof.timestamp`, a `nat64` the table canister wrote about itself, and renders the word "before".
+A canister that derived the seed after seeing hole cards and back-dated that field would produce a
+page identical in every pixel. The browser witnessed a hash, not an ordering.
+
+So the claim is demoted to **Not proven**, and the panel now says what would settle it: the
+commitment is on screen from the moment cards are dealt, so a player who copies it mid-hand and
+compares it after the reveal has witnessed the ordering themselves. That is a client-side path to
+the property, and it is one screenshot of work. Two other statements were tightened with it: the
+tally's "Nobody could have chosen them after seeing your hand" became "Change any one of them and
+the hash in step 3 stops matching", and rung 1's "Published at X, before a single card was dealt"
+now attributes that timestamp to the canister and names it as the one thing on the panel taken on
+trust.
+
+`docs/SHUFFLE-SPEC.md:21` carries the same sentence in its **Proven** row and is not owned by this
+pass. It should be demoted the same way.
+
+#### The verification really is local, measured
+
+With every canister request aborted at the browser (37 attempted, 37 failed) and the panel's own
+"Run the check again" clicked: the headline came back `.headline.good`, the tally came back
+"7 of 7 cards", and the derived hole cards `2♦ 8♣` were byte-identical to the online derivation.
+The tell that this was a fresh, networkless run rather than stale DOM is the canister echo under
+"Show the work", which flipped from *"true — proves only that the canister can hash"* to
+*"unreachable — and the check above still passed without it"* in the same pass. The page said
+"I cannot reach the table" and "verified" at the same moment.
+
 ---
 
 ## 4. Making it one product

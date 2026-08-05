@@ -51,6 +51,19 @@ export const ICP_LEDGER_CANISTER_ID = 'ryjl3-tyaaa-aaaaa-aaaba-cai';
 export const ICP_TRANSFER_FEE_E8S = 10_000n;
 
 /**
+ * The smallest deposit the TABLE canister will accept, mirrored from
+ * `src/table_canister/src/lib.rs:1525`:
+ *
+ *     let min_deposit = if currency == Currency::BTC { 1_000 } else { 20_000 };
+ *
+ * The deposit modal prints this number as "Minimum deposit: 0.0002 ICP" from its
+ * own literal, so the two have to be compared. Mirrored here for the same reason
+ * TABLE_CONFIGS is: the constant is not exposed by any canister method.
+ */
+export const ICP_MIN_DEPOSIT_E8S = 20_000;
+export const BTC_MIN_DEPOSIT_SATS = 1_000;
+
+/**
  * icp-cli identities used only to move local play money and reset local tables.
  * Each throwaway local identity holds ~1000 local ICP; the driver walks the list
  * so a long screenshot session cannot run one of them dry.

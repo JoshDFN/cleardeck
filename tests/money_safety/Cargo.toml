@@ -30,6 +30,7 @@ path = "src/lib.rs"
 # (docs/DEFECTS.md H-04, mutation 6). `HandRank` and `Card` are also the exact
 # Candid types on the canister's wire, so there is no second mirror to drift.
 poker_core = { path = "../../src/poker_core" }
+settlement_oracle = { path = "../settlement", default-features = false }
 pocket-ic = "11.0.0"
 candid = "0.10"
 serde = { version = "1.0", features = ["derive"] }

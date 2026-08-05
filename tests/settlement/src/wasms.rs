@@ -116,25 +116,101 @@ pub fn table_canister_module() -> &'static Module {
     })
 }
 
+/// Environment variables that change what `cargo build` produces, or where it
+/// puts it. The harness scrubs every one of them rather than inheriting it.
+///
+/// docs/DEFECTS.md H-21: `RUSTUP_TOOLCHAIN` OVERRIDES `rust-toolchain.toml` and
+/// cargo exports it to every child process, so running this harness from inside
+/// another cargo invocation compiled the canister with a different compiler and
+/// produced a different module hash from identical source. `CARGO_TARGET_DIR`
+/// is worse: the build would succeed somewhere else while the path read and
+/// hashed below kept whatever stale bytes were already there.
+pub const SCRUBBED_EXACT: &[&str] = &[
+    "RUSTUP_TOOLCHAIN",
+    "RUSTC",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "RUSTFLAGS",
+    "RUSTDOCFLAGS",
+    "CARGO",
+    "CARGO_ENCODED_RUSTFLAGS",
+];
+
+pub const SCRUBBED_PREFIXES: &[&str] = &[
+    "CARGO_BUILD_",
+    "CARGO_PROFILE_",
+    "CARGO_TARGET_",
+    "CARGO_UNSTABLE_",
+];
+
+/// `channel = "1.90.0"` out of a `rust-toolchain.toml`.
+pub fn parse_toolchain_channel(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        // `continue`, not `?`: a manifest is mostly lines that are not the pin, and
+        // returning None from the first of them would report every rust-toolchain
+        // file in the repo as having no channel.
+        let Some(rest) = line.strip_prefix("channel") else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let value = rest.trim().trim_matches(|c| c == '"' || c == '\'');
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// The toolchain the repo pins, read from `rust-toolchain.toml`.
+pub fn pinned_toolchain(dir: &Path) -> String {
+    let path = dir.join("rust-toolchain.toml");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    parse_toolchain_channel(&text)
+        .unwrap_or_else(|| panic!("{} has no channel to pin", path.display()))
+}
+
+/// The table-canister build, with the environment PINNED rather than inherited.
+pub fn pinned_table_canister_build(dir: &Path) -> Command {
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(dir).args([
+        "build",
+        "-p",
+        "table_canister",
+        "--target",
+        "wasm32-unknown-unknown",
+        "--release",
+    ]);
+    for key in SCRUBBED_EXACT {
+        cmd.env_remove(key);
+    }
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy().to_string();
+        if SCRUBBED_PREFIXES.iter().any(|p| name.starts_with(p)) {
+            cmd.env_remove(&name);
+        }
+    }
+    cmd.env("RUSTUP_TOOLCHAIN", pinned_toolchain(dir));
+    cmd
+}
+
 fn build_table_canister() -> PathBuf {
     let root = repo_root();
-    let status = Command::new("cargo")
-        .current_dir(&root)
-        .args([
-            "build",
-            "-p",
-            "table_canister",
-            "--target",
-            "wasm32-unknown-unknown",
-            "--release",
-        ])
+    let toolchain = pinned_toolchain(&root);
+    let status = pinned_table_canister_build(&root)
         .status()
         .expect("could not run cargo to build the table canister");
     assert!(
         status.success(),
-        "building table_canister for wasm32-unknown-unknown failed. The settlement \
-         oracle refuses to fall back to an existing artifact: see the trap-1 note \
-         at the top of src/wasms.rs."
+        "building table_canister for wasm32-unknown-unknown with the pinned toolchain \
+         {toolchain} failed. The settlement oracle refuses to fall back to an existing \
+         artifact: see the trap-1 note at the top of src/wasms.rs."
     );
     let built = root
         .join("target/wasm32-unknown-unknown/release")

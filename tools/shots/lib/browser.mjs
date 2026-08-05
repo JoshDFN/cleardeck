@@ -13,6 +13,7 @@ import {
   APP_ORIGIN, ASSET_CACHE_DIR, FREEZE_CSS, PRICE_FIXTURE_BODY,
   THIRD_PARTY_STATIC_HOSTS, THIRD_PARTY_VOLATILE_HOSTS, USE_PRICE_FIXTURE,
 } from './config.mjs';
+import { registerWatchers } from './page-health.mjs';
 
 export async function launchBrowser({ log = () => {} } = {}) {
   // The full Chromium build renders backdrop-filter/blur the way a user sees it;
@@ -270,7 +271,13 @@ export async function newContext(browser, vp, { recordVideoDir, log = () => {} }
   return context;
 }
 
-/** Attaches console/pageerror capture so scene reports can flag runtime breakage. */
+/**
+ * Attaches console/pageerror capture so scene reports can flag runtime breakage.
+ *
+ * The arrays are also registered against the page in `page-health.mjs`, which is
+ * what turns them from a manifest field nobody reads into a GATE: `shoot()`
+ * refuses to photograph a page that threw. See that file for why.
+ */
 export function watchPage(page) {
   const consoleErrors = [];
   const pageErrors = [];
@@ -282,7 +289,7 @@ export function watchPage(page) {
   page.on('requestfailed', (req) => {
     failedRequests.push(`${req.method()} ${req.url()} :: ${req.failure()?.errorText}`);
   });
-  return { consoleErrors, pageErrors, failedRequests };
+  return registerWatchers(page, { consoleErrors, pageErrors, failedRequests });
 }
 
 /** Records every canister id the page actually talked to (runtime wiring proof). */

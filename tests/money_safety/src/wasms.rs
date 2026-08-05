@@ -123,6 +123,127 @@ fn download(url: &str) -> Vec<u8> {
 /// artifact under test" cannot be two different files.
 pub const TABLE_WASM_REL: &str = "target/wasm32-unknown-unknown/release/table_canister.wasm";
 
+// ---------------------------------------------------------------------------
+// the build invocation, PINNED (docs/DEFECTS.md H-21)
+// ---------------------------------------------------------------------------
+
+/// Environment variables that change what `cargo build` produces, or where it
+/// puts it, and which this harness therefore refuses to inherit.
+///
+/// # Why (docs/DEFECTS.md H-21)
+///
+/// The harness prints a sha256 and calls it "the wasm under test". That is a claim
+/// about the CODE. It stops being one the moment the build can be steered from
+/// outside:
+///
+/// * `RUSTUP_TOOLCHAIN` OVERRIDES `rust-toolchain.toml`. Cargo exports it to every
+///   child process, so running the harness from inside another cargo invocation
+///   (a wrapper script, a workspace test, an IDE) silently compiles the canister
+///   with whatever compiler the parent happened to use, and identical source
+///   produces a different module hash. Measured: 1.90.0 and 1.96.1 do not agree.
+/// * `CARGO_TARGET_DIR` moves the OUTPUT. `cargo build` would succeed while
+///   `target/wasm32-unknown-unknown/release/table_canister.wasm` -- the path this
+///   file then reads and hashes -- kept whatever stale bytes were already there.
+///   That is docs/DEFECTS.md H-01 all over again, reachable purely from the
+///   environment.
+/// * `RUSTFLAGS` / `CARGO_ENCODED_RUSTFLAGS` / `RUSTC` / `RUSTC_WRAPPER` /
+///   `CARGO_PROFILE_*` change codegen.
+///
+/// Exact names, and prefixes for the families cargo reads.
+pub const SCRUBBED_EXACT: &[&str] = &[
+    "RUSTUP_TOOLCHAIN",
+    "RUSTUP_HOME_OVERRIDE",
+    "RUSTC",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "RUSTFLAGS",
+    "RUSTDOCFLAGS",
+    "CARGO",
+    "CARGO_ENCODED_RUSTFLAGS",
+];
+
+pub const SCRUBBED_PREFIXES: &[&str] = &[
+    "CARGO_BUILD_",
+    "CARGO_PROFILE_",
+    "CARGO_TARGET_",
+    "CARGO_UNSTABLE_",
+];
+
+/// The toolchain channel `dir/rust-toolchain.toml` pins, e.g. `1.90.0`.
+///
+/// Read from the tree being compiled rather than hardcoded, so the pin cannot
+/// drift away from the file the rest of the project uses. Absent or unparseable
+/// is a hard error: the whole point is that the build is not left to chance.
+pub fn pinned_toolchain(dir: &Path) -> String {
+    let path = dir.join("rust-toolchain.toml");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read {}: {e}. The money-safety harness pins the compiler from that file so \
+             the sha256 it prints is a claim about the CODE and not about how the harness was \
+             invoked (docs/DEFECTS.md H-21).",
+            path.display()
+        )
+    });
+    parse_toolchain_channel(&text).unwrap_or_else(|| {
+        panic!(
+            "{} has no `channel = \"...\"` line, so there is no pin to apply",
+            path.display()
+        )
+    })
+}
+
+/// `channel = "1.90.0"` out of a `rust-toolchain.toml`. Split out so it is
+/// testable without a filesystem.
+pub fn parse_toolchain_channel(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("channel") else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let value = rest.trim().trim_matches(|c| c == '"' || c == '\'');
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// `cargo build -p table_canister --target wasm32-unknown-unknown --release`, run
+/// in `dir`, with the build environment PINNED rather than inherited.
+///
+/// Public so the pin itself is testable: `invariants::classifier` inspects the
+/// command's environment overrides rather than trusting this comment.
+pub fn pinned_table_canister_build(dir: &Path) -> Command {
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(dir).args([
+        "build",
+        "-p",
+        "table_canister",
+        "--target",
+        "wasm32-unknown-unknown",
+        "--release",
+    ]);
+    for key in SCRUBBED_EXACT {
+        cmd.env_remove(key);
+    }
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy().to_string();
+        if SCRUBBED_PREFIXES.iter().any(|p| name.starts_with(p)) {
+            cmd.env_remove(&name);
+        }
+    }
+    // Then say, explicitly, which compiler this is.
+    cmd.env("RUSTUP_TOOLCHAIN", pinned_toolchain(dir));
+    cmd
+}
+
 /// The table canister module under test, together with its identity.
 #[derive(Debug)]
 pub struct TableModule {
@@ -213,16 +334,7 @@ fn build_previous_release() -> TableModule {
         assert!(tar.wait().expect("tar wait").success(), "tar -x failed");
     }
 
-    let status = Command::new("cargo")
-        .current_dir(&tree)
-        .args([
-            "build",
-            "-p",
-            "table_canister",
-            "--target",
-            "wasm32-unknown-unknown",
-            "--release",
-        ])
+    let status = pinned_table_canister_build(&tree)
         .status()
         .expect("could not run cargo to build the previous release");
     assert!(
@@ -235,8 +347,10 @@ fn build_previous_release() -> TableModule {
     let bytes = std::fs::read(&path).expect("previous-release wasm could not be read");
     let sha256 = sha256_hex(&bytes);
     announce(&format!(
-        "MONEY-SAFETY: PREVIOUS release ({PREVIOUS_RELEASE_REF}) sha256={sha256} bytes={}",
-        bytes.len()
+        "MONEY-SAFETY: PREVIOUS release ({PREVIOUS_RELEASE_REF}) sha256={sha256} bytes={} \
+         toolchain={}",
+        bytes.len(),
+        pinned_toolchain(&tree)
     ));
     TableModule {
         bytes,
@@ -258,23 +372,22 @@ fn build_table_canister() -> TableModule {
     // of the deployed module" the same claim. Cargo takes a file lock on the
     // target dir, so a concurrent build in another process serialises rather
     // than corrupting.
-    let status = Command::new("cargo")
-        .current_dir(&root)
-        .args([
-            "build",
-            "-p",
-            "table_canister",
-            "--target",
-            "wasm32-unknown-unknown",
-            "--release",
-        ])
+    // ...with the build environment PINNED, not inherited. See
+    // `pinned_table_canister_build` and docs/DEFECTS.md H-21: a parent cargo
+    // exports RUSTUP_TOOLCHAIN, which overrides rust-toolchain.toml, so the same
+    // source produced a different module hash depending on how the harness was
+    // invoked -- and CARGO_TARGET_DIR would move the output away from the path
+    // this function then reads and hashes.
+    let toolchain = pinned_toolchain(&root);
+    let status = pinned_table_canister_build(&root)
         .status()
         .expect("could not run cargo to build the table canister");
     assert!(
         status.success(),
-        "building table_canister for wasm32-unknown-unknown FAILED. The money-safety harness \
-         refuses to run against any binary it did not just build from this tree (docs/DEFECTS.md \
-         H-01), so there is nothing to test. Fix the build."
+        "building table_canister for wasm32-unknown-unknown with the pinned toolchain \
+         {toolchain} FAILED. The money-safety harness refuses to run against any binary it did \
+         not just build from this tree (docs/DEFECTS.md H-01), so there is nothing to test. \
+         Fix the build, or install the toolchain: `rustup toolchain install {toolchain}`."
     );
 
     let bytes = std::fs::read(&path).unwrap_or_else(|e| {
@@ -285,8 +398,11 @@ fn build_table_canister() -> TableModule {
     });
     let sha256 = sha256_hex(&bytes);
 
+    // The toolchain is part of the identity of the artifact, so it is printed
+    // beside the hash. Without it the sha256 is a claim about the code AND about
+    // how the harness happened to be invoked, which is two claims wearing one hat.
     announce(&format!(
-        "MONEY-SAFETY: wasm under test sha256={sha256} bytes={} path={}",
+        "MONEY-SAFETY: wasm under test sha256={sha256} bytes={} toolchain={toolchain} path={}",
         bytes.len(),
         path.display()
     ));

@@ -17,6 +17,7 @@
 pub mod actions;
 pub mod documented;
 pub mod fuzz;
+pub mod hand_attribution;
 pub mod invariants;
 pub mod legacy_ledger_shapes;
 pub mod ledger;

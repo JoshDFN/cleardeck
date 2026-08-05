@@ -40,7 +40,17 @@ node tools/shots/run.mjs --viewports desktop
 node tools/shots/run.mjs --skip-build --skip-deploy    # reuse the current dist + deploy
 SHOTS_DEBUG=1 node tools/shots/run.mjs                # stack traces on fatal errors
 SHOTS_PRICE_FIXTURE=1 node tools/shots/run.mjs        # offline: labelled placeholder prices
+
+node tools/shots/test-census.mjs                      # the inverted gate's own self-check
+node tools/shots/test-money.mjs                       # the money parser's own self-check
 ```
+
+> `SHOTS_CENSUS=report` **turns the inverted gate off** (see below): the token census still
+> runs and still reports, but an unaccounted-for number no longer fails the scene. It exists
+> for the first pass after a redesign, when the enumeration is being read rather than enforced.
+> A run that used it says so in the scene notes (`REPORT ONLY, NOT GATING`) and in
+> `manifest.json` (`checks.tokenCensus.mode`). Never file evidence from such a run without
+> quoting that line.
 
 **Finish with a full run.** A partial run rewrites `latest/manifest.json` and
 `latest/INDEX.md` to describe only the scenes it captured, while the other scenes' PNGs stay
@@ -126,7 +136,46 @@ a surface is gated when it is not is worse off than one who knows it is open.
 | hand-history row pot | history canister `total_pot`, cross-checked against the table's `sum(winners.amount)` | `handhistory` |
 | **no rake** | history canister `rake == 0`, per hand | `handhistory` |
 
-**Not asserted today** — open surfaces, listed so nobody mistakes silence for a pass:
+| lobby **preview pane**: heading blinds, mini-felt live pot, each seated stack, the facts list (blinds, buy-in, ante, clock, hands dealt, last pot) and the rake line's pot | the TABLE canister's config and live view | `lobby` |
+| deposit modal "Minimum deposit" / "Network fee" | the minimum the table canister enforces, and the ledger's own `icrc1_fee()` | `deposit` |
+
+### The denominator: every number on the screen is counted
+
+The table above is a **numerator**. Until wave 4 there was no denominator, and that is not a
+theoretical complaint: the wave-3 critic rewrote `.current-table-name` — the largest teal
+string on every table scene, quoting the blinds — to `9.99/19.98`, and the run still reported
+*"14 money figures on screen all equal the canister's"* and filed the canonical PNG. A money
+surface nobody thought to assert was invisible in a green run.
+
+`lib/token-census.mjs` inverts the question. After every scene has had its say, **every
+numeric-looking token the page renders** is enumerated and each one must be either
+
+1. **matched to a figure** the chain-agreement layer really compared with a canister value
+   (one-to-one: three seats showing `12.00` need three distinct passing checks), or
+2. **declared non-monetary** in `token-allowlist.mjs`, which is small, in-repo and reviewed.
+
+Anything else is `UNASSERTED` and **fails the scene**. The count is in every run's
+`INDEX.md` (`tokens on screen / chain-matched / allowlisted / UNASSERTED`) and the full
+enumeration, including every allowlist rule and how many tokens it excused, is in
+`manifest.json` under `checks.tokenCensus`.
+
+The allowlist is the only way this can be defeated, so it defends itself:
+
+* every rule needs a **selector**, a **token pattern**, and a reason; the census throws on a
+  malformed rule rather than excusing everything (its first draft did exactly that —
+  `new RegExp(undefined)` is `/(?:)/`, which matches every string);
+* **the shape invariant**: every amount this client renders goes through a `toFixed`, so a
+  money figure always carries a decimal point. A rule whose pattern accepts a decimal token
+  must be marked `moneyShaped: true`, and the census refuses to run otherwise. Exactly one
+  rule is (`.version`, for `v0.1.0-alpha`);
+* chain checks are consulted **first**, so a rule can only excuse a leftover token in an
+  element, never shadow a check that would have failed;
+* `node tools/shots/test-census.mjs` is the offline self-check: 16 cases, no replica needed,
+  including "an unasserted money token fails the scene" and "a money-shaped token in an
+  allowlisted element is refused".
+
+**Not asserted today** — open surfaces, listed so nobody mistakes silence for a pass. Note
+that "not asserted" now means "fails the census if it is ever on screen", not "invisible":
 
 * the **action log** (`ActionFeed`) bet/raise/win amounts — the drawer is closed in every
   scene, so no scene reaches them;

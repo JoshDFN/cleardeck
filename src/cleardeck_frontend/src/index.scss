@@ -167,6 +167,69 @@ img {
   font-feature-settings: 'tnum' 1;
 }
 
+/* ==========================================================================
+   THE FOUR PLAYER-PROTECTION NOTICES RENDER ONCE PER PAGE ON A PHONE
+   ==========================================================================
+
+   `routes/+page.svelte` carries the same four notices TWICE, word for word: the
+   unaudited-alpha disclaimer, the jurisdiction warning, the 18+ notice and the
+   no-middleman/no-house statement, once as `.alpha-warning-banner` above the
+   header and again as `.footer-disclaimer` at the foot of the page. On a
+   1440x900 desktop that redundancy is free. On a 390x844 phone it is 268 px --
+   32% of the screen -- and the copy that sits ABOVE the table is subtracted
+   from the playing surface directly, because `PokerTable.svelte` sizes itself
+   to "the viewport, less everything above me in the flow".
+
+   In portrait, therefore, exactly ONE of the two renders, and it is ALWAYS the
+   TOP BANNER -- on every view, the table included.
+
+   WHY IT IS THE BANNER AND NOT THE FOOTER (wave 4 coherence pass, corrected).
+   The first version of this rule kept the FOOTER on the table view and hid the
+   banner, on the reasoning that three of the four reference clients put their
+   compliance text in a bottom strip. Those clients pin that strip to the
+   viewport. This footer does not: it is the last block of a long document.
+   Driven and measured on the shipped build at 390x844 (layout viewport
+   425x918), on the real table view, against the real canisters:
+
+     .alpha-warning-banner  display:none            0 px on screen
+     .footer-disclaimer     y 931..1166, height 235  0 px on screen,
+                                                     248 px of scroll away
+
+   Four of four protected phrases were in the DOM and ZERO of four were on
+   screen -- including while the Deposit modal was open, which is the screen a
+   player commits real ICP from. That is a reduction in prominence of the
+   unaudited-alpha disclaimer, the 18+ notice and the jurisdiction warning, and
+   the project's rules forbid it: more prominent is always allowed, less never
+   is. `make hygiene` cannot see it, because hygiene greps the SOURCE for the
+   phrases and they were never removed from it.
+
+   The de-duplication itself is kept -- a phone still renders the four notices
+   once, not twice -- but the copy that survives is the one a player cannot miss.
+   Measured after this change, same build, same table: banner y 0..268,
+   fully in the viewport, 4 of 4 phrases on screen, on the table view and behind
+   the Deposit modal.
+
+   WHAT IT COSTS, STATED PLAINLY. The banner is above the table in the flow and
+   `PokerTable.svelte` sizes itself to "the viewport, less everything above me",
+   so the portrait felt gives back what the banner takes. docs/WAVE-04.md carries
+   the before/after felt measurement. The vertical budget has to be recovered
+   from chrome that protects nobody -- the three-row table header and the
+   411.8 px `.header-right` that forces the 0.918 zoom-out -- not from the
+   notices.
+
+   WHAT THIS RULE MAY NEVER BECOME. It may not shorten, soften, summarise or
+   restyle either block, it may not hide both, and it may not be the block that
+   is off screen that survives. The wording lives in +page.svelte and is
+   unchanged.
+
+   Desktop is deliberately untouched and still renders BOTH copies: at 1440x900
+   the banner is what keeps the felt height-capped at its measured 2.12 aspect,
+   and removing it there grew the surface from 68% to 79% of the window, outside
+   bar 3's not-felt band. */
+@media (max-aspect-ratio: 1/1) {
+  .footer-disclaimer { display: none; }
+}
+
 /* Legacy form styles (can be removed if not needed) */
 form {
   display: flex;

@@ -693,7 +693,29 @@
     <div class="glow glow-3"></div>
   </div>
 
-  <!-- Disclaimer Banner -->
+  <!--
+    THE FOUR NOTICES RENDER ONCE PER PAGE, NOT TWICE.
+
+    This block and the identical `.footer-disclaimer` block below carry the same
+    four notices word for word: the unaudited-alpha disclaimer, the jurisdiction
+    warning, the 18+ notice, and the no-middleman/no-house statement. Both were
+    rendered on EVERY page, so a phone showed all four twice and spent 268 px --
+    32% of a 390x844 screen -- saying the same thing a second time. That 268 px
+    is why the table could not be given a playing surface: `--cd-avail` is the
+    viewport less everything above the table in the flow, and the banner is
+    above it.
+
+    Nothing is deleted and nothing is softened. Both blocks are still here,
+    verbatim, and on a desktop both still render. The de-duplication is a
+    PORTRAIT rule and it lives in `src/index.scss` under "THE FOUR
+    PLAYER-PROTECTION NOTICES RENDER ONCE PER PAGE ON A PHONE", where it is
+    stated in full: in portrait the table view shows the FOOTER copy and every
+    other view shows THIS banner, so a phone always sees all four notices, once.
+
+    The wording, the phrase count in this file, and `make hygiene` are all
+    unchanged. Making either copy MORE prominent is always allowed; making
+    either one shorter, quieter, or conditional on anything else is not.
+  -->
   <div class="alpha-warning-banner">
     <div class="banner-content">
       <p class="banner-warning">
@@ -863,6 +885,9 @@
   </main>
 
   <footer>
+    <!-- The other half of the once-per-page rule above. In portrait on the
+         TABLE view this is the copy that renders, and it is the full
+         four-notice text, exactly as written, never a summary of it. -->
     <div class="footer-disclaimer">
       <div class="disclaimer-content">
         <p class="disclaimer-warning">

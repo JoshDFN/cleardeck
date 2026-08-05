@@ -448,6 +448,38 @@ pub struct PrincipalCompare {
     pub diff: i128,
 }
 
+/// What the canister's own hand history SAYS it paid one person, against what the
+/// rules of poker owe them.
+///
+/// # Why this is a third comparison and not a restatement of the second
+///
+/// [`PrincipalCompare`] measures money: it reads escrow and chips. This reads the
+/// RECORD -- the winner list `get_hand_history` publishes, which is what the UI
+/// shows, what the history canister archives, and what a player would quote in a
+/// dispute. The two can disagree, and each direction is its own defect:
+///
+/// * the money is right and the record is wrong. `push_winner` aggregates by
+///   `(seat, principal)` precisely because one chair can carry two people's money
+///   in a hand (docs/DEFECTS.md E-36); aggregating by seat alone still pays both
+///   people correctly -- `credit_escrow` has already run -- while reporting one
+///   person's money under the other's name. Nothing in this repo looked at the
+///   winner list at all, so that defect was invisible from end to end.
+/// * the record is right and the money is wrong. That is FINDING 13's apply side,
+///   and [`PrincipalCompare`] has it.
+///
+/// Gross, not net: the winner list is what was paid OUT of the pot, so it is
+/// compared against the oracle's `owed`, not against `owed - contributed`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimCompare {
+    pub principal: Principal,
+    /// Sum of the winner-list entries naming this person.
+    pub claimed: i128,
+    /// What the rules of poker say they are owed out of the pot.
+    pub owed: i128,
+    /// `claimed - owed`.
+    pub diff: i128,
+}
+
 #[derive(Clone, Debug)]
 pub struct HandComparison {
     pub label: String,
@@ -457,6 +489,9 @@ pub struct HandComparison {
     pub seats: Vec<SeatCompare>,
     /// The same comparison, per PRINCIPAL. See [`PrincipalCompare`].
     pub principals: Vec<PrincipalCompare>,
+    /// What the canister's own record CLAIMS it paid each person, against the
+    /// oracle. See [`ClaimCompare`].
+    pub claims: Vec<ClaimCompare>,
     /// True when every seat's delta AND every principal's delta matches the oracle
     /// exactly. Seats alone are not enough: docs/SECURITY-FINDINGS.md FINDING 13 is
     /// a payout that is right at every seat and wrong at a principal.
@@ -555,8 +590,67 @@ impl HandComparison {
             });
         }
 
-        let agrees =
-            seats.iter().all(|s| s.diff == 0) && principals.iter().all(|p| p.diff == 0);
+        // --- the RECORD dimension ------------------------------------------
+        //
+        // The winner list the canister publishes, per person, against the oracle's
+        // gross answer per person. Skipped only where a chair carried two people's
+        // money and the rules do not split the per-seat answer between them --
+        // which is already an `Anomaly::SeatWithTwoOwners` above, so it is never a
+        // silent skip.
+        let ambiguous = record
+            .seats
+            .iter()
+            .any(|t| t.sole_owner().is_none() && oracle_deltas.get(&t.seat).copied().unwrap_or(0) != 0);
+        let mut claims: Vec<ClaimCompare> = Vec::new();
+        if !ambiguous {
+            // The engine hands an uncalled bet back DURING the hand -- it reduces
+            // `total_bet_this_hand` and the pot together before a payout plan is
+            // built -- and writes no `Winner` for it. That money is not the winner
+            // list's business, so it comes out of the oracle's gross before the two
+            // are compared. It is still measured: the per-seat and per-principal
+            // legs above see it, because it moved real chips.
+            let uncalled_to = |seat: u8| -> i128 {
+                match settlement.uncalled {
+                    Some((s, amount)) if s == seat => amount as i128,
+                    _ => 0,
+                }
+            };
+            let mut owed_gross: BTreeMap<Principal, i128> = BTreeMap::new();
+            for trace in &record.seats {
+                let gross = settlement.owed_to(trace.seat) as i128 - uncalled_to(trace.seat);
+                match trace.sole_owner() {
+                    Some(who) => *owed_gross.entry(who).or_insert(0) += gross,
+                    None => {
+                        // Every owner of this chair relinquished (gross == 0 for the
+                        // seat is enforced by `ambiguous` above), so each is owed
+                        // exactly their own money back.
+                        for (who, amount) in &trace.stake_owners {
+                            *owed_gross.entry(*who).or_insert(0) += *amount as i128;
+                        }
+                    }
+                }
+            }
+            let mut claimed: BTreeMap<Principal, i128> = BTreeMap::new();
+            for w in &record.engine_winners {
+                *claimed.entry(w.principal).or_insert(0) += w.amount as i128;
+            }
+            let mut everyone: BTreeSet<Principal> = owed_gross.keys().copied().collect();
+            everyone.extend(claimed.keys().copied());
+            for who in everyone {
+                let c = claimed.get(&who).copied().unwrap_or(0);
+                let o = owed_gross.get(&who).copied().unwrap_or(0);
+                claims.push(ClaimCompare {
+                    principal: who,
+                    claimed: c,
+                    owed: o,
+                    diff: c - o,
+                });
+            }
+        }
+
+        let agrees = seats.iter().all(|s| s.diff == 0)
+            && principals.iter().all(|p| p.diff == 0)
+            && claims.iter().all(|c| c.diff == 0);
         Self {
             label: label.to_string(),
             destroyed: record.chips_destroyed(),
@@ -565,9 +659,16 @@ impl HandComparison {
             settlement,
             seats,
             principals,
+            claims,
             agrees,
             anomalies,
         }
+    }
+
+    /// People the canister's own record credits with an amount the rules of poker
+    /// do not owe them.
+    pub fn misreported(&self) -> Vec<&ClaimCompare> {
+        self.claims.iter().filter(|c| c.diff != 0).collect()
     }
 
     /// The largest amount that reached the WRONG PERSON in this hand.
@@ -652,6 +753,21 @@ impl HandComparison {
                 p.oracle,
                 p.diff
             ));
+        }
+        if !self.claims.is_empty() {
+            out.push_str(
+                "record (what the canister's OWN winner list says it paid)      claimed  \
+                 oracle_owed  DIFF\n",
+            );
+            for c in &self.claims {
+                out.push_str(&format!(
+                    "  {:<48}  {:>11}  {:>11}  {:>+6}\n",
+                    c.principal.to_text(),
+                    c.claimed,
+                    c.owed,
+                    c.diff
+                ));
+            }
         }
         out.push_str(&format!(
             "collected {}   oracle owed {}   engine paid {}   destroyed {}   \

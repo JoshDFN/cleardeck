@@ -22,6 +22,11 @@
   import Card from './Card.svelte';
   import ActionFeed from './ActionFeed.svelte';
   import { playSound } from '$lib/sounds.js';
+  import { computeEquity, describeHand, formatEquity, cardCodes } from '$lib/equity.js';
+  // Importing this module installs the app-wide BigInt/JSON guard (see the
+  // header of $lib/utils.js). This component is where the class of defect that
+  // guard exists for was found (docs/DEFECTS.md T-10), so it names it.
+  import { candidKey } from '$lib/utils.js';
 
   const {
     tableState,
@@ -153,18 +158,153 @@
   /**
    * THE ALL-IN MOMENT, built from chain state only.
    *
-   * docs/DESIGN-BAR.md bar 15 says the reference clients dramatise all-in with
+   * docs/DESIGN-BAR.md bar 15: the reference clients dramatise all-in with
    * INFORMATION -- an All-In tag, live per-player EQUITY, and the pot called
-   * out. Two of the four do the equity part. ClearDeck deliberately does NOT:
-   * the table canister exposes no equity and this component may not invent
-   * data, so showing a percentage here would be a fabricated number on a screen
-   * that is otherwise auditable. What is on chain is used instead: who is all
-   * in, how much each of them has committed, and the pot at risk.
+   * out. Two of the four (PokerStars, GGPoker) show the equity. What is on chain
+   * is used first: who is all in, how much each of them has committed, and the
+   * pot at risk. The equity is COMPUTED, in $lib/equity.js, from cards this
+   * viewer can already see -- see `equity` below for the information rule.
    */
   const allInSeats = $derived(
     players.map((p, i) => (p && p.is_all_in && !p.has_folded ? i : -1)).filter(i => i >= 0)
   );
   const allInMoment = $derived(gameInProgress && allInSeats.length > 0);
+
+  /**
+   * WHO IS IN THIS HAND, by the canister's own rule, in both of its phases.
+   *
+   * MID-HAND. `start_hand` clears every seat's `hole_cards` and then deals only
+   * to `status == Active` seats (src/table_canister/src/lib.rs:2714, 6765-6777),
+   * and folding sets `has_folded`. So "dealt in and still live" is exactly
+   * `Active && !has_folded`.
+   *
+   * AT SHOWDOWN, `status` is no longer safe to read, and this cost a whole
+   * capture before it was found. `sit_out_next_hand` only sets a FLAG; the flag
+   * is consumed by the next `start_hand`, which writes `status = SittingOut`
+   * BEFORE it checks whether two active players are left (lib.rs:2644-2665) —
+   * and an update that returns `Err` still commits what it wrote. So an
+   * auto-deal that fires and correctly refuses to deal leaves a player who is
+   * sitting in the finished hand, cards face up on the felt, marked SittingOut.
+   * Reading `status` there dropped that player out of the live set and the
+   * showdown rendered with NO equity badges at all — nondeterministically,
+   * depending on whether the auto-deal timer beat the screenshot.
+   *
+   * The cards themselves do not have that problem. At showdown the canister
+   * reveals `hole_cards` for every non-folded player it dealt in, and leaves
+   * them null for everyone it did not, so "has cards on the wire" IS "was dealt
+   * in" — a fact about this hand, not about what the seat intends to do next.
+   */
+  function isInHand(p) {
+    if (!p || p.has_folded) return false;
+    if (isShowdown) return !!revealedHole(p);
+    return variantKey(p.status) === 'Active';
+  }
+
+  const liveSeats = $derived(
+    (gameInProgress || isShowdown)
+      ? players.map((p, i) => (isInHand(p) ? i : -1)).filter(i => i >= 0)
+      : []
+  );
+
+  /**
+   * EQUITY -- computed, never invented, and never from a card you may not see.
+   *
+   * `get_table_view` nulls `hole_cards` for every player the caller is not
+   * entitled to (self, or showdown-and-not-folded, or a voluntary show), so the
+   * opponents' cards are simply ABSENT from `tableState` until the engine
+   * reveals them. Two modes fall out of that, and $lib/equity.js implements only
+   * those two:
+   *
+   *   showdown -- every live hand is face up because the ENGINE turned it up.
+   *               Exact enumeration of the remaining runouts; with a complete
+   *               board that is one runout, i.e. 100.00% / 0.00%.
+   *   hero     -- only your own two cards are known. No per-opponent number is
+   *               produced. Yours is computed against opponents drawn uniformly
+   *               at random, and the badge SAYS "vs N random" so it can never be
+   *               read as a read on anybody.
+   *
+   * MEMOISED ON THE CARDS. `tableState` is re-polled about once a second and the
+   * action clock ticks inside it, so a naive $derived would re-run a 200,000
+   * trial Monte Carlo every second and the badge would flicker. The key is the
+   * exact card set plus the mode; anything else moving on the table is not an
+   * input to equity and must not restart it.
+   */
+  const equityInput = $derived.by(() => {
+    if (!allInMoment && !isShowdown) return null;
+    const board = communityCards.slice(0, 5);
+    const boardKey = (cardCodes(board) ?? []).join('.');
+    const revealed = liveSeats
+      .map(seat => ({ seat, cards: seat === mySeat ? (myCards || []) : revealedHole(players[seat]) }))
+      .filter(r => Array.isArray(r.cards) && r.cards.length === 2);
+    const hero = (mySeat !== null && myCards && myCards.length === 2 && liveSeats.includes(mySeat))
+      ? { seat: mySeat, cards: myCards }
+      : null;
+    if (!hero && revealed.length < 2) return null;
+    const key = [
+      revealed.length === liveSeats.length ? 'sd' : 'hero',
+      boardKey,
+      liveSeats.length,
+      hero ? (cardCodes(hero.cards) ?? []).join('-') : '',
+      revealed.map(r => `${r.seat}:${(cardCodes(r.cards) ?? []).join('-')}`).join(','),
+    ].join('|');
+    return { key, revealed, liveCount: liveSeats.length, hero, board };
+  });
+
+  // A plain (non-reactive) instance-local memo: the cache must NOT be a signal,
+  // or writing it would re-invalidate the derived that wrote it.
+  let equityMemo = { key: null, value: null };
+
+  const equity = $derived.by(() => {
+    const input = equityInput;
+    if (!input) return null;
+    if (equityMemo.key === input.key) return equityMemo.value;
+    let value = null;
+    try {
+      value = computeEquity(input);
+    } catch (err) {
+      // A wrong picture of the table must degrade to NO number, never a wrong
+      // one. The felt simply stops claiming an equity.
+      console.error('[cleardeck] equity computation failed; no equity will be shown', err);
+      value = null;
+    }
+    equityMemo = { key: input.key, value };
+    return value;
+  });
+
+  const equityMode = $derived(equity?.mode ?? null);
+
+  /** What the badge says, or null if this seat has no honest number. */
+  function equityFor(seat) {
+    if (!equity) return null;
+    const share = equity.bySeat.get(seat);
+    if (share === undefined) return null;
+    return formatEquity(share, equity.method);
+  }
+
+  /** One line naming the method, shown on the felt beside the pot (bar 15). */
+  const equityMethodLabel = $derived.by(() => {
+    if (!equity) return null;
+    if (equity.mode === 'showdown') {
+      return equity.method === 'exact'
+        ? `Equity · exact · ${equity.trials.toLocaleString('en-US')} runout${equity.trials === 1 ? '' : 's'}`
+        : `Equity · Monte Carlo · ${equity.trials.toLocaleString('en-US')} trials`;
+    }
+    return `Equity vs ${equity.opponents} random · Monte Carlo · ${equity.trials.toLocaleString('en-US')} trials`;
+  });
+
+  /**
+   * YOUR hand, named in words -- GGPoker's hand-strength readout (bar 15/16).
+   *
+   * Always safe: it is a function of the two cards in your own hand and the
+   * board everyone can see. Pre-flop it names the holding ("Queen-Six offsuit")
+   * rather than a five-card hand that does not exist yet.
+   */
+  const heroHandName = $derived.by(() => {
+    if (!myCards || myCards.length !== 2) return null;
+    const codes = cardCodes([...myCards, ...communityCards.slice(0, 5)]);
+    if (!codes) return null;
+    return describeHand(codes)?.name ?? null;
+  });
 
   // ---------------------------------------------------------------------------
   // 3. The seat ring -- equal ARC LENGTH on the ellipse
@@ -234,17 +374,42 @@
       // Committed chips. CHIP_IN / CHIP_SIDE are felt-width fractions chosen so
       // the disc clears the hole cards (which end 0.11 fw inward) without
       // reaching the board (whose half-width is 0.30 fw).
-      const CHIP_IN = 0.155;
-      const CHIP_SIDE = 0.140;
-      const CHIP_SIDE_IN = 0.050;
+      //
+      // THE RULE IS "PUSH ALONG THE AXIS THAT HAS ROOM", AND THAT AXIS TURNS
+      // WITH THE SURFACE. On the 2.1:1 landscape stadium the spare felt is
+      // horizontal, so every disc moves horizontally: flank seats push inward
+      // (their normal IS horizontal) and top/bottom seats push sideways along
+      // the tangent. On the 0.555:1 portrait surface the spare felt is
+      // vertical, and the same three constants applied unchanged put the
+      // hero's disc on top of the hero's own hole cards and the flank discs
+      // across the pot's collected/betting line. Portrait therefore transposes
+      // the rule: top and bottom seats push inward (their normal is vertical
+      // there), flank seats push along the tangent, up or down.
+      const tall = aspect < 1;
+      const CHIP_IN = tall ? 0.255 : 0.155;
+      const CHIP_SIDE = tall ? 0.150 : 0.140;
+      const CHIP_SIDE_IN = tall ? 0.045 : 0.050;
+      // A seat sits on a rail segment that is either mostly horizontal (its
+      // normal points up or down) or mostly vertical. `alongNormal` is true when
+      // pushing inward already moves the disc along the roomy axis. The
+      // LANDSCAPE test is left exactly as it was -- `side`, i.e. |cos| > 0.35 --
+      // so the proven desktop chip positions do not move by a pixel.
+      const alongNormal = tall ? Math.abs(ny) >= Math.abs(nx) : side !== 'center';
       let bx = nx * CHIP_IN;
       let by = ny * CHIP_IN;
-      if (side === 'center') {
-        // Tangent, taken away from the vertical axis so the disc never drifts
-        // under the board. cs === 0 (dead centre) is broken to the right.
-        const away = cs >= 0 ? 1 : -1;
-        bx = away * CHIP_SIDE + nx * CHIP_SIDE_IN;
-        by = ny * CHIP_SIDE_IN;
+      if (!alongNormal) {
+        // Tangent, taken away from the axis the board sits on so the disc never
+        // drifts under it. Dead centre is broken to the right (landscape) or
+        // downward (portrait).
+        if (tall) {
+          const away = sn >= 0 ? 1 : -1;
+          bx = nx * CHIP_SIDE_IN;
+          by = away * CHIP_SIDE + ny * CHIP_SIDE_IN;
+        } else {
+          const away = cs >= 0 ? 1 : -1;
+          bx = away * CHIP_SIDE + nx * CHIP_SIDE_IN;
+          by = ny * CHIP_SIDE_IN;
+        }
       }
 
       out.push({
@@ -260,7 +425,15 @@
         // under the plate -- seat 1 showed 20px of a 158px pair. Always
         // perpendicular to the rail and into the felt: up for the bottom half of
         // the ring, down for the top half.
-        cy: sn >= 0 ? -1 : 1,
+        //
+        // PORTRAIT SENDS A FLANK SEAT'S PAIR THE OTHER WAY. On the 0.555
+        // surface "toward the centre" is where the board tray, the pot and the
+        // winner line already are, and at showdown a revealed pair landed on
+        // top of the winner readout. A tall table has ~85 px of clear felt
+        // between one flank plate and the next along the rail, so that is where
+        // the pair goes. Top and bottom seats are unaffected: their normal IS
+        // vertical, and the felt they open onto is the middle of the table.
+        cy: (tall && Math.abs(nx) > Math.abs(ny)) ? (sn >= 0 ? 1 : -1) : (sn >= 0 ? -1 : 1),
         side
       });
     }
@@ -271,8 +444,17 @@
   // recomputed for each -- one ring generator, two dressings (bar 19/20).
   // These two MUST equal `--ar` in the matching CSS block, or the seats sit on
   // an ellipse the felt is not drawing.
+  //
+  // PORTRAIT_AR went 0.70 -> 0.555 in wave 4. 0.70 was chosen so the RING fit a
+  // short stage; it left the felt itself 0.70:1, which on a 390x844 phone is a
+  // 217x316 surface -- 20.6% of the screen against PokerNow's real portrait
+  // capture at 52.1% (docs/DESIGN-BAR.md bar 22 wants >= 40%). 0.555 is the
+  // aspect at which the WIDTH cap (the ring plus its two flanking pods must fit
+  // the stage) and the HEIGHT cap (the felt itself must fit the stage) bind at
+  // the same felt width on that phone, i.e. the largest surface the screen can
+  // actually hold. It is also within 3% of PokerNow's measured 0.571.
   const LANDSCAPE_AR = 2.10;
-  const PORTRAIT_AR = 0.70;
+  const PORTRAIT_AR = 0.555;
 
   let portrait = $state(false);
   const ring = $derived(ringSeats(seatCount, portrait ? PORTRAIT_AR : LANDSCAPE_AR));
@@ -337,8 +519,36 @@
       : 0;
   }
 
+  /**
+   * THE TABLE STARTS AT THE TOP OF THE VIEWPORT.
+   *
+   * docs/DEFECTS.md T-16 / docs/DESIGN-BAR.md bar 23. `--cd-avail` is a
+   * DOCUMENT-space arithmetic: "the
+   * viewport, less everything above the table in the flow". It is only the
+   * on-screen truth while the page is scrolled to the top, and entering a table
+   * does not guarantee that -- the lobby's first row is BELOW the fold on a
+   * phone (docs/DESIGN-BAR.md bar 25 measured it at y=1004 of 844), so tapping
+   * a table scrolls the page down first and the table view inherits that offset.
+   * Measured on the shipped build at 390x844: scrollY=137 on arrival, which is
+   * exactly why `table-preflop-mobile.png` and `table-facing-bet-mobile.png`
+   * shipped with the pot, the whole board and four of six pods ABOVE the top of
+   * the frame while the DOM assertions all passed (bar 23).
+   *
+   * The table therefore puts the page back at the top when it opens, once, and
+   * every scrollable ancestor with it. It is a mount-time correction, not a
+   * scroll lock: the player can still scroll down to the notices afterwards.
+   */
+  function anchorToTop() {
+    if (typeof window === 'undefined' || !wrapperEl) return;
+    for (let node = wrapperEl.parentElement; node; node = node.parentElement) {
+      if (node.scrollTop) node.scrollTop = 0;
+    }
+    if (window.scrollY) window.scrollTo(0, 0);
+  }
+
   $effect(() => {
     if (typeof window === 'undefined') return undefined;
+    anchorToTop();
     measureViewport();
     const onResize = () => measureViewport();
     window.addEventListener('resize', onResize);
@@ -497,16 +707,24 @@
    * TypeErrors, an empty action log, and the fairness panel and hand-history
    * list starved of the same reactive pass. See docs/DEFECTS.md T-10.
    *
-   * The variant tag plus its amount is all the identity this key needs, and it
-   * never touches JSON.
+   * The variant tag plus its amount is all the identity this key needs. Every
+   * piece of it is turned into text by `String()` or by `candidKey()`, both of
+   * which are total on BigInt. Nothing here can throw, whatever shape a future
+   * variant arm takes.
    */
   function actionKey(a) {
     const tag = a && a.action ? Object.keys(a.action)[0] : 'none';
     const payload = a && a.action ? a.action[tag] : null;
-    const amount = payload && typeof payload === 'object' && 'amount' in payload
-      ? String(payload.amount)
-      : (typeof payload === 'bigint' || typeof payload === 'number' ? String(payload) : '');
-    return `${a.seat}-${a.timestamp}-${tag}-${amount}`;
+    let detail = '';
+    if (payload && typeof payload === 'object') {
+      // The common arms carry `{ amount }`; anything else falls back to the
+      // BigInt-safe serialiser rather than collapsing to the empty string,
+      // which would make two different payloads look like the same action.
+      detail = 'amount' in payload ? String(payload.amount) : candidKey(payload);
+    } else if (payload !== null && payload !== undefined) {
+      detail = String(payload);
+    }
+    return `${a.seat}-${a.timestamp}-${tag}-${detail}`;
   }
 
   $effect(() => {
@@ -524,6 +742,33 @@
       }];
     }
     lastTrackedAction = key;
+  });
+
+  /**
+   * SHOWDOWN LINES. Every hand the engine turned up, named in words, in the log
+   * -- so the reason the pot went where it went survives the four seconds the
+   * winner glow lasts. The names come from $lib/equity.js's `describeHand`, the
+   * same function that writes the felt's own readout, so the log and the felt
+   * cannot say different things about the same five cards.
+   *
+   * WORDS, DELIBERATELY, NO PERCENTAGES. A number in the log is a number the
+   * screenshot gate has to account for, and the equity already has one home on
+   * the felt with its method printed beside it. Repeating it here would put a
+   * second, unasserted copy of it on the screen.
+   */
+  $effect(() => {
+    if (!isShowdown || communityCards.length < 3) return;
+    if (actionFeed.some(a => a.type === 'showdown')) return;
+    const lines = liveSeats
+      .map(seat => {
+        const hole = seat === mySeat ? (myCards || []) : revealedHole(players[seat]);
+        if (!Array.isArray(hole) || hole.length !== 2) return null;
+        const codes = cardCodes([...hole, ...communityCards.slice(0, 5)]);
+        const named = codes ? describeHand(codes)?.name : null;
+        return named ? { type: 'showdown', seat, text: `shows ${named}`, timestamp: Date.now() } : null;
+      })
+      .filter(Boolean);
+    if (lines.length > 0) actionFeed = [...actionFeed, ...lines];
   });
 
   $effect(() => {
@@ -682,6 +927,140 @@
       localStorage.setItem('poker_wallet_collapsed', walletCollapsed.toString());
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // 10. The two things that MOVE: chips to the pot, and the pot to the winner
+  // ---------------------------------------------------------------------------
+  //
+  // docs/DESIGN-BAR.md bar 11: 500 ms for anything that moves an object, and
+  // that is the whole budget here. Both flights are TRANSFORM-ONLY ghosts
+  // rendered on top of the felt -- no real element ever moves, so the geometry
+  // that §2.2 measures cannot be disturbed by an animation frame, and a capture
+  // taken mid-flight still measures the same table.
+  //
+  // The ghosts also mean the client never has to lie about state: the bet discs
+  // are gone from the DOM the instant the canister zeroes `current_bet`; what
+  // flies to the middle is a copy of what was just there, carrying the amount
+  // the chain last reported for it.
+
+  /**
+   * THE BEAT, in milliseconds. Bar 11 sets 500 ms for anything that moves an
+   * object, and no single element here moves for longer than that. They are
+   * SEQUENCED rather than simultaneous, because the order is the story:
+   *
+   *      0 -  500   the street's chips travel from the seats to the middle
+   *    360 -  860   the pot travels from the middle to the winner
+   *    760 - 1180   the `+X` award lands on the winner's pod
+   *      0 -  440   the revealed pairs flip up (100 ms stagger per card)
+   *
+   * The 4 s winner glow (bar 13) runs underneath all of it and is the only
+   * thing on the table allowed to last longer than a second.
+   */
+  const FLIGHT_MS = 500;
+  /** Matches `.pot-flight`'s animation-delay; keeps the ghost alive long enough. */
+  const POT_FLIGHT_DELAY_MS = 360;
+
+  let sweepingChips = $state([]);   // [{ seat, amount }] flying to the pot
+  let potFlight = $state([]);       // [{ seat, amount, cs, sn }] flying to a winner
+  let lastStreetBets = [];          // plain: last non-zero per-seat bets
+  /**
+   * Whether this client WATCHED the current hand being played.
+   *
+   * The pot flight is a claim about time: "that pot just moved, in front of
+   * you". Firing it for a hand that finished before the page was open is a
+   * false claim, and it is not hypothetical -- the frame probe caught it. A
+   * page opened on a table showing a completed hand flew that old pot on
+   * connect, and because the flight was de-duplicated on `hand_number` alone
+   * (which restarts at 1 after a table reset), the hand the viewer actually
+   * watched end was then treated as already flown and did NOT animate. Exactly
+   * backwards: an old payout replayed, the real one did not.
+   */
+  let sawHandInProgress = false;
+
+  /**
+   * A GHOST'S LIFETIME BELONGS TO THE GHOST.
+   *
+   * Both flights used to be un-mounted by a `setTimeout` returned as the
+   * effect's teardown, which reads naturally and is wrong twice over: Svelte
+   * runs the previous teardown before EVERY re-run, and both effects read
+   * `players`, which is a fresh array on every poll — so the timer that removes
+   * a ghost was liable to be cancelled by the next poll. The frame probe in
+   * $SCRATCH caught it: `chipFlights: 2` still in the DOM a full second after
+   * the flight had ended. Invisible (the animation fills to `opacity: 0`), but
+   * a stale keyed node means the NEXT sweep reuses it and never replays.
+   *
+   * A flight now ends when its own animation ends, which is the only event that
+   * actually knows. The timer stays as a backstop for the case where
+   * `animationend` cannot fire at all, and neither is tied to an effect's life.
+   */
+  let sweepTimer = null;
+  let potTimer = null;
+  $effect(() => () => { clearTimeout(sweepTimer); clearTimeout(potTimer); });
+
+  const dropSweep = (seat) => { sweepingChips = sweepingChips.filter(g => g.seat !== seat); };
+  const dropPotFlight = (seat) => { potFlight = potFlight.filter(f => f.seat !== seat); };
+
+  /**
+   * `prefers-reduced-motion`, read from the platform.
+   *
+   * The CSS already hides both flights under the query, but a ghost that is
+   * only hidden is still a node that has to be cleaned up by an event that will
+   * never fire, because a `display: none` element does not animate. When the
+   * viewer has asked for less motion the ghosts are simply never created, and
+   * the CSS rule stays as the second line of defence.
+   */
+  let reducedMotion = $state(false);
+  $effect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    reducedMotion = mq.matches;
+    const onChange = () => { reducedMotion = mq.matches; };
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  });
+
+  $effect(() => {
+    const bets = players.map(p => (p ? Number(p.current_bet ?? 0) : 0));
+    const total = bets.reduce((a, b) => a + b, 0);
+    if (total > 0) {
+      lastStreetBets = bets;
+      return undefined;
+    }
+    // The bets just went to zero. Either a street was collected mid-hand, or
+    // the hand ended -- and BOTH are a sweep. Gating this on `gameInProgress`
+    // alone meant the one moment the player most wants to see chips move, the
+    // end of an all-in hand, was the one moment nothing moved: the canister
+    // zeroes `current_bet` and sets HandComplete in the same poll, so the
+    // sweep was skipped and the pot appeared to teleport. Measured with the
+    // frame probe in $SCRATCH: `chipFlights: 0` across the whole transition.
+    if ((!gameInProgress && !isHandComplete) || !lastStreetBets.some(b => b > 0)) return undefined;
+    const swept = lastStreetBets.map((amount, seat) => ({ seat, amount })).filter(g => g.amount > 0);
+    lastStreetBets = [];
+    if (reducedMotion) return undefined;
+    sweepingChips = swept;
+    clearTimeout(sweepTimer);
+    sweepTimer = setTimeout(() => { sweepingChips = []; }, FLIGHT_MS + 600);
+    return undefined;
+  });
+
+  $effect(() => {
+    if (gameInProgress) { sawHandInProgress = true; return undefined; }
+    if (!isHandComplete || lastWinners.length === 0) return undefined;
+    // Only ever once per watched hand, and never for a hand that ended before
+    // this client was looking at it.
+    if (!sawHandInProgress) return undefined;
+    sawHandInProgress = false;
+    if (reducedMotion) return undefined;
+    const ring = seatPoints;
+    potFlight = lastWinners.map(w => {
+      const seat = Number(w.seat);
+      const point = ring[seat] ?? { cs: 0, sn: 1 };
+      return { seat, amount: Number(w.amount), cs: point.cs, sn: point.sn };
+    });
+    clearTimeout(potTimer);
+    potTimer = setTimeout(() => { potFlight = []; }, POT_FLIGHT_DELAY_MS + FLIGHT_MS + 600);
+    return undefined;
+  });
 </script>
 
 <!-- `ring-<n>` is a breakpoint on SEAT COUNT, not on viewport width, so it does
@@ -778,6 +1157,12 @@
                   {/each}
                 </div>
               {/if}
+              {#if equityMethodLabel}
+                <!-- Bar 15 says show the equity; honesty says show HOW. The
+                     method and the trial count are on the felt, not buried, and
+                     the full statement of the model is the tooltip. -->
+                <div class="equity-method" title={equity?.note ?? ''}>{equityMethodLabel}</div>
+              {/if}
             </div>
           {/if}
 
@@ -786,12 +1171,42 @@
                a provably-fair table is a claim about chain state; the canister
                has dealt exactly `communityCards.length` cards and the felt says
                so. The five slots stay in the layout so the board keeps its
-               footprint and the pot does not jump when the flop lands. -->
+               footprint and the pot does not jump when the flop lands.
+
+               THE TRAY IS THE FIX FOR THE SEVEN-CARD ROW. At showdown the felt
+               used to show `J 4  K 9 2 2 10` in one horizontal band -- an
+               opponent's revealed pair butted against the community board -- and
+               the hero's own pair 14 px under the board's bottom edge. Nothing
+               said which five cards were the board. It is now drawn as ONE
+               OBJECT on its own tray, with its own caption, and the caption row
+               physically occupies the gap between the board and the hero's pair.
+               `.community-cards` is still the direct parent of exactly the five
+               board cards, which is the contract tools/shots/lib/dom-scrape.mjs
+               reads the board by. -->
           {#if gameInProgress || isShowdown || communityCards.length > 0}
-            <div class="community-cards">
-              {#each Array(5) as _, i}
-                <Card card={communityCards[i] ?? null} />
-              {/each}
+            {@const framed = allInMoment || isShowdown}
+            <div class="board-frame" class:framed>
+              <div class="community-cards">
+                {#each Array(5) as _, i}
+                  <Card card={communityCards[i] ?? null} />
+                {/each}
+              </div>
+              {#if framed}
+                <div class="board-caption">
+                  <span class="caption-tag">
+                    Board
+                    {#if communityCards.length < 5}
+                      &middot; {5 - communityCards.length} to come
+                    {/if}
+                  </span>
+                  {#if heroHandName}
+                    <!-- GGPoker's named hand-strength readout. Yours only: it is
+                         a function of the two cards in your own hand and a board
+                         everyone can see, so it reveals nothing. -->
+                    <span class="caption-hand">Your hand &middot; {heroHandName}</span>
+                  {/if}
+                </div>
+              {/if}
             </div>
           {/if}
         </div>
@@ -804,12 +1219,15 @@
           {@const acting = gameInProgress && i === actionOn}
           {@const isHero = i === mySeat}
           {@const win = isHandComplete ? winInfoFor(i) : null}
+          {@const equityText = (allInMoment || isShowdown) ? equityFor(i) : null}
+          {@const live = isInHand(player)}
           <div
             class="seat seat-{point.side}"
             class:occupied={!!player}
             class:acting
             class:is-me={isHero}
             class:folded={player?.has_folded}
+            class:live-hand={live && (allInMoment || isShowdown)}
             class:winner={!!win}
             style:--cs={point.cs}
             style:--sn={point.sn}
@@ -836,7 +1254,13 @@
                   {@const hole = revealedHole(player)}
                   <Card card={hole[0]} />
                   <Card card={hole[1]} />
-                {:else if (gameInProgress || isShowdown) && !player.has_folded}
+                {:else if (gameInProgress || isShowdown) && live}
+                  <!-- `live`, not `!has_folded`: `start_hand` deals only to
+                       Active players, so a seated-but-sitting-out player was
+                       never dealt in and must not be drawn holding cards. The
+                       equity model counts opponents with the SAME predicate, so
+                       the number of hands drawn and the number of hands modelled
+                       are the same number by construction. -->
                   <Card faceDown={true} />
                   <Card faceDown={true} />
                 {/if}
@@ -860,18 +1284,36 @@
                 <div class="avatar-container" class:is-me={isHero}>
                   <img src={getAvatarUrl(player, i)} alt="" class="player-avatar" />
                   {#if player.has_folded}
-                    <div class="avatar-overlay folded">Fold</div>
+                    <!-- PokerNow's treatment, measured: a folded seat is a grey
+                         cross plus the WORD, and the whole pod desaturates. Ours
+                         dimmed the seat to 46% opacity and nothing else, which
+                         at a glance is indistinguishable from an empty chair. -->
+                    <div class="avatar-overlay folded"><span class="fold-x" aria-hidden="true">&#10005;</span></div>
                   {:else if player.is_all_in}
                     <div class="avatar-overlay allin">All In</div>
                   {/if}
                 </div>
                 <div class="pod-text">
                   <span class="player-name" class:is-me={isHero}>{getShortName(player, i)}</span>
-                  <span class="chips">{fmt(player.chips)}</span>
+                  <span class="stack-row">
+                    <span class="chips">{fmt(player.chips)}</span>
+                    {#if player.has_folded}<span class="fold-word">Fold</span>{/if}
+                  </span>
                 </div>
-                <div class="pod-slot">
+                <div class="pod-slot" class:with-equity={!!equityText}>
                   {#if acting && timeRemaining !== null}
                     <span class="turn-timer" class:urgent={clockUrgent}>{timeRemaining}s</span>
+                  {/if}
+                  {#if equityText}
+                    <!-- Bar 15: the badge sits beside the player, as PokerStars
+                         and GGPoker put it, not in a legend somewhere. It is
+                         ADDITIVE -- the action clock keeps its slot, because a
+                         player deciding whether to call needs both. -->
+                    <span
+                      class="equity-badge"
+                      class:modelled={equityMode === 'hero'}
+                      title={equity?.note ?? ''}
+                    >{equityText}</span>
                   {/if}
                   <span class="position-badges">
                     {#if i === dealerSeat}<span class="position-badge dealer">D</span>{/if}
@@ -901,8 +1343,24 @@
                    already said twice by chain data that cannot drift -- the
                    avatar overlay on the player, and "All in - N at risk" on the
                    pot. -->
-              {#if win && handRankWords(win.hand_rank)}
-                <div class="hand-tag">{handRankWords(win.hand_rank)}</div>
+              {#if win}
+                <!-- THE DELTA CHIP. PokerNow puts `+450` directly under the
+                     winner's stack, so the player reads WHAT CHANGED at the pod
+                     that received it. Ours put the amount in a banner in the
+                     middle of the felt, ~300 px away, and the pod showed only
+                     the post-hand stack -- the one number from which the change
+                     cannot be recovered.
+                     It lands on the chip spot (`bx`/`by`), which touches the
+                     pod's inner edge and is the one place on the felt already
+                     proven clear of this seat's cards AND of the board, at every
+                     seat on the ring. The named hand rides with it, so the award
+                     is one object rather than two competing tags. -->
+                <div class="winner-award">
+                  <span class="stack-delta">+{fmt(Number(win.amount))}</span>
+                  {#if handRankWords(win.hand_rank)}
+                    <span class="hand-tag">{handRankWords(win.hand_rank)}</span>
+                  {/if}
+                </div>
               {/if}
             {:else}
               <button class="join-seat" onclick={() => onAction('join', i)}>
@@ -911,6 +1369,36 @@
               </button>
             {/if}
           </div>
+        {/each}
+
+        <!-- ============ the two flights (bar 11: 500 ms, transform only) ====
+             GHOSTS, not the real elements. `.bet-chip` is removed from the DOM
+             the moment the canister zeroes `current_bet`; what travels is a copy
+             carrying the last amount the chain reported, so no figure on the
+             felt is ever showing a stale number in order to animate. -->
+        {#each sweepingChips as ghost (ghost.seat)}
+          {@const point = seatPoints[ghost.seat]}
+          {#if point}
+            <div
+              class="chip-flight"
+              style:--cs={point.cs}
+              style:--sn={point.sn}
+              style:--bx={point.bx}
+              style:--by={point.by}
+              onanimationend={() => dropSweep(ghost.seat)}
+              aria-hidden="true"
+            >{fmt(ghost.amount)}</div>
+          {/if}
+        {/each}
+
+        {#each potFlight as flight (flight.seat)}
+          <div
+            class="pot-flight"
+            style:--wcs={flight.cs}
+            style:--wsn={flight.sn}
+            onanimationend={() => dropPotFlight(flight.seat)}
+            aria-hidden="true"
+          >{fmt(flight.amount)}</div>
         {/each}
 
         <!-- sitting-out notice sits over the surround, never over the felt -->
@@ -1320,6 +1808,62 @@
     --card-w: calc(var(--fw) * var(--card-board-r));
   }
 
+  /* ---------- the board frame: what stops a seven-card row ----------
+     Only drawn at the all-in and the showdown, which are the two moments a
+     revealed pair sits next to the community cards. On every other scene the
+     board is unchanged, geometry included -- an unframed `.board-frame` is a
+     zero-cost wrapper with no padding, no background and no caption. */
+
+  .board-frame {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border-radius: calc(var(--fw) * 0.018);
+  }
+
+  .board-frame.framed {
+    gap: calc(var(--fw) * 0.010);
+    padding: calc(var(--fw) * 0.013) calc(var(--fw) * 0.016) calc(var(--fw) * 0.010);
+    background: rgba(3, 12, 8, 0.42);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+      inset 0 calc(var(--fw) * 0.004) calc(var(--fw) * 0.02) rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(2px);
+  }
+
+  /* The caption row is not decoration: it physically occupies the gap between
+     the last board card and the hero's own pair, which used to be 14 px of bare
+     felt, and it NAMES both sides of that gap. */
+  .board-caption {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 0.9em;
+    white-space: nowrap;
+  }
+
+  .caption-tag {
+    font-size: 0.62em;
+    font-weight: 800;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.42);
+  }
+
+  .caption-hand {
+    font-size: 0.74em;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #9ef0c8;
+  }
+
+  .showdown .board-frame.framed {
+    background: rgba(3, 12, 8, 0.58);
+    box-shadow:
+      inset 0 0 0 1px rgba(233, 255, 99, 0.20),
+      inset 0 calc(var(--fw) * 0.004) calc(var(--fw) * 0.02) rgba(0, 0, 0, 0.45);
+  }
+
   .pot-display {
     position: absolute;
     bottom: calc(100% + var(--fw) * 0.012);
@@ -1410,6 +1954,21 @@
     letter-spacing: 0.04em;
     color: rgba(255, 255, 255, 0.5);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  /* THE METHOD, ON THE FELT. A percentage with no method behind it is the same
+     class of claim as a pot with no chain behind it. This line says which
+     computation produced the badges and over how many runouts or trials; the
+     `title` carries the full statement, including the modelling assumption in
+     the hero case. */
+  .equity-method {
+    pointer-events: auto;
+    cursor: help;
+    font-size: 0.6em;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.44);
     white-space: nowrap;
   }
 
@@ -1504,7 +2063,32 @@
 
   .seat.acting { z-index: 22; }
   .seat.winner { z-index: 24; }
-  .seat.folded { opacity: 0.46; }
+
+  /* A FOLDED SEAT IS OUT, AND HAS TO LOOK OUT.
+     PokerNow greys the whole pod, replaces the avatar with a cross and prints
+     the word FOLD under the name, so that at a glance only the live hands are
+     lit. Ours dropped the seat to 46% opacity and did nothing else -- which on
+     a dark table is not a signal, it is a slightly dimmer identical pod, and
+     the wave-3 critic read it as "ours dims nobody".
+     Opacity is kept low AND the colour is drained, because either one alone is
+     ambiguous with a seat that is merely far from the light. */
+  .seat.folded { opacity: 0.42; }
+  .seat.folded .player-nameplate {
+    filter: grayscale(1) contrast(0.85);
+    border-color: rgba(255, 255, 255, 0.06);
+    box-shadow: none;
+  }
+  .seat.folded .bet-chip { filter: grayscale(1); opacity: 0.6; }
+
+  /* ...and a live hand at the all-in or the showdown is LIT, so the contrast is
+     carried by both ends and not only by the folded one. */
+  .seat.live-hand .player-nameplate {
+    border-color: rgba(255, 255, 255, 0.34);
+    box-shadow:
+      0 0 calc(var(--fw) * 0.022) rgba(255, 255, 255, 0.12),
+      0 calc(var(--fw) * 0.006) calc(var(--fw) * 0.018) rgba(0, 0, 0, 0.55);
+  }
+  .seat.live-hand.is-me .player-nameplate { border-color: rgba(126, 226, 184, 0.85); }
 
   /* ---- pod ---- */
 
@@ -1597,7 +2181,35 @@
     line-height: 1;
   }
 
-  .avatar-overlay.folded { background: rgba(10, 10, 12, 0.82); color: rgba(255, 255, 255, 0.55); }
+  .avatar-overlay.folded { background: rgba(10, 10, 12, 0.88); color: rgba(255, 255, 255, 0.5); }
+
+  .fold-x {
+    font-size: 2.1em;
+    font-weight: 400;
+    line-height: 1;
+    color: rgba(255, 255, 255, 0.42);
+  }
+
+  /* The WORD, on the stack line, exactly where PokerNow puts it. It is a SIBLING
+     of `.chips`, never inside it: `.chips` is a money figure the screenshot gate
+     reads by `textContent` and asserts against the canister, so nothing may be
+     appended to that element. The row keeps the pod at two lines, which is all
+     the height a portrait pod has. */
+  .stack-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.45em;
+    min-width: 0;
+  }
+
+  .fold-word {
+    font-size: 0.6em;
+    font-weight: 800;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.45);
+    line-height: 1;
+  }
 
   .avatar-overlay.allin {
     background: rgba(178, 43, 12, 0.9);
@@ -1640,6 +2252,41 @@
     align-items: flex-end;
     gap: 0.15em;
     min-width: 2.3em;
+  }
+
+  /* `100.00%` is wider than a `60s` clock, so the slot grows for it and the
+     name ellipsizes by one character rather than the badge being clipped by the
+     pod's `overflow: hidden`. */
+  .pod-slot.with-equity { min-width: 3.5em; }
+
+  /* THE EQUITY BADGE (bar 15). Two visually distinct things, because they are
+     two epistemically distinct things:
+       solid mint   -- computed over hands the ENGINE revealed. A fact.
+       outlined     -- computed against opponents drawn at random because the
+                       canister has not revealed them. A model, and it is dashed
+                       and carries the `vs N random` method line under the pot
+                       so it can never be mistaken for the first kind. */
+  .equity-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.08em 0.34em;
+    border-radius: 0.35em;
+    font-size: 0.68em;
+    font-weight: 800;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+    background: #7ee2b8;
+    color: #06231a;
+    white-space: nowrap;
+    cursor: help;
+  }
+
+  .equity-badge.modelled {
+    background: transparent;
+    border: 1px dashed rgba(126, 226, 184, 0.7);
+    color: #9ef0c8;
   }
 
   .turn-timer {
@@ -1719,15 +2366,38 @@
     z-index: 4;                      /* behind the pod, like GGPoker */
   }
 
+  /* A REVEALED PAIR IS A THIRD OBJECT, not more board.
+     The inward nudge is HALVED here and the pair gets its own plinth. Full
+     nudge put seat 1's revealed `6s 4d` 33 px INSIDE the board tray at
+     showdown, so the felt read `6 4 | 10 4 J 7 9` as one seven-card row -- the
+     exact complaint the tray exists to answer, arriving from the other side.
+     Half the nudge clears the tray; the plinth means that even when a crowded
+     ring brings them close again, the two groups are drawn on different
+     surfaces and cannot merge. */
   .player-cards.shown {
     z-index: 7;
     transform:
       translate(-50%, -50%)
       translate(
-        calc(var(--nx, 0) * var(--fw) * var(--card-nudge-r)),
+        calc(var(--nx, 0) * var(--fw) * var(--card-nudge-r) * 0.5),
         calc(var(--cy, -1) * var(--fw) * var(--off-shown-r))
       );
     filter: drop-shadow(0 calc(var(--fw) * 0.004) calc(var(--fw) * 0.012) rgba(0, 0, 0, 0.55));
+  }
+
+  .player-cards.shown::before {
+    content: '';
+    position: absolute;
+    inset: calc(var(--fw) * -0.008) calc(var(--fw) * -0.010);
+    z-index: -1;
+    border-radius: calc(var(--fw) * 0.014);
+    background: rgba(4, 14, 9, 0.78);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  }
+
+  .seat.winner .player-cards.shown::before {
+    background: rgba(20, 26, 4, 0.85);
+    box-shadow: inset 0 0 0 1px rgba(233, 255, 99, 0.45);
   }
 
   /* YOUR cards are the one thing on the felt that outranks a pod, so the hero's
@@ -1782,28 +2452,153 @@
 
   .bet-amount { font-size: 0.78em; font-variant-numeric: tabular-nums; }
 
-  /* ---- hand tag (showdown / all-in), on the felt side of the pod ---- */
+  /* ---- the winner's award, on the felt side of the pod ---- */
 
-  /* The named winning hand, parked on this seat's chip spot -- see `bx`/`by` in
-     ringSeats(), which is already sized to clear both the hole cards and the
-     board at every seat on the ring. */
-  .hand-tag {
+  /* Parked on this seat's chip spot -- see `bx`/`by` in ringSeats(), already
+     sized to clear both the hole cards and the board at every seat on the ring,
+     and free at showdown because the street's bets have been swept. The chip
+     spot touches the pod's inner edge, which is the whole point: the delta has
+     to be AT the stack it changed. */
+  .winner-award {
     position: absolute;
     left: 0;
     top: 0;
     z-index: 20;
-    padding: 0.1em 0.5em;
-    border-radius: 0.4em;
-    background: #E9FF63;
-    color: #1d2000;
-    font-size: 0.62em;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.18em;
     white-space: nowrap;
+    /* 1.3x the chip spot. The chip spot is sized for a BET, which lands while
+       the board is three cards wide; at showdown the board is five cards wide
+       and wearing a tray, and the award landed 40 px inside it. Pushing the
+       award further out along the same proven vector keeps it touching the pod
+       and clear of the tray, without moving the bet disc that is measured
+       everywhere else. */
+    --award-out: 1.3;
     transform:
       translate(-50%, -50%)
-      translate(calc(var(--bx, 0) * var(--fw)), calc(var(--by, 0) * var(--fw)));
+      translate(
+        calc(var(--bx, 0) * var(--fw) * var(--award-out)),
+        calc(var(--by, 0) * var(--fw) * var(--award-out))
+      );
+    /* The award LANDS, and it lands LAST: 760 ms in, which is where the pot
+       ghost finishes its flight to this pod. */
+    animation: award-land 0.42s cubic-bezier(0.2, 1.25, 0.5, 1) 0.76s both;
+  }
+
+  /* PokerNow's `+300`: an olive chip under the winner's stack, the single
+     figure that says what changed. */
+  .stack-delta {
+    padding: 0.1em 0.5em;
+    border-radius: 999px;
+    background: #E9FF63;
+    color: #1d2000;
+    font-size: 0.86em;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+    box-shadow: 0 0 calc(var(--fw) * 0.03) rgba(233, 255, 99, 0.45);
+  }
+
+  .hand-tag {
+    padding: 0.08em 0.45em;
+    border-radius: 0.35em;
+    background: rgba(8, 18, 12, 0.9);
+    border: 1px solid rgba(233, 255, 99, 0.45);
+    color: #e9ff63;
+    font-size: 0.58em;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  @keyframes award-land {
+    from { opacity: 0; transform:
+      translate(-50%, -50%)
+      translate(
+        calc(var(--bx, 0) * var(--fw) * var(--award-out)),
+        calc(var(--by, 0) * var(--fw) * var(--award-out)))
+      scale(0.6); }
+    to   { opacity: 1; transform:
+      translate(-50%, -50%)
+      translate(
+        calc(var(--bx, 0) * var(--fw) * var(--award-out)),
+        calc(var(--by, 0) * var(--fw) * var(--award-out)))
+      scale(1); }
+  }
+
+  /* ---- the two flights ----
+     Ghost copies painted over the felt. Neither is in the layout, so neither can
+     move a measured object; both are pure transform + opacity. */
+
+  .chip-flight,
+  .pot-flight {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: 23;
+    pointer-events: none;
+    padding: 0.12em 0.55em;
+    border-radius: 999px;
+    font-weight: 800;
+    font-size: 0.8em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  /* seat chip -> middle */
+  .chip-flight {
+    --fx: calc(var(--rx) * var(--cs, 0) + var(--bx, 0) * var(--fw));
+    --fy: calc(var(--ry) * var(--sn, 0) + var(--by, 0) * var(--fw));
+    background: #dfe86a;
+    color: #23260c;
+    animation: chip-to-pot 0.5s cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+
+  @keyframes chip-to-pot {
+    from { transform: translate(-50%, -50%) translate(var(--fx), var(--fy)) scale(1); opacity: 1; }
+    85%  { opacity: 1; }
+    to   { transform: translate(-50%, -50%) scale(0.55); opacity: 0; }
+  }
+
+  /* middle -> winner's pod */
+  .pot-flight {
+    background: #E9FF63;
+    color: #1d2000;
+    box-shadow: 0 0 calc(var(--fw) * 0.04) rgba(233, 255, 99, 0.5);
+    /* 360 ms behind the chip sweep: the pot leaves once the street's chips have
+       arrived in it. Must equal POT_FLIGHT_DELAY_MS in the script block, which
+       is what keeps the ghost mounted for the whole flight. */
+    animation: pot-to-winner 0.5s cubic-bezier(0.4, 0, 0.2, 1) 0.36s both;
+  }
+
+  @keyframes pot-to-winner {
+    from { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+    80%  { opacity: 1; }
+    to   {
+      transform:
+        translate(-50%, -50%)
+        translate(calc(var(--rx) * var(--wcs, 0)), calc(var(--ry) * var(--wsn, 0)))
+        scale(0.7);
+      opacity: 0;
+    }
+  }
+
+  /* ---- cards revealing (bar 11: a flip is short) ----
+     Only the pairs the ENGINE just turned up animate. The hero's own pair has
+     been face up all hand and must not re-flip every poll. */
+  .player-cards.shown > :global(.card) {
+    animation: card-reveal 0.34s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+    transform-origin: 50% 50%;
+  }
+
+  .player-cards.shown > :global(.card:nth-child(2)) { animation-delay: 0.1s; }
+
+  @keyframes card-reveal {
+    0%   { transform: perspective(600px) rotateY(88deg); opacity: 0.2; }
+    65%  { transform: perspective(600px) rotateY(-9deg); opacity: 1; }
+    100% { transform: none; opacity: 1; }
   }
 
   /* ---- empty seat: a full-size pod with an explicit call to action (bar 4) ---- */
@@ -2271,41 +3066,70 @@
      ========================================================================= */
 
   @media (max-aspect-ratio: 1/1) {
-    /* THE SURFACE TURNS THROUGH NINETY DEGREES. Landscape is a 2.1:1 stadium;
-       portrait is 0.70:1 -- TALLER than it is wide (bar 20: "the ellipse becomes
-       a tall rounded rectangle and pods move to the left and right edges in two
-       columns"). It has to. On a 390-wide phone the felt's width is pinned by
-       the viewport, so a wide surface simply cannot use the height: at 1.25:1
-       the table finished 177px short of the bottom of its own stage and left a
-       dead band under the rail. Turning it upright spends that height on felt.
+    /* THE SURFACE TURNS THROUGH NINETY DEGREES, and then it takes the whole
+       phone. Landscape is a 2.1:1 stadium; portrait is 0.555:1 -- taller than it
+       is wide, which is bar 20 ("the ellipse becomes a tall rounded rectangle
+       and pods move to the left and right edges in two columns, pot centred.
+       Table still occupies ~75% of viewport height") and it is also what the one
+       real phone reference does: PokerNow portrait measures 313x548 on a 390x844
+       screen, aspect 0.571, 52.1% of the screen by area.
 
-       The equal-arc ring generator needs no changes for this -- feed it 0.82 and
-       it puts the seats down the two flanks by itself -- but `PORTRAIT_AR` in
-       the script block must be the same number as `--ar` here, or the seats sit
-       on an ellipse the felt is not drawing. */
+       WHY 0.555 AND NOT 0.70. Two caps decide the felt width:
+
+         width   the ring plus the two pods straddling it must fit the stage
+                   fw * (ring-k + pod-w-r)  <=  stage width
+         height  the FELT ITSELF must fit the stage -- the old cap only sized
+                 the RING, and at ring-ky 0.98 with pods hanging off the top and
+                 bottom that is nearly the same number. It is not the same number
+                 once the pods move INSIDE the surface.
+                   fw / ar                  <=  stage height
+
+       0.555 is where those two bind at the same felt width on a 390x844 phone,
+       i.e. the largest surface the screen can hold. At 0.70 with the pods
+       outboard the width cap bound alone and left the felt at 217x316 = 20.6% of
+       the screen, 40% of PokerNow's, with 215 px of dead surround under it.
+
+       WHY THE PODS MOVED ONTO THE FELT. `--ring-kx` was 1.00, so each flank pod
+       hung half its width off the surface and the felt could never be wider than
+       stage/1.42 = 70% of a phone. PokerNow's portrait pods sit ON the felt --
+       their surface is 80.3% of the screen width and the pods overlap it, ending
+       ~38 px outside the rail. `--ring-kx: 0.70` does the same thing here and
+       buys 16 points of screen width. Pods no longer hang off the top and bottom
+       at all, which is where the height went.
+
+       `PORTRAIT_AR` in the script block must equal `--ar` here, and `--ring-kx`
+       must equal `--ring-ky`, or the seats sit on an ellipse the felt is not
+       drawing: `ringSeats()` spaces by arc length on the FELT ellipse, and only
+       a uniform scale of it keeps that spacing true on the ring. */
     .poker-table-wrapper {
-      --ar: 0.70;
-      --ring-kx: 1.00;
-      --ring-ky: 0.98;
-      --pod-w-r: 0.42;
-      --pod-h-r: 0.115;
-      --avatar-r: 0.105;
+      --ar: 0.555;
+      --ring-kx: 0.70;
+      --ring-ky: 0.70;
+      --pod-w-r: 0.46;
+      --pod-h-r: 0.140;
+      --avatar-r: 0.098;
       --card-board-r: 0.112;
-      --card-hero-r: 0.165;
-      --card-opp-r: 0.098;
+      --card-hero-r: 0.150;
+      --card-opp-r: 0.092;
       --board-gap-r: 0.010;
-      --card-nudge-r: 0.055;
-      --off-opp-r: 0.070;
-      --off-shown-r: 0.118;
-      --off-hero-r: 0.140;
-      --cluster-dy-r: 0.000;
-      --ui-r: 0.044;
-      --dock-h: 96px;
+      --card-nudge-r: 0.050;
+      --off-opp-r: 0.068;
+      --off-shown-r: 0.112;
+      --off-hero-r: 0.132;
+      /* The board sits high and the pot sits under it, PokerNow's portrait
+         order. Centring both put the pot readout in the same 40 px band as the
+         two mid-height flank seats. */
+      --cluster-dy-r: -0.066;
+      /* bar 24: money glyphs. 0.044 rendered the stack figure at 8 px on a
+         phone. 0.058 puts it at ~17 px, against PokerNow portrait's ~11 px. */
+      --ui-r: 0.058;
+      --dock-h: 90px;
     }
 
-    /* width  needs 1.00 + 0.42        = 1.420 -> 70cqw
-       height needs 0.98/0.70 + 0.115  = 1.515 -> 66cqh */
-    .table-inner { --fw: min(70cqw, 66cqh); }
+    /* width  0.70 + 0.46 = 1.160 -> 86cqw
+       height max(0.70/0.555 + 0.140, 1/0.555) = 1.802 (the FELT, not the ring)
+                                              -> 55cqh */
+    .table-inner { --fw: min(86cqw, 55cqh); }
 
     /* Per-density again, at .poker-table-wrapper.<class> specificity. Media
        queries add NO specificity, so the landscape `.ring-crowded .table-inner`
@@ -2313,60 +3137,214 @@
        would otherwise win here: a 9-max table on a phone was being laid out with
        the LANDSCAPE felt cap, which is how it ended up 1.43:1 with unreadable
        pods. Every density override therefore has a portrait twin. */
+
+    /* Nine pods on a phone. The ring has to open out (0.90, not 0.70) or the two
+       plates either side of top centre overlap by 23 px, and the two mid-height
+       flank plates land on the board. Everything else comes down with it. */
     .poker-table-wrapper.ring-crowded {
-      --pod-w-r: 0.36;
-      --pod-h-r: 0.100;
-      --avatar-r: 0.090;
-      --card-opp-r: 0.084;
-      --off-opp-r: 0.060;
-      --off-shown-r: 0.102;
-      --ui-r: 0.038;
+      --ring-kx: 0.90;
+      /* The only place kx and ky part company in portrait. Nine seats need the
+         ring TALLER than a uniform scale of the felt would make it, so the two
+         mid-height plates and the two upper flank plates open a wide enough
+         band for the board tray and the pot to sit between them. It costs a
+         little of the equal-arc spacing (ringSeats() measures arc on the felt
+         ellipse) and nothing at all of the felt: at ky 1.00 the height cap is
+         1.00/0.555 + 0.116 = 1.918 -> 52cqh = 328 px, still looser than the
+         78cqw = 304 px the width cap allows. */
+      --ring-ky: 1.00;
+      --pod-w-r: 0.38;
+      --pod-h-r: 0.112;
+      --avatar-r: 0.056;
+      /* Nine plates means the board and the pot have to clear the two
+         mid-height flank seats, which on a 9-ring sit within 30 px of the
+         vertical centre. The cluster rides higher for them. */
+      --cluster-dy-r: -0.180;
+      --card-board-r: 0.098;
+      --card-opp-r: 0.076;
+      --off-opp-r: 0.056;
+      --off-shown-r: 0.094;
+      --ui-r: 0.056;
     }
-    /* 1.00 + 0.36 = 1.360 -> 73cqw ; 1.4000 + 0.100 = 1.500 -> 66cqh */
-    .ring-crowded .table-inner { --fw: min(73cqw, 66cqh); }
+    /* 0.90 + 0.38 = 1.280 -> 78cqw ; ring-bound at ky 1.00 -> 52cqh */
+    .ring-crowded .table-inner { --fw: min(78cqw, 52cqh); }
 
     .poker-table-wrapper.ring-sparse {
-      --pod-w-r: 0.46;
-      --pod-h-r: 0.125;
-      --avatar-r: 0.115;
-      --card-opp-r: 0.108;
-      --off-opp-r: 0.076;
-      --off-shown-r: 0.129;
-      --ui-r: 0.048;
+      --ring-kx: 0.62;
+      --ring-ky: 0.62;
+      --pod-w-r: 0.52;
+      --pod-h-r: 0.155;
+      --avatar-r: 0.112;
+      --card-opp-r: 0.104;
+      --off-opp-r: 0.074;
+      --off-shown-r: 0.124;
+      --ui-r: 0.062;
     }
-    /* 1.00 + 0.46 = 1.460 -> 68cqw ; 1.4000 + 0.125 = 1.525 -> 65cqh */
-    .ring-sparse .table-inner { --fw: min(68cqw, 65cqh); }
+    /* 0.62 + 0.52 = 1.140 -> 87cqw ; felt-bound -> 55cqh */
+    .ring-sparse .table-inner { --fw: min(87cqw, 55cqh); }
 
-    /* The hole-card rule needs NO portrait variant. Turning the surface upright
-       made the ring longer, not shorter: at 0.70:1 the ellipse's perimeter is
-       ~3.8 felt widths, so even nine plates get ~100px of rail each on a phone,
-       against ~62px of plate-plus-card. Only the inward nudge changes, because
-       the portrait felt is narrow and its rail is proportionally closer in. */
+    /* FULL BLEED. The page reserves 8 px of padding either side of the table
+       area; on a 390 px phone that is 4% of the playing surface spent on a
+       gutter nothing sits in. The wrapper takes the whole viewport width back
+       and the rail keeps the edge margin instead. */
+    .poker-table-wrapper {
+      width: 100vw;
+      max-width: 100vw;
+      margin-left: calc(50% - 50vw);
+      margin-right: calc(50% - 50vw);
+    }
+
+    /* THE MIDDLE OF THE TABLE OUTRANKS AN EMPTY CHAIR. A portrait felt is
+       narrow enough that the pot's collected/betting decomposition and the
+       equity-method line run under the two mid-height plates, and those two
+       lines are chain figures. The cluster therefore paints above every seat in
+       portrait (z-index 26 clears .seat 10, .seat.acting 22 and .seat.winner
+       24); it is `pointer-events: none`, so nothing becomes unclickable. */
+    .board-cluster { z-index: 26; }
+
+    /* bar 20: a tall ROUNDED RECTANGLE, not an ellipse. It is not decoration --
+       an ellipse only offers its full width on one scanline, so a flank pod
+       parked at mid-height crops the measured surface; a stadium offers it over
+       most of the height. It is also what the phone reference draws. */
+    .felt { border-radius: calc(var(--fw) * 0.28); }
 
     .mark-1, .mark-2 { display: none; }
+
+    /* The pot reads UNDER the board in portrait (PokerNow's order), so the
+       board can sit high and clear of the flank seats. */
+    .pot-display, .winner-display {
+      bottom: auto;
+      top: calc(100% + var(--fw) * 0.016);
+    }
+
+    /* THE MIDDLE OF A PORTRAIT TABLE IS A 166 px SLOT.
+       On a 0.555 surface the two mid-height flank seats sit at +/-106 px of the
+       centre and their plates are 47 tall, so everything the middle carries --
+       the board, its showdown frame and caption, and the pot or the winner line
+       -- has to live inside the 166 px between them. Measured before this
+       block: the winner line alone was 247 px wide and lay 51x47 into both
+       plates. The board tray, its caption and the winner readout are therefore
+       all one type step tighter in portrait than in landscape. */
+    .caption-hand { font-size: 0.6em; }
+    .caption-tag { font-size: 0.55em; letter-spacing: 0.12em; }
+    .board-frame.framed {
+      gap: calc(var(--fw) * 0.006);
+      padding: calc(var(--fw) * 0.008) calc(var(--fw) * 0.012) calc(var(--fw) * 0.006);
+    }
+    .board-caption { gap: 0.6em; }
+
+    /* NOTHING IN THE POD OUTRANKS THE STACK FIGURE.
+       A 9-max phone pod is ~116 px wide. `min-width: 2.3em` on the clock/blind
+       column, and `3.5em` once the equity badge appears, reserved 39-59 of those
+       pixels whether or not anything was in them -- and the thing that lost the
+       argument was the money. Portrait lets the column size to its contents,
+       and lifts the equity badge OUT of the plate entirely: it floats on the
+       felt just above the pod's outer corner, which is where PokerStars puts it
+       and where it costs the stack nothing.
+
+       `overflow: visible` is what lets the badge sit outside the pill. The only
+       thing the pod was clipping is the action clock's progress line, which now
+       carries the pill's own bottom radius instead. */
+    .player-nameplate { overflow: visible; }
+    .pod-clock { border-radius: 0 0 999px 999px; }
+
+    .pod-slot,
+    .pod-slot.with-equity { min-width: 0; }
+
+    .position-badge { font-size: 0.52em; min-width: 1.2em; height: 1.2em; }
+    .ring-crowded .position-badge { font-size: 0.44em; min-width: 1.05em; height: 1.05em; }
+    .ring-crowded .player-nameplate { gap: 0.32em; padding: 0 0.4em 0 calc(var(--pod-h) * 0.08); }
+    .ring-crowded .chips { letter-spacing: -0.015em; }
+
+    .equity-badge {
+      position: absolute;
+      right: 0.1em;
+      top: -0.95em;
+      z-index: 3;
+      font-size: 0.6em;
+      padding: 0.06em 0.3em;
+      box-shadow: 0 0 0 2px rgba(9, 11, 15, 0.85);
+    }
+
+    /* The winner line spanned 247 of a 390 px screen and lay across both
+       mid-height flank plates (measured: 24x39 px into each). Same words, one
+       type step down, and allowed to WRAP inside a box narrower than the gap
+       between the two flank pods rather than pushing through them. */
+    .winner-text { font-size: 0.82em; }
+    .winner-hand-rank, .split-info { font-size: 0.56em; }
+    /* Every readout that lands in that 166 px slot is set on a 1.15 leading in
+       portrait. The winner block was 94 px of a 127 px gap on its own. */
+    .winner-display, .pot-display { line-height: 1.15; }
+    /* Wide and SHORT, not narrow and tall: a pod is 47 px tall and the gap
+       above it is only 127, so height is the scarce axis here and width is not
+       -- the readout may run the width of the felt as long as it stays out of
+       the two flank plates' rows. */
+    .winner-display {
+      flex-direction: row;
+      flex-wrap: nowrap;
+      align-items: baseline;
+      column-gap: 0.5em;
+      padding: 0.26em 0.7em;
+      gap: 0.5em;
+      white-space: nowrap;
+      text-align: center;
+    }
+    .winner-display .phase-indicator { font-size: 0.56em; }
+
+    /* The pot's footnote rows -- the collected/betting decomposition and the
+       equity method line -- are the other thing that pushed the cluster into
+       the flank plates on a 9-ring. */
+    .main-pot { padding: 0.16em 0.7em; }
+    .pot-label { font-size: 0.55em; }
+    .pot-display .phase-indicator { font-size: 0.62em; }
+    .pot-breakdown { font-size: 0.54em; }
+    .equity-method { font-size: 0.5em; }
+
+    /* THE AWARD IS SIZED FOR THE GAP IT LANDS IN.
+       Landscape pushes it 1.3x out along the chip vector to clear the showdown
+       board tray, which is 0.60 felt widths wide there. A portrait board is the
+       same five cards on a felt barely half as wide, so the tray reaches much
+       closer to the rail and 1.3x throws the award into the middle of the
+       table. 1.12x keeps it against the pod it belongs to, one type step down,
+       which is the same treatment every other portrait readout gets. */
+    .winner-award { --award-out: 1.12; gap: 0.1em; }
+    .stack-delta { font-size: 0.7em; padding: 0.08em 0.4em; }
+    .hand-tag { font-size: 0.48em; padding: 0.06em 0.35em; }
+    .side-pot-label { font-size: 0.52em; }
+    .side-pot-amount { font-size: 0.7em; }
 
     .action-dock {
       grid-template-columns: 1fr auto;
       grid-template-rows: auto auto;
       gap: 6px 8px;
       height: var(--dock-h);
-      padding: 0;
+      padding: 0 8px;
     }
 
-    .dock-center { grid-column: 1 / -1; grid-row: 1; }
-    .dock-left { grid-column: 1; grid-row: 2; }
-    .dock-right { grid-column: 2; grid-row: 2; }
+    /* THUMB REACH. The action row is the BOTTOM row on a phone -- it used to be
+       the top one, furthest from the thumb, with the LOG button and the wallet
+       occupying the reachable edge. */
+    .dock-center { grid-column: 1 / -1; grid-row: 2; }
+    .dock-left { grid-column: 1; grid-row: 1; }
+    .dock-right { grid-column: 2; grid-row: 1; }
 
     .actions { flex-wrap: nowrap; gap: 6px; width: 100%; }
 
+    /* 48 CSS px tall, which is >= the 44 px touch target on this device. */
     .action-btn {
       flex: 1 1 0;
       min-width: 0;
-      padding: 11px 4px;
-      font-size: 13px;
+      min-height: 48px;
+      padding: 13px 4px;
+      font-size: 15px;
+      border-radius: 12px;
     }
 
-    .action-btn.ghost { flex: 0 0 auto; padding: 11px 8px; }
+    .action-btn.ghost { flex: 0 0 auto; padding: 13px 9px; }
+
+    .no-game-message, .not-your-turn, .action-pending {
+      min-height: 48px;
+      font-size: 14px;
+    }
 
     /* The dock's second row was carrying LOG + a turn indicator + the balance +
        Deposit + Withdraw across 390px, and the indicator lost: it rendered as
@@ -2376,7 +3354,7 @@
 
     .wallet-panel { padding: 4px 8px; gap: 7px; }
     .balance-label { display: none; }
-    .wallet-action-btn { padding: 6px 8px; font-size: 10px; }
+    .wallet-action-btn { padding: 7px 9px; font-size: 11px; }
     .sit-controls { display: none; }
 
     .feed-container.left { width: min(230px, 62cqw); max-height: 60cqh; }
@@ -2404,5 +3382,18 @@
     .table-inner::after { transition: none; }
     .action-btn { transition: none; }
     .action-btn:hover { transform: none; }
+
+    /* THE TWO FLIGHTS AND THE REVEAL STOP DEAD, AND NOTHING IS LOST.
+       Everything the motion was carrying is also stated in place: the chips are
+       already counted into `.pot-amount` and its `.pot-breakdown`; the award is
+       a static `+X` chip on the winner's pod; the revealed cards are simply
+       there. So `animation: none` here removes the movement, not the
+       information -- which is the only kind of animation this table is allowed
+       to have in the first place. Both flights are also given `display: none`
+       rather than a zero-length animation, because a ghost that never travels
+       is a duplicate figure sitting on the felt. */
+    .chip-flight, .pot-flight { display: none; }
+    .winner-award { animation: none; }
+    .player-cards.shown > :global(.card) { animation: none; }
   }
 </style>

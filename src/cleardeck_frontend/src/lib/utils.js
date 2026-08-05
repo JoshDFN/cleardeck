@@ -37,6 +37,91 @@
  * have one place where money becomes text.
  */
 
+/* ===========================================================================
+ * THE BIGINT/JSON GUARD. Install-once, app-wide, and the reason this file has
+ * a side effect at all.
+ *
+ * WHAT WENT WRONG. Candid `nat`, `nat64` and `int` decode to JavaScript
+ * `BigInt`, so almost every field the table canister returns -- pot, stack,
+ * bet amounts, hand numbers, timestamps -- is a BigInt by the time it reaches
+ * a component. `JSON.stringify` THROWS on a BigInt:
+ *
+ *     TypeError: Do not know how to serialize a BigInt
+ *
+ * `PokerTable.svelte` used `JSON.stringify(lastAction.action)` as a change-
+ * detection key inside an `$effect`. The throw is uncaught, so Svelte tears
+ * the effect down -- and because effects are flushed together, the fairness
+ * panel and the hand-history list, which have nothing to do with the action
+ * log, were starved of the same reactive pass. One line in one component
+ * silently killed the two surfaces this product is built to show. It fired
+ * roughly twice a second and nothing on screen said so. See docs/DEFECTS.md
+ * T-10 and docs/WAVE-03.md seam 5.
+ *
+ * WHY A GUARD AND NOT A FIX AT THE CALL SITE. The call site was fixed, and
+ * two other sites (`routes/+page.svelte`, `HandHistory.svelte`) carry their
+ * own hand-rolled BigInt replacers. That is three copies of one rule and an
+ * open invitation for a fourth site to be written without it: any `console`
+ * dump, any `localStorage` cache, any diff helper, any dependency that
+ * stringifies an argument. The class is systemic because the DATA is systemic.
+ *
+ * So teach `BigInt` how to serialise itself, once, globally. After this runs,
+ * `JSON.stringify` cannot throw on a BigInt ANYWHERE on the page -- in code
+ * written later, in code written by someone who never read this comment, or
+ * in a third-party library. A BigInt serialises as its decimal digits in a
+ * JSON string, which is exactly what all three hand-rolled replacers already
+ * did, so no existing output changes.
+ *
+ * Mutating a built-in prototype is a real cost and is not done lightly. It is
+ * done here because it is the only placement that covers code this repo has
+ * not written yet, and because the failure it prevents is invisible, not loud.
+ * The property is non-enumerable (so `for...in` and object spreads are
+ * unaffected) and is never installed over an existing `toJSON`.
+ * ======================================================================== */
+
+function installBigIntJsonGuard() {
+    if (typeof BigInt === 'undefined') return false;
+    if (typeof BigInt.prototype.toJSON === 'function') return false;
+    Object.defineProperty(BigInt.prototype, 'toJSON', {
+        value: function toJSON() { return this.toString(); },
+        writable: true,
+        configurable: true,
+        enumerable: false,
+    });
+    return true;
+}
+
+/** True when this module installed the guard (false if it was already there). */
+export const bigIntJsonGuardInstalled = installBigIntJsonGuard();
+
+/**
+ * `JSON.stringify` that is safe on Candid data even if the global guard above
+ * were ever removed. Prefer this at any new call site: it states the intent,
+ * and it does not depend on a prototype property staying installed.
+ *
+ * @param {*} value
+ * @param {number|string} [space] indentation, as for JSON.stringify
+ * @returns {string|undefined}
+ */
+export function safeStringify(value, space) {
+    return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), space);
+}
+
+/**
+ * A stable identity string for any Candid value, for change detection in an
+ * `$effect`. Never throws, never returns `undefined`, and does not care what
+ * numeric type the canister used.
+ *
+ * @param {*} value
+ * @returns {string}
+ */
+export function candidKey(value) {
+    try {
+        return safeStringify(value) ?? 'undefined';
+    } catch {
+        return String(value);
+    }
+}
+
 /** Smallest unit per whole token: e8s per ICP, and sats per ckBTC. Both 1e8. */
 export const SMALLEST_UNITS_PER_TOKEN = 100_000_000;
 
@@ -229,4 +314,55 @@ export function handRankName(optHandRank) {
 export function getPhaseName(phase) {
     if (!phase) return 'Unknown';
     return Object.keys(phase)[0];
+}
+
+/* ===========================================================================
+ * THE TABLE TITLE. One rule, because the same stale string is rendered in
+ * three places and it is wrong by 5x and 10x in two of them.
+ *
+ * `init_microstakes_tables` (src/lobby_canister/src/lib.rs) writes
+ * 1_000_000/2_000_000 into ALL THREE ICP table records and bakes those blinds
+ * into the NAME string, while icp.yaml initialises table_2 at 0.05/0.10 and
+ * table_3 at 0.10/0.20. So the lobby canister's name for a table that charges
+ * 0.10/0.20 reads "9-Max - 0.01/0.02", and any surface that renders
+ * `table.name` verbatim quotes a price the contract will not charge:
+ *
+ *   routes/+page.svelte  the table header pill   FIXED (docs/DEFECTS.md T-11)
+ *   Lobby.svelte         the row NAME cell       STILL VERBATIM
+ *   Lobby.svelte         the preview pane <h3>   STILL VERBATIM
+ *
+ * The FORMAT half of the name ("9-Max") is true and worth keeping; the price
+ * half must come from the config that will actually charge it. That is what
+ * these two functions do, and they are the same computation the header pill
+ * already performs — extracted here so the remaining two call sites are a
+ * one-line change:
+ *
+ *     <h3>{tableTitle(selectedTable.name, effectiveConfig(selectedTable))}</h3>
+ *
+ * The screenshot harness asserts every blind figure quoted by all three
+ * surfaces against the TABLE canister's own config
+ * (tools/shots/lib/chain-agreement.mjs), so adopting this is verifiable and
+ * NOT adopting it keeps the lobby scene red.
+ * ======================================================================== */
+
+/** The format half of a lobby table name: "9-Max - 0.01/0.02" -> "9-Max". */
+export function tableFormatLabel(name) {
+    return String(name ?? '').split(/\s+[-–—]\s+/)[0].trim() || String(name ?? '');
+}
+
+/**
+ * A table title whose blinds are the blinds the table will charge.
+ *
+ * @param {string} name the lobby canister's registered name
+ * @param {object|null|undefined} config the TABLE canister's own config
+ *        (`get_table_view().config`), never the lobby's stored copy
+ * @returns {string} "9-Max · 0.10/0.20", or just "9-Max" before the view lands
+ */
+export function tableTitle(name, config) {
+    const format = tableFormatLabel(name);
+    if (!config) return format;
+    const currency = currencyOf(config) ?? 'ICP';
+    const sb = formatTokenAmount(config.small_blind, { currency });
+    const bb = formatTokenAmount(config.big_blind, { currency });
+    return `${format} · ${sb}/${bb}`;
 }

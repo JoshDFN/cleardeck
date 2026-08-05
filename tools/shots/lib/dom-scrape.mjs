@@ -88,6 +88,16 @@ export function scrapeTable(page) {
                 dealerBadge: !!el.querySelector('.position-badge.dealer'),
                 sbBadge: !!el.querySelector('.position-badge.sb'),
                 bbBadge: !!el.querySelector('.position-badge.bb'),
+                // The all-in / showdown surfaces. `awardText` is MONEY (the pot
+                // this seat just received) and is asserted against
+                // last_hand_winners; `equityText` is a probability and is
+                // asserted against an independent recomputation in
+                // lib/equity-oracle.mjs. Neither may be merely allowlisted.
+                equityText: one(el, '.equity-badge'),
+                equityModelled: !!el.querySelector('.equity-badge.modelled'),
+                awardText: one(el, '.stack-delta'),
+                handTagText: one(el, '.hand-tag'),
+                foldWord: one(el, '.fold-word'),
                 cards: [...el.querySelectorAll('.player-cards .card')].map(readCard),
             };
         });
@@ -115,6 +125,10 @@ export function scrapeTable(page) {
             board,
             seats,
             phaseText: one(document, '.phase-indicator'),
+            equityMethodText: one(document, '.equity-method'),
+            equityMethodTitle: document.querySelector('.equity-method')?.getAttribute('title') ?? null,
+            boardCaptionTag: one(document, '.board-caption .caption-tag'),
+            heroHandText: one(document, '.board-caption .caption-hand'),
             winnerText: one(document, '.winner-display .winner-text') ?? one(document, '.winner-display'),
             winnerHandRank: one(document, '.winner-display .winner-hand-rank'),
             splitInfo: one(document, '.winner-display .split-info'),
@@ -266,7 +280,39 @@ export function scrapeLobby(page) {
             };
         });
 
-        return { rows, rowCount: rows.length, headers, columnMap: col };
+        // THE PREVIEW PANE IS A SECOND MONEY SURFACE.
+        // The redesigned lobby puts a whole table summary beside the list: a live
+        // pot on a mini-felt, every seated player's stack, a facts list quoting
+        // the blinds, the buy-in range, the ante and the last pot, and a rake line
+        // that repeats that pot in a sentence. None of it was scraped, so none of
+        // it was compared with anything — and its heading is `selectedTable.name`,
+        // the same stale lobby string that made the table header lie by 5x and 10x
+        // (docs/DEFECTS.md T-11). Read it all; assert it all.
+        const facts = [...document.querySelectorAll('.facts > div')].map((d) => ({
+            label: txt(d.querySelector('dt')),
+            value: txt(d.querySelector('dd')),
+        }));
+        const preview = {
+            present: !!document.querySelector('aside.preview'),
+            heading: txt(document.querySelector('.preview-heading h3')),
+            sub: txt(document.querySelector('.preview-sub')),
+            selectedRowName: txt(document.querySelector('tbody tr.selected .table-name')),
+            feltPotText: txt(document.querySelector('.felt-pot')),
+            feltPhase: txt(document.querySelector('.felt-phase')),
+            miniBoard: [...document.querySelectorAll('.mini-felt .mini-card')].map((el) => ({
+                rank: txt(el.querySelector('.mc-rank')),
+                suit: txt(el.querySelector('.mc-suit')),
+            })),
+            seated: [...document.querySelectorAll('.seated-one')].map((el) => ({
+                name: txt(el.querySelector('.seated-name')),
+                stackText: txt(el.querySelector('.seated-stack')),
+            })),
+            facts,
+            factByLabel: Object.fromEntries(facts.filter((f) => f.label).map((f) => [f.label, f.value])),
+            rakeLineText: txt(document.querySelector('.rake-line')),
+        };
+
+        return { rows, rowCount: rows.length, headers, columnMap: col, preview };
     });
 }
 
@@ -285,6 +331,12 @@ export function scrapeDeposit(page) {
             title: txt(document.querySelector('#deposit-modal-title')),
             cryptoBalances,
             usdValues,
+            // "Minimum deposit: 0.0002 ICP (Network fee: 0.0001 ICP)". Two money
+            // figures the modal states as fact, both hardcoded in the component,
+            // and neither compared with anything until the token census counted
+            // them. The fee is a live ledger value; the minimum is enforced by the
+            // table canister.
+            minimumNotice: txt(document.querySelector('.minimum-notice')),
             priceError: txt(document.querySelector('.price-error')),
             sourceButtons: [...document.querySelectorAll('.wallet-source-toggle button')]
                 .map((b) => txt(b)).filter(Boolean),

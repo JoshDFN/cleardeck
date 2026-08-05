@@ -436,3 +436,95 @@ fn register_entries_are_all_still_needed() {
         );
     }
 }
+
+// ===========================================================================
+// THE BUILD IS PINNED, NOT INHERITED (docs/DEFECTS.md H-21)
+// ===========================================================================
+//
+// Every result in this harness is attributed to a sha256, and that sha256 is only
+// a claim about the CODE if the build cannot be steered from outside. Cargo
+// exports RUSTUP_TOOLCHAIN to every child process and RUSTUP_TOOLCHAIN OVERRIDES
+// rust-toolchain.toml, so running this harness from inside another cargo
+// invocation used to compile the canister with whatever compiler the parent
+// happened to be using -- identical source, different module.
+//
+// These tests assert the pin itself rather than trusting the comment on it.
+
+#[test]
+fn the_pinned_channel_is_read_from_rust_toolchain_toml() {
+    use money_safety::wasms::{parse_toolchain_channel, pinned_toolchain, repo_root};
+
+    let channel = pinned_toolchain(&repo_root());
+    assert!(
+        !channel.is_empty() && channel.chars().next().is_some_and(|c| c.is_ascii_digit()),
+        "the pin must be a real channel, got {channel:?}"
+    );
+
+    // The parser must survive an ordinary manifest, not just the happy line.
+    let manifest = "# a comment\n[toolchain]\nchannel = \"1.90.0\"\ntargets = [\"x\"]\n";
+    assert_eq!(
+        parse_toolchain_channel(manifest).as_deref(),
+        Some("1.90.0"),
+        "the channel must be found past the section header and the comment. Reading it \
+         with `?` instead of `continue` returns None on the FIRST line that is not the \
+         pin, which makes every build refuse to start."
+    );
+    assert_eq!(parse_toolchain_channel("channel='nightly'").as_deref(), Some("nightly"));
+    assert_eq!(parse_toolchain_channel("[toolchain]\nprofile=\"minimal\"\n"), None);
+    assert_eq!(parse_toolchain_channel("# channel = \"1.0.0\"\n"), None);
+}
+
+#[test]
+fn the_canister_build_refuses_to_inherit_a_toolchain_or_an_output_directory() {
+    use money_safety::wasms::{pinned_table_canister_build, pinned_toolchain, repo_root};
+    use std::collections::BTreeMap;
+
+    let root = repo_root();
+    let poison = [
+        ("RUSTUP_TOOLCHAIN", "1.96.1"),
+        ("CARGO_TARGET_DIR", "/tmp/somewhere-else"),
+        ("RUSTFLAGS", "-C opt-level=0"),
+        ("CARGO_ENCODED_RUSTFLAGS", "-C\u{1f}opt-level=0"),
+        ("RUSTC_WRAPPER", "/bin/false"),
+        ("CARGO_BUILD_TARGET", "x86_64-unknown-linux-gnu"),
+        ("CARGO_PROFILE_RELEASE_OPT_LEVEL", "0"),
+    ];
+    for (k, v) in poison {
+        std::env::set_var(k, v);
+    }
+    let cmd = pinned_table_canister_build(&root);
+    let overrides: BTreeMap<String, Option<String>> = cmd
+        .get_envs()
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().to_string(),
+                v.map(|v| v.to_string_lossy().to_string()),
+            )
+        })
+        .collect();
+    for (k, _) in poison {
+        std::env::remove_var(k);
+    }
+
+    assert_eq!(
+        overrides.get("RUSTUP_TOOLCHAIN"),
+        Some(&Some(pinned_toolchain(&root))),
+        "the build must SET the pinned toolchain over the poisoned one, not hope for it: \
+         {overrides:?}"
+    );
+    for (key, planted) in poison.iter().skip(1) {
+        let effective = overrides.get(*key).cloned().flatten();
+        assert!(
+            effective.is_none(),
+            "{key} reaches the canister build as {effective:?} (planted {planted:?}). It \
+             changes what is produced, or where it is put: with CARGO_TARGET_DIR set the \
+             build succeeds somewhere else while the harness hashes whatever stale bytes \
+             are still at target/wasm32-unknown-unknown/release/table_canister.wasm."
+        );
+        assert!(
+            overrides.contains_key(*key),
+            "{key} is set in this process and the build command does not remove it, so it \
+             is INHERITED: {overrides:?}"
+        );
+    }
+}

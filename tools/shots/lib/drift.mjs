@@ -35,6 +35,44 @@ export const DRIFT_TARGETS = {
         how: 'double the blinds quoted in the table header pill',
     },
     callbutton: { selector: '.actions .action-btn.primary', how: 'double the amount on the Call button' },
+
+    // ---- surfaces the harness DID NOT LOOK AT before the token census -------
+    // Each of these rendered a money figure that no check had ever compared with
+    // anything. They are here so the claim "it is asserted now" is a thing that
+    // can be made to FAIL on demand, not a line in a document.
+    depositfee: {
+        selector: '.minimum-notice',
+        how: 'double the minimum deposit the modal quotes (its "Network fee" sits in the '
+            + 'same sentence; both are now compared with the table canister\'s minimum and '
+            + "the ledger's own icrc1_fee)",
+    },
+    previewstack: {
+        selector: '.seated-stack',
+        how: "double the first seated player's stack in the lobby preview pane",
+    },
+    previewfact: {
+        selector: '.facts dd',
+        how: 'double the blinds in the lobby preview facts list',
+    },
+    previewpot: {
+        selector: '.felt-pot',
+        how: "double the live pot on the lobby preview's mini-felt",
+    },
+
+    // ---- the allowlist itself, under test -----------------------------------
+    // Not a chain disagreement: this writes a MONEY-SHAPED number into an element
+    // the allowlist excuses as a COUNT. Nothing asserts that element, so the only
+    // thing that can catch it is the census's shape invariant — a decimal token
+    // is never excused. If this run comes back green the allowlist has become
+    // able to swallow money, which is the one way the inversion can be defeated.
+    censusshape: {
+        selector: '.display-name',
+        how: 'write "0.30" into an element the allowlist excuses (the wallet display name, '
+            + 'whose digits are excused as part of a generated label), to prove that a '
+            + 'MONEY-SHAPED token is refused there rather than swallowed. Nothing asserts '
+            + 'this element, so only the census\'s shape invariant can catch it',
+        writeText: '0.30',
+    },
 };
 
 /** @returns {string[]} the drift targets requested for this run (possibly empty). */
@@ -102,7 +140,8 @@ export async function injectDrift(page, targets) {
             }
             const before = el.textContent;
             let after;
-            if (name === 'board') after = bumpRank(before);
+            if (table[name].writeText !== undefined) after = table[name].writeText;
+            else if (name === 'board') after = bumpRank(before);
             else if (name === 'headerstakes') after = doubleBlinds(before);
             else after = doubleNumbers(before);
             plan.push({ selector, after });

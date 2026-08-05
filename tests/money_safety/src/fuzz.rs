@@ -23,8 +23,9 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 use crate::actions::{apply, Act, Op, StepResult};
+use crate::hand_attribution::HandAttributionWatch;
 use crate::invariants::{
-    check_hand_payout_total, check_no_rake, check_point_in_time,
+    check_hand_attribution, check_hand_payout_total, check_no_rake, check_point_in_time,
     check_self_reported_inconsistency, check_upgrade_durability, Violation,
 };
 use crate::rng::Rng;
@@ -57,9 +58,28 @@ pub struct RunReport {
     /// Total e8s the run observed stranded inside the canister (money nobody owns
     /// and nobody can withdraw).
     pub max_stranded_e8s: i128,
+    /// M8 PRINCIPAL ATTRIBUTION coverage over this run. Reported, not merely
+    /// counted: an attribution gate that quietly declines to measure is
+    /// indistinguishable from one that passes.
+    pub attribution: AttributionCoverage,
     pub transcript_tail: Vec<StepResult>,
     pub final_ledger_main: u64,
     pub final_internal_total: u64,
+}
+
+/// How much of the run M8 actually got to speak about.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct AttributionCoverage {
+    /// Hands that finished with the table idle again.
+    pub hands_seen: u64,
+    /// Hands the four attribution legs ran on.
+    pub hands_measured: u64,
+    /// Hands the independent settlement-oracle leg ran on. Always a subset of
+    /// `hands_measured`: the rules of poker do not define an answer for a chair
+    /// carrying two people's money (docs/DEFECTS.md E-36).
+    pub hands_oracle_checked: u64,
+    /// Why the rest were declined, counted by reason.
+    pub declined: BTreeMap<String, u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -408,6 +428,14 @@ pub fn run_sequence(
     };
     let mut max_stranded: i128 = 0;
     let mut executed = 0usize;
+    // M8 PRINCIPAL ATTRIBUTION, in the per-step loop.
+    //
+    // It used to live only in two hand-written fixtures, so the class it exists to
+    // catch was covered exactly where somebody had scripted it -- the same shape of
+    // hole that let FINDING 13 through wave 2. The watch is fed the snapshot the
+    // loop already takes, so it costs no extra messages, and it answers on every
+    // hand a randomised hostile sequence happens to complete.
+    let mut attribution = HandAttributionWatch::new();
 
     let record = |findings: &mut BTreeMap<String, Finding>,
                       all: &mut Vec<Violation>,
@@ -490,6 +518,30 @@ pub fn run_sequence(
             Some(op),
             check_self_reported_inconsistency(&logs, &after.table.phase),
         );
+
+        // --- M8 PRINCIPAL ATTRIBUTION, per hand -----------------------------
+        //
+        // Fed every step so it sees the hand while it is live (`departed_stakes` is
+        // cleared at settlement and is the only record of a departed player's
+        // stake), and it answers the moment the hand is over.
+        {
+            // Lazily: the history is one query, and it is only needed on the step a
+            // hand settles. See `HandAttributionWatch::observe_lazily`.
+            if let Some(hand) =
+                attribution.observe_lazily(&after, world.uncredited_raw_deposits, |n| {
+                    world.hand_history(n)
+                })
+            {
+                record(
+                    &mut findings,
+                    &mut all,
+                    &mut max_stranded,
+                    i + 1,
+                    Some(op),
+                    check_hand_attribution(&hand),
+                );
+            }
+        }
 
         // --- seat churn tracking, for the sharp M3 basis --------------------
         if after.table.phase.hand_in_progress() {
@@ -576,6 +628,12 @@ pub fn run_sequence(
         blocking_findings: blocking,
         documented_findings: documented,
         max_stranded_e8s: max_stranded,
+        attribution: AttributionCoverage {
+            hands_seen: attribution.hands_seen,
+            hands_measured: attribution.hands_measured,
+            hands_oracle_checked: attribution.hands_oracled,
+            declined: attribution.declined.clone(),
+        },
         transcript_tail: transcript[tail_start..].to_vec(),
         final_ledger_main: final_snap.ledger_main,
         final_internal_total: final_snap.internal_total(),

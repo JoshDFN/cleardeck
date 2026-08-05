@@ -25,6 +25,9 @@
   import logger from '$lib/logger.js';
   import { auth } from '$lib/auth.js';
   import { verifyHandLocally } from '$lib/shuffle-verify.js';
+  // Importing this module installs the app-wide BigInt/JSON guard (see the
+  // header of $lib/utils.js). `safeStringify` is the same rule, stated locally.
+  import { safeStringify } from '$lib/utils.js';
 
   const { tableId = null, onClose, tableActor = null, handNumber = 0 } = $props();
 
@@ -503,11 +506,9 @@
     // `amount`, `won_e8s` and `amount_e8s` are Candid nat64s, i.e. BigInt. A bare
     // JSON.stringify THROWS on those, so the download button did nothing at all.
     // Same class of defect as docs/DEFECTS.md T-10; e8s are written as decimal
-    // strings, which is what a nat64 is on the wire anyway.
-    const blob = new Blob(
-      [JSON.stringify(payload, (_k, v2) => (typeof v2 === 'bigint' ? v2.toString() : v2), 2)],
-      { type: 'application/json' },
-    );
+    // strings, which is what a nat64 is on the wire anyway. `safeStringify` is
+    // the one copy of that rule ($lib/utils.js).
+    const blob = new Blob([safeStringify(payload, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -577,16 +578,33 @@
           <button class="ghost-btn" onclick={() => downloadHand(selected)}>Download</button>
         </div>
 
-        <!-- proof banner: the claim, stated only as strongly as it was checked -->
+        <!-- proof banner: the claim, stated only as strongly as it was checked.
+             THE ORDERING IS NOT PART OF THE CLAIM. This banner used to lead with
+             "These cards were fixed before the hand was played … before any card
+             was dealt", which is the ordering claim ShuffleProof.svelte retires
+             by name ("Not proven: that the commitment came before the cards").
+             Two surfaces of the same product cannot say opposite things about
+             the same fact, and the one a player opens to review a hand they lost
+             is the worse one to over-claim on. What the browser actually did is
+             stated instead, and the ordering is carried beside it as the open
+             question, with the one thing that would settle it. -->
         {#if selected.verification?.ok}
           <div class="proof-banner good">
             <span class="banner-mark">✓</span>
             <div>
-              <strong>These cards were fixed before the hand was played.</strong>
+              <strong>These cards follow from the seed the table committed to.</strong>
               <p>
                 All {selected.verification.cardsMatched} cards below were re-derived in this browser from
-                the seed whose SHA-256 the table published at {formatClock(selected.timestamp)} — before any
-                card was dealt. No canister was asked to confirm it.
+                the revealed seed, and its SHA-256 recomputed here matches the commitment the table
+                published for this hand. No canister was asked to confirm it.
+              </p>
+              <p class="banner-caveat">
+                <span class="caveat-tag">Not proven</span>
+                That the commitment came <em>before</em> the deal. The
+                {formatClock(selected.timestamp)} above is a clock read off the table canister; this page
+                did not watch the order of events, and everything above stays true even if that clock is
+                wrong. To witness it yourself, copy the commitment off the table while a hand is still
+                running and compare it here after the seed is revealed.
               </p>
             </div>
           </div>
@@ -1082,6 +1100,25 @@
   .proof-banner.bad { background: rgba(231, 76, 60, 0.1); border: 1px solid rgba(231, 76, 60, 0.35); }
   .proof-banner.bad strong, .proof-banner.bad .banner-mark { color: #ff6b5b; }
 
+  /* The limit rides INSIDE the green banner rather than under it, so the reader
+     cannot take the verdict without the caveat. Same treatment ShuffleProof's
+     `.limit.not-proven` gets: a tag, not a footnote. */
+  .banner-caveat { margin-top: 7px !important; padding-top: 7px; border-top: 1px solid rgba(255, 255, 255, 0.09); }
+  .caveat-tag {
+    display: inline-block;
+    margin-right: 6px;
+    padding: 1px 6px;
+    border-radius: 5px;
+    background: rgba(241, 196, 15, 0.14);
+    border: 1px solid rgba(241, 196, 15, 0.34);
+    color: #f1c40f;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    vertical-align: 1px;
+  }
+
   .scrubber { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
 
   .stop {
@@ -1278,8 +1315,14 @@
     .hand-row { flex-wrap: wrap; gap: 8px; }
     .row-badges { justify-content: flex-start; }
     .player-row { grid-template-columns: 1fr; gap: 6px; }
-    .log-line { grid-template-columns: 54px 1fr; }
-    .log-line .log-seat { display: none; }
+    /* WHO ACTED IS NOT THE COLUMN TO DROP. This used to be
+       `grid-template-columns: 54px 1fr` plus `.log-seat { display: none }`,
+       which on a phone rendered the whole log as "05:46:19 AM calls" — every
+       line anonymous, so the log could not answer the one question it exists
+       to answer. The TIME column is the one with slack: it is monospace, fixed
+       width and the least load-bearing thing on the line. */
+    .log-line { grid-template-columns: 52px 46px 1fr; gap: 6px; font-size: 11px; }
+    .log-seat { font-size: 10.5px; }
     .proof-label { min-width: 0; }
   }
 </style>

@@ -257,6 +257,7 @@ impl Bench {
             "`{}` was settled differently from the rules of poker.\n\
              Per-SEAT DIFF   (engine minus what the rules owe): {:?}\n\
              Per-PRINCIPAL DIFF (WHO was paid, by principal):   {:?}\n\
+             Per-RECORD DIFF (who the canister SAYS it paid):   {:?}\n\
              Every chip may still be conserved -- {} destroyed -- and the totals may \
              still be right; what is wrong is WHO HAS THE MONEY. A run where the SEAT \
              column is all zeroes and the PRINCIPAL column is not is \
@@ -272,6 +273,10 @@ impl Bench {
             cmp.misattributed()
                 .iter()
                 .map(|p| (p.principal.to_text(), p.diff))
+                .collect::<Vec<_>>(),
+            cmp.misreported()
+                .iter()
+                .map(|c| (c.principal.to_text(), c.diff))
                 .collect::<Vec<_>>(),
             cmp.destroyed,
             cmp.report(),

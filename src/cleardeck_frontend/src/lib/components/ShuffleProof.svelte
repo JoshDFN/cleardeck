@@ -319,8 +319,9 @@
         <div class="rung-body">
           <h4>Before the deal, the table locked in a hash</h4>
           <p class="rung-note">
-            Published at {formatTimestamp(proof.timestamp)}, before a single card was dealt.
-            Once it is out, the deck behind it cannot be changed.
+            The table says it published this at {formatTimestamp(proof.timestamp)}. That timestamp is the
+            canister's own word and is the one thing on this panel you have to take on trust; everything
+            below is checked here. Once the hash is out, the deck behind it cannot be changed.
           </p>
           <div class="proof-item">
             <span class="label">SHA-256 commitment</span>
@@ -465,7 +466,7 @@
                 {#if report.ok}
                   <strong>{report.cardsMatched} of {report.cardsChecked} cards</strong> you saw this hand were
                   re-derived in this browser from the committed seed, each at exactly the position the
-                  dealing rule puts it. Nobody could have chosen them after seeing your hand.
+                  dealing rule puts it. Change any one of them and the hash in step 3 stops matching.
                 {:else if report.cardsChecked > 0}
                   <strong>{report.cardsMatched} of {report.cardsChecked} cards</strong> matched.
                   {#if !report.commitment.match}
@@ -689,13 +690,24 @@
         <div class="limits">
           <div class="limit proven">
             <span class="limit-tag">Proven</span>
-            <p>The 52-card order was fixed before any card was seen, and the cards you were dealt follow from
-              the seed the table committed to. Checked here, on your machine, from the cards on your screen.</p>
+            <p>The cards you were dealt follow from the seed the table committed to. That seed fixes all 52
+              positions, and every card you saw this hand sits exactly where it puts one. Checked here, on
+              your machine, from the cards on your screen.</p>
           </div>
           <div class="limit proven">
             <span class="limit-tag">Proven</span>
-            <p>Nobody chose the deck after seeing hole cards. The commitment is published before the deal and
-              the seed is only revealed once the hand is over.</p>
+            <p>The deck could not be changed after that commitment existed. Any other card at any other
+              position would give a different SHA-256, and the one in step 1 is the one that was published.</p>
+          </div>
+          <div class="limit not-proven">
+            <span class="limit-tag">Not proven</span>
+            <p><strong>That the commitment came before the cards.</strong> This page reads
+              <code>{formatTimestamp(proof.timestamp)}</code> off the table canister; it did not watch the
+              order of events. Everything above stays true even if that clock is wrong.
+              <strong>You can witness it yourself:</strong> copy the commitment from step 1 while a hand is
+              still running — it is on screen from the moment cards are dealt — and check it against the one
+              shown here after the seed is revealed. Then the "before" is something you saw, not something
+              we told you.</p>
           </div>
           <div class="limit not-proven">
             <span class="limit-tag">Not proven</span>

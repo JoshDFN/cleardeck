@@ -941,6 +941,7 @@ dependencies = [
  "poker_core",
  "serde",
  "serde_json",
+ "settlement_oracle",
  "sha2",
 ]
 
@@ -1604,6 +1605,19 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "settlement_oracle"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "crc32fast",
+ "hex",
+ "pocket-ic",
+ "poker_core",
+ "serde",
+ "sha2",
 ]
 
 [[package]]

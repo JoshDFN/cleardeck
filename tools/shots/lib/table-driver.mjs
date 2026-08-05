@@ -159,6 +159,17 @@ export async function ledgerBalance(principalText) {
 }
 
 /**
+ * The ledger's own transfer fee, read live.
+ *
+ * The deposit modal prints "(Network fee: 0.0001 ICP)" from a literal in the
+ * component. This is the number that literal has to equal.
+ */
+export async function ledgerTransferFee() {
+  const ledger = await ledgerActor(ICP_LEDGER_CANISTER_ID);
+  return ledger.icrc1_fee();
+}
+
+/**
  * Makes sure a dev player has at least `minE8s` in the ledger, topping up from
  * the funder identity when short.
  */

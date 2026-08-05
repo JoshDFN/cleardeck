@@ -1,0 +1,887 @@
+{
+  "startedAt": "2026-08-05T03:56:15.618Z",
+  "gitSha": "3253b67",
+  "gateway": "http://localhost:8077",
+  "appOrigin": "http://127.0.0.1:4943",
+  "frontendCanisterId": "5uljf-s3777-77775-aaaea-cai",
+  "viewport": {
+    "name": "mobile",
+    "width": 390,
+    "height": 844,
+    "deviceScaleFactor": 1,
+    "isMobile": true
+  },
+  "table": {
+    "name": "6-Max - 0.01/0.02",
+    "canisterId": "4zfnl-5t777-77775-aaadq-cai"
+  },
+  "method": {
+    "timeBase": "performance.now() inside the page; click times are the browser's own event.timeStamp",
+    "visible": "first requestAnimationFrame callback after the DOM change that carries the state",
+    "headless": "headless Chromium; rAF cadence is a proxy for presented frames",
+    "thirdParty": "no interception in this run: fonts/avatars are fetched live or fail, exactly as the app would",
+    "quantiles": "nearest-rank, so every reported value is an observation that happened"
+  },
+  "lobbyLoad": {
+    "firstPaint": {
+      "n": 20,
+      "unit": "ms",
+      "min": 132,
+      "p50": 156,
+      "p95": 188,
+      "max": 324,
+      "mean": 168.6,
+      "samples": [
+        324,
+        152,
+        136,
+        172,
+        164,
+        172,
+        148,
+        188,
+        180,
+        188,
+        152,
+        180,
+        132,
+        156,
+        156,
+        140,
+        156,
+        156,
+        156,
+        164
+      ]
+    },
+    "firstContentfulPaint": {
+      "n": 20,
+      "unit": "ms",
+      "min": 132,
+      "p50": 156,
+      "p95": 188,
+      "max": 324,
+      "mean": 168.6,
+      "samples": [
+        324,
+        152,
+        136,
+        172,
+        164,
+        172,
+        148,
+        188,
+        180,
+        188,
+        152,
+        180,
+        132,
+        156,
+        156,
+        140,
+        156,
+        156,
+        156,
+        164
+      ]
+    },
+    "largestContentfulPaint": {
+      "n": 20,
+      "unit": "ms",
+      "min": 132,
+      "p50": 156,
+      "p95": 188,
+      "max": 324,
+      "mean": 168.6,
+      "samples": [
+        324,
+        152,
+        136,
+        172,
+        164,
+        172,
+        148,
+        188,
+        180,
+        188,
+        152,
+        180,
+        132,
+        156,
+        156,
+        140,
+        156,
+        156,
+        156,
+        164
+      ]
+    },
+    "firstMeaningfulPaint": {
+      "n": 20,
+      "unit": "ms",
+      "min": 193.1,
+      "p50": 219.1,
+      "p95": 317.9,
+      "max": 384,
+      "mean": 237.9,
+      "samples": [
+        384,
+        216.1,
+        208,
+        233.8,
+        300.1,
+        225.5,
+        217.4,
+        317.9,
+        240.4,
+        256.8,
+        220.9,
+        234.3,
+        196.1,
+        216.4,
+        217.9,
+        219.1,
+        242.2,
+        201.5,
+        193.1,
+        217.3
+      ]
+    },
+    "firstMeaningfulDomMutation": {
+      "n": 20,
+      "unit": "ms",
+      "min": 187.9,
+      "p50": 213.6,
+      "p95": 304.7,
+      "max": 379.8,
+      "mean": 231.1,
+      "samples": [
+        379.8,
+        211.3,
+        201.6,
+        225.8,
+        290.9,
+        217.8,
+        207.7,
+        304.7,
+        235.5,
+        249.1,
+        216.5,
+        227.6,
+        187.9,
+        209.7,
+        211.4,
+        213.6,
+        235.9,
+        194.6,
+        189.7,
+        211.9
+      ]
+    }
+  },
+  "tableEntry": {
+    "rowClickToTableShell": {
+      "n": 15,
+      "unit": "ms",
+      "min": 31.3,
+      "p50": 34.3,
+      "p95": 346.4,
+      "max": 346.4,
+      "mean": 113.2,
+      "samples": [
+        34.3,
+        334.5,
+        35.3,
+        33,
+        32.8,
+        31.3,
+        315.9,
+        33,
+        31.9,
+        34.4,
+        33.3,
+        51.5,
+        33.7,
+        346.4,
+        317.3
+      ]
+    },
+    "rowClickToOnChainStateVisible": {
+      "n": 15,
+      "unit": "ms",
+      "min": 150.1,
+      "p50": 382.5,
+      "p95": 684.4,
+      "max": 684.4,
+      "mean": 393.9,
+      "samples": [
+        225.7,
+        684.4,
+        410,
+        682.6,
+        291.2,
+        382.5,
+        559.4,
+        308,
+        183.1,
+        326,
+        275.6,
+        384.1,
+        150.1,
+        453.5,
+        592.4
+      ]
+    },
+    "navigationStartToOnChainStateVisible": {
+      "n": 15,
+      "unit": "ms",
+      "min": 468.3,
+      "p50": 854.4,
+      "p95": 1281.3,
+      "max": 1281.3,
+      "mean": 824.6,
+      "samples": [
+        566.9,
+        943.1,
+        759.1,
+        1281.3,
+        871.5,
+        765.4,
+        862.5,
+        933.7,
+        854.4,
+        689.4,
+        921.1,
+        716.3,
+        468.3,
+        810.3,
+        926.2
+      ]
+    }
+  },
+  "action": {
+    "visibleAcknowledgementMs": {
+      "n": 20,
+      "unit": "ms",
+      "min": 14,
+      "p50": 15.3,
+      "p95": 16,
+      "max": 16.7,
+      "mean": 15.3,
+      "samples": [
+        16,
+        15.3,
+        15.2,
+        15,
+        15.5,
+        15.4,
+        15,
+        15.9,
+        16.7,
+        14.7,
+        15.6,
+        14.2,
+        15.3,
+        15.5,
+        15.5,
+        15.3,
+        15.1,
+        15.5,
+        14,
+        15.3
+      ]
+    },
+    "domAcknowledgementMs": {
+      "n": 20,
+      "unit": "ms",
+      "min": 4.8,
+      "p50": 6.9,
+      "p95": 8.9,
+      "max": 9,
+      "mean": 6.9,
+      "samples": [
+        6.2,
+        7.1,
+        5.5,
+        6.9,
+        7.8,
+        5.7,
+        6.6,
+        8,
+        9,
+        4.8,
+        7.6,
+        7,
+        8,
+        8.9,
+        5.8,
+        7.1,
+        6.3,
+        5.6,
+        5.9,
+        7.2
+      ]
+    },
+    "updateCallReturnedMs": {
+      "n": 20,
+      "unit": "ms",
+      "min": 73.7,
+      "p50": 198.8,
+      "p95": 491,
+      "max": 498.5,
+      "mean": 281.5,
+      "samples": [
+        332.9,
+        107.2,
+        439.9,
+        190.2,
+        182.3,
+        439.5,
+        115.1,
+        140.2,
+        383.8,
+        455.4,
+        482.6,
+        498.5,
+        491,
+        116.8,
+        231.2,
+        165.3,
+        122.3,
+        198.8,
+        463.7,
+        73.7
+      ]
+    },
+    "settledVisibleStateMs": {
+      "n": 20,
+      "unit": "ms",
+      "min": 182.7,
+      "p50": 439.9,
+      "p95": 722.5,
+      "max": 731.4,
+      "mean": 444.4,
+      "samples": [
+        332.9,
+        589.2,
+        439.9,
+        731.4,
+        257.6,
+        439.5,
+        298.6,
+        182.7,
+        383.8,
+        455.4,
+        482.6,
+        498.5,
+        491,
+        349.9,
+        715.1,
+        364.2,
+        722.5,
+        448.5,
+        463.7,
+        240.3
+      ]
+    },
+    "settledVisibleStateMoneyMovingOnly": {
+      "n": 12,
+      "unit": "ms",
+      "min": 182.7,
+      "p50": 364.2,
+      "p95": 482.6,
+      "max": 482.6,
+      "mean": 363.9,
+      "samples": [
+        439.9,
+        257.6,
+        298.6,
+        182.7,
+        383.8,
+        455.4,
+        482.6,
+        349.9,
+        364.2,
+        448.5,
+        463.7,
+        240.3
+      ]
+    },
+    "pollWaitAfterCallReturnedMs": {
+      "n": 20,
+      "unit": "ms",
+      "min": 0,
+      "p50": 42.5,
+      "p95": 541.2,
+      "max": 600.2,
+      "mean": 162.8,
+      "samples": [
+        0,
+        482,
+        0,
+        541.2,
+        75.3,
+        0,
+        183.5,
+        42.5,
+        0,
+        0,
+        0,
+        0,
+        0,
+        233.1,
+        483.9,
+        198.9,
+        600.2,
+        249.7,
+        0,
+        166.6
+      ]
+    },
+    "settleTimeouts": 0,
+    "byLabel": {
+      "Check": {
+        "visibleAcknowledgementMs": {
+          "n": 8,
+          "unit": "ms",
+          "min": 14.2,
+          "p50": 15.3,
+          "p95": 16,
+          "max": 16,
+          "mean": 15.2,
+          "samples": [
+            16,
+            15.3,
+            15,
+            15.4,
+            14.2,
+            15.3,
+            15.5,
+            15.1
+          ]
+        },
+        "updateCallReturnedMs": {
+          "n": 8,
+          "unit": "ms",
+          "min": 107.2,
+          "p50": 231.2,
+          "p95": 498.5,
+          "max": 498.5,
+          "mean": 301.6,
+          "samples": [
+            332.9,
+            107.2,
+            190.2,
+            439.5,
+            498.5,
+            491,
+            231.2,
+            122.3
+          ]
+        },
+        "settledVisibleStateMs": {
+          "n": 8,
+          "unit": "ms",
+          "min": 332.9,
+          "p50": 498.5,
+          "p95": 731.4,
+          "max": 731.4,
+          "mean": 565,
+          "samples": [
+            332.9,
+            589.2,
+            731.4,
+            439.5,
+            498.5,
+            491,
+            715.1,
+            722.5
+          ]
+        }
+      },
+      "Call 0.10": {
+        "visibleAcknowledgementMs": {
+          "n": 10,
+          "unit": "ms",
+          "min": 14.7,
+          "p50": 15.3,
+          "p95": 16.7,
+          "max": 16.7,
+          "mean": 15.4,
+          "samples": [
+            15.2,
+            15.5,
+            15,
+            16.7,
+            14.7,
+            15.6,
+            15.5,
+            15.3,
+            15.5,
+            15.3
+          ]
+        },
+        "updateCallReturnedMs": {
+          "n": 10,
+          "unit": "ms",
+          "min": 73.7,
+          "p50": 182.3,
+          "p95": 482.6,
+          "max": 482.6,
+          "mean": 261.4,
+          "samples": [
+            439.9,
+            182.3,
+            115.1,
+            383.8,
+            455.4,
+            482.6,
+            116.8,
+            165.3,
+            198.8,
+            73.7
+          ]
+        },
+        "settledVisibleStateMs": {
+          "n": 10,
+          "unit": "ms",
+          "min": 240.3,
+          "p50": 364.2,
+          "p95": 482.6,
+          "max": 482.6,
+          "mean": 372.1,
+          "samples": [
+            439.9,
+            257.6,
+            298.6,
+            383.8,
+            455.4,
+            482.6,
+            349.9,
+            364.2,
+            448.5,
+            240.3
+          ]
+        }
+      },
+      "Call 0.05": {
+        "visibleAcknowledgementMs": {
+          "n": 2,
+          "unit": "ms",
+          "min": 14,
+          "p50": 14,
+          "p95": 15.9,
+          "max": 15.9,
+          "mean": 15,
+          "samples": [
+            15.9,
+            14
+          ]
+        },
+        "updateCallReturnedMs": {
+          "n": 2,
+          "unit": "ms",
+          "min": 140.2,
+          "p50": 140.2,
+          "p95": 463.7,
+          "max": 463.7,
+          "mean": 302,
+          "samples": [
+            140.2,
+            463.7
+          ]
+        },
+        "settledVisibleStateMs": {
+          "n": 2,
+          "unit": "ms",
+          "min": 182.7,
+          "p50": 182.7,
+          "p95": 463.7,
+          "max": 463.7,
+          "mean": 323.2,
+          "samples": [
+            182.7,
+            463.7
+          ]
+        }
+      }
+    },
+    "fixture": {
+      "handsStarted": 4,
+      "oppActions": 15,
+      "oppBets": 11
+    },
+    "longAnimationFrames": 2,
+    "samples": [
+      {
+        "label": "Check",
+        "paintedAckMs": 16,
+        "callReturnedMs": 332.9,
+        "settledMs": 332.9
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 15.3,
+        "callReturnedMs": 107.2,
+        "settledMs": 589.2
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15.2,
+        "callReturnedMs": 439.9,
+        "settledMs": 439.9
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 15,
+        "callReturnedMs": 190.2,
+        "settledMs": 731.4
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15.5,
+        "callReturnedMs": 182.3,
+        "settledMs": 257.6
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 15.4,
+        "callReturnedMs": 439.5,
+        "settledMs": 439.5
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15,
+        "callReturnedMs": 115.1,
+        "settledMs": 298.6
+      },
+      {
+        "label": "Call 0.05",
+        "paintedAckMs": 15.9,
+        "callReturnedMs": 140.2,
+        "settledMs": 182.7
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 16.7,
+        "callReturnedMs": 383.8,
+        "settledMs": 383.8
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 14.7,
+        "callReturnedMs": 455.4,
+        "settledMs": 455.4
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15.6,
+        "callReturnedMs": 482.6,
+        "settledMs": 482.6
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 14.2,
+        "callReturnedMs": 498.5,
+        "settledMs": 498.5
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 15.3,
+        "callReturnedMs": 491,
+        "settledMs": 491
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15.5,
+        "callReturnedMs": 116.8,
+        "settledMs": 349.9
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 15.5,
+        "callReturnedMs": 231.2,
+        "settledMs": 715.1
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15.3,
+        "callReturnedMs": 165.3,
+        "settledMs": 364.2
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 15.1,
+        "callReturnedMs": 122.3,
+        "settledMs": 722.5
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15.5,
+        "callReturnedMs": 198.8,
+        "settledMs": 448.5
+      },
+      {
+        "label": "Call 0.05",
+        "paintedAckMs": 14,
+        "callReturnedMs": 463.7,
+        "settledMs": 463.7
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15.3,
+        "callReturnedMs": 73.7,
+        "settledMs": 240.3
+      }
+    ]
+  },
+  "finishedAt": "2026-08-05T03:57:08.083Z",
+  "machineLoad": {
+    "machine": {
+      "platform": "darwin 25.3.0",
+      "cpuModel": "Apple M4 Max",
+      "cpuCount": 16,
+      "totalMemGiB": 128
+    },
+    "samples": [
+      {
+        "at": "2026-08-05T03:56:15.398Z",
+        "loadAvg": {
+          "1m": 4.443359375,
+          "5m": 4.58642578125,
+          "15m": 4.1162109375
+        },
+        "loadPerCore": 0.278,
+        "heavyProcesses": {
+          "cargo/rustc": 1,
+          "pocket-ic": 77,
+          "node (harness)": 2,
+          "icp-cli": 4
+        },
+        "totalPercentCpuAcrossAllProcesses": 176
+      },
+      {
+        "at": "2026-08-05T03:56:25.482Z",
+        "loadAvg": {
+          "1m": 4.21484375,
+          "5m": 4.53369140625,
+          "15m": 4.1025390625
+        },
+        "loadPerCore": 0.263,
+        "heavyProcesses": {
+          "cargo/rustc": 1,
+          "pocket-ic": 74,
+          "node (harness)": 2,
+          "icp-cli": 4
+        },
+        "totalPercentCpuAcrossAllProcesses": 351.7
+      },
+      {
+        "at": "2026-08-05T03:56:35.482Z",
+        "loadAvg": {
+          "1m": 3.72021484375,
+          "5m": 4.41650390625,
+          "15m": 4.0654296875
+        },
+        "loadPerCore": 0.233,
+        "heavyProcesses": {
+          "cargo/rustc": 1,
+          "pocket-ic": 72,
+          "node (harness)": 2,
+          "icp-cli": 4
+        },
+        "totalPercentCpuAcrossAllProcesses": 427.7
+      },
+      {
+        "at": "2026-08-05T03:56:45.481Z",
+        "loadAvg": {
+          "1m": 3.83642578125,
+          "5m": 4.41845703125,
+          "15m": 4.0703125
+        },
+        "loadPerCore": 0.24,
+        "heavyProcesses": {
+          "cargo/rustc": 1,
+          "pocket-ic": 77,
+          "node (harness)": 2,
+          "icp-cli": 4
+        },
+        "totalPercentCpuAcrossAllProcesses": 285.8
+      },
+      {
+        "at": "2026-08-05T03:56:55.484Z",
+        "loadAvg": {
+          "1m": 3.70703125,
+          "5m": 4.37109375,
+          "15m": 4.0576171875
+        },
+        "loadPerCore": 0.232,
+        "heavyProcesses": {
+          "cargo/rustc": 1,
+          "pocket-ic": 79,
+          "node (harness)": 2,
+          "icp-cli": 4
+        },
+        "totalPercentCpuAcrossAllProcesses": 255.6
+      },
+      {
+        "at": "2026-08-05T03:57:05.488Z",
+        "loadAvg": {
+          "1m": 3.53076171875,
+          "5m": 4.3095703125,
+          "15m": 4.0390625
+        },
+        "loadPerCore": 0.221,
+        "heavyProcesses": {
+          "cargo/rustc": 1,
+          "pocket-ic": 85,
+          "node (harness)": 2,
+          "icp-cli": 4
+        },
+        "totalPercentCpuAcrossAllProcesses": 241
+      },
+      {
+        "at": "2026-08-05T03:57:08.169Z",
+        "loadAvg": {
+          "1m": 3.32763671875,
+          "5m": 4.25439453125,
+          "15m": 4.02099609375
+        },
+        "loadPerCore": 0.208,
+        "heavyProcesses": {
+          "cargo/rustc": 1,
+          "pocket-ic": 85,
+          "node (harness)": 2,
+          "icp-cli": 4
+        },
+        "totalPercentCpuAcrossAllProcesses": 205.5
+      }
+    ],
+    "sampleCount": 7,
+    "loadAvg1mMin": 3.32763671875,
+    "loadAvg1mMax": 4.443359375,
+    "loadPerCoreMax": 0.278,
+    "busiestSample": {
+      "at": "2026-08-05T03:56:15.398Z",
+      "loadAvg": {
+        "1m": 4.443359375,
+        "5m": 4.58642578125,
+        "15m": 4.1162109375
+      },
+      "loadPerCore": 0.278,
+      "heavyProcesses": {
+        "cargo/rustc": 1,
+        "pocket-ic": 77,
+        "node (harness)": 2,
+        "icp-cli": 4
+      },
+      "totalPercentCpuAcrossAllProcesses": 176
+    },
+    "competingWork": {
+      "cargoOrRustcSeen": true,
+      "extraHarnessProcessSeen": true,
+      "pocketIcSeenMax": 85
+    },
+    "verdict": "1-minute load stayed at or under 0.28 per core (peak 4.44 across 16 cores); a cargo/rustc BUILD was running; ANOTHER harness process (screenshot or perf run) was on the same replica for part of this run"
+  }
+}
