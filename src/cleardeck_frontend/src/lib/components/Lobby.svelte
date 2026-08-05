@@ -541,23 +541,49 @@
        and this lobby used to put it at 88.4%. Nothing is deleted to get there —
        the heading, the counts, the filters and the drift warning all moved
        INSIDE the list pane, and the signed-out pitch moved BELOW the list, where
-       a visitor reads it after seeing that the tables are real. -->
+       a visitor reads it after seeing that the tables are real.
+
+       WAVE 5 measured the rest of the way, on the rendered page at ten widths
+       (docs/DESIGN-BAR.md §9.4.2a–c). Above the first row there is now exactly
+       ONE row of lobby furniture and the column headers — 70.3 px at 1440×900,
+       down from 127.4 — and the first row sits at 34.8% of the viewport against
+       PokerStars' 34.4%. What moved: the drift statement went BELOW the rows
+       (its count stays here as a chip, at no cost in height), and the density
+       and refresh controls went to the list footer. What did not move: 7 facts
+       in the row, 18 in the preview, three live tables signed out, five filter
+       pills rendered whole, and the four protected notices on screen. -->
   <div class="board">
     <div class="list-pane">
       <header class="pane-bar">
         <div class="pane-title">
           <h2>Cash games</h2>
+          <!-- Heading and counts on ONE line, and the drift warning folded into
+               it as a chip. Stacked, they cost 43 px of the 900 px viewport that
+               BAR 25 measures; inline they cost 19 and the row is unchanged in
+               what it says. -->
           <p class="pane-sub">
             <strong>{tables.length}</strong>
             {tables.length === 1 ? 'table' : 'tables'}
             <span class="sep">·</span>
-            <strong>{seatsTaken}</strong> of {seatsTotal} seats taken
+            <strong>{seatsTaken}</strong>/{seatsTotal} seats
             {#if handsRunning > 0}
               <span class="sep">·</span>
               <strong class="hot">{handsRunning}</strong> {handsRunning === 1 ? 'hand' : 'hands'} in play
             {/if}
             <span class="sep">·</span>
             <span class="norake">0% rake</span>
+            {#if liveLoaded && driftedTables > 0}
+              <!-- The COUNT stays above the list, at zero extra height, and it
+                   is stated in full at the foot of the list where there is room
+                   for the whole sentence. Each affected row also carries its own
+                   "⚠ record differs" flag in the money cell it applies to, which
+                   is the placement a player actually reads. -->
+              <a
+                class="drift-chip"
+                href="#lobby-record-drift"
+                title="{driftedTables} of {tables.length} lobby records quote figures their table contracts do not charge. Every figure in the list is the contract's. Opens the full statement at the foot of the list."
+              >⚠ {driftedTables} {driftedTables === 1 ? 'record' : 'records'} differ</a>
+            {/if}
           </p>
         </div>
 
@@ -592,60 +618,7 @@
           {/if}
         </div>
 
-        <div class="pane-actions">
-          <div class="seg" role="group" aria-label="Row density">
-            <button
-              class:on={density === 'comfortable'}
-              onclick={() => setDensity('comfortable')}
-              title="Comfortable rows"
-              aria-label="Comfortable rows"
-              aria-pressed={density === 'comfortable'}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/>
-              </svg>
-            </button>
-            <button
-              class:on={density === 'compact'}
-              onclick={() => setDensity('compact')}
-              title="Compact rows"
-              aria-label="Compact rows"
-              aria-pressed={density === 'compact'}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
-              </svg>
-            </button>
-          </div>
-          <!-- Icon only, like the density control beside it. The words cost 52 px
-               of the one row this bar is allowed, and the row is what keeps the
-               first table 400 px higher up the page. Name, tooltip and hover
-               label are all still there for anyone who needs them. -->
-          <button class="btn ghost icon" onclick={refreshAll} title="Refresh tables" aria-label="Refresh tables">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M23 4v6h-6M1 20v-6h6"/>
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-            </svg>
-          </button>
-        </div>
       </header>
-
-      {#if liveLoaded && driftedTables > 0}
-        <!-- One statement of the problem, attached to the list it is about,
-             instead of the same warning shouted in every money cell. The figures
-             below are always the table contract's; it is the lobby canister's
-             REGISTRATION — including the stakes baked into the name — that is
-             stale, and each stale name is struck through where it appears. -->
-        <p class="drift-strip">
-          <strong>
-            {driftedTables === 1
-              ? `1 of ${tables.length} lobby records quotes figures its table contract does not charge.`
-              : `${driftedTables} of ${tables.length} lobby records quote figures their table contracts do not charge.`}
-          </strong>
-          Every figure below is what the <em>contract</em> charges{#if staleNames > 0}; the stale
-          {staleNames === 1 ? 'name is' : 'names are'} struck through{/if}.
-        </p>
-      {/if}
 
       {#if tables.length === 0}
         <div class="empty">
@@ -829,6 +802,27 @@
           </tbody>
         </table>
 
+        {#if liveLoaded && driftedTables > 0}
+          <!-- The whole statement, immediately under the rows it is about.
+               It used to sit ABOVE them and cost 26 px of desktop viewport and
+               57 px of phone viewport — the two lines that pushed the first row
+               out of the reference band. Nothing here is softened: the sentence
+               is the same one, the per-row "⚠ record differs" flag is still in
+               the money cell of every affected row, the struck-through figure is
+               still on any stale name, and the count is still above the list as
+               a chip beside the table count. -->
+          <p class="drift-strip" id="lobby-record-drift">
+            <strong>
+              {driftedTables === 1
+                ? `1 of ${tables.length} lobby records quotes figures its table contract does not charge.`
+                : `${driftedTables} of ${tables.length} lobby records quote figures their table contracts do not charge.`}
+            </strong>
+            Every figure above is what the <em>contract</em> charges — read from the table canister
+            itself, not from the lobby's registration{#if staleNames > 0}; the stale
+            {staleNames === 1 ? 'name is' : 'names are'} struck through{/if}.
+          </p>
+        {/if}
+
         {#if seatsTaken === 0}
           <!-- Under the list, not above it. It is an invitation, not a warning,
                and putting it above the rows cost 63 px of the one thing this
@@ -849,15 +843,59 @@
 
         <!-- The columns a rake-funded client shows that this one does not, and
              why. Stating the gap is better than estimating it: none of these is
-             recorded on-chain, so no client could compute them from this engine. -->
-        <p class="list-foot">
-          Every column above is read live from a canister: the list from
-          <button class="linkish mono" onclick={() => copyText(lobbyCanisterId, 'lobby')}>{shortId(lobbyCanisterId)}</button>,
-          each row from its own table contract, re-read every {LIVE_POLL_MS / 1000} seconds.
-          Average pot, players-per-flop, hands-per-hour and waiting lists are
-          <strong>not recorded on-chain</strong>, so they are absent here rather than estimated.
-          <button class="link-btn" onclick={() => showHow = true}>How it works</button>
-        </p>
+             recorded on-chain, so no client could compute them from this engine.
+
+             THE TWO CONTROLS LIVE HERE NOW, not in the bar above the list. They
+             cost 121 px of the bar's one row, which is what made the bar wrap to
+             two lines and put the first table row 27 px lower; and neither is a
+             control anybody reaches for BEFORE reading the list. Refresh belongs
+             beside the sentence that states the poll interval it overrides, and
+             row density belongs beside the rows it changes. Both are unchanged
+             in what they do. -->
+        <footer class="list-foot">
+          <p class="foot-copy">
+            Every column above is read live from a canister: the list from
+            <button class="linkish mono" onclick={() => copyText(lobbyCanisterId, 'lobby')}>{shortId(lobbyCanisterId)}</button>,
+            each row from its own table contract, re-read every {LIVE_POLL_MS / 1000} seconds.
+            Average pot, players-per-flop, hands-per-hour and waiting lists are
+            <strong>not recorded on-chain</strong>, so they are absent here rather than estimated.
+            <button class="link-btn" onclick={() => showHow = true}>How it works</button>
+          </p>
+
+          <div class="pane-actions">
+            <div class="seg" role="group" aria-label="Row density">
+              <button
+                class:on={density === 'comfortable'}
+                onclick={() => setDensity('comfortable')}
+                title="Comfortable rows"
+                aria-label="Comfortable rows"
+                aria-pressed={density === 'comfortable'}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/>
+                </svg>
+              </button>
+              <button
+                class:on={density === 'compact'}
+                onclick={() => setDensity('compact')}
+                title="Compact rows"
+                aria-label="Compact rows"
+                aria-pressed={density === 'compact'}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+                </svg>
+              </button>
+            </div>
+            <button class="btn ghost icon" onclick={refreshAll} title="Refresh tables" aria-label="Refresh tables">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 4v6h-6M1 20v-6h6"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+              </svg>
+              <span class="icon-label">Refresh</span>
+            </button>
+          </div>
+        </footer>
       {/if}
     </div>
 
@@ -1101,14 +1139,16 @@
 {/if}
 
 <style>
-  /* The top pad is a real budget line, not a taste call. The disclaimer banner
-     and the app header own 243 px of a 900 px desktop viewport (268 + 120 of an
-     844 px phone) before this component paints a pixel, so everything above the
-     first table row is measured against what is left. */
+  /* The top pad is a real budget line, not a taste call. Measured on the
+     rendered page at 1440x900: the disclaimer banner is 160 px and the app
+     header 82.5, so 242.5 px (27.0%) of the viewport is spent before this
+     component paints a pixel; on a 390x844 phone it is 268 + 119.5 = 387.5 px
+     (45.9%). Everything above the first table row is measured against what is
+     left, and 4 px is all this pad may take. */
   .lobby {
     max-width: 1320px;
     margin: 0 auto;
-    padding: 10px 20px 32px;
+    padding: 4px 20px 32px;
     color: #e6e8ec;
   }
 
@@ -1157,7 +1197,10 @@
     color: #fff;
   }
 
-  .btn.icon { padding: 7px 9px; font-weight: 500; }
+  /* In the footer there is room for the word again: it was dropped from the top
+     bar because it cost 52 px of a row the first table row was paying for. */
+  .btn.icon { padding: 6px 11px; font-weight: 500; gap: 6px; }
+  .icon-label { font-size: 12px; }
   .btn.sm { padding: 8px 14px; font-size: 12.5px; white-space: nowrap; }
   .btn.wide { width: 100%; }
   .btn:disabled { opacity: 0.55; cursor: progress; }
@@ -1357,30 +1400,37 @@
   /* ------------------------------------------------- the list pane's own bar
 
      Heading, counts, filters and the density/refresh controls on ONE row inside
-     the pane. Measured before: three stacked blocks ABOVE the pane, 56 + 35 + 63
-     px of content and 34 px of margins between them = 188 px. Measured after:
-     one 56 px row plus a 26 px drift strip = 82 px, inside the pane, no margins.
-     Nothing was removed from them except the word "Refresh". */
+     the pane, and NOTHING else above the first row except the column headers.
+
+     The budget, measured on the rendered page at 1440x900, from the bottom of
+     the app header to the top of the first row:
+       wave 3      three stacked blocks above the pane                  188 px
+       wave 4      56 px bar + 26 px drift strip + 34 px thead + pads   127 px
+       now         33 px bar + 30 px thead + 6 px of pad                 69 px
+     Nothing was deleted to get from 127 to 69: the heading moved beside the
+     counts instead of above them, the drift statement moved to the foot of the
+     list with its count kept up here as a chip, and the paddings were cut. */
 
   .pane-bar {
     display: flex;
     align-items: center;
-    gap: 8px 12px;
+    gap: 5px 10px;
     flex-wrap: wrap;
-    padding: 6px 12px;
+    padding: 3px 12px;
     background: rgba(0, 0, 0, 0.16);
     border-bottom: 1px solid rgba(255, 255, 255, 0.055);
   }
 
-  /* Heading OVER counts, not beside them. Side by side the block measured 442 px
-     and the row wanted 442 + 383 (filters) + 178 (controls) + gaps in an 884 px
-     pane, so the bar wrapped to two rows and cost 33 px. Stacked, and with the
-     Refresh label dropped, the row measures 240 + 383 + 109 = 732 px and fits. */
+  /* Heading BESIDE counts. Stacked they measured 43 px, which is 43 px of the
+     one thing this screen is for; on one baseline they measure 19 and say the
+     same words. The counts wrap under the heading on a narrow pane rather than
+     being cut. */
   .pane-title {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 1px;
+    flex-direction: row;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 2px 9px;
     min-width: 0;
     margin-right: auto;
     order: 1;
@@ -1388,7 +1438,7 @@
 
   .pane-title h2 {
     margin: 0;
-    font-size: 16px;
+    font-size: 14px;
     font-weight: 700;
     letter-spacing: -0.01em;
     color: #fff;
@@ -1397,8 +1447,33 @@
 
   .pane-sub {
     margin: 0;
-    font-size: 12px;
+    font-size: 11.5px;
     color: #7d8492;
+  }
+
+  /* The drift COUNT, inline in the counts line, so the warning is above the
+     list at zero cost in height. The sentence it summarises is at the foot of
+     the list and every affected row flags its own money cell. */
+  /* A link to the full statement at the foot of the list, which on a phone is
+     the only way to read it without hunting: the rows are between them. */
+  .drift-chip {
+    display: inline-block;
+    margin-left: 2px;
+    text-decoration: none;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #f0b429;
+    background: rgba(240, 180, 41, 0.12);
+    border: 1px solid rgba(240, 180, 41, 0.28);
+    border-radius: 5px;
+    padding: 0 5px;
+    white-space: nowrap;
+  }
+
+  .drift-chip:hover {
+    background: rgba(240, 180, 41, 0.2);
+    border-color: rgba(240, 180, 41, 0.45);
   }
 
   .pane-sub strong { color: #dfe3ea; font-weight: 600; }
@@ -1410,17 +1485,20 @@
     font-weight: 600;
   }
 
-  .pane-actions { display: flex; align-items: center; gap: 8px; order: 3; }
+  .pane-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 
   /* PokerStars ships row density as a strip of small icon buttons rather than
      words (docs/DESIGN-BAR.md); at three tables the words were costing more
      width than the feature is worth. */
+  /* These two controls set the height of the whole bar, so their padding is a
+     viewport measurement, not a taste call: 5 px of button padding put the row
+     at 31 px and the first table row 6 px lower down the page. */
   .seg {
     display: flex;
     background: rgba(255, 255, 255, 0.035);
     border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 9px;
-    padding: 2px;
+    border-radius: 8px;
+    padding: 1px;
   }
 
   .seg button {
@@ -1431,7 +1509,7 @@
     border: none;
     color: #6f7683;
     font: inherit;
-    padding: 5px 8px;
+    padding: 4px 7px;
     border-radius: 7px;
     cursor: pointer;
   }
@@ -1462,7 +1540,7 @@
     color: #7d8492;
     font: inherit;
     font-size: 12px;
-    padding: 5px 11px;
+    padding: 4px 11px;
     border-radius: 999px;
     cursor: pointer;
     white-space: nowrap;
@@ -1481,17 +1559,19 @@
 
   /* ------------------------------------------- the two in-pane status strips */
 
-  /* Full-bleed inside the pane and one line deep at desktop width, rather than a
-     63 px card with its own margins sitting between the visitor and the list.
-     Same statement, attached to the thing it is a statement about. */
+  /* BELOW the rows, full-bleed inside the pane. Above them it was 26 px of a
+     desktop viewport and 57 px of a phone's — the last thing between the visitor
+     and the list, and on a phone the single most expensive line on the screen.
+     The statement is unchanged, the count is still above the list as a chip, and
+     every affected row still flags its own money cell. */
   .drift-strip {
     margin: 0;
-    padding: 5px 12px;
+    padding: 7px 12px;
     font-size: 11px;
     line-height: 1.38;
     color: #9aa2ae;
     background: rgba(240, 180, 41, 0.07);
-    border-bottom: 1px solid rgba(240, 180, 41, 0.22);
+    border-top: 1px solid rgba(240, 180, 41, 0.22);
   }
 
   .drift-strip strong { color: #f0b429; font-weight: 600; }
@@ -1515,17 +1595,32 @@
 
   /* ------------------------------------------------------------- the board */
 
+  /* `start`, not `stretch`. Stretching the list pane to the preview's height was
+     right when the first row sat at 41% and the rows filled the pane; with the
+     rows 57 px higher up the page a three-table lobby stretched to a 352 px
+     preview left a 270 px empty BOX between the last row and the footer, which
+     reads as a rendering failure. The pane is now exactly as tall as what is in
+     it, and the page background carries the difference. */
   .board {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 352px;
     gap: 18px;
-    align-items: stretch;
+    align-items: start;
   }
 
   /* A flex column so the provenance footer sits at the BOTTOM of the pane.
      The pane stretches to the preview's height (align-items: stretch above), so
      without this a three-row lobby left ~600 px of unexplained void beside a
      tall preview — the single worst thing about the previous layout. */
+  /* `container-type: inline-size` is load-bearing, not decoration. Which columns
+     fit is a question about the PANE's width, and the pane's width is the
+     viewport MINUS the preview (0, 320 or 352 px) minus the gaps — so a
+     viewport-width media query answers the wrong question and got it wrong in
+     four separate sub-ranges, every one of which clipped the row's action
+     control (docs/DEFECTS.md L-01). Measured minimum pane widths for the table's
+     own min-content, at 12 px cell padding: 7 columns 879 px, 6 columns (no
+     Hands) 807, 5 columns (no Hands, no Buy-in) 687. The two `@container` rules
+     below are those numbers. */
   .list-pane {
     display: flex;
     flex-direction: column;
@@ -1533,6 +1628,18 @@
     border: 1px solid rgba(255, 255, 255, 0.07);
     border-radius: 14px;
     overflow: hidden;
+    container-type: inline-size;
+  }
+
+  /* Hands goes first — it is the least load-bearing column and the one a
+     rake-funded client would not have either. Buy-in goes second, and its range
+     is still stated in the preview pane's facts list at every width. */
+  @container (max-width: 878px) {
+    .c-hands { display: none; }
+  }
+
+  @container (max-width: 806px) {
+    .c-buyin { display: none; }
   }
 
   .tables-list {
@@ -1547,6 +1654,9 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.07);
   }
 
+  /* The only lobby furniture left above the first row besides the bar, so its
+     padding is a budget line too: 9 px put the header row at 34.3 px, 7 px puts
+     it at 30.3 and no label changed. */
   .sort, .head {
     display: inline-flex;
     align-items: center;
@@ -1560,7 +1670,7 @@
     letter-spacing: 0.09em;
     text-transform: uppercase;
     color: #666d79;
-    padding: 9px 16px;
+    padding: 7px 12px;
   }
 
   .sort { cursor: pointer; }
@@ -1590,8 +1700,15 @@
   .tables-list tbody tr.btc.selected { box-shadow: inset 3px 0 0 #f7931a; }
   .tables-list tbody tr:focus-visible { outline: 2px solid #00d4aa; outline-offset: -2px; }
 
-  .tables-list td { padding: 13px 16px; vertical-align: middle; }
-  .tables-list.compact td { padding: 8px 16px; }
+  /* 12 px, not 16, and that is a correctness fix rather than a taste call.
+     Measured at 1440x900 on the rendered page: seven columns of nowrap content
+     plus 16 px of padding a side gives the table a min-content width of
+     934.5 px inside a 908 px pane, and `.list-pane { overflow: hidden }` then
+     CLIPPED the last column — every row's `Sit` / `View` / `Watch` control lost
+     its right 10.5 px, arrow included (docs/DEFECTS.md L-01). 12 px takes 56 px
+     out of the table's min-content and every column fits with room to spare. */
+  .tables-list td { padding: 13px 12px; vertical-align: middle; }
+  .tables-list.compact td { padding: 8px 12px; }
   .tables-list.compact .tags { display: none; }
 
   .c-table { width: 30%; }
@@ -1782,14 +1899,20 @@
   tr.full .go { color: #8b93a0; font-weight: 600; }
 
   .list-foot {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
     margin: auto 0 0;
-    padding: 13px 16px;
+    padding: 11px 12px;
     border-top: 1px solid rgba(255, 255, 255, 0.055);
     background: rgba(0, 0, 0, 0.18);
     font-size: 11px;
     line-height: 1.6;
     color: #6b7280;
   }
+
+  .foot-copy { margin: 0; min-width: 0; }
 
   .list-foot strong { color: #9aa2ae; font-weight: 600; }
 
@@ -2158,27 +2281,28 @@
 
   /* ------------------------------------------------------------ responsive */
 
+  /* Which COLUMNS survive is decided by the two `@container` rules above; these
+     rules only decide how much room the preview takes away from the pane. */
   @media (max-width: 1240px) {
     .board { grid-template-columns: minmax(0, 1fr) 320px; }
-    .c-hands { display: none; }
   }
 
+  /* The preview drops below the list at 1080, not 1000. Between the two the
+     pane measured 623–686 px against a 687 px five-column floor, so the table
+     overflowed and `overflow: hidden` cut the Sit control off the right edge of
+     every row. There is no column left to drop at that point — Table, Stakes,
+     Seats, Now and the action are the row — so the preview is what gives way. */
   @media (max-width: 1080px) {
-    .c-buyin { display: none; }
-  }
-
-  @media (max-width: 1000px) {
     .board { grid-template-columns: minmax(0, 1fr); }
     .preview { position: static; }
     .intro { grid-template-columns: minmax(0, 1fr); gap: 22px; }
     .intro h1 { font-size: 30px; }
-    .c-buyin, .c-hands { display: table-cell; }
   }
 
   /* Below this the grid stops being readable, so each row becomes a card.
      The <table> element is kept — one <tr> per table, whatever the layout. */
   @media (max-width: 760px) {
-    .lobby { padding: 6px 12px 24px; }
+    .lobby { padding: 2px 12px 24px; }
 
     /* The intro used to sit ABOVE the list, where the disclaimer banner and the
        app header had already spent 388 px of an 844 px phone, so it hid its own
@@ -2200,10 +2324,16 @@
     .claim-figure { font-size: 12.5px; }
 
     /* Heading, counts and Refresh on one wrapped row; the filter strip below it.
-       No horizontal scroller anywhere: see .filters. */
+       No horizontal scroller anywhere: see .filters.
+
+       Measured from the bottom of the app header to the top of the first card at
+       390x844: 155 px before this pass (84 px bar + 57 px drift strip + pads),
+       67 px after. The chrome above the lobby is 387.5 px of an 844 px screen
+       and no lobby layout can move it, so these are the only px the lobby owns
+       and they are spent down to the row of pills BAR 28 forbids clipping. */
     .pane-bar {
-      padding: 0 0 8px;
-      gap: 8px 10px;
+      padding: 0 0 5px;
+      gap: 5px 10px;
       background: none;
       border-bottom: none;
     }
@@ -2211,11 +2341,15 @@
     /* `1 1 0` (not `auto`) so the block shrinks, and Refresh is re-ordered ahead
        of the filter strip so it shares the heading's row instead of taking a
        31 px row of its own. */
-    .pane-title { flex: 1 1 0; min-width: 0; gap: 0; }
-    .pane-title h2 { font-size: 15px; }
+    .pane-title { flex: 1 1 0; min-width: 0; gap: 1px 7px; }
+    .pane-title h2 { font-size: 14px; }
     .pane-sub { font-size: 11px; }
-    .pane-actions { flex: none; order: 2; }
     .seg { display: none; }
+    .drift-chip { font-size: 10px; }
+
+    /* The footer becomes two stacked blocks on a phone rather than one row with
+       a 100 px control hanging off the end of a wrapped paragraph. */
+    .list-foot { flex-direction: column; align-items: flex-start; gap: 10px; }
 
     /* WRAPS. At 390 px the pills measured scrollWidth 434 against clientWidth
        366 under `overflow-x: auto`, so "Micro" was sliced mid-word and "Low" was
@@ -2234,12 +2368,12 @@
     .pill { font-size: 11.5px; padding: 5px 10px; }
 
     .drift-strip {
-      padding: 6px 9px;
-      margin-bottom: 8px;
-      font-size: 10.5px;
-      line-height: 1.36;
+      padding: 9px 11px;
+      margin-top: 3px;
+      font-size: 11px;
+      line-height: 1.4;
       border: 1px solid rgba(240, 180, 41, 0.24);
-      border-radius: 10px;
+      border-radius: 11px;
     }
 
     .nudge {
@@ -2257,16 +2391,23 @@
     .tables-list, .tables-list tbody { display: block; width: 100%; }
     .tables-list thead { display: none; }
 
+    /* The card's own height decides how many tables a phone can compare without
+       scrolling, which is the second half of BAR 31. At 194.6 px only ONE card
+       fitted under 387.5 px of chrome plus the bar; every px below ~190 buys the
+       second one. 183 px is what these paddings measure, and no field was
+       dropped to get there. */
     .tables-list tbody tr {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 2px 12px;
-      padding: 10px 12px;
-      margin-bottom: 7px;
+      padding: 9px 11px;
+      margin-bottom: 6px;
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 12px;
       background: rgba(255, 255, 255, 0.022);
     }
+
+    .tables-list tbody tr .tags { margin-top: 4px; }
 
     .tables-list tbody tr.selected { box-shadow: none; border-color: rgba(0, 212, 170, 0.32); }
     .tables-list td, .tables-list.compact td { display: block; padding: 0; }
@@ -2274,20 +2415,27 @@
     .c-table, .c-stakes, .c-buyin, .c-seats, .c-hands, .c-now, .c-go { width: auto; }
     .c-table { grid-column: 1; grid-row: 1; }
     .c-go { grid-column: 2; grid-row: 1; text-align: right; align-self: start; }
-    .c-stakes { grid-column: 1; grid-row: 2; margin-top: 8px; }
-    .c-seats { grid-column: 2; grid-row: 2; margin-top: 8px; text-align: right; }
+    .c-stakes { grid-column: 1; grid-row: 2; margin-top: 6px; }
+    .c-seats { grid-column: 2; grid-row: 2; margin-top: 6px; text-align: right; }
     /* Kept in the DOM (the harness reads both against the table contract) but
        folded into the buy-in line below, so the card stays four rows tall. */
-    .c-buyin { grid-column: 1 / -1; grid-row: 3; margin-top: 6px; }
+    .c-buyin { grid-column: 1 / -1; grid-row: 3; margin-top: 5px; }
     /* Specificity has to beat `.tables-list td { display: block }` above. */
     .tables-list .c-hands { display: none; }
     .c-now {
       grid-column: 1 / -1; grid-row: 4;
-      margin-top: 8px; padding-top: 8px !important;
+      margin-top: 6px; padding-top: 6px !important;
       border-top: 1px solid rgba(255, 255, 255, 0.06);
     }
     .tables-list.compact .tags { display: flex; }
     .now-detail { display: inline; margin-left: 8px; }
+
+    /* Inline, not a line of their own. On a phone each of these two flags added
+       15–17 px to the tallest cards — the exact cards that decide whether a
+       second table is on screen — and both fit beside the figure they qualify:
+       "0.05/0.10 ICP ⚠ RECORD DIFFERS" measures 181 px in a 254 px column. */
+    .drift-mark { display: inline; margin-top: 0; margin-left: 7px; }
+    .seat-note { display: inline; margin-top: 0; margin-left: 6px; }
     .buyin-value::before {
       content: 'Buy-in ';
       font-size: 10px;

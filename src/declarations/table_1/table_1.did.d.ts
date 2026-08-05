@@ -6,6 +6,10 @@ export interface ActionRecord {
   'action' : PlayerAction,
   'seat' : number,
   'timestamp' : bigint,
+  /** "preflop" | "flop" | "turn" | "river" -- see table_1.did.js, docs/DEFECTS.md H-32 */
+  'phase' : string,
+  /** the chips the action moved; the only place a Call's or an AllIn's amount lives */
+  'amount' : bigint,
 }
 export interface ActionTimer {
   'player_seat' : number,

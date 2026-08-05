@@ -412,6 +412,78 @@
         }
       }
 
+      // THE AWARD SPOT (docs/DEFECTS.md T-23). The winner's `+X` chip used to be
+      // the chip spot times a single multiplier -- 1.30 in landscape, 1.12 in
+      // portrait -- and that multiplier means two different things depending on
+      // which axis the chip spot used:
+      //
+      //   chip pushed along the TANGENT (top and bottom seats in landscape,
+      //   flank seats in portrait): scaling it moves the award further from the
+      //   board's centre line. Proven, and kept exactly as it was.
+      //
+      //   chip pushed along the NORMAL (flank seats in landscape, top and bottom
+      //   seats in portrait): the normal points AT THE BOARD, so scaling it
+      //   drives the award INTO the board. Measured on desktop: the `+24.00`
+      //   chip of a winner at seat 1 or 2 overlapped `.community-cards` by 25.6%
+      //   of its own area and covered the suit pip of a board card -- the cards
+      //   that justify the award.
+      //
+      // For those seats the award therefore keeps the chip's own distance along
+      // the normal and takes its extra clearance along the TANGENT, away from
+      // the board: sideways on a wide surface, and away from the board's row on
+      // a tall one. Nothing here moves the bet disc, which is measured
+      // everywhere else.
+      const AWARD_OUT = tall ? 1.12 : 1.30;
+      const AWARD_TAN = 0.150;
+      let ax = bx * AWARD_OUT;
+      let ay = by * AWARD_OUT;
+      if (alongNormal && !tall) {
+        // Landscape flank seat: the board is a mid-height band, so the room is
+        // vertical. The award keeps the chip's own inward distance and takes its
+        // showdown clearance along the tangent, away from the board's row.
+        ax = bx;
+        ay = by + (sn >= 0 ? 1 : -1) * AWARD_TAN;
+      }
+
+      // THE POD-ATTACHED READOUT SPOKE (docs/DEFECTS.md T-22 and T-23).
+      //
+      // The equity badge -- and in portrait the award chip as well -- hangs off
+      // the plate. Which side is free is not a matter of taste: every other
+      // object in a seat already claims a direction, and claiming the same one
+      // is how a readout ends up on top of the cards it describes.
+      //
+      //   flank seat (the normal is mostly HORIZONTAL): the cards ride +/-cy,
+      //     which is vertical, and the bet disc rides the tangent, also
+      //     vertical. The free side is therefore horizontal, and INWARD -- at a
+      //     phone's left flank seat, outward is off the screen entirely
+      //     (measured).
+      //   top or bottom seat, PORTRAIT: the cards ride the vertical normal
+      //     inward, so the free side is vertically OUTWARD.
+      //   top or bottom seat, LANDSCAPE: outward is off the felt and over the
+      //     action dock (the old "All In" tag died there: read at y=818 on a
+      //     surface ending at y=753). The plate's two ends are free, so the
+      //     readout takes the end OPPOSITE the bet disc and the award, both of
+      //     which ride the tangent there.
+      const flank = Math.abs(nx) > Math.abs(ny);
+      let rdx = 0;
+      let rdy = 0;
+      if (flank) rdx = nx >= 0 ? 1 : -1;
+      else if (tall) rdy = ny >= 0 ? -1 : 1;
+      else rdx = cs >= 0 ? -1 : 1;
+
+      // IN PORTRAIT THE AWARD JOINS THE BADGE ON THE SPOKE. At a portrait flank
+      // seat the chip's tangent and the cards' `cy` are the SAME direction (see
+      // `cy` below), so the award landed on the winner's own revealed pair --
+      // measured at 68% of a card's ink on a phone. At a portrait top or bottom
+      // seat the chip vector points at a board that spans nearly the whole felt
+      // width, and the award then competes with the flank seats' own readouts in
+      // the middle of the table (measured: the hero's award covering a flank
+      // seat's `0.00%` badge). The plate's free side is free for both, so both
+      // use it -- the badge at one end of it, the award at the other, which the
+      // CSS lays out because the distances are functions of the pod's own size.
+      // Landscape keeps the chip vector, where it is proven and has room.
+      const awardOnSpoke = tall;
+
       out.push({
         cs: Number(cs.toFixed(5)),
         sn: Number(sn.toFixed(5)),
@@ -419,6 +491,11 @@
         ny: Number(ny.toFixed(5)),
         bx: Number(bx.toFixed(5)),
         by: Number(by.toFixed(5)),
+        ax: Number(ax.toFixed(5)),
+        ay: Number(ay.toFixed(5)),
+        rdx,
+        rdy,
+        awardOnSpoke,
         // Which way an OPPONENT's hole cards peek out from behind their plate.
         // Never along the inward normal: at a side seat the normal is horizontal
         // and the pod is 0.235 fw WIDE, so a horizontal nudge buries the cards
@@ -507,9 +584,33 @@
     portrait = window.innerHeight >= window.innerWidth;
     if (!wrapperEl) return;
     const top = documentTop(wrapperEl);
-    const floor = portrait ? MIN_AVAIL_PORTRAIT : MIN_AVAIL_LANDSCAPE;
+    // A FLOOR TALLER THAN WHAT IS LEFT IS NOT A FLOOR, IT IS AN OVERFLOW.
+    //
+    // `Math.max(floor, room)` alone hands the wrapper a height the viewport does
+    // not have whenever the chrome above it is tall, and the two floors here are
+    // 340 and 460 CSS px. Measured on ONE PHONE HELD SIDEWAYS, 844x390, before
+    // this clamp: the 460 floor put the felt at `y 323..625` of a 390 px
+    // viewport and took the action dock (`y 677..739`), the pot readout and the
+    // bottom-left seat pod off the frame with it. Four things a player acts on,
+    // below the fold, on a viewport `./scripts/dev.sh shots` does not
+    // photograph and docs/DESIGN-BAR.md §9.6 lists as unadjudicated -- which is
+    // why a floor and bar 23 ("the felt wholly inside the viewport") had been
+    // able to coexist in this function.
+    //
+    // Bar 23 wins. The floor may RAISE a table the page has squeezed; it may
+    // never push one past the bottom edge. `usable` is what is genuinely left
+    // below the chrome, and both the floor and the room are capped by it, so
+    // `availPx <= usable` always holds.
+    //
+    // Neither canonical viewport is affected: measured `usable` is 703.4 at
+    // 390x844 (floor 340) and 629.5 at 1440x900 (floor 460), so the clamp is
+    // inert at both and both felt measurements are unchanged -- desktop is still
+    // 961.1 x 457.7 at 6-max and 982.8 x 468.0 at 9-max, aspect 2.10.
+    const rawFloor = portrait ? MIN_AVAIL_PORTRAIT : MIN_AVAIL_LANDSCAPE;
+    const usable = Math.max(0, window.innerHeight - top - 8);
+    const floor = Math.min(rawFloor, usable);
     // 8px of breathing room at the bottom edge; never taller than the viewport.
-    const room = Math.min(window.innerHeight - top - 8, Math.round(window.innerHeight * 0.94));
+    const room = Math.min(usable, Math.round(window.innerHeight * 0.94));
     availPx = Math.max(floor, Math.round(room));
     // The page reserves bottom padding around the table area; cancel it so a
     // table that exactly fits does not produce a scrollbar.
@@ -1097,6 +1198,26 @@
         </div>
 
         <!-- board + pot cluster -->
+        <!-- THE METHOD TRAVELS WITH THE FIGURE (docs/DEFECTS.md T-27).
+             `.equity-method` used to be rendered inside `.pot-display` only, and
+             the pot display is REPLACED by the winner banner the moment the pot
+             hits zero -- which is exactly the frame where the equity becomes a
+             verdict. Measured at the showdown on both viewports: two solid
+             `100.00% / 0.00%` badges on screen and `.equity-method` null, with the
+             method surviving only in a `title` attribute a phone cannot open. An
+             equity figure whose method is not stated is a number a player acts on
+             without knowing what it means.
+
+             One snippet, rendered in whichever readout is on screen, so the two
+             cannot drift and the line cannot be dropped by a branch again. -->
+        {#snippet equityMethodLine()}
+          {#if equityMethodLabel}
+            <!-- Bar 15 says show the equity; honesty says show HOW. The method and
+                 the trial count are on the felt, not buried, and the full statement
+                 of the model is the tooltip. -->
+            <div class="equity-method" title={equity?.note ?? ''}>{equityMethodLabel}</div>
+          {/if}
+        {/snippet}
         <div class="board-cluster">
           {#if isHandComplete && lastWinners.length > 0}
             <div class="winner-display" class:you-won={myWinInfo}>
@@ -1117,6 +1238,7 @@
                 <span class="split-info">Split pot &middot; {lastWinners.length} winners</span>
               {/if}
               <span class="phase-indicator">{streetLabel}</span>
+              {@render equityMethodLine()}
             </div>
           {:else}
             <div class="pot-display">
@@ -1157,12 +1279,7 @@
                   {/each}
                 </div>
               {/if}
-              {#if equityMethodLabel}
-                <!-- Bar 15 says show the equity; honesty says show HOW. The
-                     method and the trial count are on the felt, not buried, and
-                     the full statement of the model is the tooltip. -->
-                <div class="equity-method" title={equity?.note ?? ''}>{equityMethodLabel}</div>
-              {/if}
+              {@render equityMethodLine()}
             </div>
           {/if}
 
@@ -1224,6 +1341,8 @@
           <div
             class="seat seat-{point.side}"
             class:occupied={!!player}
+            class:award-on-spoke={point.awardOnSpoke}
+            class:spoke-y={point.rdy !== 0}
             class:acting
             class:is-me={isHero}
             class:folded={player?.has_folded}
@@ -1235,6 +1354,10 @@
             style:--ny={point.ny}
             style:--bx={point.bx}
             style:--by={point.by}
+            style:--ax={point.ax}
+            style:--ay={point.ay}
+            style:--rdx={point.rdx}
+            style:--rdy={point.rdy}
             style:--cy={point.cy}
           >
             {#if player}
@@ -1300,20 +1423,9 @@
                     {#if player.has_folded}<span class="fold-word">Fold</span>{/if}
                   </span>
                 </div>
-                <div class="pod-slot" class:with-equity={!!equityText}>
+                <div class="pod-slot">
                   {#if acting && timeRemaining !== null}
                     <span class="turn-timer" class:urgent={clockUrgent}>{timeRemaining}s</span>
-                  {/if}
-                  {#if equityText}
-                    <!-- Bar 15: the badge sits beside the player, as PokerStars
-                         and GGPoker put it, not in a legend somewhere. It is
-                         ADDITIVE -- the action clock keeps its slot, because a
-                         player deciding whether to call needs both. -->
-                    <span
-                      class="equity-badge"
-                      class:modelled={equityMode === 'hero'}
-                      title={equity?.note ?? ''}
-                    >{equityText}</span>
                   {/if}
                   <span class="position-badges">
                     {#if i === dealerSeat}<span class="position-badge dealer">D</span>{/if}
@@ -1329,6 +1441,27 @@
                   ></span>
                 {/if}
               </div>
+
+              {#if equityText}
+                <!-- THE EQUITY BADGE IS A SEAT-LEVEL OBJECT (docs/DEFECTS.md T-22).
+                     Bar 15 puts it beside the player, as PokerStars and GGPoker do,
+                     and it is ADDITIVE: the action clock keeps its slot in the
+                     plate, because a player deciding whether to call needs both.
+
+                     It used to be rendered INSIDE `.player-nameplate`, which sets
+                     `z-index: 6` and therefore opens a stacking context, while the
+                     hero's own cards and every revealed pair paint at `z-index: 7`
+                     as siblings of that plate. From in there no z-index could win:
+                     on a phone the winner's `100.00%` was measured 58.4% covered by
+                     the hero's own card and read as `0%`. It is now a child of the
+                     SEAT, above the cards, and placed on the one axis no card of
+                     this seat ever uses -- see `.equity-badge` in the stylesheet. -->
+                <span
+                  class="equity-badge"
+                  class:modelled={equityMode === 'hero'}
+                  title={equity?.note ?? ''}
+                >{equityText}</span>
+              {/if}
 
               <!-- Showdown only: the winning hand named in words (bar 16). It
                    lands on the chip spot, which is free at showdown because the
@@ -2029,6 +2162,21 @@
 
   .winner-display:not(.you-won) .winner-text { color: #f3f6df; }
 
+  /* THE METHOD LINE INSIDE THE WINNER BANNER (docs/DEFECTS.md T-27).
+     Under the pot it is one more row of a column, which is where it has always
+     been. The winner banner is a rounded pill whose height is tuned to a 166 px
+     slot in portrait, so the line hangs OFF the pill instead of growing it, on
+     the side that faces away from the board: above the banner in landscape (the
+     banner sits above the board there) and below it in portrait (where the
+     readout is under the board). It is the same element, the same words and the
+     same `title` in both cases -- only the anchor differs. */
+  .winner-display .equity-method {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 0.25em);
+    transform: translateX(-50%);
+  }
+
   .winner-hand-rank {
     font-size: 0.72em;
     letter-spacing: 0.16em;
@@ -2254,19 +2402,39 @@
     min-width: 2.3em;
   }
 
-  /* `100.00%` is wider than a `60s` clock, so the slot grows for it and the
-     name ellipsizes by one character rather than the badge being clipped by the
-     pod's `overflow: hidden`. */
-  .pod-slot.with-equity { min-width: 3.5em; }
-
   /* THE EQUITY BADGE (bar 15). Two visually distinct things, because they are
      two epistemically distinct things:
        solid mint   -- computed over hands the ENGINE revealed. A fact.
        outlined     -- computed against opponents drawn at random because the
                        canister has not revealed them. A model, and it is dashed
-                       and carries the `vs N random` method line under the pot
-                       so it can never be mistaken for the first kind. */
+                       and carries the `vs N random` method line beside the pot
+                       or the winner banner so it can never be mistaken for the
+                       first kind.
+
+     WHERE IT SITS, AND WHY IT IS NOT IN THE PLATE (docs/DEFECTS.md T-22).
+     A badge inside `.player-nameplate` is inside a stacking context (`z-index:
+     6`) that the hole cards (`z-index: 7`) beat from outside, at any z-index the
+     badge picks. So it is a child of `.seat`, painted above the cards -- and to
+     avoid trading one occlusion for another it hangs off the plate on this
+     seat's READOUT SPOKE (`--rdx`/`--rdy`, computed per seat and per orientation
+     in `ringSeats`): the one side of the plate that neither this seat's cards nor
+     its bet disc nor the board nor the pot readout claims.
+
+     The badge no longer costs the pod any width either: `.pod-slot.with-equity`
+     used to reserve 3.5em inside a 116 px phone pod, which is width the STACK
+     figure needed. */
   .equity-badge {
+    position: absolute;
+    left: 0;
+    top: 0;
+    /* Above `.player-cards.hero` and `.player-cards.shown` (both z-index 7) and
+       above the plate (6). Below `.winner-award` (20), which never lands here. */
+    z-index: 9;
+    --badge-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + 1.55em));
+    --badge-dy: calc(var(--rdy, 0) * (var(--pod-h) * 0.5 + 0.8em));
+    transform:
+      translate(-50%, -50%)
+      translate(var(--badge-dx), var(--badge-dy));
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -2281,7 +2449,15 @@
     color: #06231a;
     white-space: nowrap;
     cursor: help;
+    /* On the felt now rather than on a charcoal plate, so it carries its own
+       edge. Costs nothing where it overlaps the plate. */
+    box-shadow: 0 0 0 2px rgba(9, 11, 15, 0.85);
   }
+
+  /* A seat whose spoke is VERTICAL carries both readouts on the same edge of the
+     plate, so they take opposite ENDS of it: the badge on the inner end, the
+     award on the outer. Only portrait produces such a seat (`rdy`, `ringSeats`). */
+  .seat.spoke-y .equity-badge { --badge-dx: calc(var(--pod-w) * -0.24); }
 
   .equity-badge.modelled {
     background: transparent;
@@ -2454,11 +2630,13 @@
 
   /* ---- the winner's award, on the felt side of the pod ---- */
 
-  /* Parked on this seat's chip spot -- see `bx`/`by` in ringSeats(), already
-     sized to clear both the hole cards and the board at every seat on the ring,
-     and free at showdown because the street's bets have been swept. The chip
-     spot touches the pod's inner edge, which is the whole point: the delta has
-     to be AT the stack it changed. */
+  /* Parked on this seat's AWARD SPOT -- `ax`/`ay` in ringSeats(), which is the
+     chip spot given its extra showdown clearance along whichever axis has room
+     rather than along the chip's own vector. See the comment there: scaling the
+     chip vector is what put the `+24.00` chip of a winner at seat 1 or 2 on top
+     of the board and over the suit pip of a board card (docs/DEFECTS.md T-23).
+     The award still touches the pod, which is the whole point: the delta has to
+     be AT the stack it changed. */
   .winner-award {
     position: absolute;
     left: 0;
@@ -2469,19 +2647,14 @@
     align-items: center;
     gap: 0.18em;
     white-space: nowrap;
-    /* 1.3x the chip spot. The chip spot is sized for a BET, which lands while
-       the board is three cards wide; at showdown the board is five cards wide
-       and wearing a tray, and the award landed 40 px inside it. Pushing the
-       award further out along the same proven vector keeps it touching the pod
-       and clear of the tray, without moving the bet disc that is measured
-       everywhere else. */
-    --award-out: 1.3;
+    /* One offset, named once, so the landing animation below cannot drift from
+       the resting position -- the keyframes used to restate the vector and any
+       change had to be made in three places. */
+    --award-dx: calc(var(--ax, 0) * var(--fw));
+    --award-dy: calc(var(--ay, 0) * var(--fw));
     transform:
       translate(-50%, -50%)
-      translate(
-        calc(var(--bx, 0) * var(--fw) * var(--award-out)),
-        calc(var(--by, 0) * var(--fw) * var(--award-out))
-      );
+      translate(var(--award-dx), var(--award-dy));
     /* The award LANDS, and it lands LAST: 760 ms in, which is where the pot
        ghost finishes its flight to this pod. */
     animation: award-land 0.42s cubic-bezier(0.2, 1.25, 0.5, 1) 0.76s both;
@@ -2515,17 +2688,9 @@
 
   @keyframes award-land {
     from { opacity: 0; transform:
-      translate(-50%, -50%)
-      translate(
-        calc(var(--bx, 0) * var(--fw) * var(--award-out)),
-        calc(var(--by, 0) * var(--fw) * var(--award-out)))
-      scale(0.6); }
+      translate(-50%, -50%) translate(var(--award-dx), var(--award-dy)) scale(0.6); }
     to   { opacity: 1; transform:
-      translate(-50%, -50%)
-      translate(
-        calc(var(--bx, 0) * var(--fw) * var(--award-out)),
-        calc(var(--by, 0) * var(--fw) * var(--award-out)))
-      scale(1); }
+      translate(-50%, -50%) translate(var(--award-dx), var(--award-dy)) scale(1); }
   }
 
   /* ---- the two flights ----
@@ -3234,36 +3399,28 @@
 
     /* NOTHING IN THE POD OUTRANKS THE STACK FIGURE.
        A 9-max phone pod is ~116 px wide. `min-width: 2.3em` on the clock/blind
-       column, and `3.5em` once the equity badge appears, reserved 39-59 of those
-       pixels whether or not anything was in them -- and the thing that lost the
-       argument was the money. Portrait lets the column size to its contents,
-       and lifts the equity badge OUT of the plate entirely: it floats on the
-       felt just above the pod's outer corner, which is where PokerStars puts it
-       and where it costs the stack nothing.
+       column reserved 39 of those pixels whether or not anything was in them --
+       and the thing that lost the argument was the money. Portrait lets the
+       column size to its contents. (The equity badge no longer costs the pod any
+       width at ANY viewport: it is a seat-level object outside the plate, see
+       `.equity-badge`.)
 
-       `overflow: visible` is what lets the badge sit outside the pill. The only
-       thing the pod was clipping is the action clock's progress line, which now
-       carries the pill's own bottom radius instead. */
+       `overflow: visible` is kept because the action clock's progress line now
+       carries the pill's own bottom radius instead of being clipped by it. */
     .player-nameplate { overflow: visible; }
     .pod-clock { border-radius: 0 0 999px 999px; }
 
-    .pod-slot,
-    .pod-slot.with-equity { min-width: 0; }
+    .pod-slot { min-width: 0; }
 
     .position-badge { font-size: 0.52em; min-width: 1.2em; height: 1.2em; }
     .ring-crowded .position-badge { font-size: 0.44em; min-width: 1.05em; height: 1.05em; }
     .ring-crowded .player-nameplate { gap: 0.32em; padding: 0 0.4em 0 calc(var(--pod-h) * 0.08); }
     .ring-crowded .chips { letter-spacing: -0.015em; }
 
-    .equity-badge {
-      position: absolute;
-      right: 0.1em;
-      top: -0.95em;
-      z-index: 3;
-      font-size: 0.6em;
-      padding: 0.06em 0.3em;
-      box-shadow: 0 0 0 2px rgba(9, 11, 15, 0.85);
-    }
+    /* Type only. The PLACEMENT is the same rule at both viewports (the `-cy`
+       axis), because the reason for it -- the cards paint above the plate -- is
+       the same at both. */
+    .equity-badge { font-size: 0.6em; padding: 0.06em 0.3em; }
 
     /* The winner line spanned 247 of a 390 px screen and lay across both
        mid-height flank plates (measured: 24x39 px into each). Same words, one
@@ -3298,15 +3455,36 @@
     .pot-display .phase-indicator { font-size: 0.62em; }
     .pot-breakdown { font-size: 0.54em; }
     .equity-method { font-size: 0.5em; }
+    /* Portrait puts the readout BELOW the board, so the method line hangs below
+       the winner banner rather than above it (T-27). */
+    .winner-display .equity-method { bottom: auto; top: calc(100% + 0.25em); }
 
-    /* THE AWARD IS SIZED FOR THE GAP IT LANDS IN.
-       Landscape pushes it 1.3x out along the chip vector to clear the showdown
-       board tray, which is 0.60 felt widths wide there. A portrait board is the
-       same five cards on a felt barely half as wide, so the tray reaches much
-       closer to the rail and 1.3x throws the award into the middle of the
-       table. 1.12x keeps it against the pod it belongs to, one type step down,
-       which is the same treatment every other portrait readout gets. */
-    .winner-award { --award-out: 1.12; gap: 0.1em; }
+    /* THE AWARD IS SIZED FOR THE GAP IT LANDS IN. Its POSITION is computed per
+       seat and per orientation in `ringSeats` (`ax`/`ay`); a portrait board is
+       the same five cards on a felt barely half as wide, so the tray reaches
+       much closer to the rail and the clearance there is smaller. What is left
+       here is type, one step down, the same treatment every other portrait
+       readout gets. */
+    .winner-award { gap: 0.1em; }
+
+    /* PORTRAIT HAS NO ROOM ON THE CHIP VECTOR (T-23), so the award rides the
+       readout spoke with the badge -- see `awardOnSpoke` in ringSeats().
+       Horizontal spoke (flank seats): one step further out than the badge. The
+       badge reaches ~0.15 felt widths past the plate's end at its widest
+       (`100.00%`, measured 59 px on a 332 px felt), and the award's own
+       half-width is ~0.09, so 0.20 was 12 px short of clearing it and the award
+       took 11.8% of the badge's ink. 0.28 leaves a 12 px gap on the same
+       measurement.
+       Vertical spoke (top and bottom seats): the same edge as the badge, at the
+       other END of it, so the two cannot meet however wide either gets. */
+    .seat.award-on-spoke .winner-award {
+      --award-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + var(--fw) * 0.28));
+      --award-dy: 0px;
+    }
+    .seat.award-on-spoke.spoke-y .winner-award {
+      --award-dx: calc(var(--pod-w) * 0.24);
+      --award-dy: calc(var(--rdy, 0) * (var(--pod-h) * 0.5 + var(--fw) * 0.05));
+    }
     .stack-delta { font-size: 0.7em; padding: 0.08em 0.4em; }
     .hand-tag { font-size: 0.48em; padding: 0.06em 0.35em; }
     .side-pot-label { font-size: 0.52em; }

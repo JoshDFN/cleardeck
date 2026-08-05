@@ -157,8 +157,8 @@ export function writeIndex(shaDir, latestDir, manifest) {
     // screen was wrong by 5x. The census columns are the denominator: how many
     // numbers the page renders, how many are matched to a canister value, how
     // many are declared non-monetary, and how many nothing accounts for.
-    '| scene | viewport | file | agrees with chain | money figures | tokens on screen | chain-matched | allowlisted | UNASSERTED | notes |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| scene | viewport | file | agrees with chain | money figures | tokens on screen | chain-matched | allowlisted | UNASSERTED | figures on screen | COVERED | NOTICES | felt | notes |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
   for (const s of manifest.scenes) {
     for (const shot of s.shots) {
@@ -180,15 +180,44 @@ export function writeIndex(shaDir, latestDir, manifest) {
         .reduce((n, [, v]) => n + (Number(v?.moneyFiguresChecked) || 0), 0);
       const census = shot.checks?.tokenCensus;
       const cell = (v) => (census ? String(v) : '-');
+      // The pixel gate's two numbers: how many money/equity/card figures the page
+      // renders, and how many of them something is painted over. A text gate
+      // cannot see the second column, which is why T-22 and T-23 were filed as
+      // verified twice. `COVERED` names the worst offender inline so the table
+      // itself is actionable.
+      const occl = shot.checks?.occlusion;
+      const worst = occl?.findings?.[0];
+      const coveredCell = !occl
+        ? '-'
+        : occl.counts.figuresOccluded === 0
+          ? '0'
+          : `**${occl.counts.figuresOccluded}** (${(worst.pixels.coveredInkFraction * 100).toFixed(0)}% of `
+            + `\`${worst.occluded.path.split(' > ').pop()}\` by \`${worst.occluder.path.split(' > ').pop()}\`)`;
+      // HARD RULE 2 and its mirror image, in two columns a reader cannot miss.
+      // `NOTICES` is how many of the five protected phrases a player can actually
+      // SEE on this shot, hit-tested on their own pixels; anything below 5/5 is
+      // bold because it is a rule violation, not a note. `felt` is the playing
+      // surface as a fraction of the frame, which is the number hiding a notice
+      // buys and therefore the number that has to be recorded beside it.
+      const notices = shot.checks?.protectedNotices;
+      const noticeCell = !notices
+        ? '-'
+        : notices.ok
+          ? `${notices.onScreen}/${notices.total}`
+          : `**${notices.onScreen}/${notices.total}**`;
+      const felt = shot.checks?.feltArea?.felt;
+      const feltCell = !felt ? '-' : `${felt.areaPct}% (${felt.w}x${felt.h}, ${felt.seatPods} pods)`;
       lines.push(
         `| ${s.scene} | ${shot.viewport} | \`${shot.files[0]}\` | ` +
           `${verdict} | ${money} | ${cell(census?.totalTokensOnScreen)} | ` +
           `${cell(census?.chainMatched)} | ${cell(census?.allowlisted)} | ` +
-          `${cell(census?.unasserted)} | ${(shot.notes || s.notes || '').replace(/\|/g, '/')} |`,
+          `${cell(census?.unasserted)} | ${occl ? occl.counts.figuresOnScreen : '-'} | ${coveredCell} | ` +
+          `${noticeCell} | ${feltCell} | ` +
+          `${(shot.notes || s.notes || '').replace(/\|/g, '/')} |`,
       );
     }
     if (s.shots.length === 0) {
-      lines.push(`| ${s.scene} | - | (failed) | NO | 0 | - | - | - | - | ${(s.error || '').replace(/\|/g, '/')} |`);
+      lines.push(`| ${s.scene} | - | (failed) | NO | 0 | - | - | - | - | - | - | - | - | ${(s.error || '').replace(/\|/g, '/')} |`);
     }
   }
   lines.push('');

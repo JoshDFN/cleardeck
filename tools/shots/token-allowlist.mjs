@@ -118,10 +118,20 @@ export const ALLOWLIST = [
     // ---- fixed copy ---------------------------------------------------------
     {
         id: 'protected-disclaimer-copy',
-        selector: '.alpha-warning-banner, .footer-disclaimer, .disclaimer-content, .legal',
-        tokens: '^(?:18|21|100)$',
-        why: 'the 18+ notice and the "100% on-chain" / "100% by AI" lines of the '
-            + 'unaudited-alpha disclaimer. Fixed legal copy, protected by `make hygiene`',
+        // `.player-notice` and `.modal-notices` are the SAME protected copy restated
+        // inside a dialog, which wave 5 had to do because a 72%-black scrim hides
+        // the banner behind it (docs/DEFECTS.md T-31, H-36, T-36). Without them the
+        // deposit and withdraw scenes fail the census on the "18" of "18+ only" —
+        // a player-protection notice being read as an unasserted money figure.
+        selector: '.alpha-warning-banner, .footer-disclaimer, .disclaimer-content, .legal, '
+            + '.player-notice, .modal-notices',
+        tokens: '^(?:0|18|21|100)$',
+        why: 'the 18+ notice, the "100% on-chain" / "100% by AI" lines and the "0% rake" '
+            + 'property of the unaudited-alpha disclaimer. Fixed legal copy, protected by '
+            + '`make hygiene`. The `0` arrived with the portrait `.banner-strip` (the T-20 '
+            + 'fix), which states the no-rake property verbatim on the table view; without it '
+            + 'every portrait table scene failed the census on the word "0% rake" inside the '
+            + 'player-protection notice itself',
     },
     {
         id: 'static-claim-copy',

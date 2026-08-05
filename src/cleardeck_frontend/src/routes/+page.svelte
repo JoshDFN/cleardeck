@@ -42,6 +42,19 @@
   let showHowItWorks = $state(false);
   let showVerify = $state(false);
 
+  // PRESENTATION of the four player-protection notices, never their content.
+  //
+  // In portrait ON THE TABLE VIEW the notices render as a compact red strip that
+  // carries the protected words themselves (see `.banner-strip` below), and this
+  // flag opens the full verbatim text over the whole screen in one tap. It is a
+  // full-screen OVERLAY rather than an in-flow expansion on purpose: the table
+  // sizes itself to "the viewport, less everything above me in the flow", so an
+  // in-flow expansion would resize the felt underneath the player mid-hand.
+  //
+  // Everywhere else -- desktop, landscape, and the lobby in portrait -- the full
+  // block renders in the flow exactly as before and this flag does nothing.
+  let noticesExpanded = $state(false);
+
   // The `icp canister status` command for the network THIS bundle talks to.
   // On a mainnet build that is the live btc_table_1 with `-e ic`; on a local dev
   // build it is the local lobby with `-e local`. docs/DEFECTS.md T-02.
@@ -715,23 +728,98 @@
     The wording, the phrase count in this file, and `make hygiene` are all
     unchanged. Making either copy MORE prominent is always allowed; making
     either one shorter, quieter, or conditional on anything else is not.
+
+    WAVE 5: THE PRESENTATION CHANGED IN PORTRAIT ON THE TABLE VIEW. THE WORDS
+    DID NOT.
+
+    `.banner-strip` below is a compact red strip that carries the protected words
+    THEMSELVES, not a summary of them: it states, verbatim, "Unaudited code with
+    known bugs", "your funds are NOT safe", "illegal in many jurisdictions",
+    "18+ only", "No middleman, no house" and "No rake is taken from any pot on any
+    table". Those are the five literal strings BOTH of this repo's notice checks
+    look for -- `FRONTEND_NOTICES` in `scripts/dev.sh` (which greps the source)
+    and `PROTECTED_PHRASES` in `tools/shots/lib/protected-notices.mjs` (which
+    hit-tests the rendered pixels) -- so the strip is not a paraphrase that a
+    reviewer has to adjudicate. A player who never taps has still been told, on
+    screen, every one of them. One tap opens `.banner-content` -- the full text
+    below, unchanged, every word -- over the whole screen.
+
+    The no-rake sentence was added last and budgeted at a line of strip height,
+    i.e. ~2 points of felt area, on the reasoning that a protected notice in the
+    app's own canonical wording is worth that. Measured, it cost NOTHING: the
+    strip is still three lines at `y 6..50` and the felt is still 332.8 x 599.5.
+    What it bought is real -- before it, the table view stated the no-rake
+    property only as "No middleman, no house", and the pixel-level notice gate
+    read 4 of 5 on every mobile table scene for that reason alone.
+
+    It renders ONLY in portrait AND only on the table view. On desktop, in
+    landscape, and on the lobby in portrait the full block renders in the flow
+    exactly as it did before, and the strip is `display: none`.
+
+    WHY THIS IS ALLOWED AND THE WAVE-4 VERSION WAS NOT. Wave 4 hid all four
+    notices on the phone's table view: `make hygiene` was green because it greps
+    the SOURCE, and a player saw NOTHING. This does the opposite of that -- the
+    protected words are on screen on every view at every viewport, and the probe
+    that says so reads the RENDERED page (`elementFromPoint` at the text's own
+    centre, box inside the viewport), not the source.
   -->
-  <div class="alpha-warning-banner">
+  <div
+    class="alpha-warning-banner"
+    class:on-table={view === 'table'}
+    class:expanded={noticesExpanded}
+  >
+    <!-- Collapsed presentation, portrait + table view only. Every protected
+         phrase is literal, so the on-screen test and `make hygiene` ask about
+         the same words. -->
+    <button
+      class="banner-strip"
+      type="button"
+      aria-expanded={noticesExpanded}
+      title="Open the full player-protection terms"
+      onclick={() => noticesExpanded = true}
+    >
+      <span class="warning-icon">⚠️</span>
+      <span class="strip-text">Unaudited code with known bugs: your funds are NOT safe. Online gambling is illegal in many jurisdictions. 18+ only. No middleman, no house. No rake is taken from any pot on any table.</span>
+      <span class="strip-more">FULL TERMS</span>
+    </button>
     <div class="banner-content">
       <p class="banner-warning">
         <span class="warning-icon">⚠️</span>
         <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk—your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
       </p>
+      <!-- WAVE 5 COHERENCE PASS. The canonical no-rake sentence is stated HERE,
+           not only in `.banner-strip`.
+
+           Measured on the rendered page with the repo's own gate
+           (tools/shots/lib/protected-notices.mjs) before this line existed: the
+           strip is `display: none` at every viewport except portrait-on-table,
+           so DESKTOP read 4 of 5 on the lobby signed out, the lobby signed in,
+           the table, the table behind the Deposit modal and the table behind
+           Verify Fair, and PORTRAIT dropped to 4 of 5 the moment a player TAPPED
+           the strip — this very block covers the strip and did not restate the
+           property. The missing phrase was always "No rake is taken from any pot
+           on any table".
+
+           `.banner-content` is now a strict superset of `.banner-strip`, which
+           is what a "FULL TERMS" button has to be. -->
       <p class="banner-info">
-        No middleman, no house. Built to demonstrate the power of the Internet Computer: 100% on-chain—frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
+        No middleman, no house. <strong>No rake is taken from any pot on any table.</strong> Built to demonstrate the power of the Internet Computer: 100% on-chain—frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
       </p>
       <p class="banner-ai">
         This entire project was built 100% by AI. <span class="warning-icon">⚠️</span>
       </p>
     </div>
+    {#if noticesExpanded}
+      <button
+        class="banner-close"
+        type="button"
+        onclick={() => noticesExpanded = false}
+        aria-label="Close the full player-protection terms"
+      >Close</button>
+    {/if}
   </div>
 
-  <header>
+  <header class:compact={view === 'table'}>
     <div class="header-left">
       {#if view === 'table'}
         <button class="back-btn" onclick={backToLobby}>
@@ -895,7 +983,7 @@
           <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk—your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
         </p>
         <p class="disclaimer-info">
-          No middleman, no house. Built to demonstrate the power of the Internet Computer: 100% on-chain—frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
+          No middleman, no house. <strong>No rake is taken from any pot on any table.</strong> Built to demonstrate the power of the Internet Computer: 100% on-chain—frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
         </p>
         <p class="disclaimer-ai">
           This entire project was built 100% by AI. <span class="warning-icon">⚠️</span>
@@ -1066,6 +1154,30 @@
   .banner-content {
     max-width: 800px;
     margin: 0 auto;
+  }
+
+  /* ------------------------------------------------------------------------
+     THE COMPACT NOTICE STRIP -- portrait, table view only.
+     ------------------------------------------------------------------------
+     Off everywhere by default, so desktop and landscape are byte-identical to
+     before. The portrait rules that switch it on live in the media query at the
+     bottom of this stylesheet, next to the compact header they pay for.
+     ------------------------------------------------------------------------ */
+  .banner-strip {
+    display: none;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    color: inherit;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  .banner-close {
+    display: none;
   }
 
   .banner-content p {
@@ -1767,6 +1879,315 @@
 
     .table-area {
       padding: 8px;
+    }
+  }
+
+  /* =========================================================================
+     THE TABLE VIEW ON A PHONE (portrait, or any window under 560 px tall):
+     WIN BACK THE PLAYING SURFACE FROM CHROME, NOT FROM THE NOTICES.
+     =========================================================================
+
+     `PokerTable.svelte` sizes itself to "the viewport, less everything above me
+     in the flow", so on a 390x844 phone every pixel this block does not spend is
+     a pixel of felt. Measured before this block, on the real table view:
+
+       .alpha-warning-banner   268.0 px   four notices, full text, in the flow
+       header                  173.5 px   THREE rows: brand / left / right,
+                                          because .header-right needed 411.8 px
+                                          and could not share a row with anything
+       .table-area padding       8.0 px
+       ------------------------------------------------------------------------
+       above the table         449.5 px of a 918 px layout viewport (49%)
+
+     and the felt came out 199.1 x 358.7 = 18.3% of the screen, against
+     PokerNow's 52.1% on the same device.
+
+     Three things happen here, none of which takes a word away from a player:
+
+     1. THE BRAND ROW GOES, on the table view only. A 44 px row telling the
+        player which app they are already playing in.
+     2. THE HEADER BECOMES TWO SHORT ROWS instead of three, and every control in
+        it comes down one type step so `.header-right` fits the device width.
+        That last part is load-bearing for `initial-scale=1` in `app.html`: the
+        moment anything in the document is wider than 390 px, Chrome either
+        clips it or (with no pinned scale) shrinks the WHOLE PAGE to fit, which
+        is the 0.918 zoom-out of docs/DEFECTS.md T-19.
+     3. THE FOUR NOTICES BECOME A STRIP THAT STILL SAYS ALL FOUR THINGS, one tap
+        from the full text. Nothing is shortened; `.strip-text` quotes the
+        protected phrases verbatim.
+
+     Everything here is scoped to `header.compact` / `.alpha-warning-banner
+     .on-table`, i.e. THE TABLE VIEW ONLY. The lobby still gets the full banner
+     in the flow at every viewport, because on the lobby nothing is competing for
+     the space.
+
+     THE SECOND CONDITION, `max-height: 560px`, IS THE PHONE HELD SIDEWAYS.
+     Measured at 844x390 before it: 160 px of banner plus a 99 px header left
+     123 px for a poker table, so `MIN_AVAIL_LANDSCAPE` took over and put the
+     felt at `y 302..553` of a 390 px viewport, with the action dock, the pot
+     readout and the bottom-left pod below the fold. It is the same disease and it
+     takes the same medicine, so the query matches BOTH. 560 px is not a new
+     number: `PokerTable.svelte` already trims the action dock at
+     `(min-aspect-ratio: 1/1) and (max-height: 560px)`, and the follow-up block
+     after this one puts the compact header on ONE row there, because in a 390 px
+     -tall window a header row costs more than a header column.
+     ========================================================================= */
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+
+    /* ---------------- the notice strip, collapsed ------------------------ */
+
+    .alpha-warning-banner.on-table {
+      padding: 0;
+    }
+
+    .alpha-warning-banner.on-table .banner-strip {
+      display: block;
+      padding: 6px 9px 7px;
+      font-size: 11px;
+      line-height: 1.3;
+    }
+
+    .alpha-warning-banner.on-table .banner-strip .warning-icon {
+      font-size: 11px;
+    }
+
+    .alpha-warning-banner.on-table .strip-text {
+      color: #fff;
+      font-weight: 500;
+    }
+
+    /* The affordance. It sits INSIDE the text flow so it costs no row of its
+       own, and it is a real 24 px-tall target inside a strip the whole width of
+       which is the button. */
+    .alpha-warning-banner.on-table .strip-more {
+      display: inline-block;
+      margin-left: 5px;
+      padding: 1px 6px;
+      border: 1px solid rgba(255, 255, 255, 0.6);
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: #fef08a;
+      white-space: nowrap;
+    }
+
+    /* Collapsed: the FULL text is one tap away. The words a player must not be
+       able to miss are in `.strip-text` above, on screen, unshortened. */
+    .alpha-warning-banner.on-table:not(.expanded) .banner-content {
+      display: none;
+    }
+
+    /* ---------------- the notice strip, expanded ------------------------- */
+    /* An OVERLAY, not an in-flow expansion: the table is sized from the flow
+       above it, so growing this block in place would resize the felt under the
+       player's thumb mid-hand.
+       `.alpha-warning-banner` is `position: relative; z-index: 100`, which makes
+       it a STACKING CONTEXT -- a child at z-index 2000 is still painted at the
+       100 level, under every dialog scrim in this app. So the z-index goes on the
+       banner ITSELF while it is expanded, and the children order within it. */
+
+    .alpha-warning-banner.on-table.expanded {
+      z-index: 2000;
+    }
+
+    .alpha-warning-banner.on-table.expanded .banner-content {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+      max-width: none;
+      margin: 0;
+      padding: 20px 18px 84px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      /* Fully opaque. A translucent scrim let the felt read through the bottom
+         half of the terms, which is the opposite of prominence. */
+      background: linear-gradient(180deg, #9a1616, #580c0c);
+    }
+
+    /* Bigger than the in-flow copy, not smaller: this is the reading view. */
+    .alpha-warning-banner.on-table.expanded .banner-content p {
+      font-size: 13.5px;
+      line-height: 1.6;
+      margin-bottom: 14px;
+    }
+
+    .alpha-warning-banner.on-table.expanded .banner-close {
+      display: block;
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2001;
+      min-height: 44px;
+      padding: 0 30px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.55);
+      background: rgba(0, 0, 0, 0.5);
+      color: #fff;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* ---------------- the compact table-view header ---------------------- */
+
+    header.compact {
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 4px 8px;
+      gap: 3px;
+    }
+
+    /* The brand mark and the tagline, on the one screen where the player is
+       already inside the product. 44 px of row, recovered. */
+    header.compact .logo {
+      display: none;
+    }
+
+    /* Two deterministic rows: where you are, then what you can do. Left to the
+       flex-wrap default these two would still land on separate rows (239 px +
+       411.8 px will not share 374), but "still" is not "always" -- pinning the
+       basis to 100% means a shorter table name can never silently reflow the
+       header into one row and change the felt height. */
+    header.compact .header-left,
+    header.compact .header-right {
+      flex: 1 0 100%;
+      min-width: 0;
+      gap: 6px;
+    }
+
+    header.compact .header-left {
+      justify-content: flex-start;
+    }
+
+    /* WRAPPING IS THE FAILURE MODE, NOT CLIPPING. At 390 px this row's content
+       is 338 px of the 374 available, so it never wraps; on a 320 px phone it
+       does, and the table gives up ~30 px of height rather than the wallet
+       button losing its right-hand edge to `overflow-x: hidden` on <body>. A
+       clipped control is unusable and invisible to every DOM assertion in the
+       repo; a third header row is merely a smaller felt. */
+    header.compact .header-right {
+      justify-content: flex-start;
+      flex-wrap: wrap;
+      row-gap: 4px;
+    }
+
+    /* The wallet chip keeps the thumb-reachable right edge; the three tool
+       buttons cluster on the left of the same row. */
+    header.compact .header-right > :global(.wallet-container) {
+      margin-left: auto;
+    }
+
+    header.compact .back-btn {
+      padding: 5px 9px;
+      font-size: 11px;
+      gap: 5px;
+    }
+
+    header.compact .back-btn svg {
+      width: 15px;
+      height: 15px;
+    }
+
+    /* `.current-table-name` is the stakes pill. It stays -- the blinds are the
+       one number in this header a player needs -- and it stays FULL TEXT,
+       because `tools/shots/lib/dom-scrape.mjs` asserts it against the table
+       canister's own config and the token census reads it as money. */
+    header.compact .current-table-name {
+      font-size: 11px;
+      padding: 3px 8px;
+      min-width: 0;
+      white-space: nowrap;
+    }
+
+    header.compact .sound-toggle-btn {
+      padding: 6px;
+    }
+
+    header.compact .sound-toggle-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Labels stay. "Verify Fair" is the one control that names what this product
+       is for, and an unlabelled shield icon does not say it. */
+    header.compact .history-btn,
+    header.compact .verify-btn {
+      padding: 5px 8px;
+      font-size: 11px;
+      gap: 5px;
+    }
+
+    header.compact .history-btn svg,
+    header.compact .verify-btn svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    /* The wallet chip comes down with everything else. The display name is kept
+       and merely narrowed: `.display-name` is a fault-injection target
+       (`SHOTS_INJECT_DRIFT=censusshape` writes a money-shaped token into it to
+       prove the census refuses one), and the census only gates tokens it can
+       SEE, so hiding this element would quietly disarm that self-test. */
+    header.compact :global(.wallet-container),
+    header.compact :global(.wallet-btn) {
+      min-width: 0;
+    }
+
+    header.compact :global(.wallet-btn) {
+      padding: 3px 8px;
+      gap: 6px;
+      font-size: 11px;
+    }
+
+    header.compact :global(.wallet-btn .avatar-img) {
+      width: 20px;
+      height: 20px;
+    }
+
+    /* 8.5em at 11px = 93 px, against 71 px for the generated names this build
+       produces, so the name renders IN FULL and the clamp only exists so a very
+       long one ellipsises instead of pushing the document past 390 px and
+       re-arming the T-19 zoom-out. Measured: this row's content is 343 px of the
+       374 px available. */
+    header.compact :global(.wallet-btn .display-name) {
+      max-width: 8.5em;
+    }
+
+    /* ---------------- the last 4 px above the felt ----------------------- */
+    /* `.table-area` is the table's parent; its top padding is subtracted from
+       the felt as directly as the header is. The wrapper already goes full-bleed
+       horizontally (PokerTable.svelte), so this is only the vertical inset. */
+    main[data-view='table'] .table-area {
+      padding-top: 4px;
+    }
+  }
+
+  /* =========================================================================
+     THE PHONE HELD SIDEWAYS: the same compact header, on ONE row.
+     =========================================================================
+     Height is the scarce axis in a 390 px-tall window and width is not: the two
+     header groups measure 180 + 338 = 518 px of the ~828 available, so they share
+     a row and the table gets the ~34 px back. Portrait keeps two rows, where 374
+     px cannot hold 518.
+     ========================================================================= */
+  @media (min-aspect-ratio: 1/1) and (max-height: 560px) {
+    header.compact .header-left,
+    header.compact .header-right {
+      flex: 0 1 auto;
+    }
+
+    header.compact .header-right {
+      flex-grow: 1;
+      justify-content: flex-end;
+    }
+
+    /* Two lines of strip, not three: the same words on a wider screen. */
+    .alpha-warning-banner.on-table .banner-strip {
+      padding: 5px 10px 6px;
     }
   }
 

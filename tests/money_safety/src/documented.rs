@@ -31,19 +31,26 @@
 //!   and did not exist until the wave-2 coherence pass wrote it: docs/DEFECTS.md
 //!   H-19. It is a documentation-coupling check, not proof the defect is still
 //!   live -- only running the engine can show that.)
-//! # The register is EMPTY, and that is the goal state
+//! # The register holds EXACTLY ONE entry, and it excuses ZERO e8s
 //!
-//! It used to carry six entries: three for E-01 (post-flop money destroyed at every
+//! It used to carry six: three for E-01 (post-flop money destroyed at every
 //! showdown, seen as stranded on the ledger, as value leaving the table, and as
 //! `awarded < collected`), one for E-03's `side_pots` drift, one for E-03's
 //! self-reported `BUG: Side pots (...)` line, and one for E-05's orphaned stake.
 //! All four defects were fixed in wave 2, so all six entries were DELETED, which is
-//! what fixing a defect is supposed to do to its tolerance.
+//! what fixing a defect is supposed to do to its tolerance. That left the register
+//! empty, and empty is still the goal state.
 //!
-//! An empty register means: **nothing on the money path is excused.** Every
-//! violation any invariant reports now fails the run. If a defect has to ship, add
-//! an entry here with an id, a document, a direction and a bound -- and know that
-//! the fuzzer can then explore past it.
+//! The one entry that is back names E-36 on the check
+//! `canister_reports_its_own_inconsistency`, direction `Unsigned`, bound **0 e8s**
+//! (docs/DEFECTS.md H-28). It is the other half of the
+//! [`TOLERATED_SELF_REPORTS`] line below, which had no register entry to meet, so a
+//! tolerated log line blocked exactly as hard as an untolerated one and the fuzzer's
+//! own default invocation was red at HEAD. It cannot excuse a single e8 moving
+//! anywhere: **nothing on the money path is excused.** Every violation that touches
+//! a balance still fails the run. If a money defect has to ship, add an entry here
+//! with an id, a document, a direction and a bound -- and know that the fuzzer can
+//! then explore past it.
 //!
 //! The classifier's own tests do not depend on the register having entries: they
 //! drive [`classify_against`] with a synthetic register, so the mechanism stays
@@ -141,9 +148,60 @@ pub const TOLERATED_SELF_REPORTS: &[&str] = &[
 ];
 
 pub const REGISTER: &[DocumentedDefect] = &[
-    // EMPTY ON PURPOSE. See the module docs: the six entries that used to live here
-    // named E-01, E-03 and E-05, and all three are fixed. Their markers are now
-    // gates:
+    // THE ONLY ENTRY. It admits E-36 is shipping, which it is, and it is what
+    // closes docs/DEFECTS.md H-28: the fuzzer's OWN DEFAULT INVOCATION was red.
+    //
+    // The two halves of the tolerance mechanism did not meet.
+    // `check_self_reported_inconsistency` matched E-36's `WARNING:` against
+    // `TOLERATED_SELF_REPORTS` and, because it matched, downgraded it from
+    // `SelfReportedFailure` to `BreakdownDrift` on the check
+    // `canister_reports_its_own_inconsistency` -- "where it can be counted". But
+    // nothing in this register named that (invariant, check) pair, so `classify`
+    // answered `Blocking(NotRegistered)` and the run failed. The downgrade bought
+    // nothing: a line on the tolerated list blocked exactly as hard as one that was
+    // not on it. `cargo test --test fuzz` with no environment at all failed at seed
+    // 0xC1EA_2DEC_0003, shrunk to 12 ops, and no make target ever ran that
+    // invocation because every caller passed MONEY_FUZZ_SEEDS.
+    //
+    // WHY THIS DIRECTION AND NOT THE OTHER. H-28 offered two fixes: name the
+    // tolerance here, or stop emitting a violation for a tolerated line. The second
+    // puts tolerance back into a place the register cannot see, which is the exact
+    // H-03/H-20 pathology this file exists to prevent -- 296 occurrences of a real
+    // open defect once reported as `0 documented finding(s)`. So it is named here,
+    // counted, printed per run, and policed by
+    // `register_entries_are_all_still_needed`.
+    //
+    // WHAT THIS DOES NOT EXCUSE. `directions` is `Unsigned` only and the bound is
+    // ZERO e8s, so this entry can excuse exactly one thing: a zero-delta log-line
+    // finding on that one check. It cannot excuse a single e8 moving anywhere. The
+    // engine's handling of the dual-stake state is correct -- both stakes stay in
+    // the payout basis, each under its own owner, because dropping either destroys a
+    // chip -- so there is no accounting inconsistency to excuse, only a `WARNING:`
+    // about a seat that E-36 should never have dealt the action to.
+    //
+    // DELETE THIS ENTRY when E-36 is fixed, together with its
+    // `TOLERATED_SELF_REPORTS` line. `register_entries_are_all_still_needed` fails
+    // on both halves if only one is removed.
+    DocumentedDefect {
+        id: "E-36",
+        doc: "docs/DEFECTS.md#e-36 (the defect) and #h-28 (why this entry exists)",
+        invariant: Invariant::M1bPotBreakdown,
+        check: "canister_reports_its_own_inconsistency",
+        // The violation is constructed with `delta_e8s: 0`, so `Direction::of(0)` is
+        // `Unsigned`. A signed one on this check would be a DIFFERENT finding and
+        // blocks.
+        directions: &[Direction::Unsigned],
+        max_abs_delta_e8s: Some(0),
+        why: "E-36 is open and shipping: a player who takes an empty chair MID-HAND and calls \
+              sit_in() is dealt the action and can bet into a hand it holds no cards in. The \
+              payout path detects the resulting dual-stake seat and says so in a WARNING:, then \
+              keeps BOTH stakes with their own owners -- which is the correct thing to do, since \
+              dropping either destroys a chip. The line is therefore not an accounting \
+              inconsistency and must not stop a fund-safety run; it is counted here instead so \
+              the fuzzer can explore past a defect the project has already decided to ship.",
+    },
+    // The six entries that used to live here named E-01, E-03 and E-05, and all
+    // three are fixed. Their markers are now gates:
     //
     //   E-01  tests/regressions.rs reg01 (the winner is paid every e8 collected),
     //         tests/invariants/seam.rs seam_a, and the settlement oracle's

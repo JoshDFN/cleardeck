@@ -20,6 +20,7 @@ has a single queue to work from.
 | `T-` | build, deploy or configuration of the app itself. |
 | `H-` | the harnesses. A harness defect means a result you cannot trust. |
 | `D-` | documentation and evidence: a claim the artifact does not support. |
+| `L-` | the lobby screen and what it renders (wave 5). |
 
 `Status` is one of **executed** (reproduced by running code), **code-read** (read but not run),
 or **fixed-in-wave-1**.
@@ -30,14 +31,18 @@ or **fixed-in-wave-1**.
 
 | # | sev | status | where | one line |
 |---|---|---|---|---|
+| [E-42](#e-42) | **critical** | **OPEN** — executed by an independent auditor on a funded local table | `record_hand_to_history` → `evaluate_hand` (`src/table_canister/src/lib.rs:871`) | **a funded table was locked with about 420 ICP unreachable through every path a player has.** One player stopped heartbeating pre-flop; every state-advancing call then trapped, and `withdraw`/`cash_out` refused because a hand was in progress. The one unguarded settlement-path call to a trapping evaluator. [FINDING 15](SECURITY-FINDINGS.md) |
+| [T-33](#t-33) | **critical** | **OPEN** — executed by an independent auditor | `Dockerfile`, `scripts/verify-build.sh`, `README.md` §Verify the Code, `icp.yaml` `shrink` | **nobody can check what code is running.** The deployed module hash matches no commit here; the build is not path-independent; the published Docker verification cannot compile (`COPY` omits `src/poker_core`); and the procedure the README gives a reader is controller-only. The auditor proved this is not paperwork: the deployed binary locked a funded table and the source in this repo settled the identical state correctly |
 | [E-01](#e-01) | **critical** | **FIXED-IN-WAVE-2** (with E-03 and E-05) | `determine_winners` / `advance_to_next_street` | every showdown after post-flop betting paid only the pre-flop pot and destroyed the rest permanently; the payout basis is now rebuilt from the players' contributions at payout time |
 | [E-02](#e-02) | **fund-theft** | **FIXED-IN-WAVE-2** (demonstrated as theft first) | `periodic_cleanup`, `deposit`, `notify_deposit`, `VERIFIED_DEPOSITS` | one real ledger transfer credited twice and the excess WITHDRAWN as real ICP; closed by a monotonic watermark plus a bounded record with one writer |
 | [E-37](#e-37) | high | **FIXED** (demonstrated first, then fixed) | `Stake`, `plan_payouts`, `apply_payouts` (`principal_of` deleted) | the E-05 fix paid a departed player's refunded stake to whoever took their chair. Composed end to end on the real canister: `-2000000` from the player who left, `+2000000` to the stranger in her chair, every total balancing. The owner now travels with the stake and `M8_PRINCIPAL_ATTRIBUTION` + a PRINCIPAL column in the settlement oracle gate it. [FINDING 13](SECURITY-FINDINGS.md) |
 | [E-38](#e-38) | high | **FIXED** (both fields, in one change) | `PersistentState::deposit_watermark`, `TableState::departed_stakes` | two agents each added a non-`opt` persisted field. As shipped an upgrade was REJECTED; fixing only the first makes the upgrade SILENTLY destroy every chip at the table (re-measured on the wave-3 fixture: 594000000 seated e8s and three players' hole cards, gone, upgrade reported successful). Both are now `opt`; M7 upgrades `801aa79` state into the current wasm with every e8, stack, card and the anti-replay record intact, and `pre_upgrade` traps rather than proceeding after a failed save. [FINDING 14](SECURITY-FINDINGS.md) |
 | [T-20](#t-20) | **high** | **FIXED-IN-WAVE-4-COHERENCE-PASS** | `src/index.scss` portrait rule | on a phone, on the table view and behind the open Deposit modal, **0 of the 4 protected notices were on screen** — 4 of 4 in the DOM, 248 px of scroll away. `make hygiene` greps the source and cannot see it. The de-duplication is kept; the copy that survives is now the TOP banner, verified 4 of 4 on screen |
 | [T-21](#t-21) | **high** | **FIXED-IN-WAVE-4-COHERENCE-PASS** | `HandHistory.svelte` replayer banner | the hand replayer asserted *"These cards were fixed before the hand was played … before any card was dealt"* under a green tick, in the same wave and product as `ShuffleProof.svelte`'s *"Not proven: that the commitment came before the cards"* |
-| [T-25](#t-25) | **high** | executed | the portrait table as a whole | with the notices on screen — the only shippable configuration — the wave-4 portrait redesign measures **18.3% / 16.4%** of the phone against **20.9%** for the geometry it replaced. The 42.9–52.1% headline exists only in the configuration that hid the notices |
-| [T-22](#t-22) | **high** | executed | `.equity-badge` vs `.player-cards` in portrait | on a phone the winner's `100.00%` renders as **`0%`** — the hero's own card covers the rest. `elementFromPoint` returns `.player-cards` at the centre of BOTH badges. A plausible wrong number on a decision surface |
+| [T-25](#t-25) | **high** | **FIXED IN WAVE 5** | the portrait table as a whole | with the notices on screen — the only shippable configuration — the wave-4 portrait redesign measures **18.3% / 16.4%** of the phone against **20.9%** for the geometry it replaced. The 42.9–52.1% headline exists only in the configuration that hid the notices. **Fixed by taking the vertical budget off the chrome, not the notices**: with all five protected phrases on screen and hit-tested, the portrait felt is now **60.6% (6-max) / 50.7% (9-max)**. The aspect was never changed |
+| [T-22](#t-22) | **high** | **FIXED IN WAVE 5** | `.equity-badge` vs `.player-cards` in portrait | on a phone the winner's `100.00%` rendered as **`0%`** — the hero's own card covered the rest. Fixed and **measured on the rendered page in both directions** by the new pixel gate ([H-37](#h-37)): 60.4% of the badge's ink covered before, 0.0% after, on the same scenes against the same canisters |
+| [H-37](#h-37) | **high** | **BUILT IN WAVE 5** | `tools/shots/lib/occlusion.mjs`, `lib/png.mjs`, `test-occlusion.mjs` | every gate in this repo read `textContent`, so a correct number with a card painted over it was photographed and filed as VERIFIED twice ([T-22](#t-22), [T-23](#t-23)). There is now a gate that judges PIXELS: effective paint order per CSS 2.1 Appendix E, hit testing, and a four-shot pixel differential per (figure, occluder) that decides. Across a 22-shot sweep a naive z-index gate would have raised **3,836** false flags and this one raises **0** |
+| [H-38](#h-38) | medium | executed | `scripts/dev.sh`, `Makefile`, `.github/workflows/ci.yml` | the harness's three self-checks — the token census, the money parser and the pixel gate — are named by **no make target and no CI job**, the same shape as [H-17](#h-17). `npm run selftest` in `tools/shots` runs all three in ~15 s with no replica; wiring it into `cmd_test` is one line in a file this task does not own |
 | [T-08](#t-08) | **high** | **FIXED-IN-WAVE-3** | `PokerTable.svelte` pot header | the table's headline POT was displayed at **2×** during every betting round, and disagreed with the pot-odds strip on the same screen. The headline is now `get_pot()` unmodified, the two legs shown beside it are a decomposition that sums back to it, and the pot-odds strip spells out the same figure. Gated by the screenshot harness on every table scene |
 | [T-09](#t-09) | medium | **FIXED-IN-WAVE-3** | `PokerTable.svelte` showdown | the villain's revealed hand rendered as two blank cards and the winning hand as `0`: an unwrapped Candid `opt` in two places. Both are unwrapped now (`revealedHole()` and `handRankWords()`), and a revealed pair is lifted clear of its own plate so it can be read |
 | [H-16](#h-16) | high | **FIXED-IN-COHERENCE-PASS** | `tests/money_safety/src/world.rs`, `wasms.rs` | `World::upgrade` reused `self.table_wasm`, so every "survives an upgrade" assertion was new-wasm-to-itself. `upgrade_to_module_under_test` + `previous_release_table_canister()` + M7 now walk `801aa79` state into the current wasm |
@@ -48,7 +53,7 @@ or **fixed-in-wave-1**.
 | [H-21](#h-21) | low | **FIXED** | `tests/money_safety/src/wasms.rs`, `tests/settlement/src/wasms.rs` | the harness's `cargo build` inherited `RUSTUP_TOOLCHAIN`, which overrides `rust-toolchain.toml`; a different toolchain produced a different module hash from identical source. Both harnesses now scrub the whole family and SET the channel read from `rust-toolchain.toml`, and print it beside the sha256 |
 | [H-26](#h-26) | **high** | executed | `tests/money_safety/src/fuzz.rs` `run_sequence` | a fuzz run is documented as "a pure function of `(seed, config, actor_names, steps)`" and is not. Seed `212967420072194` at 400 steps plays **4 hands and finds nothing alone, 5 hands and two fund-creation findings when seed `212967420072193` ran before it in the same process**. Every `MONEY_FUZZ_SEEDS=<one seed>` reproducer in this repo is therefore unverified |
 | [E-41](#e-41) | **high** | executed | unknown; first observed at `check_timeouts` | the canister ends a hostile sequence **SHORT by 2,000,000 e8s** — it owes escrow+chips more than its ledger balance. M2 LEDGER REALITY, which is never excusable. Reproduces on a pristine `git archive HEAD` tree with the pristine harness |
-| [H-28](#h-28) | **high** | executed | `documented::TOLERATED_SELF_REPORTS` vs `documented::REGISTER` | the two halves of the tolerance mechanism are not connected: a tolerated `WARNING:` line becomes an `M1b BreakdownDrift` violation on a check no `REGISTER` entry names, so it BLOCKS. `cd tests/money_safety && cargo test --test fuzz` at its own DEFAULT seeds is RED at HEAD |
+| [H-28](#h-28) | **high** | **FIXED IN THIS PASS** (reproduced first, then fixed) | `documented::TOLERATED_SELF_REPORTS` vs `documented::REGISTER` | the two halves of the tolerance mechanism did not meet: a tolerated `WARNING:` line became an `M1b BreakdownDrift` violation on a check no `REGISTER` entry named, so it BLOCKED. `cargo test --test fuzz` with no environment was RED at `fe72d46` (seed `0xc1ea2dec0003`, 220 ops shrunk to 12, 221 s). Not an engine defect: the 12 ops are E-36 exactly. Closed by the register entry, NOT by silencing the detector, and the invocation is now in `make test` and `make fuzz-default` |
 | [H-29](#h-29) | medium | executed | both harnesses' `sha256` identity claim | the module hash is NOT a function of the source. Two trees with byte-identical source, the same pinned toolchain and the same `Cargo.lock` produced two modules that agree for all 2,053,251 bytes of code and data and differ only inside the semantics-free `name` custom section |
 | [H-27](#h-27) | medium | executed | `tests/money_safety`, `tests/settlement` | what the widened attribution gate still does NOT reach, named per planted bug: swapped winner amounts need two payouts to two different people in one hand, which no ordinary-hand fixture and no 300-step fuzz seed produced; `push_winner`'s owner-merge needs a chair with two owners, which only the hand-written fixture builds |
 | [H-22](#h-22) | medium | executed | `tests/settlement` re-deal search | the exact-deal search has no attempt cap, so a deck that stops varying HANGS the suite instead of failing it; contained by a timeout in `cmd_test`, not fixed |
@@ -1064,6 +1069,20 @@ money goes to the players who are actually in the hand.
 It is a loss for whoever does it rather than a way to take somebody else's money, and it needs
 two deliberate calls plus somebody else leaving mid-hand. That is why it is medium and not high.
 
+**This defect is now REGISTERED as shipping, and that is its marker.** `documented::REGISTER`
+carries one entry, `E-36` on the check `canister_reports_its_own_inconsistency`, direction
+`Unsigned`, bound **0 e8s** — see [H-28](#h-28) for why it had to exist and why the alternative was
+rejected. Two consequences worth knowing before touching this defect:
+
+* the money-safety fuzzer now COUNTS the `WARNING:` line instead of blocking on it, so
+  `cargo test --test fuzz` reports `1 documented finding(s) ... x8 worst_delta=0` and carries on
+  exploring past E-36 instead of stopping at it;
+* **fixing E-36 will break two tests on purpose.** `register_entries_are_all_still_needed` fails if
+  the `E-36` id leaves this file while the register entry stays, and it fails if the
+  `"carries both a live stake and a departed stake"` line leaves `src/table_canister/src/lib.rs`
+  while `TOLERATED_SELF_REPORTS` still excuses it. Delete the defect, the register entry and the
+  tolerated substring in one change.
+
 **How it was found, and what it says about the payout path** the fix for E-05 records a departed
 seat's stake against its seat number, so this sequence makes ONE seat carry two stakes in one
 hand -- a state the fix's author had reasoned was unreachable. It is handled: both stakes stay in
@@ -1201,6 +1220,12 @@ this entire wave**, which is why zero screenshots exist.
 `scripts/deploy-mainnet.sh` calls `init_microstakes_tables(table_1, table_2, table_3)` and carries
 a `# NOTE: verify whether btc_table_1 needs a separate lobby registration call.` `make local-up`
 now states this explicitly instead of leaving it as a comment.
+
+**DETERMINED in the wave-5 lobby pass — see [L-05](#l-05).** It is **not** a frontend fix: the
+frontend already renders BTC rows completely and `lobby.get_tables()` simply does not return one.
+The call is `add_btc_headsup_table(principal "<btc_table_1>")`, admin only, and the config it
+registers matches `btc_table_1`'s contract exactly. L-05 carries the exact command, where the line
+belongs so it survives a `local-up`, and the 35 px the extra filter row costs the phone layout.
 
 <a id="t-06"></a>
 ### T-06 — low — two lists of mainnet canister ids
@@ -2087,9 +2112,10 @@ is a fingerprint of the source. Deliberately not done here: `announce()`'s outpu
 every document in `docs/` quotes.
 
 <a id="h-28"></a>
-### H-28 — high — the tolerated-self-report list and the register do not meet, so the fuzzer's own default is red
+### H-28 — high — FIXED IN THIS PASS — the tolerated-self-report list and the register did not meet, so the fuzzer's own default was red
 
-`cd tests/money_safety && cargo test --test fuzz`, with no environment at all, fails at HEAD:
+**Reproduced first.** `cd tests/money_safety && cargo test --test fuzz`, with no environment at
+all, failed at `fe72d46` in 221 s:
 
 ```text
 money-fuzz: seed 0xc1ea2dec0003 finished: 5 hands, 3 upgrades, 1 blocking finding(s)
@@ -2122,13 +2148,85 @@ a defect the project has already decided to ship.
 same 12-op shrunk reproducer. `make test` and `make fuzz` both pass explicit `MONEY_FUZZ_SEEDS`, so
 neither of them lands on seed `0xc1ea2dec0003` and neither has ever shown it.
 
-**Fix, and it is a decision not a typo.** Either add a `DocumentedDefect { id: "E-36", invariant:
-M1bPotBreakdown, check: "canister_reports_its_own_inconsistency", directions: &[Unsigned],
-max_abs_delta_e8s: Some(0), .. }` to `REGISTER` — admitting E-36 is shipping, which it is, and
-which `register_entries_are_all_still_needed` will then police — or stop emitting a violation for a
-line that is on the tolerated list and count it somewhere the run can report without failing.
-Deliberately NOT done here: both options change what stops a fund-safety run, and that is not a
-change to make as a side effect of a task about attribution.
+**Is it a real engine defect or an over-strict invariant? Neither.** The shrunk 12-op reproducer
+answers it, and it is worth reading in full, because the ops ARE E-36:
+
+```text
+seed 0xc1ea2dec0003, 6-max ICP table, ante 500_000, 12 ops
+ 1. FundEscrow  { actor: 0, amount: 800_000_000 }
+ 2. JoinTable   { actor: 0, seat: 0 }
+ 3. FundEscrow  { actor: 1, amount: 800_000_000 }
+ 4. JoinTable   { actor: 1, seat: 1 }
+ 5. FundEscrow  { actor: 2, amount: 800_000_000 }
+ 6. JoinTable   { actor: 2, seat: 2 }
+ 7. StartNewHand{ actor: 0 }
+ 8. LeaveTable  { actor: 2 }          <- seat 2 vacated MID-HAND, stake stays in the basis
+ 9. ActInTurn   { act: AllIn }
+10. FundAndSeat { actor: 2 }          <- the same chair re-occupied mid-hand
+11. ActLegalInTurn
+12. ActAs       { actor: 2, act: Call }  <- the newcomer BETS into a hand it holds no cards in
+
+violation: M1bPotBreakdown / canister_reports_its_own_inconsistency
+severity : BreakdownDrift    delta_e8s: 0    phase: HandComplete
+detail   : the canister logged a self-report that is on the tolerated list and settled
+           anyway: WARNING: seat 2 carries both a live stake and a departed stake in hand 1
+```
+
+Ops 8, 10 and 12 are the [E-36](#e-36) sequence verbatim, and E-36 is already documented, already
+open, already shipping. The engine's *handling* of the state is correct — both stakes stay in the
+payout basis under their own owners, because dropping either destroys a chip — so the `WARNING:` is
+not an accounting inconsistency and the invariant that notices it is not over-strict either. It is
+right to notice. What was broken is that the harness had nowhere to put the noticing: the downgrade
+to `BreakdownDrift` on `canister_reports_its_own_inconsistency` bought nothing, because no register
+entry named that pair. `worst_delta` is `0` on all 8 occurrences: not one e8 moved.
+
+**So no engine change, and the engine stays byte-stable.** `table_wasm_sha256` in the report before
+and after this pass is the same module.
+
+**Fixed by naming the tolerance, which was the decision, not the typo.** A
+`DocumentedDefect { id: "E-36", invariant: M1bPotBreakdown, check:
+"canister_reports_its_own_inconsistency", directions: &[Unsigned], max_abs_delta_e8s: Some(0) }` is
+now in `REGISTER`. The other option — stop emitting a violation for a tolerated line — was
+rejected: it puts tolerance back into a place the register cannot see, which is the exact H-03/H-20
+pathology `documented.rs` exists to prevent (296 occurrences of a real open defect once reported as
+`0 documented finding(s)`). The bound is **zero e8s** and the direction is `Unsigned` only, so the
+entry can excuse exactly one thing: a zero-delta log line on that one check. It cannot excuse a
+chip. `register_entries_are_all_still_needed` now polices both halves — the entry's id must stay in
+this file and the `TOLERATED_SELF_REPORTS` substring must stay in `lib.rs` — so fixing E-36 forces
+both to be deleted together. **That coupling is E-36's known-defect marker**, and it lives in the
+harness rather than in `DEFECT_MARKERS` because E-36 is not reachable from
+`tools/differential`'s pure-engine subset.
+
+After the fix, the same bare invocation:
+
+```text
+money-fuzz: seed 0xc1ea2dec0003 finished: 5 hands, 3 upgrades, 0 blocking finding(s),
+            1 documented finding(s), worst stranded 0 e8s
+  documented  M1b_POT_BREAKDOWN:canister_reports_its_own_inconsistency|BreakdownDrift|
+              HandComplete|+ x8 worst_delta=0
+money-fuzz: M8 PRINCIPAL ATTRIBUTION ran on 13 of the 15 hand(s) this run completed;
+            10 of them were also checked against the independent settlement oracle
+test result: ok. 1 passed; 0 failed  (51.02s)
+```
+
+The defect is now COUNTED and PRINTED instead of either blocking or vanishing, which is the whole
+point of the register.
+
+**And the invocation is wired in, because a red default nobody runs is the actual defect.** The
+reason this survived a whole wave is structural, not careless: every caller passed
+`MONEY_FUZZ_SEEDS`, so `seeds()`'s `Err(_) =>` arm and `DEFAULT_STEPS` were executed by NOTHING.
+`make test` passed 1 seed × 40 steps, `make fuzz` passed 9 explicit seeds, and neither ever landed
+on `0xc1ea2dec0003`. Three changes, so it cannot recur:
+
+1. **`make fuzz-default`** / `./scripts/dev.sh fuzz-default` — the bare invocation, run under
+   `env -u MONEY_FUZZ_SEEDS -u MONEY_FUZZ_STEPS -u MONEY_FUZZ_SHRINK -u MONEY_FUZZ_REPORT` so a
+   shell that happens to export one of them cannot quietly turn it back into a different run.
+2. **`make fuzz` runs it FIRST**, before the 9-seed sweep, so the long gate can never be green
+   while the command in the harness's own doc comment is red.
+3. **`make test` runs it too**, unconditionally and with no opt-out, after the existing steerable
+   40-step smoke. It costs ~51 s against a gate that already spends 900 s on the settlement
+   oracle, and it reuses the wasm and the ledger that step has already fetched. An environment
+   variable that skips it is how the hole gets dug a second time, so there is not one.
 
 <a id="h-27"></a>
 ### H-27 — medium — what the widened attribution gate still cannot reach
@@ -2421,7 +2519,7 @@ to every surface. Reproduce with the commands on each entry.
 | [H-24](#h-24) | **high** | open | `tools/shots/scenarios/shuffleproof.mjs` | the fairness scene asserts `.proof-item >= 2`, which is true **before** the verification runs. Both shipped shuffleproof PNGs show rungs 3 and 4 grey and "Re-deriving your cards locally", filed as verified |
 | [T-16](#t-16) | **high** | **FIXED IN WAVE 4** | the whole client at 390×844 | the mobile playing surface was **19.7–21.1% of the screen against PokerNow's 52.1% on the identical device**, and two of the six mobile captures did not contain a poker table at all. Now **42.9–52.1%**, scroll-anchored, nothing off-frame |
 | [D-03](#d-03) | medium | **partly fixed** (vocabulary landed) | every component `<style>` block | 16 border radii, 28 font sizes, 9 greens, 6 ambers, 11 greys, 8 panel tints, 8 panel strokes; four buttons in one header row with three heights, two radii, two font sizes and two accent families |
-| [T-19](#t-19) | medium | open | `src/cleardeck_frontend/src/app.html` + `+page.svelte` `.header-right` | every phone renders the whole app at **0.918 scale**: `.header-right` needs 424 CSS px, the viewport meta has no `initial-scale`, so Chrome zooms the document out to fit. Every glyph is 8.2% smaller than authored and ~32 px of the screen's right edge is blank |
+| [T-19](#t-19) | medium | **FIXED IN WAVE 5** | `src/cleardeck_frontend/src/app.html` + `+page.svelte` `.header-right` | every phone renders the whole app at **0.918 scale**: `.header-right` needs 424 CSS px, the viewport meta has no `initial-scale`, so Chrome zooms the document out to fit. Every glyph is 8.2% smaller than authored and ~32 px of the screen's right edge is blank. **Fixed**: `initial-scale=1` plus a two-row table header whose `.header-right` is 374 px. Measured after: layout viewport `390x844`, `documentElement.scrollWidth = 390`, page scale `1.0000`, at 320/360/390/430/768 px wide |
 | [T-15](#t-15) | medium | **partly fixed** (first consumer) | `lib/utils.js` `formatTokenAmount` | the "canonical money layer" written this wave, documented at length, was imported by **nobody**. Seven copies of "divide by 1e8", not one |
 | [T-12](#t-12) | low | **FIXED IN THIS PASS** | `PokerTable.svelte:769` | the MAIN pot was labelled `Side 1`, and on a single-layer pot it printed `SIDE 1 0.40` directly under `TOTAL POT 0.40` |
 | [T-13](#t-13) | low | **FIXED IN THIS PASS** | 3 of 4 dialogs | Escape closed `HowItWorks` and silently did nothing in `DepositModal`, `WithdrawModal` and `HandHistory`; each carried a keydown handler on a `tabindex="-1"` backdrop that nothing can focus |
@@ -2747,6 +2845,34 @@ The fix is two changes together, in files a mobile-layout pass does not own:
 
 Until both land, the 0.918 scale is *load-bearing* for the mobile playing-surface numbers in T-16.
 
+**FIXED IN WAVE 5.** Both landed together, and the warning above about `initial-scale=1` alone was
+right: the header had to come down in the same change.
+
+| reading | before | after |
+|---|---|---|
+| `window.innerWidth` × `innerHeight` | 425 × 918 | **390 × 844** |
+| page scale | 0.9176 | **1.0000** |
+| `documentElement.scrollWidth` on the table view | **425** (overflowing 390) | **390** |
+| widest thing in `.header-right` | `.header-right` itself, 411.8 | 374, content 338 |
+| `header` height on the table view | 173.5 (three rows) | **69.0** (two rows) |
+| everything above the table | 449.5 of 918 (49%) | **132.6** of 844 (16%) |
+| 6-max portrait felt | 199.1 × 358.7 = 18.3% | **332.8 × 599.5 = 60.6%** |
+
+The brand row is dropped on the table view only (44 px of a screen where the player is already
+inside the product); every control keeps its label; `.header-right` is allowed to WRAP at narrower
+widths, so a 320 px phone gets a third header row and a smaller felt rather than a clipped wallet
+button — verified `scrollWidth == innerWidth` at 320, 360, 390, 430 and 768 px.
+
+Two consequences worth naming, both of which were invisible before:
+
+* The repo's own pixel-occlusion gate **could not run at all** on two mobile scenes before this fix.
+  `page.screenshot({ clip })` on an element whose page rect reaches x≈425 throws
+  `Clipped area is either empty or outside the resulting image` against a 390 px painted image, so
+  `table-facing-bet` and `table-allin` at mobile crashed the gate rather than passing or failing it.
+  Both pass it now.
+* The blank ~32 px strip at the right edge is visible in every pre-fix mobile PNG in
+  `artifacts/screens/`; it is gone.
+
 <a id="d-03"></a>
 ### D-03 — medium — there was no design system, so four agents each invented one
 
@@ -2995,13 +3121,23 @@ Full narrative, gate results and the scene-by-scene A/B are in **[WAVE-04.md](WA
 | [T-20](#t-20) | **high** | **FIXED IN THIS PASS** | `src/index.scss` portrait rule | on a phone, on the table view and behind the open Deposit modal, **0 of the 4 protected notices were on screen** (4 of 4 in the DOM, 248 px of scroll away). `make hygiene` cannot see this: it greps the source |
 | [T-21](#t-21) | **high** | **FIXED IN THIS PASS** | `HandHistory.svelte:582-593` | the per-hand replayer asserted *"These cards were fixed before the hand was played … before any card was dealt"* with a green tick, in the same wave and the same product as `ShuffleProof.svelte`'s *"Not proven: that the commitment came before the cards"* |
 | [T-25](#t-25) | **high** | open | the portrait table as a whole | with the notices restored, the wave-4 portrait redesign measures **18.3% / 16.4%** of the screen against **20.9%** for the geometry it replaced. It is a regression in the only shippable configuration |
-| [T-22](#t-22) | **high** | open | `.equity-badge` in portrait vs `.player-cards` | on a phone the winner's `100.00%` renders as **`0%`** — the hero's own card covers the rest. A plausible wrong number on a decision surface |
-| [T-23](#t-23) | medium | open | `.winner-award` | on a phone the award chip covers the winner's revealed pair; on desktop it overlaps `.community-cards` by **25.6% of its own area** when the winner sits at seat 1 or 2 |
+| [T-22](#t-22) | **high** | **FIXED IN WAVE 5** (measured red then green, on the rendered page) | `.equity-badge` in portrait vs `.player-cards` | on a phone the winner's `100.00%` rendered as **`0%`** — the hero's own card covered the rest. The badge is out of the plate's stacking context and on a per-seat spoke no card of that seat uses: **60.4% / 46.8% of its ink covered before, 0.0% after** |
+| [T-23](#t-23) | medium | **FIXED IN WAVE 5** (measured red then green) | `.winner-award` | the award chip covered the winner's revealed pair (**68.1% of a card's ink, 58.8% of its rank glyph**) and, on desktop, a community card's suit pip (**5.2%**). Root cause: one multiplier scaled the chip vector, which points AT the board at flank seats. The award has its own per-seat vector now; **0.0% after** |
 | [T-24](#t-24) | medium | **FIXED IN THIS PASS** | `HandHistory.svelte:1318` | below 560 px the action log hid `.log-seat`, so every line on a phone read `06:03:57 AM calls` — 8 of 8 anonymous |
-| [T-26](#t-26) | medium | open | `WithdrawModal.svelte:15` vs `:167,:179` | the BTC withdrawal minimum the modal **states** (1,000 sats) is **90.9× the one it enforces** (11 sats), and the error string it would print is unreachable for 12–999 sats |
-| [T-27](#t-27) | low | open | `.equity-method` inside `.pot-display` | the line that names the equity method disappears exactly when the equity becomes a verdict, because the pot display is replaced by the winner banner |
+| [T-26](#t-26) | medium | **FIXED IN THIS PASS** | `WithdrawModal.svelte:15` vs `:167,:179` | the BTC withdrawal minimum the modal **stated** (1,000 sats) was **90.9× the one it enforced** (11 sats), and the error string it printed was unreachable for 12–999 sats. Resolved to **11**, the canister's number, on every surface: a UI-only floor of 1,000 would have trapped any balance below it. Gated by `tests/money_safety/tests/ui_limits.rs`, which reads `lib.rs` and both modals |
+| [T-31](#t-31) | **high** | **executed, and FIXED for the two money modals in this pass** | `.modal-backdrop` in `WithdrawModal.svelte` / `DepositModal.svelte` vs the notice banner | with **either money modal open, 0 of the 4 protected notices are unobstructed**, at 1440x900 AND at 390x844. `elementFromPoint` at the centre of each returns `.modal-backdrop` — `rgba(0,0,0,0.7)` + `backdrop-filter: blur(4px)`, z-index 200. Identical on `fe72d46`, so the wave-4 T-20 fix left this case open. All four are now restated INSIDE both dialogs: **4 of 4 unobstructed** on both viewports with either modal open |
+| [T-28](#t-28) | medium | **FIXED IN THIS PASS** | `WithdrawModal.svelte` `setMaxAmount` | MAX put an amount in the box that could not be withdrawn, two ways: `toFixed(4)` rounded a 123,456,789 e8s balance UP to 123,460,000 and the modal refused its own MAX with `Insufficient balance`; and it ignored the 100 ICP per-transaction ceiling, so 500 ICP produced a canister rejection from a button labelled MAX. Floors and clamps now |
+| [T-29](#t-29) | medium | **FIXED IN THIS PASS** | `WithdrawModal.svelte` vs `lib.rs:47,51,54` | two limits the canister enforces and no surface mentioned: the **100 ICP / 0.1 BTC per-transaction ceiling** and the **60-second withdrawal cooldown**. A player met both as an unexplained rejection. Both now stated from the mirrored constants; the ceiling is checked client-side too |
+| [T-30](#t-30) | medium | **FIXED IN THIS PASS** | `DepositModal.svelte:399,634` | the "you have enough to deposit" test was `balance > minDeposit`, but an ICRC-2 deposit costs the depositor **two** ledger fees, so the real floor is `minDeposit + 2 × fee`. A wallet with 1,005 sats was shown a form whose every possible deposit the ledger would refuse |
+| [D-05](#d-05) | low | executed | `DepositModal.svelte` native-BTC path | the **10,000 sat** minimum and **~2,000 sat** cost the native-BTC flow states are the ckBTC **minter's**, and no constant in this repository enforces either, so `ui_limits.rs` cannot check them. Reduced to two named constants so they cannot disagree with each other; they can still disagree with the minter |
+| [T-27](#t-27) | low | **FIXED IN WAVE 5** | `.equity-method` inside `.pot-display` | the line that names the equity method disappeared exactly when the equity became a verdict, because the pot display is replaced by the winner banner. It is one snippet rendered into whichever readout is on screen; measured in the same frame as the badges at both viewports |
 | [H-30](#h-30) | medium | open | `ShuffleProof.svelte` placement + `shuffleproof` scene | the green verdict is **below the fold at both viewports**; on mobile it is inside a nested scroller (`.proof-sidebar`, `clientHeight 918`, `scrollHeight 2708`) that scrolling the page cannot reach |
-| [H-31](#h-31) | medium | open | `tools/shots/scenarios/handhistory.mjs` | the scene never clicks a hand open, so the replayer — where T-21 hid for a whole wave and where the action-log A/B is lost — has never been photographed or asserted |
+| [H-31](#h-31) | medium | **FIXED IN THIS PASS** | `tools/shots/scenarios/handreplay.mjs` (new) | the replayer is now opened, walked street by street and asserted at both viewports: every board card against `community_cards`, every log line against the hand record, the fairness claims, and the four protected notices hit-tested on the rendered page |
+| [H-32](#h-32) | **high** | **FIXED IN THIS PASS** | `src/declarations/table_1/table_1.did.js` | the client's Candid declaration of `ActionRecord` omitted `phase` and `amount`, so the agent decoded three fields off a five-field record. **No client could show a call's or an all-in's amount, or the street any action happened on, however it was written.** Root cause is [E-08](#e-08) (the hand-maintained `.did`), which is a different owner's file and stays open |
+| [H-33](#h-33) | medium | **FIXED IN THIS PASS** | `tools/shots/scenarios/handhistory.mjs` staging wait | `querySelectorAll('.community-cards .card').length >= 5` was **true the instant the board frame mounted**: `PokerTable.svelte` always renders `Array(5)` of `<Card>` and an undealt slot is still a `.card`. A wait that cannot fail stood in for the one piece of state the scene depends on |
+| [H-34](#h-34) | medium | **FIXED by the gate's owner, 2026-08-05** | `tools/shots/lib/occlusion.mjs` | the new pixel gate had no notion of a dialog, so **every modal scene failed it**, the pre-existing `handhistory` scene included: a dialog covering the table behind it is what a dialog is for. The gate now identifies the overlay LAYER (fixed ancestor covering ≥40% of the viewport, or `role="dialog"`/`aria-modal`) and reports a page figure covered by an overlay as `behind-an-overlay` instead of failing; a figure INSIDE an overlay is still gated, so a dialog covering its own numbers still fails. `handhistory` and `handreplay` are verified at both viewports with 0 occluded and no `SHOTS_OCCLUSION=report` |
+| [H-35](#h-35) | medium | **FIXED IN THIS PASS** | `HandHistory.svelte` proof panel, download file, list foot | three claims [T-21](#t-21) left behind in the same modal: the commitment row was labelled *"committed before the deal"*, the downloadable audit file called the field `commitment_published_before_deal`, and the list foot said *"**Every** hand above was re-derived in this browser"* while listing hands whose seed is still sealed |
+| [H-36](#h-36) | **high** | **FIXED for this dialog; open for the others** | every full-screen dialog vs `.alpha-warning-banner` | wave 4's *"4 of 4 phrases on screen … **and behind the open Deposit modal**"* is a GEOMETRY measurement. Hit-tested, a dialog's 72%-black scrim hides all four: with the hand-history modal open and its own copy of the notices suppressed, **0 of 5** protected phrases are on screen while **4 carriers sit in the DOM** |
 | [D-04](#d-04) | medium | **FIXED IN THIS PASS** | `docs/DESIGN-BAR.md` §9.4.1 | "There is no real mobile lobby capture in the corpus" is false. `pokerstars/web-ps-gipsy-2.png` is one, indexed `real_gameplay=true`; the doc missed it by querying `scene == 'lobby-mobile'` when it is filed `mobile-portrait` |
 
 <a id="t-20"></a>
@@ -3089,8 +3225,61 @@ is 18 px taller and 40 px narrower than variant C's, and loses on area for exact
 `.header-right` that fits and a two-row table header return ~120 CSS px and 8.2% of linear scale;
 (b) make `PORTRAIT_AR` a function of the stage height rather than a constant.
 
+**FIXED IN WAVE 5 by (a) alone. (b) was never needed, and the reason is worth recording.** Same
+tool, same replica, same six scenes, mobile 390×844, notices on screen and hit-tested throughout:
+
+| variant | notices on screen | 6-max | 9-max |
+|---|---|---|---|
+| A — wave 4 as shipped | 5 of 5 | 182.7×329.2 = **18.3%** | 172.7×311.2 = **16.3%** |
+| C — `3253b67` geometry | 4 of 4 | 238.9×341.3 = 20.9% | 238.9×341.3 = 20.9% |
+| **wave 5** | **5 of 5** | **332.8×599.5 = 60.6%** | **304.2×548.1 = 50.7%** |
+| PokerNow `mobile-portrait-1`, real capture | n/a | 313×548 = 52.1% | — |
+
+`--ar: 0.555` is untouched. Once 317 CSS px of chrome came back (449.5 → 132.6 above the table, and
+the page stopped painting at 0.918), the **width** cap started binding instead of the height cap, and
+at the width cap a 0.555 felt is the largest the screen can hold. That is exactly what §"WHY 0.555
+AND NOT 0.70" in `PokerTable.svelte` predicted; the constant was right and the budget was wrong.
+
+The remaining headroom is small and is stated so nobody re-litigates it: at 6-max the height cap
+still binds by 2.6 px of felt width (`min(86cqw, 55cqh)` = `min(335.4, 332.8)`), worth **1.0 point**
+of area, and the `55cqh` in that expression is itself a round-in of an exact `55.5cqh`. At 9-max the
+**width** cap binds (`min(78cqw, 52cqh)` = `min(304.2, 314.6)`), so 50.7% is the ceiling for a nine-pod
+ring at `--ring-kx: 0.90` and no vertical budget can improve it.
+
 <a id="t-22"></a>
-### T-22 — high — on a phone the winner's `100.00%` renders as `0%`
+### T-22 — high — FIXED IN WAVE 5 — on a phone the winner's `100.00%` renders as `0%`
+
+**Status FIXED 2026-08-05, measured on the rendered page before and after.** The badge is no
+longer inside the plate's stacking context: it is a child of `.seat` at `z-index: 9`, above the
+cards, and it hangs off the plate on that seat's **readout spoke** — the one side of the plate
+that neither this seat's cards nor its bet disc nor the board nor the pot readout claims
+(`--rdx`/`--rdy`, computed per seat and per orientation in `ringSeats`, see the comment there).
+Clear of the cards by construction rather than by luck, at both viewports.
+
+Two placements were tried and measured first. Leaving the badge above the pod's corner and
+merely raising its z-index only reverses who covers whom — it then sits on the hero's own card.
+Hanging it off the outward normal puts it off the felt at a landscape bottom seat (the same
+failure that killed the old "All In" tag: read at y=818 on a surface ending at y=753) and off
+the SCREEN at a portrait flank seat.
+
+The badge also stopped costing the pod any width: `.pod-slot.with-equity { min-width: 3.5em }`
+reserved 39–59 px of a 116 px phone pod, and what lost that argument was the stack figure.
+
+**Before → after, both from the pixel gate, on the real canisters.** The "before" column is a
+build of `fe72d46`'s `PokerTable.svelte` served through `SHOTS_SERVE_DIST` so that every
+canister call, every scene and every threshold is identical between the two columns:
+
+| scene, viewport | figure | before | after |
+|---|---|---|---|
+| `table-allin` mobile | hero's `43.4%` badge | **60.4% of its ink covered** by `.player-cards.hero` (180 of 298 px; 8 of 15 hit-test probes answer something else) | 0.0%, scene verified |
+| `table-showdown` mobile | hero's `0.00%` badge | **46.8% covered** by `.player-cards.hero` (357 of 763 px) | 0.0%, scene verified |
+| `table-allin` desktop | badges | 0.0% (T-22 is portrait-only, as reported) | 0.0% |
+
+Note the second row: `elementFromPoint` at that badge's centre answered `span.equity-badge`
+itself while 46.8% of it was painted over. Hit testing alone under-reports; the four-shot pixel
+differential is what decides.
+
+**The original report follows.**
 
 In the gate's own accepted artifact `artifacts/screens/latest/table-showdown-mobile.png` the hero's
 equity badge says `0.00%` and a player sees **`0%`**, because the hero's own `8♠` covers the rest of
@@ -3110,7 +3299,44 @@ intersects `.equity-badge`'s client rect — because every existing gate reads `
 therefore cannot see any of this.
 
 <a id="t-23"></a>
-### T-23 — medium — the award chip covers the cards that justify it
+### T-23 — medium — FIXED IN WAVE 5 — the award chip covers the cards that justify it
+
+**Status FIXED 2026-08-05.** The root cause is one multiplier meaning two different things.
+The award was the chip spot times `--award-out` (1.30 landscape, 1.12 portrait), and the chip
+spot uses whichever axis has room: the **tangent** at top and bottom seats in landscape, the
+**normal** at flank seats. Scaling a tangent moves the award further from the board; scaling a
+normal drives it **into** the board, because the normal points at it. In portrait it is worse
+still: at a flank seat the chip's tangent and the cards' `cy` are the *same direction*, so the
+award landed on the winner's own revealed pair.
+
+The award now has its own per-seat vector (`ax`/`ay` in `ringSeats`, with the reasoning in the
+comment there):
+
+* landscape, tangent seats — unchanged, 1.30× the chip spot, which was already proven;
+* landscape, flank seats — keep the chip's own inward distance, take the extra clearance along
+  the tangent, away from the board's row;
+* portrait, every seat — the award rides the **readout spoke** with the equity badge, at the
+  other end of it (vertical spoke) or one step further out along it (horizontal spoke). The
+  `--award-dx`/`--award-dy` pair is named once so the landing animation cannot drift from the
+  resting position, which it previously could: the keyframes restated the vector.
+
+**Before → after, same method as [T-22](#t-22).** The award reaches the board only when the
+winner sits at a flank seat, so the desktop row below is a hand where seat 2 won:
+
+| scene, viewport | figure | before | after |
+|---|---|---|---|
+| `table-showdown` desktop | community card's `♠` pip | **5.2% of the pip's ink covered** by `.winner-award` (50 of 965 px; the award's rect covers 19% of the pip's) | 0.0%, scene verified |
+| `table-showdown` mobile | winner's revealed `Q♠` | **68.1% of the card's face covered** (821 of 1206 px) | 0.0%, scene verified |
+| `table-showdown` mobile | that card's `Q` rank glyph | **58.8% covered** | 0.0% |
+| `table-showdown` mobile | two revealed `♠` pips | **48.8% and 46.1% covered** | 0.0% |
+| `table-showdown` mobile | winner's `4♠` | **37.6% covered** | 0.0% |
+
+The desktop figure is smaller than the 25.6% in the original report because the two are
+different denominators: 25.6% was the fraction of the AWARD's own area that overlapped
+`.community-cards`; 5.2% is the fraction of the PIP's own ink that stopped being visible, which
+is the number that says what the player lost.
+
+**The original report follows.**
 
 Mobile, same artifact: the `+24.00` chip sits on the winner's revealed pair (the red `8` of a
 revealed card is visible behind it). Desktop, measured live: `.winner-award` overlaps
@@ -3131,7 +3357,9 @@ actor present on **8 of 8** lines on a phone. That the actor still reads `Seat 2
 three inches away says `Nakamoto` is a separate, older gap, and is in the wave-5 list.
 
 <a id="t-26"></a>
-### T-26 — medium — Withdraw states a BTC minimum 90.9× the one it enforces
+### T-26 — medium — FIXED IN THIS PASS — Withdraw stated a BTC minimum 90.9× the one it enforced
+
+What was there at `fe72d46`:
 
 ```
 WithdrawModal.svelte:15   const minWithdrawal = isBTC ? 11n : 100000n;
@@ -3140,14 +3368,259 @@ WithdrawModal.svelte:179  Minimum: 1,000 sats (Fee: 10 sats)
 WithdrawModal.svelte:60   const minDisplay = isBTC ? '1,000 sats' : '0.001 ICP';
 ```
 
-The enforced floor is **11 sats**; every surface a player reads says **1,000**. The error string
-`Minimum withdrawal is 1,000 sats` is unreachable for any amount from 12 to 999 sats. ICP is
+The enforced floor was **11 sats**; every surface a player read said **1,000**. The error string
+`Minimum withdrawal is 1,000 sats` was unreachable for any amount from 12 to 999 sats. ICP was
 consistent (0.001 ICP = 100,000 e8s), and BTC tables are local-only today, which is the only reason
-this is `medium`. No denominator in the money-figure census contains it, because the census walks
+this is `medium`. No denominator in the money-figure census contained it, because the census walks
 text nodes and never reads an input's `min`.
 
+#### Which number is right: 11, and the reasoning matters more than the number
+
+11 is defensible only barely — `BTC_MIN_WITHDRAWAL_AMOUNT = 11` sits one satoshi above the 10-sat
+`CKBTC_TRANSFER_FEE`, so a withdrawal at the floor pays the player **1 sat**. That is technically
+valid and practically useless, and it is exactly why somebody wrote 1,000 in the copy. It is still
+the right number for the UI to state, for three reasons in order of weight:
+
+1. **The canister is the enforcement.** `withdraw()` compares against
+   `Currency::min_withdrawal()` and nothing else does. A player calling the canister directly gets
+   11 whatever the modal says. A UI that states a floor the canister does not apply is lying in the
+   only direction that produces unreachable error strings.
+2. **Enforcing 1,000 client-side would TRAP DUST.** A BTC player who loses down to 400 sats has
+   exactly one exit — `withdraw` — and a UI-only floor of 1,000 closes it permanently. The canister
+   would have paid them 390 sats. Choosing the *higher* number costs a player their whole remaining
+   balance, which is a worse defect than the one being fixed.
+3. **Raising the canister constant to 1,000 is the same trap**, written into a canister that
+   custodies real funds, and it is not a change to make from a frontend pass. (`src/table_canister`
+   is untouched by this pass; the module hash is unchanged.)
+
+The real complaint behind "1,000" is answered honestly instead of with a false floor. The modal now
+states the fee, computes the **net the wallet will actually receive** from whatever is typed, and
+says so louder when the fee takes half or more:
+
+```
+BTC table:  Minimum 11 sats, maximum 10,000,000 sats per transaction. The network fee is
+            10 sats and is taken out of what you withdraw, so your wallet receives that
+            much less. One withdrawal every 60 seconds.
+            entered 11   -> "Your wallet receives 1 sats after the 10 sats fee.
+                             The fee is most of this withdrawal."
+            entered 1000 -> "Your wallet receives 990 sats after the 10 sats fee."
+ICP table:  Minimum 0.001 ICP, maximum 100 ICP per transaction. The network fee is
+            0.0001 ICP ...
+```
+
+A player can still withdraw 11 sats. They can no longer be surprised by what arrives.
+
+#### How it is gated
+
+Every figure the modal states or enforces now comes from ONE fenced block of mirrored constants, so
+there is no second copy of a number to disagree with the first. `MIN_WITHDRAWAL`, `MAX_WITHDRAWAL`,
+`TRANSFER_FEE` and `WITHDRAWAL_COOLDOWN_SECS` are declared inside
+`// >>> MIRRORED-LIMITS-BEGIN … // <<< MIRRORED-LIMITS-END`; the hint, the error strings, the
+input's `min` and `max` attributes and the net line are all interpolations of them.
+
+`tests/money_safety/tests/ui_limits.rs` makes two separate claims, because either alone is
+escapable:
+
+| claim | what it catches | how it is known to fail |
+|---|---|---|
+| the fenced mirrors equal the constants in `src/table_canister/src/lib.rs` | a canister constant changed without the UI | run in a scratch clone with `MIN_WITHDRAWAL` set to `1000n`: `states a BTC MIN_WITHDRAWAL of 1000 while the canister enforces BTC_MIN_WITHDRAWAL_AMOUNT = 11` |
+| outside the fence, no line mentioning a minimum, maximum, fee or cooldown may carry digits outside `{...}` | **T-26 itself** — the mirror was already right and the copy beside it was wrong | run in a scratch clone on the `fe72d46` modals: it names `WithdrawModal.svelte:179 Minimum: 1,000 sats (Fee: 10 sats)`, `:181 Minimum withdrawal: 0.001 ICP` and five more in `DepositModal.svelte` |
+
+Both failures are reproduced permanently inside the binary as well
+(`the_literal_check_convicts_the_defect_it_was_written_for`,
+`the_mirror_comparison_convicts_the_defect_it_was_written_for`) so the gate cannot become a
+tautology once the defect is gone. It is a source-level check and it does not pretend to be
+anything else: it is not a claim that a player SEES the right number, it is a claim that the number
+a player sees cannot be a *different* number from the one the canister applies, because there is
+only one number in the file. It needs no replica and no wasm — two file reads — and it runs in
+`make test`.
+
+<a id="t-31"></a>
+### T-31 — high — with either money modal open, 0 of the 4 protected notices were unobstructed
+
+**Found by measuring, which is the only reason it was found.** This pass drove the real app in a
+real browser against the real local canisters — sign in with the app's own Dev Login, click into a
+table, open Withdraw and Deposit — and asked, for each of the four protected phrases,
+`document.elementFromPoint` at the centre of the element that renders it.
+
+| build | view | phrases unobstructed |
+|---|---|---|
+| `fe72d46` | table view, nothing open | 4 of 4 (desktop and mobile) |
+| `fe72d46` | **Deposit open** | **0 of 4** (desktop and mobile) |
+| `fe72d46` | **Withdraw open** | **0 of 4** (desktop and mobile) |
+| this pass | **Deposit open** | **4 of 4** (desktop and mobile) |
+| this pass | **Withdraw open** | **4 of 4** (desktop and mobile) |
+
+What covered them, byte-identically on both builds (the class hash is the same, `svelte-hv5b71`, so
+the CSS is literally unchanged):
+
+```
+covered by -> class='modal-backdrop svelte-hv5b71'
+              background: rgba(0, 0, 0, 0.7)
+              backdrop-filter: blur(4px)
+              z-index: 200
+```
+
+All twelve text nodes stayed in the DOM and inside the viewport the whole time. They were behind a
+70%-opaque black scrim with a 4 px blur, on 11–12 px type. That is not "on screen" in the sense
+HARD RULE 2 means it, and it is the same shape as [T-20](#t-20), which wave 4 reported fixed — the
+T-20 fix made the top banner the surviving copy, which is right, and the banner is exactly what the
+backdrop covers. `make hygiene` was green throughout, because it greps the source.
+
+**Fixed for the two money modals, and only there.** The four notices are now restated inside both
+dialogs, as the first block of the modal body:
+
+> **Unaudited code with known bugs: your funds are NOT safe.** Online gambling is illegal in many
+> jurisdictions. 18+ only. No middleman, no house, 0% rake.
+
+Measured after the change, on the rendered page, at both viewports, with each modal open: **4 of 4
+unobstructed and topmost**, at 12 px, at y = 140–243 in an 844 px / 900 px viewport — and the amount
+input, the limits hint and the primary button all still `inViewport && topmost` as well. Zero page
+errors on either walk.
+
+Why this way and not by raising the banner: the banner lives in `routes/+page.svelte` and
+`src/index.scss`, which had other owners this wave, and raising a z-index past the backdrop risks
+putting the banner over the dialog itself. Restating the notices inside the dialog needs nothing
+outside these two components, holds whatever any future backdrop does, and puts the warning on the
+one screen where a player is about to move real money. More prominent is always allowed.
+
+**Still open, and named here so it is not lost:** every OTHER modal in the app has the same
+backdrop. `HowItWorks`, the hand replayer, `SoundSettings` and anything else that renders
+`.modal-backdrop` will scrim the banner the same way. The general fix is one z-index decision about
+the banner, in files this pass does not own. The measurement script is in the wave scratch
+(`notices.mjs`) and takes about a minute to point at another dialog.
+
+<a id="t-28"></a>
+### T-28 — medium — FIXED IN THIS PASS — MAX produced an amount the canister or the balance refuses
+
+Same file, same class, found while fixing T-26. `setMaxAmount` had two independent ways to put a
+number in the box that could not be withdrawn:
+
+```
+WithdrawModal.svelte:110  const maxDisplay = maxSmallest / 100_000_000;
+WithdrawModal.svelte:111  withdrawAmount = isBTC ? maxDisplay.toFixed(8) : maxDisplay.toFixed(4);
+```
+
+1. **`toFixed(4)` rounds, and rounding goes up half the time.** A balance of 123,456,789 e8s
+   became `"1.2346"`, i.e. 123,460,000 e8s — **3,211 e8s more than the player has** — and the modal
+   then refused its own MAX with `Insufficient balance`. Measured; the numbers above are the actual
+   values. It floors now, via the same exact 8-decimal formatter the limits use, so MAX is at worst
+   1 e8 under the balance and never over it.
+2. **It ignored `*_MAX_WITHDRAWAL_PER_TX`.** A player holding 500 ICP got `"500.0000"` in the box
+   and `Maximum withdrawal per transaction is 100.0000 ICP` from the canister, from a button
+   labelled MAX. It is clamped to `MAX_WITHDRAWAL` now: 500 ICP gives `100`.
+
+`DepositModal.svelte`'s MAX had the same `toFixed(4)` rounding, but its 2×-fee holdback absorbed
+the ≤5,000 e8s of round-up, so it was latent rather than live. It floors now too, and the holdback
+is derived from `TRANSFER_FEE` instead of written out as `20 / 20000`.
+
+<a id="t-29"></a>
+### T-29 — medium — FIXED IN THIS PASS — two limits the canister enforces and the UI never mentioned
+
+The opposite direction of T-26, and the same complaint from the player: a rejection with no
+forewarning.
+
+| limit | canister | what the UI said |
+|---|---|---|
+| `ICP_MAX_WITHDRAWAL_PER_TX` / `BTC_MAX_WITHDRAWAL_PER_TX` | 100 ICP / 0.1 BTC per transaction, `lib.rs:47,51` | nothing, on any surface, and the client did not check it either |
+| `WITHDRAWAL_COOLDOWN_NS` | one withdrawal per 60 s, `lib.rs:54` | nothing. First a player learns of it is `Please wait 47 seconds before withdrawing again` |
+
+Both are now stated in the withdraw hint, interpolated from the mirrored constants, and the ceiling
+is checked client-side as well — which cannot trap funds, since a larger balance simply comes out in
+successive withdrawals. The cooldown is stated but deliberately not enforced client-side: the
+canister's own message carries the remaining seconds, which a mirror cannot.
+
+Also fixed while in there: the input's `step` was `0.0001` for ICP, a UI-only granularity the
+canister never asked for — it made an exact balance unrepresentable in its own input box. It is
+`0.00000001` now, the full precision of a smallest unit.
+
+#### The rest of the audit, for the record
+
+Every other place the app states a limit, a minimum, a maximum, a fee or a timeout was checked
+against the constant the canister enforces. The ones that AGREE are worth listing, because a census
+that only reports failures cannot be told from one that was not run:
+
+| surface | UI states | canister enforces | verdict |
+|---|---|---|---|
+| Withdraw ICP minimum | 0.001 ICP | `ICP_MIN_WITHDRAWAL_AMOUNT` 100,000 e8s | agrees |
+| Withdraw fee, both currencies | 10 sats / 0.0001 ICP | `CKBTC_TRANSFER_FEE` 10, `ICP_TRANSFER_FEE` 10,000 | agrees |
+| Deposit minimum, both currencies | 1,000 sats / 0.0002 ICP | `deposit()` 1,000 / 20,000 | agrees |
+| Deposit `InsufficientFunds` fee text | 10 sats / 0.0001 ICP | same two constants | agrees |
+| Lobby blinds, buy-in range, seat count | read from each table's own `config` at runtime | the same struct | cannot disagree: no second copy |
+| Lobby clock `{action_timeout_secs}s + {time_bank_secs}s` | from `config` | same | cannot disagree |
+| `PokerTable` clock fallbacks `?? 30` / `?? 60` | 30 s time bank, 60 s action | `DEFAULT_TIME_BANK_SECS` 30, `DEFAULT_ACTION_TIMEOUT_SECS` 60 | agrees |
+
+One disagreement of the same *kind* is out of this pass's reach, and is recorded rather than fixed
+because `src/table_canister/src/lib.rs` is not this pass's file:
+
+```rust
+// src/table_canister/src/lib.rs:2464
+// Standard poker: min buy-in should be at least 20 big blinds
+if config.min_buy_in < config.big_blind * 10 {
+    return Err("min_buy_in should be at least 10 big blinds".to_string());
+}
+```
+
+The comment says **20 big blinds**, the code enforces **10**, and the error message says 10. It is
+not player-facing today — `validate_config` is reached only from table creation and the app has no
+create-table screen — so nobody can be lied to by it yet. Whoever owns that file should pick a
+number and make the comment say it.
+
+
+<a id="t-30"></a>
+### T-30 — medium — FIXED IN THIS PASS — the deposit form's "you have enough" test understated the requirement by two fees
+
+```
+DepositModal.svelte:399  return bal !== null && bal > Number(minDeposit);
+DepositModal.svelte:634  const hasEnoughBalance = $derived(effectiveWalletBalance !== null &&
+                                                            effectiveWalletBalance > Number(minDeposit));
+```
+
+An ICRC-2 deposit costs the depositor **two** ledger fees, both charged to their account: one for
+`icrc2_approve` and one for the canister's `icrc2_transfer_from`. `deposit()`'s floor is 1,000 sats
+/ 20,000 e8s, so the real requirement to make the minimum deposit is 1,020 sats / 0.0004 ICP. The
+test compared against the floor alone, so a wallet holding 1,005 sats was shown the deposit form
+and every amount it could enter would have been refused by the ledger. (`setMaxAmount` in the same
+file already held back `20 / 20000` — 2× the fee — so the correct number was known one function
+away and not used.)
+
+The test is now `balance >= MIN_DEPOSIT + 2 × TRANSFER_FEE`, both duplicate copies of it are one
+`$derived`, and the modal states the wallet figure as well as the deposit figure:
+`Minimum deposit: 1,000 sats (network fee 10 sats, charged twice by the ledger, so you need
+1,020 sats in your wallet to deposit the minimum)`.
+
+<a id="d-05"></a>
+### D-05 — low — the only two limits in the app that nothing in this repository can verify
+
+The native-BTC deposit path states a **10,000 sat** minimum and a **~2,000 sat** ckBTC cost, in
+four places in `DepositModal.svelte`. Neither figure is enforced by anything in this tree: the
+address belongs to the ckBTC **minter**, an external canister, and `src/table_canister` has no
+constant for either. `ui_limits.rs` therefore cannot check them, and this entry exists so that
+absence is recorded rather than assumed.
+
+Reduced but not closed in this pass: the four mentions are now interpolated from two named
+constants (`BTC_NATIVE_MIN_SATS`, `BTC_NATIVE_MINTER_FEE_SATS`) carrying a comment that says they
+are the minter's and not ours, so they can no longer disagree with *each other* — which is the shape
+T-26 took. What remains open is that they can still disagree with the minter. Closing it needs a
+live query of the minter's `get_minter_info` / retrieval-fee endpoints and a note on screen saying
+when it was last read; that is a network call this modal does not make today.
+
 <a id="t-27"></a>
-### T-27 — low — the equity method line disappears exactly when the equity becomes a verdict
+### T-27 — low — FIXED IN WAVE 5 — the equity method line disappears exactly when the equity becomes a verdict
+
+**Status FIXED 2026-08-05.** The line is now a Svelte `{#snippet}` rendered into whichever
+readout is on screen — the pot display or the winner banner — so one string cannot be dropped by
+a branch again. Inside the banner it hangs OFF the pill rather than growing it (the banner's
+height is tuned to a 166 px slot in portrait), on the side facing away from the board: above the
+banner in landscape, below it in portrait, which is where each orientation has felt.
+
+Measured at the showdown after the fix, on the deployed build: the scene notes now read
+`Seat 2 wins 24.00 ICP Straight Complete Equity · exact · 1 runout` at desktop and
+`You won 24.00 ICP Pair Complete Equity · exact · 1 runout` at mobile — the method is in the
+same frame as the two solid `100.00% / 0.00%` badges, at both viewports, and the pixel gate
+reports it unoccluded there.
+
+**The original report follows.**
 
 `.equity-method` — `EQUITY · EXACT · 1 RUNOUT`, or the full `vs N random · MONTE CARLO · 200,000
 TRIALS` statement — lives inside `.pot-display`, which is replaced by the winner banner once the pot
@@ -3168,13 +3641,19 @@ scrolling a nested container a player has no reason to know exists. The scene pa
 asserts the DOM, not the pixels.
 
 <a id="h-31"></a>
-### H-31 — medium — the hand-history scene never opens a hand
+### H-31 — medium — the hand-history scene never opens a hand — **FIXED, see [below](#h-31-fixed)**
 
 `tools/shots/scenarios/handhistory.mjs` asserts the LIST and stops. The replayer behind
 `.hand-row` is where [T-21](#t-21) lived undisturbed for a whole wave, where the action-log A/B
 against PokerNow is lost, and where the only per-card verification surface in the corpus lives. It
 has never been photographed and nothing about it is asserted. One `page.click('.hand-row')` and a
 handful of assertions closes it.
+
+**Closed by `tools/shots/scenarios/handreplay.mjs`** — the full account, the assertion table and the
+five mutations that prove each assertion fires are in [H-31 (fixed)](#h-31-fixed) at the end of this
+file. It took rather more than a handful of assertions: opening the replayer also uncovered
+[H-32](#h-32) (the two fields the log is made of were unreachable through the client's Candid
+declaration), [H-33](#h-33), [H-35](#h-35) and [H-36](#h-36).
 
 <a id="d-04"></a>
 ### D-04 — medium — FIXED IN THIS PASS — the corpus does contain a real mobile lobby capture
@@ -3192,3 +3671,1212 @@ pitch **~85 px**, **4 rows fully visible** and a 5th clipped by the tab bar.
 The doc missed it by querying `INDEX.json` for `scene == 'lobby-mobile'`; the file is filed
 `scene == 'mobile-portrait'`. **BAR 31** in `DESIGN-BAR.md` now exists and cites it. ClearDeck's
 mobile lobby measures a first row at **y = 543 = 64.3%** with **1** row fully visible.
+
+---
+
+<a id="h-31-fixed"></a>
+### H-31 — medium — FIXED IN THIS PASS — the hand replayer is now opened, walked and asserted
+
+**Where** `tools/shots/scenarios/handreplay.mjs` (new scene, registered in `scenarios/index.mjs`),
+`tools/shots/lib/protected-notices.mjs` (new), `tools/shots/lib/hand-record-wire.mjs` (new).
+
+The replayer behind `.hand-row` had never been clicked by anything in this repository. Nothing about
+it was asserted, no PNG of it existed, and every number it renders was outside the token census —
+the census can only see what a scene puts on screen.
+
+**What the scene asserts, on the rendered page, in the only legal configuration**
+
+| # | assertion | measured this run |
+|---|---|---|
+| 1 | every street stop clicked; board grows | `Pre-flop 0 · Flop 3 · Turn 4 · River 5 · Showdown 5`, every card's face equal to `get_hand_history(n).community_cards`, **0 crosses / 5 ticks** |
+| 2 | every log line against the hand record | **10 of 10** lines: street, actor seat, verb, class and amount |
+| 3 | the log's own arithmetic | blinds + every recorded amount = **144,000,000 e8s** = what the winners were paid, and the screen says so |
+| 4 | money figures | **15** compared with the canister (13 in the replayer, blinds against `get_table_view().config`), 0 mismatches |
+| 5 | the fairness claims | banner tone `good`; headline carries no ordering claim; three retired over-claim strings absent; `Not proven` present; caveat carries it |
+| 6 | the ordering, witnessed | `data-witness="matched"`; the sighting store holds the hand's own commitment, read at `PreFlop` with 0 board cards; paste-to-compare `good` / `bad` / `good` |
+| 7 | the four protected notices | **5 of 5 on screen and unoccluded**, hit-tested |
+| 8 | the token census | 191 (desktop) / 166 (mobile) numeric tokens, **0 unaccounted for** |
+| 9 | the replayer opened on a hand STILL BEING PLAYED refuses to sum it | `data-audit="not-checkable"`, *"this hand has not been settled yet, so there is no pot for the amounts to be checked against"* |
+
+Row 9 is a defect this pass would otherwise have introduced. The table writes a hand's record when
+the hand **starts**, so the replayer can be opened on a record with actions and no winners; the first
+version of the audit summed the blinds against a pot of zero and announced *"the amounts come to
+0.03 ICP but the table paid out 0.00 ICP. One of the two is wrong"* about a hand that was simply not
+finished. `potAudit` now refuses on an unsettled record, and the scene walks that path deliberately —
+it opens the live hand mid-staging (switching the list filter first, because "My hands" cannot match a
+hand whose record has no showdown players yet) and fails if the audit does anything but refuse.
+
+**Captures** `artifacts/screens/<sha>/handreplay-{desktop,mobile}.png` plus a second frame per
+viewport at `motion/handreplay/frames-{desktop,mobile}/frame-000.png`, because one frame cannot hold
+the record: the replayer's content measures **1119 px** (desktop) and **2480 px** (mobile) inside a
+scroller **689 px / 618 px** tall. `checks.fold` in the manifest names, per element, whether it falls
+inside the dialog — the measurement [H-30](#h-30) says nobody was making.
+
+**Proved by breaking it.** Four mutations, each caught, transcripts in `$SCRATCH`:
+
+* reverting [H-32](#h-32) (the Candid declaration) → **14 problems**, each naming the truth:
+  `log line 3 (action 1 (Call)) shows NO amount, but the canister recorded 1000000 e8s`,
+  `... is under street "Street not recorded", not "Pre-flop"`, plus the audit line flipping to
+  `unbalanced` and the census finding the wrong sum (`0.73` where the pot is `1.44`) unasserted.
+* restoring the [T-21](#t-21) headline → `the headline verdict claims an ordering: "These cards were
+  fixed before the hand was played, before any card was dealt."` and all three over-claim strings
+  found in the modal.
+* restoring the `committed before the deal` label → `a proof label claims an ordering`.
+* `display: none` on the in-dialog notices → **0 of 5** protected phrases on screen, on both scenes.
+* not recording the mid-hand sighting → `the witness panel reads "none", not "matched"`.
+
+**One thing the scene must not be trusted about**: it reads its chain truth through
+`lib/hand-record-wire.mjs`, not through `src/declarations`. The first version shared the app's
+declaration and, when H-32 was reverted, both sides of every street and amount comparison went blind
+together: the scene went red, but reported `not "null"` instead of the amount the canister had
+recorded. An assertion has to know the truth, not merely differ from the screen.
+
+---
+
+<a id="h-32"></a>
+### H-32 — high — FIXED IN THIS PASS — the Candid declaration dropped the two fields the action log is made of
+
+**Where** `src/declarations/table_1/table_1.did.js` (and its `.d.ts`), generated from
+`src/table_canister/table_canister.did`. Root cause is [E-08](#e-08), a different owner's file.
+
+`ActionRecord` in `src/table_canister/src/lib.rs` has carried, since before wave 1:
+
+```rust
+pub struct ActionRecord {
+    pub seat: u8,
+    pub action: PlayerAction,
+    pub timestamp: u64,
+    pub phase: String,   // "preflop" | "flop" | "turn" | "river"
+    pub amount: u64,     // the actual amount, including Call and AllIn
+}
+```
+
+`apply_player_action` fills both for **every** action it records. The client's declaration named only
+`{ action; seat; timestamp }`, and Candid record subtyping means a decoder silently **drops** fields
+it does not declare. So the two fields the log needed were on the wire and unreachable:
+
+* `PlayerAction::Call` and `PlayerAction::AllIn` carry **no payload**, so the only place a call's or
+  an all-in's amount exists is `ActionRecord.amount`. That is why the replayer's log carried an
+  amount on **none** of its lines in the wave-4 A/B against PokerNow, which carries one on 6 of 11.
+* the street was equally unreachable, which is why the log printed a note saying the table "does not
+  tag [an action] with the street it happened on". It does.
+
+**Proved on this replica** before anything was changed, with a throwaway actor built from a wide IDL:
+`get_hand_history(1)` on `table_2` returned 8 actions, every one carrying `phase` and `amount`
+(`{Call:null} seat 1 phase "preflop" amount 5000000`, …).
+
+**Fix** the two fields added to the declaration, with the reason in a comment beside them. Adding
+fields a decoder can already see on the wire cannot break an older canister — the encoder is the Rust
+struct. `table_2`/`table_3`'s copies of the declaration are unused (the app and the harness both load
+`table_1`'s) and are left for whoever regenerates them with the `.did`.
+
+---
+
+<a id="h-33"></a>
+### H-33 — medium — FIXED IN THIS PASS — a staging wait that could not fail
+
+**Where** `tools/shots/scenarios/handhistory.mjs`.
+
+```js
+() => document.querySelectorAll('.community-cards .card').length >= 5
+```
+
+`PokerTable.svelte` renders `{#each Array(5) as _, i}<Card card={communityCards[i] ?? null} />`
+unconditionally, and an undealt slot is still a `.card` — it only carries `.empty`. So this predicate
+was true the instant the board frame mounted, dealt cards or not, and the comment above it described
+a signal it was not reading. It stood in for "the app has seen the finished hand", which is the one
+piece of state the scene depends on.
+
+`:not(.empty):not(.face-down)` counts cards that are actually face up. `handreplay.mjs` uses the same
+form to wait for an EMPTY board (0 face-up cards) as the signal that the app has seen a NEW hand,
+which the vacuous version could not have expressed at all.
+
+---
+
+<a id="h-34"></a>
+### H-34 — medium — FIXED — the pixel gate has no notion of a dialog, so every modal scene fails it
+
+**Status FIXED 2026-08-05 by the gate's owner**, exactly as prescribed below. `lib/occlusion.mjs`
+now identifies the **overlay layer** an element belongs to — a `position: fixed` ancestor (or self)
+covering ≥40% of the viewport, or anything carrying `role="dialog"` / `aria-modal="true"` — and an
+occluder inside an overlay that covers a figure **on the page** is reported as `behind-an-overlay`
+with its measured fraction, not gated. The test is deliberately one-directional: a figure *inside* an
+overlay is gated normally, so a dialog that covers its own numbers still fails, and so does a second
+overlay covering the first one's. `test-occlusion.mjs` pins both halves ("a dialog covering the page
+behind it does not fail the scene", "a figure INSIDE a dialog, covered by the dialog's own chrome,
+still fails").
+
+Measured after the fix, with no `SHOTS_OCCLUSION=report` anywhere: `handhistory` and `handreplay` are
+**verified at both viewports** with `0 occluded`, and the dialogs' effect on the page is still in the
+artifact as a number — 37 figures at `handhistory` desktop, 36 at `handreplay` mobile, 186 across the
+whole sweep, each with the fraction of its ink the dialog takes. That list is also the corroboration
+for [T-31](#t-31)/[H-36](#h-36): at `deposit` desktop it names `p.banner-info` at **79.9%** and
+`p.banner-warning` among the figures the backdrop suppresses.
+
+The original report follows, because the reasoning in it is what the fix implements.
+
+**Where** `tools/shots/lib/occlusion.mjs` (a different owner's file, landed during this pass).
+
+The gate is right about what it measures and the two defects it was built for are real. But its
+target set is "money, equity and cards", its occluder set is "anything painted on top", and a modal
+is a thing deliberately painted on top of a table. So:
+
+| scene | viewport | findings | occluders |
+|---|---|---|---|
+| `handhistory` (pre-existing) | desktop | 48 | `.hand-history-modal` 37, `.modal-content` 11 |
+| `handreplay` | desktop | 60 | `.hand-history-modal` 37, `.modal-content.wide` 23 |
+
+**Every** occluder in both scenes is the dialog or its overlay; **zero** are caused by anything added
+in this pass (checked: no finding names `.legal`, and no protected-notice carrier is among the
+occluded targets). `handhistory` is a scene nobody touched in this respect, and it fails identically,
+which is what makes this the gate's gap rather than the component's.
+
+The gate's own header says a gate that cries wolf gets switched off. The fix belongs in
+`occlusion.mjs`: an occluder that is, or is inside, an open dialog overlay is intentional and should
+be reported rather than gated (or gated only against things inside the same dialog). Until then the
+two hand-history scenes can only reach a canonical filename with `SHOTS_OCCLUSION=report`, which the
+manifest labels `REPORT ONLY (SHOTS_OCCLUSION=report) — NOT GATING` in every row it appears in.
+
+---
+
+<a id="h-35"></a>
+### H-35 — medium — FIXED IN THIS PASS — three claims T-21 left behind in the same modal
+
+[T-21](#t-21) demoted the replayer's green headline. Three other claims in the same component still
+said the retired thing, or said more than was counted:
+
+1. **`.proof-label`: "committed before the deal".** The label on the commitment row asserted, as
+   fact, the exact ordering the banner two panels above it lists under `Not proven`. Now
+   "commitment in this hand's record"; the seed row is "seed, published with the finished hand".
+2. **The downloadable audit file: `commitment_published_before_deal`.** A field NAME is a claim, and
+   this one shipped in a JSON file the player keeps. Now `commitment_in_the_hand_record`, and the
+   file carries an explicit `not_proven` string plus, when the browser has one, its own mid-hand
+   sighting of the commitment.
+3. **`.list-foot`: "Every hand above was re-derived in this browser from its own revealed seed".**
+   False whenever a hand is in play: that hand is listed with its seed sealed and cannot have been
+   re-derived. Now counted — "N of M hand(s) above were re-derived …" — from the same
+   `verification.ok` flag the per-row badge uses.
+
+All three are gated by `handreplay.mjs`: `.proof-label` and `.proof-banner strong` must not contain
+the word "before", the modal must contain "Not proven", and three historical over-claim strings must
+be absent from it.
+
+**What replaced the claim, rather than just removing it.** The commitment is on screen from the
+moment cards are dealt and the seed is not published until the hand ends, so a player who reads the
+commitment mid-hand and compares it afterwards has established the ordering themselves, with no
+canister clock in the argument. `$lib/commitment-witness.js` does the reading automatically — one
+sighting per (table, hand), never overwritten, never taken once a seed exists — and the replayer
+states exactly what it proves: *"the deck was already fixed at the moment you looked: before every
+card dealt after it, and before every action taken after it."* A paste box compares a commitment the
+player kept elsewhere. Both verdicts are asserted by the scene.
+
+---
+
+<a id="h-36"></a>
+### H-36 — high — the four protected notices are behind every dialog's scrim, and wave 4's check could not see it
+
+**Where** `.alpha-warning-banner` / `.footer-disclaimer` versus every full-screen dialog in the app.
+**Fixed for the hand-history dialog. Open for `DepositModal`, `WithdrawModal` and any future
+overlay** — those are other owners' files.
+
+[T-20](#t-20) fixed a portrait table showing 0 of 4 notices, and wave 4 re-measured: banner
+`y 0..268`, "fully in the viewport", "**and behind the open Deposit modal**". That last clause is a
+GEOMETRY result, and geometry cannot see a black sheet. Every dialog here is
+`position: fixed; inset: 0` over `rgba(0,0,0,0.72)` with a 4 px blur.
+
+**Measured.** `tools/shots/lib/protected-notices.mjs` finds the deepest element carrying each
+protected phrase and hit-tests its own pixels with `elementFromPoint`. With the hand-history dialog
+open and its in-dialog copy of the notices suppressed (`display: none`, the wave-4 failure mode
+exactly): **0 of 5 phrases on screen, 4 carriers in the DOM**, on both scenes and both viewports.
+`make hygiene` stays green throughout, correctly — it greps the source.
+
+**Fix, for this dialog.** The four notices ride inside the dialog, verbatim, pinned outside the
+scrolling region (`flex-shrink: 0`) so they cannot be scrolled away, on the list and the replayer, at
+every viewport, together with the no-rake property. Nothing anywhere else is weakened; this is an
+additional copy, and more prominent is always allowed. Both hand-history scenes now assert **5 of 5
+on screen and unoccluded**, and both go red if that stops being true.
+
+**Recommended next**: the same strip (or the same probe) for `DepositModal` and `WithdrawModal`. The
+deposit modal is the screen a player commits real ICP from, and it is the exact configuration wave 4
+named.
+
+---
+
+<a id="h-37"></a>
+### H-37 — high — BUILT IN WAVE 5 — the harness could not see what covers what
+
+**The gap.** Every gate in this repository reads `textContent`: `chain-agreement.mjs` asks whether
+the string equals the canister's number, `token-census.mjs` asks whether every string is accounted
+for, the protected-notice probes ask whether a phrase is present and hit-testable. None of them can
+answer the only question a player's eye asks — **is the figure on screen, or is something on top of
+it**. [T-22](#t-22) and [T-23](#t-23) were both photographed by this harness and filed as VERIFIED,
+with the canonical filename, because the text was right.
+
+**What was built.** `tools/shots/lib/occlusion.mjs`, run centrally in `run.mjs` so no scene can
+forget it, plus `lib/png.mjs` (a zlib-only PNG codec, because the pixel gate must not be the one gate
+that can fail to install) and `test-occlusion.mjs` (15 offline cases). It enumerates every money,
+equity or card figure on screen and requires that nothing paints over it. Three stages, and the last
+one decides:
+
+1. **geometry** — client-rect intersection inside the visible viewport;
+2. **effective paint order** — CSS 2.1 Appendix E simulated over the computed styles: stacking
+   contexts from `transform` / `opacity` / `filter` / `contain` / `container-type` / `position:
+   fixed|sticky` / positioned-with-a-z-index / flex-grid items with one, the *pseudo* contexts that
+   positioned `z-index: auto` elements form (whose positioned descendants escape to the parent
+   context), and the tree-order layers. One integer per element, so "is above" is one comparison that
+   is right across contexts;
+3. **occlusion evidence** — `elementFromPoint` on a 5×3 grid, and a **four-shot pixel differential**
+   per (figure, occluder): `A` both visible, `B` occluder hidden, `C` figure hidden, `D` both hidden,
+   clipped to the figure. The figure paints ink where hiding it changes the pixel (`|B−D|`) and is
+   COVERED where the occluder suppresses ≥75% of that contribution (`|A−C|`). Hiding is
+   `visibility: hidden`, which paints nothing and moves nothing.
+
+**Why the pixel differential and not the hit test.** Hit testing cannot see an occluder with
+`pointer-events: none` — `.board-cluster` is exactly that in portrait — and on one measured hand
+`elementFromPoint` at the centre of an equity badge answered *the badge* while 46.8% of it was
+painted over. The differential also cannot be fooled by a rect intersection that covers only padding.
+
+**Thresholds.** 2% of a figure's own ink for money, equity and a card's rank or pip (one glyph of a
+seven-glyph badge is ~14%, so no covered digit can pass, while a padding-only overlap measures
+0.0%); 20% for a card's blank face, because its rank and pip are gated at 2% in their own right and
+the hero's own bet disc touching the hero's own card measures 2.8% — failing that would be a false
+red on the first scene anyone ran.
+
+**Measured false-positive rate, whole sweep** (22 shots, 542 figures, 2,895 pixel-tested pairs):
+
+| gate | flags raised | real |
+|---|---|---|
+| rects intersect **and** raw z-index is higher (the naive gate) | **3,836** | 0 |
+| rects intersect **and** effective paint order puts it above | **1,487** | 0 |
+| ...and the pixel differential confirms it (this gate) | **0** | 0 |
+
+with 186 further overlaps classified `behind-an-overlay` (a dialog covering the page it is over,
+see [H-34](#h-34)), 2 figures 3 px tall at the viewport's bottom edge recorded as not measurable
+rather than judged, and **0 paint-order model disagreements** — no case where the pixels showed
+coverage the paint model said was impossible.
+
+**Three defects were found in the gate itself while building it, and each is now pinned by a case in
+`test-occlusion.mjs`:**
+
+1. **A figure that is also an occluder got its probe id overwritten**, so hiding "the figure" hid
+   nothing, all four screenshots came back identical, and it was reported as having no ink and no
+   occlusion. The award chip is both a money figure and the occluder of a card — that is T-23
+   exactly — so the first draft of this gate produced a **false GREEN on the very defect it was
+   built for**. Ids are interned per element now.
+2. **The coverage test was an absolute colour difference.** A translucent veil over a figure whose
+   own background is close to the page's pushed `|A−C|` under a fixed tolerance and the whole figure
+   was reported covered while every digit was still readable. It is a suppression RATIO now, which is
+   scale-free.
+3. **`page.screenshot({ clip })` trims the clip against the VIEWPORT, not the document.** The first
+   draft added `scrollX/scrollY`; identical while a page happens to be at scroll zero, it threw on
+   `deposit` at mobile (where the open modal leaves the page scrolled 133 px) — and the dangerous
+   version of that mistake is the one that does not throw but measures a **different rectangle** with
+   total confidence. Demonstrated directly (`$SCRATCH/pixelgate/clipsem.mjs`: viewport coordinates
+   return the marked pixels, document coordinates throw). Every figure's `inkPixels` is now asserted
+   per figure, so a crop that does not contain its figure is recorded instead of trusted.
+
+**Reproduce.**
+
+```bash
+node tools/shots/test-occlusion.mjs                 # 15 cases, no replica, no app build
+node tools/shots/run.mjs                            # the gate runs on every scene, both viewports
+SHOTS_OCCLUSION=report node tools/shots/run.mjs     # measure without gating (labelled in the manifest)
+```
+
+**Still outside the gate**, stated so nobody mistakes silence for a pass: an occluding
+`::before`/`::after` drawn by an ANCESTOR of a figure cannot be hidden independently of the figure
+itself; a translucent overlay that leaves >25% of the figure's contribution is reported as
+`alteredInkFraction` and does not fail; contrast is not measured, so a legible figure and an
+illegible one of the same colour are the same to this gate; and a figure scrolled out of the
+viewport is not judged at all.
+
+<a id="h-38"></a>
+### H-38 — medium — the harness's three self-checks are named by no make target
+
+`tools/shots/test-census.mjs`, `test-money.mjs` and the new `test-occlusion.mjs` are the only
+things that check the *verifiers* — the census that decides whether a green scene means anything,
+the money parser, and the pixel gate. `grep -n 'test-census\|test-money\|test-occlusion'
+scripts/dev.sh Makefile .github/workflows/*.yml` returns **nothing**. This is the same shape as
+[H-17](#h-17) (the fund-theft reproducer that no target named for a whole wave) and it ends the same
+way: a self-check nobody runs is a self-check that has already stopped working.
+
+They need no replica, no canister and no app build, and together they take about 15 seconds.
+`npm run selftest` in `tools/shots` now runs all three (that file is inside the harness), but the
+one-line fix belongs to `scripts/dev.sh`, which is a different owner's file:
+
+```sh
+# in cmd_test, beside the workspace tests
+( cd tools/shots && npm run selftest )
+```
+
+---
+
+## Found by the wave-5 lobby pass
+
+Everything in this section was found by measuring the **rendered** lobby — `getBoundingClientRect()`
+and `elementFromPoint()` in the browser the screenshot harness drives, against the real local
+canisters, at ten viewport widths from 390 to 1920 — and by reading the lobby canister's own
+registry with `icp canister call ... --query -e local`. Scratch harness:
+`$SCRATCH/w5/{measure,sweep,probe,modal-probe}.mjs`; raw output `$SCRATCH/w5/{measure-*,sweep}.json`.
+Geometry results and the reference comparison are in
+**[DESIGN-BAR.md §9.4.2 – §9.4.2c](DESIGN-BAR.md#942-what-cleardeck-did-and-what-it-does-now)**.
+
+| # | sev | status | where | one line |
+|---|---|---|---|---|
+| [L-01](#l-01) | **high** | **FIXED IN THIS PASS** | `Lobby.svelte` `.list-pane` / `.tables-list` | every row's `Sit` / `View` / `Watch` control was **clipped** — 10.5 px of it, arrow included — at 1440×900, and at three more width ranges besides. A control a player clicks, cut off by `overflow: hidden`, at the project's own reference viewport |
+| [L-02](#l-02) | medium | **FIXED IN THIS PASS** | `HowItWorks.svelte` `.modal-content` | the How-it-works dialog opened **behind the disclaimer banner**: its title row and its close `×` were unreachable by mouse at 1440×900. Only the keyboard path worked |
+| [L-03](#l-03) | **high** | open — **other owner** (`+page.svelte`) | `.alpha-warning-banner` + `header` in portrait | the phone lobby cannot reach the reference band from `Lobby.svelte` at all: with the lobby's own furniture at **zero** the first card is still at **45.9%**. The 28 px needed are chrome, and the mechanism to release them already ships one condition away |
+| [L-04](#l-04) | **high** | open — needs 2 admin calls **and** 1 lobby method that does not exist | lobby canister registry | the lobby's registered *names* quote blinds the table contracts do not charge (10× and 5× wrong), and its registered *configs* disagree with the contracts on four fields each. **This, and only this, is why both lobby scenes are red.** Every price the client computes is the contract's |
+| [L-05](#l-05) | low | open — needs 1 admin call | lobby canister registry, `scripts/dev.sh up_wire` | [T-05](#t-05) determined: registering `btc_table_1` is **not** a frontend fix. The exact call, plus the 35 px it costs the phone layout |
+| [L-06](#l-06) | medium | open — **other owner** (`tools/shots/lib/occlusion.mjs`) | `artifacts/screens/<sha>/manifest.json` | the new occlusion pixel gate writes **60 KB per shot** into the manifest; one run's manifest is **5.58 MB**, which trips `make hygiene`'s own 4 MiB untracked-payload check. A green harness now makes a red hygiene |
+
+<a id="l-01"></a>
+### L-01 — high — every row's action control was clipped, at four separate width ranges — FIXED
+
+**Status: executed.** Measured on the rendered page, `dist` built from `fe72d46`, before any change
+this pass.
+
+At 1440×900 the lobby's `<table>` reported a **min-content width of 934.5 px inside a 908 px pane**.
+`.list-pane { overflow: hidden }` clipped the difference, and the last column is the action column:
+
+```
+.list-pane        left 80.0   right 990.0   (clientWidth 908, scrollWidth 935)
+.go "View"        left 953.1  right 999.5   -> 10.5 px outside the pane
+.go "Watch"       left 945.6  right 999.5   -> 10.5 px outside the pane
+```
+
+Seven columns of `white-space: nowrap` content plus 16 px of cell padding a side is what set the
+floor. **No gate in the repository could see it**: every lobby assertion reads `textContent`, and
+the text was all present — it simply was not painted.
+
+It was not one breakpoint. Which columns fit is a question about the **pane's** width, and every
+rule deciding it was written against the **viewport's** — so the pane silently narrowed by 320 or
+352 px whenever the preview appeared. Swept at 13 widths, the clipping ranges were:
+
+| range | columns shown | pane | table min-content | clipped by |
+|---|---|---|---|---|
+| 761–848 | 6 (no Hands) | 719–806 | 807 | up to 88 px |
+| 1001–1064 | 5 (no Hands, no Buy-in) | 623–686 | 687 | up to 66 px |
+| 1081–1184 | 6 (no Hands) | 703–806 | 807 | up to 104 px |
+| 1241–1288 | 7 | 831–878 | 879 | up to 48 px |
+
+**Fix.** Root cause, not breakpoints: `.list-pane { container-type: inline-size }` and two
+`@container` rules at the measured floors (879 px of pane for seven columns, 807 for six, 687 for
+five), cell padding 16 → 12 px, and the preview drops below the list at 1080 rather than 1000 so the
+pane is never narrower than the five-column floor. Ten widths from 390 to 1920 now report **zero**
+clipped containers (`.bg-effects`, a fixed decorative layer in `+page.svelte`, excluded — no
+content). No column was removed from the 1440 grid and no field was dropped from the row.
+
+<a id="l-02"></a>
+### L-02 — medium — the How-it-works dialog opened behind the app chrome — FIXED
+
+**Status: executed.** `.alpha-warning-banner` is `z-index: 100` on a child of `.app`; the dialog is
+`z-index: 1000` but renders inside `<main>`, which is its own stacking context, so the banner and
+the header paint over it however high its z-index goes. Centred at `top: 50%`, the dialog box began
+at **y = 67.5 under 243 px of chrome** at 1440×900:
+
+```
+.modal-content   top 67.5   bottom 832.5
+.close-btn       top 88.5   elementFromPoint(centre) -> p.banner-warning   (unclickable)
+```
+
+Escape and the autofocused close button still worked, which is why nothing noticed.
+
+**Fix, and why not the obvious one.** Raising the z-index would have put the dialog over the
+unaudited-alpha disclaimer, the 18+ notice, the jurisdiction warning and the no-house statement,
+which is exactly what [T-31](#t-31)/[H-36](#h-36) forbid. So the dialog measures the chrome instead
+(`.alpha-warning-banner` / `header`, re-read on resize **and scroll**, since the chrome is in the
+flow and its viewport-relative bottom moves) and opens under it. Measured after: dialog top **253**
+at 1440×900 and **398** at 390×844, close button hit-testing to itself at both, title on screen at
+both, and 4 of 4 protected phrases plus the no-house property still on screen and unoccluded with
+the dialog open. The four phrases are additionally restated **inside** the dialog, pinned outside its
+scrolling region, so the guarantee no longer depends on another component's stacking order.
+
+<a id="l-03"></a>
+### L-03 — high — the phone lobby's remaining gap is 28 px of chrome, and it is not the lobby's to spend
+
+**Status: executed.** [DESIGN-BAR BAR 31](DESIGN-BAR.md#9423-the-bars) wants the first card inside
+the top 45% of a 390×844 screen; the reference band is 19.9%–42.6%. Measured this pass:
+
+```
+banner 268.0 + header 119.5   = 387.5 px = 45.9% of 844   <- before Lobby.svelte paints a pixel
+lobby furniture               =  96.8 px                  (was 155.0; BAR 26 allows 160)
+first card                    = 484.3 px = 57.4%          2 of 3 cards fully visible
+```
+
+Drive the lobby's furniture to **zero** and the first card still lands at **45.9%**, 3.3 points
+outside the band. **28.0 px** has to come out of the 387.5 px above the lobby, and all of it belongs
+to `+page.svelte` / `index.scss`.
+
+**The mechanism already exists in `+page.svelte`.** Wave 5's concurrent pass added `.banner-strip`,
+a compact strip carrying the protected phrases verbatim, one tap from the full text, and scoped it
+`class:on-table={view === 'table'}` with the note "the lobby in portrait still gets the full banner
+in the flow, because on the lobby nothing is competing for the space". On the lobby something is:
+the first-row bar. Applying that same treatment to the lobby (simulated in the page by adding
+`on-table` to `.alpha-warning-banner` and `compact` to `header`; **`+page.svelte` was not edited**):
+
+| | banner | header | chrome | first card | cards fully visible | notices on screen |
+|---|---|---|---|---|---|---|
+| ships today | 268.0 | 119.5 | 387.5 | **57.4%** | 2 of 3 | 4 of 4 |
+| with the strip | 59.6 | 42.0 | 101.6 | **23.5%** | **3 of 3** | **4 of 4** |
+
+**Exact change**, for the owner of `+page.svelte`: make the collapsed portrait presentation
+conditional on portrait alone rather than on `view === 'table'` — i.e. the class that drives it stops
+carrying the view test, and `header.compact` follows it. Nothing in the wording, the phrase list or
+`make hygiene` changes; the strip already quotes all four notices verbatim, and the measurement above
+confirms 4 of 4 on screen and unoccluded in that configuration.
+
+<a id="l-04"></a>
+### L-04 — high — the lobby registry quotes prices its own contracts do not charge, and no method can fix half of it
+
+**Status: executed** against the local lobby and all four table canisters.
+
+```
+lobby get_tables()          id 1 "Heads Up - 0.01/0.02"  cfg 1_000_000/2_000_000   200_000_000/1_000_000_000  2 seats
+                            id 2 "6-Max - 0.01/0.02"     cfg 1_000_000/2_000_000   200_000_000/1_000_000_000  6 seats
+                            id 3 "9-Max - 0.01/0.02"     cfg 1_000_000/2_000_000   200_000_000/1_000_000_000  9 seats
+table_1 get_table_view()        1_000_000/2_000_000    200_000_000/1_000_000_000   2 seats   <- agrees
+table_2 get_table_view()        5_000_000/10_000_000   1_000_000_000/5_000_000_000 6 seats   <- name is 5x wrong
+table_3 get_table_view()       10_000_000/20_000_000   2_000_000_000/1e10          9 seats   <- name is 10x wrong
+```
+
+Two separate defects wear one symptom, and the lobby scenes are red for both:
+
+1. **The registered NAME quotes a price the contract does not charge** — 4 mismatching figures in the
+   rows plus 2 in the preview heading. The client already quotes the name verbatim (it is the table's
+   registered identity), strikes the contradicted figure through and labels it `STALE NAME`; the
+   harness reads `textContent` and is right to, because a struck figure is still a figure on screen.
+2. **The registered CONFIG disagrees with the contract** on `smallBlind`, `bigBlind`, `minBuyIn` and
+   `maxBuyIn` for ids 2 and 3 → 2 `structuralProblems`, which fail the scene independently of (1).
+
+**Every price the client computes is the contract's**, verified figure by figure this pass
+([DESIGN-BAR BAR 30](DESIGN-BAR.md#9423-the-bars)): stakes, buy-in ranges, blinds, clock and ante
+all agree with `get_table_view().config`. The client reads the table canister and treats the lobby
+record as a fallback, which is why nothing else on the screen is wrong.
+
+**What (1) needs — exists today, one call per table:**
+
+```
+icp canister call lobby update_table_name '(2 : nat64, "6-Max - 0.05/0.10")' -e local --identity <lobby admin>
+icp canister call lobby update_table_name '(3 : nat64, "9-Max - 0.10/0.20")' -e local --identity <lobby admin>
+```
+
+**What (2) needs — a method that does not exist.** `lobby_canister` exposes `update_table_name` and
+nothing that can rewrite a registered `config`; `init_microstakes_tables` only re-writes the same
+hardcoded 0.01/0.02 record for all three tables. Either add
+
+```candid
+update_table_config : (nat64, TableConfig) -> (Result);   // admin only, mirrors update_table_name
+```
+
+or — better, and what the harness's own message recommends — make `init_microstakes_tables` take the
+configs it registers (or read each one from the table canister) so the registry cannot drift by
+construction. **The engine was left alone this pass, by instruction.**
+
+**Who can make the calls, which is its own finding.** The local lobby's admin is the identity that
+deployed it (`init()` sets `ADMIN = msg_caller`), which on this machine is the default identity, not
+the project's `cd-local-deployer`. Executed proof:
+
+```
+lobby get_admin()                                    -> opt principal "nsp5q-…-5ae"
+icp identity principal --identity cd-local-deployer   -> sg3sw-…-6qe
+lobby update_table_name(2, …) --identity cd-local-deployer
+                                                     -> (variant { Err = "Unauthorized: admin only" })
+```
+
+So `up_wire()` in `scripts/dev.sh` — which calls `set_admin(cd-local-deployer)` and then
+`init_microstakes_tables(...)`, both behind `|| warn "… (already set?)"` — **cannot administer the
+lobby on this replica and has been failing silently**. `set_admin` refuses a non-admin caller, so the
+warning is not "already set", it is "not authorised". That is `scripts/dev.sh`'s owner's call to make;
+it is recorded here because it is the reason the two calls above could not be issued this pass (the
+only identity that holds admin is the machine's default identity, and signing a write with it was
+refused by this session's permission policy).
+
+Durable fix, once the method exists: put both `update_table_name` calls and the config registration
+in `up_wire()` next to `init_microstakes_tables`, and in `scripts/deploy-mainnet.sh` next to its own
+`init_microstakes_tables` call — otherwise every `make local-up` and every mainnet deploy re-registers
+the stale strings.
+
+<a id="l-05"></a>
+### L-05 — low — T-05 determined: `btc_table_1` needs a canister call, not a frontend change
+
+**Status: executed** (read the registry and the BTC table's own config; the write itself was not
+issued — see [L-04](#l-04) on who holds admin).
+
+The frontend is already complete for a BTC table: `Lobby.svelte` reads `currency` off the record and
+the live view, formats sats (`unitOf`, `formatAmount`), renders the ₿ chip, tiers BTC stakes
+separately (`stakeTier`), and shows the currency filter as soon as a second currency appears. It
+renders whatever `lobby.get_tables()` returns, and that call returns three ICP tables and nothing
+else. **So this is not fixable in the frontend: the row does not exist.**
+
+The call that fixes it, exactly:
+
+```
+icp canister call lobby add_btc_headsup_table '(principal "46el7-ql777-77775-aaada-cai")' \
+  -e local --identity <lobby admin>
+```
+
+`add_btc_headsup_table` (`src/lobby_canister/src/lib.rs:339`) is admin-only, takes the next free id,
+and registers `100/200` sats with a `10_000–100_000` sat buy-in, 2 seats, `Currency::BTC` — which is
+**exactly** what `btc_table_1`'s contract enforces (verified: `small_blind 100`, `big_blind 200`,
+`min_buy_in 10_000`, `max_buy_in 100_000`, `max_players 2`, `currency BTC`). Its registered name,
+`"Heads Up - 100/200"`, quotes those same blinds, so unlike ids 2 and 3 this row would arrive with
+**no** [L-04](#l-04) drift and no stale name. No engine change is needed, and none was made.
+
+Durable fix: one line in `up_wire()` in `scripts/dev.sh`, next to the `warn` that currently states
+the defect, and the same call in `scripts/deploy-mainnet.sh`. Both are other owners' files.
+
+**What it costs the layout, stated up front so it is not a surprise.** A second currency turns on the
+currency filter row: 8 pills instead of 5. Simulated in the page at 390×844, the strip **wraps and
+cuts nothing** (BAR 28 holds), but it costs 35 px and the phone then shows **1 of 4 cards** instead
+of 2 — so on a phone T-05 and [L-03](#l-03) should land together.
+
+<a id="l-06"></a>
+### L-06 — medium — the occlusion gate's manifest trips `make hygiene`
+
+**Status: executed.** `./scripts/dev.sh shots` (full run, 22 shots) writes
+`artifacts/screens/fe72d46/manifest.json` at **5,575,176 bytes**. `./scripts/dev.sh hygiene` fails
+on it:
+
+```
+==> no large or binary files added
+    37 untracked path(s), 6633 KiB total
+    ! untracked payload exceeds 4 MiB; check for a stray artifact directory
+```
+
+Where it comes from, per shot: `occlusion` **60,181 bytes** on the lobby alone, against
+`tokenCensus` 26,321 and `chain` 11,883. The gate records every pixel-tested pair, and 22 shots of
+that is the whole 5.58 MB.
+
+This is not the gate being wrong — the pixel evidence is exactly what makes it a gate rather than a
+claim — but a harness that leaves the repo failing its own hygiene check trains people to ignore
+hygiene, which is the same failure mode the wave-4 lesson is about. Options for the owner: keep the
+per-pair detail only for FAILING figures and a count for the rest; or write the pair-level detail to
+a sibling file that hygiene's payload check does not count.
+
+Not touched here: `tools/shots/lib/occlusion.mjs` and `capture.mjs` are another owner's files, and
+deleting the artifacts would delete another agent's evidence.
+
+---
+
+## Found by the wave-5 coherence pass
+
+Two sources. The first is an **independent auditor** given the running local stack, the public
+repository and no access to any of these documents, told to treat every claim in them as marketing.
+Its verdict is quoted in full in [WAVE-05.md](WAVE-05.md). Its findings are triaged below with the
+same rule the wave-2 pass used: *anywhere the auditor was confused, misled, or could not verify
+something, that is a defect in the product, not a misunderstanding to explain away.* Where we
+believe the thing it could not verify is nevertheless true, the defect is that it is
+**undiscoverable**, and that has a different fix (say it, and give a reader a way to check it) from
+the defect of being false.
+
+The second is this pass's own walk of the app: every view, both viewports, on the rendered page.
+
+| # | sev | status | where | one line |
+|---|---|---|---|---|
+| [E-42](#e-42) | **critical** | executed by the auditor on a funded local table; call site confirmed by code read | `record_hand_to_history` → `poker_core::evaluate_hand` (`src/table_canister/src/lib.rs:871`) | **a funded table was bricked with ~420 ICP unreachable through every path a player has.** One player stopped heartbeating pre-flop; from then on `check_timeouts`, `player_action` and `leave_table` all trapped (`IMPOSSIBLE HAND: … got 0 community cards`), while `withdraw` and `cash_out` refused with *"Cannot withdraw while in a hand"*. The one unguarded settlement-path call to a trapping evaluator. [FINDING 15](SECURITY-FINDINGS.md) |
+| [T-33](#t-33) | **critical** | executed by the auditor | `Dockerfile`, `scripts/verify-build.sh`, `README.md` §Verify the Code, `icp.yaml` `shrink` | **nobody can check what code is running.** The deployed module hash matches no commit in the repository; the build is not path-independent (a 274 KB `name` section survives `shrink`); the published Docker verification cannot compile because its `COPY` list omits `src/poker_core`, which `table_canister` depends on; and the hash-reading procedure the README tells a reader to run is controller-only |
+| [E-43](#e-43) | **high** | code-read confirmed; exploited by the auditor in play | `count_players_can_act`, `count_active_players`, `is_betting_round_complete`, `check_timeouts` | a seated player who stops heartbeating is dropped from the betting round and **stays fully eligible for the pot**. Client-controlled, so it is an exploit: call the flop, stop heartbeating, get the turn and river free with full pot equity and immunity from any further bet |
+| [E-44](#e-44) | **high** | executed | `verify_shuffle : (text, text) -> (bool) query` | the one on-chain call a non-technical player would reach for to check they were not cheated **answers "false" for a genuine proof** when the two hex strings are passed in the order a reader would pick. No parameter names in the Candid, `bool` return, so *"you called it backwards"* and *"you were cheated"* are the same answer |
+| [T-36](#t-36) | **high** | **FIXED IN THIS PASS** (measured red first, on the rendered page) | `+page.svelte`, `DepositModal.svelte`, `WithdrawModal.svelte`, `HowItWorks.svelte` | **HARD RULE 2 was live-broken across the whole desktop app.** The canonical sentence *"No rake is taken from any pot on any table"* was on screen on **4 of the 15 (surface, viewport) pairs** a player can reach, and on **1 of the 7 desktop ones**. Desktop lobby, desktop table, desktop table behind Deposit, desktop table behind Verify Fair: **4 of 5**. Portrait with FULL TERMS open, portrait behind Deposit: **4 of 5** |
+| [H-40](#h-40) | **high** | **FIXED IN THIS PASS** | `tools/shots/run.mjs`, new `tools/shots/lib/felt-area.mjs` | wave 5 built a pixel-level notice gate and never wired it in: `protected-notices.mjs` was imported by **two** scenarios and by nothing else. Flipping one declaration, `.banner-strip { display: block }` → `display: none`: re-commits wave 4's exact crime with **every gate in the repo green**. Both halves now run centrally, for every scene at every viewport |
+| [T-34](#t-34) | medium | executed | history canister `4xhad-gd777-77775-aaacq-cai`; `MAX_HAND_HISTORY_ENTRIES = 100`; `reset_table` | the "permanent hand history" canister is deployed, **authorised for no tables, holding zero records**, and no table is wired to it (`get_history_canister() = null` on `table_2`). Proofs live only in the table, capped at 100 hands, pruned, and wiped by one admin call |
+| [E-45](#e-45) | medium | code-read | `notify_deposit` (archived-block branch) | a deposit made by plain transfer can only be credited while its block is still resident in the ledger canister. Once archived it can **never** be claimed, and `admin_restore_balance` was deliberately removed, so nothing can credit that user afterwards. The README documents this path |
+| [E-46](#e-46) | medium | executed | `icrc1_balance_of` vs `admin_get_all_balances` + `admin_get_table_chips` + `get_pot` | no endpoint reconciles **funds held** against **liabilities recorded**. `table_2` holds 734,105,000,000 e8s against ~42,000,000,000 of recorded liabilities. Nothing is under-collateralised, but *"held by the canister and attributed to nobody"* is exactly what a lost deposit looks like and there is no view that tells the two apart |
+| [T-32](#t-32) | medium | executed (new, this pass) | `PokerTable.svelte:313` `max_players ?? 9` | **every table entry first paints a NINE-seat ring.** At a 6-max table on a phone the felt is 45.3%→50.7% of the frame for **336 ms** and then jumps to 60.6%; on desktop 33.2% for **304 ms** and then 31.7%. Wave 5's headline 60.6% is the settled state and was never distinguished from the first paint |
+| [H-39](#h-39) | medium | executed (new, this pass) | `scripts/dev.sh` `cmd_hygiene`, size rule | `make hygiene`'s payload check counts **modified tracked files** as untracked payload (1,056 KiB of them right now), so a large wave plus one screenshot run makes it red for a reason that has nothing to do with large or binary files. Two wave-5 agents reported *"repo hygiene clean"* and two critics found it red; both were right, at different times |
+| [E-47](#e-47) | low | executed | `TableView` in `table_canister.did` | nothing distinguishes **caller-relative** fields (`can_check`, `call_amount`, `is_my_turn`, `min_bet`) from **global** ones (`action_on`, `current_bet`, `phase`), and no field says what the seat on action may legally do. The auditor read `can_check = true` while the seat on action owed 5,000,000 and got *"Cannot check, there's a bet to call"* eight times |
+| [E-48](#e-48) | low | executed | `set_display_name` | reserved UI words are not rejected: `set_display_name(opt "You")` and `(opt "Dealer")` both return `Ok`. The auditor read a seat with `is_self = false` and `display_name = opt "You"` |
+| [T-35](#t-35) | low | executed | local replica: no ckBTC ledger at `mxzaz-hqaaa-aaaar-qaada-cai` | `btc_table_1` is deployed locally but the ledger it needs is not, so **half the custody surface has no local test path**. Its mainnet twin is documented as holding real ckBTC |
+| [H-42](#h-42) | **high** | executed (new, this pass) | `scripts/dev.sh` `cmd_test` step 4 | **`./scripts/dev.sh test`, the repo's primary gate, hung for 33 minutes** with zero CPU on both the test binary and its own PocketIC. The money-safety targets have NO time bound; the settlement targets one step later have two. Every leg is green when run directly (`invariants` 45/0 in 63 s single-threaded) |
+| [H-41](#h-41) | medium | **FIXED IN THIS PASS** | `chain-agreement.mjs`, `token-census.mjs`, `token-allowlist.mjs` | both `deposit` shots were filed UNVERIFIED on every run: the `18` of a player-protection notice read as an unasserted money figure, and T-30's new `0.0004` wallet requirement asserted by nothing. The money figure is asserted now, not allowlisted |
+| [H-43](#h-43) | medium | executed (new, this pass) | `capture.mjs` `writeManifest` / `writeIndex` | a partial screenshot run **overwrites the full run's `INDEX.md` and `manifest.json`** with only the scenes it ran, in both `<sha>/` and `latest/`. The PNGs survive; the record of what they prove does not, and nothing warns |
+| [D-06](#d-06) | medium | executed | `README.md` lines 95-125, `docs/SHUFFLE-SPEC.md` | two claims a stranger reads as stronger than they are: *"the commitment is published before the deal"* (true only inside a single message, `start_new_hand` commits and deals atomically, so no outsider can observe the commitment before cards exist), and *"You can verify that the deployed canisters match this source code"* (addressed to people who by construction cannot run the procedure) |
+
+### What the auditor confirmed, unprompted
+
+Recorded because the wave's headline claims should be gradeable by a stranger, and here three of
+them were:
+
+- **The shuffle is verifiable by an outsider.** The auditor wrote its own verifier from
+  `docs/SHUFFLE-SPEC.md` alone, without reading or running any of ours, and reproduced three hands
+  from the running canister exactly: every hole card, every board card, a folded seat's cards the
+  canister never published, and a hand where it recorded the commitment at the flop and then
+  **predicted the turn and river**. *"The spec is precise enough that I had to guess nothing."*
+- **No rake, and chips conserved to the e8** in every hand it settled.
+- **`withdraw` is properly guarded against reentrancy**, the admin queries reject non-controllers,
+  mucked cards stay hidden, and the dev faucet really is dead.
+
+<a id="e-42"></a>
+### E-42, critical, one unguarded evaluator call bricks a funded table
+
+**Status: executed by the independent auditor on local `table_2`
+(`4zfnl-5t777-77775-aaadq-cai`), deployed module `0x5298915c…`. The call site is confirmed by code
+read in the current source. Full write-up: [FINDING 15](SECURITY-FINDINGS.md).**
+
+What the auditor did was play a normal hand. One seated player's client stopped sending heartbeats
+for thirty seconds while a pre-flop hand was live. From that moment:
+
+| call | result |
+|---|---|
+| `check_timeouts` | IC0503 trap: `IMPOSSIBLE HAND: evaluate_hand needs a 3-, 4- or 5-card board (flop/turn/river), got 0 community cards` |
+| `player_action` | same trap |
+| `leave_table` | same trap |
+| `withdraw` | `Err("Cannot withdraw while in a hand")` |
+| `cash_out` | `Err("Cannot cash out while in a hand")` |
+
+38,000,000,000 e8s of escrow, 3,985,000,000 of chips and a 15,000,000 pot, about **420 ICP** , 
+were unreachable through **every path a player has**, simultaneously. It cleared only because the
+auditor happened to try `sit_out`, which does not advance the game and is suggested by no error
+message.
+
+**The mechanism, confirmed in the source at HEAD.** `poker_core::evaluate_hand` traps by design on
+an impossible input (E-09's fix; the block comment argues for the trap and offers
+`try_evaluate_hand` for callers who want the rejection). Three call sites in `table_canister`
+reach it from settlement. Two of them guard the board length:
+
+- `src/table_canister/src/lib.rs:4098`: `if !(3..=5).contains(&state.community_cards.len()) { return Vec::new(); }`
+- `src/table_canister/src/lib.rs:4505`: `.filter(|_| state.community_cards.len() >= 3)`
+
+The third does not:
+
+```rust
+// src/table_canister/src/lib.rs:871, inside record_hand_to_history
+final_hand_rank: if show_cards {
+    p.hole_cards.as_ref().map(|cards| evaluate_hand(cards, &state.community_cards))
+} else {
+    None
+},
+```
+
+`record_hand_to_history(state, &winners, true)` is called unconditionally by `determine_winners`
+(`:4631`), and `show_cards = went_to_showdown && !p.has_folded`. So **any** path that reaches a
+showdown with fewer than three community cards traps, and both street-advance routines make that
+state reachable, because they set the next phase whether or not they managed to deal:
+
+```rust
+// advance_to_next_street, GamePhase::PreFlop
+if state.deck_index + 3 < state.deck.len() {   // deal the flop
+    …
+}
+state.phase = GamePhase::Flop;                 // ← unconditional
+```
+
+`run_out_board` has the same shape at every street. Once the phase reaches `Showdown` with a short
+board, the trap is **permanent**: the trap rolls the message back, the state is unchanged, and the
+next call takes the same path.
+
+**Why this is the finding that matters more than its own severity.** The auditor replayed the exact
+bricked state against the current source in its own host harness and it settled correctly. So the
+software offered for inspection and the software holding money are different, and the one holding
+money is worse, which is [T-33](#t-33), and which is why T-33 is filed as critical and not as
+housekeeping.
+
+**The fix, and why this pass did not apply it.** One line: `try_evaluate_hand(cards,
+&state.community_cards).ok()` at `:871`, which makes the history record lossy instead of fatal. The
+deeper fix is the auditor's own recommendation, *"make every settlement evaluator call refuse
+rather than trap"*: plus not treating a missing heartbeat as an absence of obligation ([E-43](#e-43)).
+Neither is applied here: this pass owns no engine file, the engine is byte-identical to `fe72d46`
+by design, and HARD RULE 3 says a fund finding is written up prominently and **never quietly
+patched**. It needs a failing test first (a `TableState` at `Showdown` with an empty board, settled
+through `determine_winners`), and that test does not exist yet.
+
+<a id="t-33"></a>
+### T-33, critical, a stranger cannot tell what code is holding their money
+
+**Status: executed by the independent auditor.** Four independent breaks in one story:
+
+1. **The deployed module matches no commit.** The auditor rebuilt `table_2` from the working tree
+   and from `fe72d46`, `3253b67`, `7bc69db` and `801aa79` and got `4ca176e3`, `3ac83432`,
+   `427e9f60`, `b87cc31a`, `93c505ea` against the deployed `5298915c…`. The deployed module's
+   **code section** is 1,758,178 bytes against 1,773,482 for every HEAD build, so it is different
+   code, not different metadata.
+2. **The build is not path-independent.** Identical source at two directories produced `3ac83432`
+   and `78e90a11`, differing only inside the 274 KB `name` custom section that `shrink: true` fails
+   to strip. This is [H-29](#h-29) again, from outside.
+3. **The published Docker verification cannot start.** `Dockerfile:23-26` copies `icp.yaml`,
+   `Cargo.toml`, `Cargo.lock`, `src/table_canister`, `src/lobby_canister` and
+   `src/history_canister`: and **not `src/poker_core`**, which is a workspace member
+   (`Cargo.toml:3`) and a path dependency of the table canister
+   (`src/table_canister/Cargo.toml:19`). `icp build` dies with *"failed to load manifest for
+   workspace member …/src/poker_core"*. Confirmed here by reading both files.
+4. **The procedure the README gives a reader is controller-only.** `scripts/verify-build.sh` reads
+   deployed hashes with `icp canister status <id> -e ic`. The README labels this "(controller-only)"
+   in one block and then tells the reader to run exactly that in "Manual Verification Steps" step 1
+   with no caveat. The script's own closing note, *"confirm the exact 'Module hash' field name …
+   on first run"*: says it had never been run. The public read-state path for `module_hash` exists
+   and is not used.
+
+**Why critical rather than medium.** Everything else in this repository describes source. E-42
+shows the deployed binary behaving worse than the source on the same state. A verifiable shuffle
+inside an unverifiable binary buys a player very little, and anyone who audited this repository
+audited software that is not deployed.
+
+<a id="e-43"></a>
+### E-43, high, a missing heartbeat is treated as an absence of obligation
+
+**Status: code-read confirmed here; exploited in play by the auditor.**
+
+```rust
+// src/table_canister/src/lib.rs:2880-2892
+fn count_active_players(state: &TableState) -> usize {
+    … .filter(|p| … !p.has_folded && p.status == PlayerStatus::Active) …
+}
+fn count_players_can_act(state: &TableState) -> usize {
+    … .filter(|p| … !p.has_folded && !p.is_all_in && p.status == PlayerStatus::Active) …
+}
+```
+
+`check_timeouts` flips `Active → Disconnected` after 30 s without a heartbeat
+(`:4667-4669`) and does **not** fold the seat. So the seat leaves every "who still has to act"
+count while remaining un-folded and therefore eligible for the pot. Live evidence from the auditor:
+`table_2` hand 1 recorded exactly one action for the whole hand (seat 1 `Fold`), and the canister
+dealt the complete board and evaluated seat 2's hand at showdown even though seat 2 was 5,000,000
+short of the 10,000,000 current bet and had never acted.
+
+It is client-controlled, which is what makes it an exploit rather than a bug. This is the same root
+as [E-06](#e-06) (one lull runs the whole board out) seen from the attacker's side.
+
+<a id="e-44"></a>
+### E-44, high, the fairness endpoint answers "false" for a valid proof
+
+**Status: executed.** Confirmed here by reading both sides:
+
+```
+src/table_canister/table_canister.did:322   verify_shuffle : (text, text) -> (bool) query;
+src/table_canister/src/lib.rs:5326          fn verify_shuffle(seed_hash: String, revealed_seed: String) -> bool
+```
+
+The Candid exposes **no parameter names**. A reader with a seed and a hash from a hand the canister
+itself dealt has a 50% chance of calling it in the order that returns `false`, and the return type
+is `bool` rather than a `Result`, so a wrong argument order and a rigged table are indistinguishable
+answers. The auditor: *"That is worse than having no endpoint."*
+
+Cheap fixes, in increasing order of goodness: name the parameters in the Candid; return
+`Result<(), String>` naming which argument failed to parse; or accept the pair in either order and
+say which reading matched.
+
+<a id="t-36"></a>
+### T-36, high, the no-rake sentence was on screen on one surface of nine, FIXED IN THIS PASS
+
+**Status: FIXED. Measured red first, on the rendered page, with the repo's own gate.**
+
+`tools/shots/lib/protected-notices.mjs` lists five protected phrases and
+`routes/+page.svelte:747-749` records why the fifth exists: stating the no-rake property only as
+*"No middleman, no house"* was judged **not** to discharge it. Wave 5 then put the canonical
+sentence in exactly one place, `.banner-strip`, which is `display: none` at every viewport except
+portrait-on-the-table-view.
+
+Measured with `probeProtectedNotices` on the dist built from the tree as the four wave-5 agents
+left it, both viewports, real canisters:
+
+| surface | 1440×900 | 390×844 |
+|---|---|---|
+| lobby, signed out | **4/5** | **4/5** |
+| lobby + How it works | **4/5** | **4/5** |
+| lobby, signed in | **4/5** | **4/5** |
+| table, as it lands | **4/5** | 5/5 |
+| table + FULL TERMS open | n/a (no strip) | **4/5** |
+| table + Deposit modal | **4/5** | **4/5** |
+| table + Hand History | 5/5 | 5/5 |
+| table + Verify Fair | **4/5** | 5/5 |
+
+The missing phrase was the same one every time. Two of these are worse than a bare omission:
+
+- **The FULL TERMS sheet was not a superset of the strip it replaces.** A player who taps the strip
+  to read the terms had the no-rake sentence taken off the screen by the act of asking for it:
+  `.banner-content` covered `.banner-strip` and did not restate the property.
+- **The money modals restated the property in the weaker wording** ("No middleman, no house, 0%
+  rake"), so the canonical sentence stayed outside the dialog, behind the very scrim the in-dialog
+  notice was built to escape.
+
+**Fix.** Purely additive, four files, no existing notice line touched (`git diff fe72d46 --
+README.md src/cleardeck_frontend/src | grep '^-' | grep -Ei 'unaudited|18\+|jurisdiction|rake'` is
+empty):
+
+- `+page.svelte`: `.banner-info` and `.disclaimer-info` now state the sentence, so it is on screen
+  on every desktop view and in the FULL TERMS sheet.
+- `DepositModal.svelte`, `WithdrawModal.svelte`, `HowItWorks.svelte`: the sentence added on its own
+  line beneath the existing wording.
+
+**Re-measured, same probe, same canisters: 5/5 on all 15 (surface, viewport) pairs.** It is now
+also asserted by the harness on every scene ([H-40](#h-40)) rather than by a script in a scratchpad.
+
+**What it cost, honestly.** One extra line in `.banner-info` at 1440×900 pushes the stage down
+18 px, so the desktop 6-max felt goes 961.1×457.7 → **929.3×442.5** (33.9% → 31.7% of the window).
+Portrait is unchanged at 332.8×599.5 = 60.6%, because the strip carries the sentence there and the
+strip was already three lines. HARD RULE 2 makes that trade non-negotiable, and the 18 px can be
+bought back later out of non-protected copy in the same paragraph; it must never be bought back out
+of a notice.
+
+<a id="h-40"></a>
+### H-40, high, the notice gate existed and was wired to nothing, FIXED IN THIS PASS
+
+**Status: FIXED.** `tools/shots/lib/protected-notices.mjs` is good code, written this wave, and
+before this pass it was imported by `scenarios/handhistory.mjs` and `scenarios/handreplay.mjs` and
+by **nothing else**: not `run.mjs`, not one table scene, not the lobby, not deposit. There was also
+no felt-area assertion anywhere in `tools/shots`: wave 5's headline number, 60.6%, existed only in
+prose and in a script in a scratchpad directory.
+
+The cost of that was demonstrated by the pass's critic with a build rather than an argument: flip
+one declaration, `.banner-strip { display: block }` → `display: none`, and the phone's table view
+shows **zero of five** protected phrases, the felt rises to 61.6%, the occlusion gate reports 0
+occluded on all six mobile scenes and `./scripts/dev.sh hygiene` prints *"repo hygiene clean"*.
+That is wave 4's crime re-committed in one line with every gate in the repo green, the precise
+structural failure this wave was chartered to end. Wave 4 was green because hygiene greps the
+**source**; wave 5 was green because the probe that reads the **screen** lived in a scratchpad.
+
+**Fix.** Both halves of HARD RULE 2 now run in `run.mjs` in the same central block as the token
+census and the pixel gate, with no per-scene opt-in and no opt-out:
+
+- `foldProtectedNotices(await probeProtectedNotices(page), …)`: every scene, every viewport. Below
+  5 of 5 and the scene does not get its canonical filename.
+- new `tools/shots/lib/felt-area.mjs`: measures `.felt` (the layout box of the visible surface, not
+  `.poker-table`, which reads 68% on a desktop where the surface is 31.7%), asserts a floor per
+  viewport (mobile 45%, desktop 28%) and **records** the exact geometry, aspect, pod count and ring
+  class.
+
+The pairing is the point, because the two failure modes are opposite and gating one invites the
+other: hiding a notice makes the felt bigger, and shrinking the felt keeps the notices on screen.
+`INDEX.md` gains a **NOTICES** column (bold below 5/5) and a **felt** column beside them.
+
+Proved in both directions on the shipping tree, the mutation table is in
+[WAVE-05.md](WAVE-05.md).
+
+<a id="t-34"></a>
+### T-34, medium, the fairness record has a shelf life of about 100 hands
+
+**Status: executed here, read-only, on the local replica.**
+
+```
+icp canister call history get_total_hands       -> (0 : nat64)
+icp canister call history get_authorized_tables -> (vec {})
+icp canister call table_2 get_history_canister  -> (null)
+```
+
+The canister described as "permanent hand history (provably-fair shuffle records)" is deployed,
+authorised for no tables, holds zero records, and no table points at it. Proofs therefore survive
+only inside the table canister, where `MAX_HAND_HISTORY_ENTRIES = 100` with `drain(0..excess)`
+prunes them and the controller's `reset_table` wipes them.
+
+The auditor's framing is the right one: *"A fairness guarantee you cannot re-check tomorrow is not
+a fairness guarantee."* Under an hour of heads-up play is enough to lose the record of the hand you
+want to check.
+
+<a id="e-45"></a>
+### E-45, medium, a deposit whose block has been archived can never be claimed
+
+**Status: code-read (the auditor's).** `notify_deposit` decodes `archived_blocks` as
+`candid::Reserved` and discards it, and ends at *"Transaction not found at this block index (may be
+archived)"*. Its comment says *"blocks at 33M+ should not be archived yet"*, which is a bet on the
+ledger, not a guarantee: the ICP ledger archives continuously. There is no fallback, because
+`admin_restore_balance` was deliberately removed ("unnecessary attack surface").
+
+A user who follows the README's documented deposit path and then waits an hour before notifying
+loses the deposit permanently, with no operator remedy. The mitigation is accidental: the shipped
+UI uses `deposit()` and `claim_external_deposit()`, so only README followers and external
+integrations are exposed. That makes the README the defect surface as much as the code.
+
+<a id="e-46"></a>
+### E-46, medium, no view reconciles funds held against liabilities recorded
+
+**Status: executed by the auditor.** `table_2` holds 734,105,000,000 e8s against roughly
+42,000,000,000 of recorded liabilities; `table_3` holds 2,731,830,000,000 against about
+1,169,980,000,000. No table is under-collateralised, which is the good news and the whole of it.
+A large surplus is attributed to no principal and there is no endpoint that reconciles the two
+sides.
+
+Given [E-45](#e-45) and the removal of `admin_restore_balance`, *"held by the canister but
+attributed to nobody"* is exactly what a lost user deposit looks like, and nothing distinguishes it
+from a shared test instance's residue. The auditor could not attribute the surplus, which is itself
+the finding.
+
+<a id="t-32"></a>
+### T-32, medium, every table entry first paints a nine-seat ring
+
+**Status: executed, new in this pass.** `PokerTable.svelte:313`:
+
+```js
+const maxPlayers = $derived(Number(tableState?.config?.max_players ?? 9));
+```
+
+Until the canister answers, `maxPlayers` is 9, so `seatCount` is 9, so the wrapper gets
+`ring-crowded` and the felt resolves from the nine-seat formula. Measured with a
+`requestAnimationFrame` sampler over the whole entry, on the real canisters, at a **6-max** table
+(`table_2`):
+
+| viewport | first paint | held for | settles to |
+|---|---|---|---|
+| 390×844 | 287.5×518.1 = **45.3%**, 9 pods, `ring-crowded` (rising to 50.7% as `--cd-avail` resolves) | **336 ms** | 332.8×599.5 = **60.6%**, 6 pods |
+| 1440×900 | 950.3×452.5 = **33.2%**, 9 pods, `ring-crowded` | **304 ms** | 929.3×442.5 = **31.7%**, 6 pods |
+
+The `?? 9` fallback is byte-identical at `fe72d46`, so this is pre-existing, not caused by wave 5.
+What wave 5 changed is the size of the consequence: portrait 6-max and 9-max now resolve from
+different formulas (`min(86cqw, 55cqh)` against `min(78cqw, 52cqh)`), so the correction is a
+visible **9.4% linear jump** of the whole table rather than a nudge.
+
+Two consequences worth separating:
+
+1. **A player sees the table resize under them on every entry.** On a phone the ring is drawn for
+   nine, then redrawn for six, a third of a second later.
+2. **Any felt figure is timing-dependent unless it says which state it measured.** This pass's own
+   first walk recorded 50.7% for the 6-max portrait table because it measured before the
+   correction; the same probe on the same build reads 60.6% after it. Wave 5's headline is the
+   settled state and never said so. The new felt gate records the pod count and the ring class
+   beside every number for exactly this reason.
+
+The fix is to render nothing ring-shaped until `max_players` is known, or to carry `max_players`
+from the lobby row the player clicked (the lobby already has it), rather than guessing 9.
+
+<a id="h-39"></a>
+### H-39, medium, `make hygiene`'s size rule counts modified tracked files
+
+**Status: executed, new in this pass.** `scripts/dev.sh:709-728`:
+
+```sh
+n="$(git status --porcelain --untracked-files=all | wc -l …)"
+bytes="$(git status --porcelain --untracked-files=all | sed 's/^...//' | … )"
+if [ "$bytes" -gt $((4 * 1024 * 1024)) ]; then warn "untracked payload exceeds 4 MiB"; …
+```
+
+`git status --porcelain` lists ` M path` as well as `?? path`, so every **modified tracked file**
+is counted as untracked payload. Measured on this tree:
+
+| what | KiB |
+|---|---|
+| what the rule counts | 2,199 |
+| genuinely untracked (`??` only) | 1,143 |
+| modified tracked files, wrongly counted | 1,056 |
+
+Both conditions were then reproduced on the SAME tree, half an hour apart, by running the screenshot
+suite in between:
+
+```
+before the definitive shots run:  42 untracked path(s),  1667 KiB total   ✓ repo hygiene clean
+after  the definitive shots run:  44 untracked path(s), 13470 KiB total   ! repo hygiene FAILED
+```
+
+After the run, `artifacts/screens/fe72d46/manifest.json` is **5,972 KiB** on its own
+([L-06](#l-06)), so genuinely-untracked payload is 6,209 KiB and the check fails **even with the
+miscount fixed**. Both causes need addressing. **`make hygiene` and `./scripts/dev.sh shots` are
+effectively mutually exclusive and whichever you ran last decides the verdict**: which is why two
+wave-5 build reports say "repo hygiene clean" and two critics found `! repo hygiene FAILED`: both
+were right, minutes apart.
+
+Every substantive check in `cmd_hygiene`: no binary/media files, all four README notices, all four
+frontend notices, the no-rake property, and "no notice line removed or altered since `ceacc37`" , 
+is green on this tree and was green in every run either side of this pass. The failing rule is the
+size heuristic alone.
+
+Two-line fix, in `scripts/dev.sh` (not owned by this pass): filter to `grep '^??'` before summing,
+and exclude `artifacts/screens/` from the payload count, which is where the rule's intent already
+points ("check for a stray artifact directory").
+
+<a id="e-47"></a>
+### E-47, low, nothing says which `TableView` fields are caller-relative
+
+**Status: executed by the auditor.** `can_check`, `call_amount`, `is_my_turn` and `min_bet` are
+relative to the caller; `action_on`, `current_bet` and `phase` are global. Neither the type nor its
+comments say so, and no field describes what the seat on action may legally do. Seated as a player
+**not** on action, the auditor read `can_check = true` and `call_amount = 0` while the seat on
+action owed 5,000,000, and acting on that produced *"Cannot check, there's a bet to call"* eight
+times in a row. Any third-party client will make the same mistake and offer illegal actions.
+
+<a id="e-48"></a>
+### E-48, low, `set_display_name` accepts "You" and "Dealer"
+
+**Status: executed by the auditor.** HTML and blank names are correctly rejected; reserved UI words
+are not. `set_display_name(opt "You")` and `(opt "Dealer")` both return `Ok`, and on `table_1` the
+auditor read a seat with `is_self = false` and `display_name = opt "You"`. Cheap seat-identity
+spoofing in a money game.
+
+<a id="t-35"></a>
+### T-35, low, half the custody surface has no local test path
+
+**Status: executed by the auditor.** `icp canister status mxzaz-hqaaa-aaaar-qaada-cai -e local`
+returns *"Canister … was not found"*: the ckBTC ledger `btc_table_1` needs is not deployed on the
+local replica. So no local deposit, claim, withdrawal or minter path can be exercised for BTC at
+all, by anyone, including us. Its mainnet twin is documented as holding real ckBTC.
+
+This is the same wall the wave-5 money-copy pass hit from the other side: the corrected 11-sat
+minimum ([T-26](#t-26)) is right in the canister and in the source and **has never been seen on a
+rendered page**, because there is no BTC row in the local lobby and Withdraw is disabled at zero
+balance. Deploying a local ckBTC ledger is the one change that makes both verifiable.
+
+<a id="d-06"></a>
+### D-06, medium, two claims a stranger reads as stronger than they are
+
+**Status: executed by the auditor**, which is the point: it had no access to these documents and
+still arrived at both caveats unprompted.
+
+1. **"The commitment is published before the deal."** True only inside a single message.
+   `start_new_hand` commits and deals atomically, so **no outsider can observe the commitment
+   before cards exist**. What is genuinely provable, and what the auditor did prove, is that the
+   whole 52-card order was fixed before the board was shown. The hand replayer's wave-5 rewrite
+   already says the honest version ("the deck was already fixed at the moment you looked"); the
+   README and the shuffle spec should match it.
+2. **"You can verify that the deployed canisters match this source code."** Addressed to readers
+   who by construction cannot run the procedure ([T-33](#t-33)).
+
+One more, on the credit side, quoted because it is the most useful sentence in this section: *"The
+README's own warning that funds are not safe is, as far as I can tell, the most accurate sentence in
+the documentation."*
+
+### Correction to [L-04](#l-04): the admin identity is on this machine
+
+L-04 is filed as *"needs 2 admin calls **and** 1 lobby method that does not exist"* and tells the
+next agent to build API surface. Verified read-only in this pass, with no state change:
+
+```
+icp canister call lobby get_admin        -> (opt principal "nsp5q-aelxk-…-5ae")
+icp canister call lobby is_caller_admin --identity cyclepay-hotwallet -> (true)
+icp canister call lobby is_caller_admin --identity cd-local-deployer  -> (false)
+```
+
+`cyclepay-hotwallet` is a local identity and it **is** the lobby admin, so `update_table_name` is
+callable today. And `init_microstakes_tables` (`src/lobby_canister/src/lib.rs:238`) already does
+`tables.clear()` and re-inserts all three records including their names, so nothing new is needed to
+rewrite a registered config either, it just re-inserts hardcoded `1_000_000/2_000_000` while
+`icp.yaml:66,76` initialises `table_2` at `5_000_000/10_000_000` and `table_3` at
+`10_000_000/20_000_000`.
+
+The defect underneath is worse than a stale label and should be re-read as such: **the lobby
+advertises stakes the table does not charge.** A player who picks the row labelled
+`6-Max - 0.01/0.02` sits down at 0.05/0.10, five times the blind they chose, and at
+`9-Max - 0.01/0.02`, ten times. The harness says so on every run:
+
+```
+lobby row NAME "6-Max - 0.01/0.02" quotes a small blind: DISAGREES:
+  screen "0.01" … canister says 5000000 e8s (screen is 0.200x the chain)
+lobby row NAME "9-Max - 0.01/0.02" quotes a big blind: DISAGREES:
+  screen "0.02" … canister says 20000000 e8s (screen is 0.100x the chain)
+```
+
+This pass did **not** make the calls. They mutate state on a replica four other agents are
+photographing against, the table names are read live by every scene, and the durable fix is six
+constants in `init_microstakes_tables` plus a lobby redeploy, which is an engine change this pass is
+not permitted to make. It is ranked in [WAVE-05.md](WAVE-05.md) for wave 6, re-severitised from
+"stale registry" to **high: the lobby misprices every table it lists**.
+
+<a id="h-41"></a>
+### H-41, medium, the deposit scene went UNVERIFIED because the copy grew and the assertion did not, FIXED IN THIS PASS
+
+**Status: FIXED.** Both deposit shots were being filed as `UNVERIFIED-deposit-*.png` on every run,
+for two reasons that had nothing to do with the deposit flow:
+
+```
+TOKEN CENSUS FAILED: 2 of 26 numeric tokens on screen are asserted by nothing , 
+  "18"     in div.modal-content > div.modal-body > p.player-notice
+  "0.0004" in div.modal-body > div.form-section > div.minimum-notice > span
+```
+
+1. **`"18"` is the `18+ only` of a player-protection notice** being read as an unasserted money
+   figure. `.player-notice` and `.modal-notices` are the protected copy restated inside a dialog,
+   which wave 5 had to do because a 72%-black scrim hides the banner behind it
+   ([T-31](#t-31), [H-36](#h-36), [T-36](#t-36)). The `protected-disclaimer-copy` allowlist rule
+   named `.alpha-warning-banner, .footer-disclaimer, .disclaimer-content, .legal` and not the two
+   in-dialog carriers. Fixed by adding them to that rule, which is the rule's own stated purpose.
+2. **`"0.0004"` is a real money figure that nothing asserted.** T-30 added
+   *"…charged twice by the ledger, so you need 0.0004 ICP in your wallet to deposit the minimum"* to
+   `.minimum-notice`; `assertDepositAgreement` scraped `nums[0]` and `nums[1]` and dropped `nums[2]`,
+   and the census rule's label regex named only `Minimum deposit|Network fee`. So the number a player
+   with a nearly-empty wallet acts on was ungated. **Allowlisting it would have been the wrong fix**
+  , it is money. It is asserted now against `MIN_DEPOSIT + 2 x icrc1_fee()`, both read from their
+   sources, and both deposit shots verify at both viewports.
+
+The general shape is worth naming, because it will happen again: **a wave that improves money copy
+breaks the census, and the cheap way out is to allowlist the new number.** The census is designed to
+make that visible; it only works if the next person asserts instead of allowlists.
+
+### Correction to [H-37](#h-37): paint-order model disagreements are not zero
+
+H-37 records *"0 paint-order model disagreements, no case where the pixels showed coverage the paint
+model said was impossible"*, and its self-test prints `ALL 16 PIXEL-GATE CASES PASS` where the entry
+says 15 offline cases. Measured on the definitive run of this pass, out of the gate's own manifest:
+`table-showdown` desktop reports **1**. The pass's critic measured **2** in a 22-shot sweep and the
+gate's own author reported 2. The number is small, non-gating by design and correctly recorded in
+the manifest, the defect is that the summary in this file states it as zero.
+
+The mechanism is real and benign: a translucent figure sampling a background through
+`backdrop-filter` measures suppression when the background is hidden, with nothing painted on top of
+it. The gate reports it as a `paintOrderModelDisagreement` with its fraction rather than failing the
+scene, which is right. What is missing is a self-test case that actually reproduces it, the case
+named for it asserts only `r.ok && occlusionsFound === 0` and would still pass with the whole
+`paintOrderModelDisagreement` path deleted.
+
+<a id="h-42"></a>
+### H-42, high, `./scripts/dev.sh test`, the repo's primary gate, can hang forever
+
+**Status: executed, new in this pass.** `cmd_test` step 4 runs the money-safety targets with **no
+time bound**, while step 5 wraps the settlement targets in one:
+
+```sh
+# scripts/dev.sh:453-458 , money-safety, UNBOUNDED
+cargo test --test invariants  -- --test-threads=2 &&
+cargo test --test regressions -- --test-threads=2 &&
+…
+# scripts/dev.sh:504-506 , settlement, bounded
+with_timeout 900 sh -c 'cd tests/settlement && cargo test --test settlement …'
+with_timeout 300 sh -c 'cd tests/settlement && cargo test --test disagreements …'
+```
+
+Observed here. `./scripts/dev.sh test` reached step 4, emitted 22 `test result:` lines across the
+earlier targets, entered `cargo test --test invariants -- --test-threads=2`, and then stopped for
+**33 minutes and counting** with no further output and no test line. Both ends of the run were
+idle, not slow:
+
+```
+$ ps -o pid,time,%cpu -p <invariants binary>       # sampled 45 s apart, twice
+  48927   0:05.50   0.0        …unchanged…
+$ ps -o pid,time,%cpu -p <its own pocket-ic>
+  48977   0:53.52   0.0
+$ lsof -p 48927 -a -i
+  invariant 48927 josh 14u IPv4 TCP localhost:57995->localhost:57993 (ESTABLISHED)
+```
+
+A live socket to a live PocketIC server with **zero CPU on both sides** is a blocked wait, not
+progress. Four other PocketIC servers belonging to concurrent agents were running on the machine, so
+contention is a plausible trigger and this may not be deterministic, which makes it worse, not
+better: a gate that hangs sometimes is a gate people learn to skip.
+
+This is [H-22](#h-22)'s exact shape one directory over. H-22 records the settlement suite hanging
+rather than failing and says it is *"contained by a timeout in `cmd_test`, not fixed"*: the
+containment was applied to `tests/settlement` and never to `tests/money_safety`, which is where the
+fund-safety invariants live.
+
+**Fix:** wrap step 4 the way step 5 already is. A one-line change per target, and the bound should
+be generous (the suite legitimately takes many minutes under load) but finite. Separately, a
+`--test-threads=2` money suite that spawns its own PocketIC per test is a poor citizen on a shared
+machine; step 4 could reasonably run single-threaded.
+
+<a id="h-43"></a>
+### H-43, medium, a partial screenshot run silently destroys the full run's index and manifest
+
+**Status: executed, new in this pass, by doing it accidentally and having to redo a 25-minute run.**
+
+`writeManifest` and `writeIndex` (`tools/shots/lib/capture.mjs:127-134`) unconditionally overwrite
+`<sha>/manifest.json`, `<sha>/INDEX.md` and both mirrors in `latest/` with the manifest of **the
+scenes this invocation ran**. So:
+
+```
+$ ./scripts/dev.sh shots                                   # 22 shots, manifest 5,972 KiB
+$ node tools/shots/run.mjs --scenes lobby --viewports desktop --skip-build --skip-deploy
+$ python3 -c "…json.load(open('artifacts/screens/fe72d46/manifest.json'))…"
+scenes in manifest: ['lobby']                              # manifest now 363 KiB
+```
+
+The 72 PNGs survive, they are keyed by filename, but **the index and the manifest that say what
+they prove do not**, and nothing warns. A reader who opens `INDEX.md` after any partial run sees one
+row and has no way to tell whether the other twenty-one shots were never taken, taken and failed, or
+taken and verified an hour earlier.
+
+`run.mjs` already understands this hazard for one artifact type and handles it well: a full run wipes
+`latest/` up front, a partial run does not, and `clearLatestVariants` retires only the filenames the
+current (scene, viewport) could claim, *"because a verified PNG left over from an earlier commit is
+exactly the artifact a reader would trust"*. The same reasoning applies with more force to the
+manifest, which is the only machine-readable record of every gate's verdict.
+
+**Fix:** on a partial run, read the existing manifest and merge scene entries by `(scene, viewport)`
+rather than replacing the file, or, at minimum, write partial runs to
+`manifest-partial-<scenes>.json` and leave the full one alone. Either is a small change in
+`capture.mjs`.

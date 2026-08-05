@@ -32,6 +32,10 @@ TABLE_CANISTERS=(table_1 table_2 table_3 btc_table_1)
 
 WASM_PATH="$REPO_ROOT/target/wasm32-unknown-unknown/release/table_canister.wasm"
 
+# Kept in step with `DEFAULT_STEPS` in tests/money_safety/src/fuzz.rs. Only used to
+# print what `fuzz-default` is about to do; the run itself passes NO environment.
+DEFAULT_FUZZ_STEPS=220
+
 # ---------------------------------------------------------------------------
 # output helpers
 # ---------------------------------------------------------------------------
@@ -446,7 +450,7 @@ cmd_test() {
   step "[3/5] differential fast subset (tools/differential)"
   ( cd tools/differential && cargo test ) || failed+=("differential fast subset")
 
-  step "[4/5] money-safety fast subset (tests/money_safety)"
+  step "[4/5] money-safety fast subset + the fuzzer at its own defaults"
   announce_wasm
   (
     cd tests/money_safety
@@ -459,9 +463,30 @@ cmd_test() {
     # proven fund-theft primitive had its gate outside the gate. Named explicitly
     # here so that cannot recur silently -- if the file is renamed, this line fails.
     cargo test --test deposit_replay -- --test-threads=2 &&
+    # ui_limits reads src/table_canister/src/lib.rs and the two money modals and
+    # fails when a limit the UI STATES stops matching the limit the canister
+    # ENFORCES (docs/DEFECTS.md T-26: the withdraw modal said 1,000 sats and the
+    # canister accepted 11). Two file reads, no replica, so it belongs in the fast
+    # gate. Named explicitly for the deposit_replay reason above.
+    cargo test --test ui_limits &&
     MONEY_FUZZ_SEEDS="${CLEARDECK_SMOKE_FUZZ_SEEDS:-1}" \
     MONEY_FUZZ_STEPS="${CLEARDECK_SMOKE_FUZZ_STEPS:-40}" \
     MONEY_FUZZ_SHRINK=10 \
+      cargo test --test fuzz &&
+    # AND THE SAME BINARY WITH NOTHING IN THE ENVIRONMENT (docs/DEFECTS.md H-28).
+    #
+    # The line above is steerable, which is a feature and was also the hole: every
+    # caller in this repo passed MONEY_FUZZ_SEEDS, so `seeds()`'s default arm and
+    # `DEFAULT_STEPS` were executed by NOTHING and `cargo test --test fuzz` -- the
+    # command in the harness's own doc comment -- was red for a whole wave at seed
+    # 0xC1EA_2DEC_0003. A smoke run of a configuration nobody ships is not a gate on
+    # the configuration everybody types.
+    #
+    # It costs about 50 s against a gate that already spends 900 s on the settlement
+    # oracle, it reuses the wasm and the ledger this step already fetched, and there
+    # is deliberately NO opt-out: an environment variable that skips this is how the
+    # hole gets dug a second time. `make fuzz-default` runs exactly this alone.
+    env -u MONEY_FUZZ_SEEDS -u MONEY_FUZZ_STEPS -u MONEY_FUZZ_SHRINK -u MONEY_FUZZ_REPORT \
       cargo test --test fuzz
   ) || failed+=("money-safety fast subset")
 
@@ -494,7 +519,38 @@ cmd_test() {
 # cmd: fuzz  -- the long hostile-sequence run
 # ---------------------------------------------------------------------------
 
+# THE FUZZER'S OWN DEFAULT INVOCATION, WITH NOTHING IN THE ENVIRONMENT.
+#
+# docs/DEFECTS.md H-28. `cd tests/money_safety && cargo test --test fuzz` was RED at
+# fe72d46 and had been for a whole wave, and the reason nobody saw it is structural
+# rather than careless: EVERY caller passed MONEY_FUZZ_SEEDS and MONEY_FUZZ_STEPS, so
+# the code path that reads the defaults -- `seeds()`'s `Err(_) =>` arm and
+# `DEFAULT_STEPS` -- was executed by nothing. `make test` passed 1 seed x 40 steps,
+# `make fuzz` passed 9 explicit seeds, and neither of them ever landed on seed
+# 0xC1EA_2DEC_0003.
+#
+# `env -u` is the point of this function. Running it under a shell that happens to
+# export MONEY_FUZZ_SEEDS would test something else entirely, which is exactly how the
+# hole was dug.
+cmd_fuzz_default() {
+  step "money-safety fuzzer at its OWN DEFAULTS (no environment)"
+  info "3 fixed seeds x $DEFAULT_FUZZ_STEPS steps: heads-up, 6-max, 6-max with an ante"
+  info "this is the invocation a developer types; docs/DEFECTS.md H-28 is why it has a target"
+  cargo build -p table_canister --target wasm32-unknown-unknown --release >/dev/null
+  announce_wasm
+  (
+    cd tests/money_safety
+    export CLEARDECK_TABLE_WASM="$WASM_PATH"
+    env -u MONEY_FUZZ_SEEDS -u MONEY_FUZZ_STEPS -u MONEY_FUZZ_SHRINK -u MONEY_FUZZ_REPORT \
+      cargo test --test fuzz -- --nocapture
+  )
+}
+
 cmd_fuzz() {
+  # The default invocation FIRST, so the long sweep can never again be green while
+  # the command in the harness's own doc comment is red.
+  cmd_fuzz_default || return 1
+
   step "money-safety hostile-sequence fuzzer (long)"
   cargo build -p table_canister --target wasm32-unknown-unknown --release >/dev/null
   announce_wasm
@@ -804,10 +860,15 @@ ${B}ClearDeck dev entry point${R}   (make <target> works for all of these)
   ${B}wasm${R}            build table_canister.wasm and print its sha256
 
   ${B}test${R}            FAST gate: workspace tests + wasm build + differential fast
-                  subset + money-safety invariants/regressions + a short fuzz run.
+                  subset + money-safety invariants/regressions/ui_limits + a short
+                  fuzz run AND the fuzzer at its own defaults (docs/DEFECTS.md H-28).
                   No replica needed.
-  ${B}fuzz${R}            LONG: 9 seeds x 600 hostile steps against the real canister
-                  and the real ICP ledger on PocketIC
+  ${B}fuzz-default${R}    the fuzzer exactly as a developer runs it: no environment at
+                  all, so the DEFAULT seeds and DEFAULT step count are what runs.
+                  docs/DEFECTS.md H-28 -- this invocation was red for a whole wave
+                  because every other target overrode it.
+  ${B}fuzz${R}            LONG: fuzz-default first, then 9 seeds x 600 hostile steps
+                  against the real canister and the real ICP ledger on PocketIC
   ${B}settlement${R}      the independent settlement oracle: derives what each seat is
                   OWED from the rules of poker and compares it against what the
                   real canister paid, hand by hand. 'settlement fast' skips the
@@ -840,6 +901,7 @@ main() {
     wasm)           cmd_wasm ;;
     test)           cmd_test ;;
     fuzz)           cmd_fuzz ;;
+    fuzz-default)   cmd_fuzz_default ;;
     settlement)     cmd_settlement "$@" ;;
     diff-full)      cmd_diff_full "$@" ;;
     shots)          cmd_shots "$@" ;;

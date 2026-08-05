@@ -10,6 +10,7 @@ import { phaseOf } from '../lib/table-driver.mjs';
 import {
   assertChainAgreement, assertHandHistoryAgreement, named, withAgreement,
 } from '../lib/chain-agreement.mjs';
+import { foldProtectedNotices, probeProtectedNotices } from '../lib/protected-notices.mjs';
 import { heroPrincipal, playCompletedHand, tableDisplayName } from './_shared.mjs';
 
 const TABLE = 'table_2';
@@ -62,8 +63,16 @@ export default {
     // signal that the app has the hand: they are on the felt at both 1440px and
     // 390px, unlike `.feed-title` ("Hand #N"), which lives in `.feed-container`
     // and is hidden below 900px.
+    //
+    // `:not(.empty)` IS LOAD-BEARING. `.community-cards` renders `Array(5)` of
+    // <Card> unconditionally (PokerTable.svelte), and an undealt slot is still a
+    // `.card`; it just carries `.empty`. So the original form of this wait,
+    // `querySelectorAll('.community-cards .card').length >= 5`, was satisfied the
+    // instant the board frame mounted, with nothing dealt — a wait that could not
+    // fail, standing in for the one thing this scene depends on. docs/DEFECTS.md
+    // H-33.
     await page.waitForFunction(
-      () => document.querySelectorAll('.community-cards .card').length >= 5,
+      () => document.querySelectorAll('.community-cards .card:not(.empty):not(.face-down)').length >= 5,
       undefined,
       { timeout: 60_000 },
     );
@@ -101,10 +110,33 @@ export default {
     const historyAgreement = named('history', await assertHandHistoryAgreement(ctx, page, {
       table: TABLE, asPlayer: HERO_PLAYER,
     }));
+
+    // THE FOUR PROTECTED NOTICES, ON THIS SURFACE, MEASURED.
+    // This modal is a fixed overlay behind a 72% scrim, so the page's own banner
+    // and footer copy are underneath it and unreadable. HARD RULE 2 is about what
+    // a player SEES, on any view, so the dialog now carries the notices itself and
+    // this asserts they arrived — by hit-testing their own pixels, which is the
+    // one thing neither `make hygiene` nor a geometry probe can do. See
+    // lib/protected-notices.mjs.
+    const notices = foldProtectedNotices(
+      await probeProtectedNotices(page), 'with the hand-history modal open',
+    );
+
     return withAgreement({
-      verified: modal === 1 && rows >= 1,
-      checks: { modal, handRows: rows, firstRow: rowText.slice(0, 160) },
-      notes: `${rows} hand row(s); first: ${rowText.slice(0, 80)}`,
+      verified: modal === 1 && rows >= 1 && notices.ok,
+      checks: {
+        modal,
+        handRows: rows,
+        firstRow: rowText.slice(0, 160),
+        protectedOnScreen: notices.onScreen,
+        protectedTotal: notices.total,
+        protectedProblems: notices.problems,
+        protectedNotices: notices.notices,
+      },
+      notes: notices.ok
+        ? `${rows} hand row(s); first: ${rowText.slice(0, 80)}; `
+          + `${notices.onScreen} of ${notices.total} protected notices measured on screen and unoccluded`
+        : `PROTECTED NOTICE NOT ON SCREEN: ${notices.problems.join(' | ')}`,
     }, tableAgreement, historyAgreement);
   },
 };

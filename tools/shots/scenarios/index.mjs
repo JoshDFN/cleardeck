@@ -12,6 +12,7 @@ import tableShowdown from './table-showdown.mjs';
 import tableSidepots from './table-sidepots.mjs';
 import deposit from './deposit.mjs';
 import handhistory from './handhistory.mjs';
+import handreplay from './handreplay.mjs';
 import shuffleproof from './shuffleproof.mjs';
 
 export const SCENES = [
@@ -24,6 +25,7 @@ export const SCENES = [
   tableSidepots,
   deposit,
   handhistory,
+  handreplay,
   shuffleproof,
 ];
 

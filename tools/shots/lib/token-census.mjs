@@ -221,14 +221,32 @@ export const CHAIN_SITES = [
     {
         id: 'deposit-minimum-and-fee',
         selector: '.minimum-notice',
-        label: /^deposit modal "(Minimum deposit|Network fee)"/,
-        why: 'the minimum deposit and the network fee the modal states as fact',
+        // The third alternative is the wallet requirement T-30 added ("charged twice
+        // by the ledger, so you need 0.0004 ICP in your wallet"). The copy grew and
+        // this label did not, so the census reported that token as asserted by
+        // nothing and BOTH deposit shots were filed UNVERIFIED (docs/DEFECTS.md H-41).
+        label: /^deposit modal "(Minimum deposit|Network fee|you need N in your wallet)"/,
+        why: 'the minimum deposit, the network fee, and the wallet balance the modal '
+            + 'says is needed to deposit that minimum — all three stated as fact',
     },
     {
         id: 'history-row-pot',
         selector: '.hand-row .pot',
         label: /^history row \d+ pot vs/,
         why: "each hand-history row's pot",
+    },
+    {
+        id: 'hand-replay-money',
+        selector: '.replayer .replay-money',
+        label: /^replay /,
+        why: 'every amount the hand REPLAYER renders: each blind post, each action\'s '
+            + 'amount, the log\'s own sum-vs-pot audit, the final pot, each winner\'s award '
+            + 'and each showdown player\'s result. The `handreplay` scene compares every one '
+            + "of them with the table canister's own get_hand_history record for that hand "
+            + '(and the blind level with get_table_view().config), one figure per element, in '
+            + 'DOM order. Added with that scene: until it existed the replayer had never been '
+            + 'opened by the harness, so not one of these numbers had ever been looked at '
+            + '(docs/DEFECTS.md H-31).',
     },
 ];
 

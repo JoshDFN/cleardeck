@@ -138,6 +138,7 @@ a surface is gated when it is not is worse off than one who knows it is open.
 
 | lobby **preview pane**: heading blinds, mini-felt live pot, each seated stack, the facts list (blinds, buy-in, ante, clock, hands dealt, last pot) and the rake line's pot | the TABLE canister's config and live view | `lobby` |
 | deposit modal "Minimum deposit" / "Network fee" | the minimum the table canister enforces, and the ledger's own `icrc1_fee()` | `deposit` |
+| **every money, equity and card figure: that nothing is painted over it** | the rendered PIXELS, by a four-shot differential per (figure, occluder) — not the DOM | every scene, both viewports |
 
 ### The denominator: every number on the screen is counted
 
@@ -185,6 +186,87 @@ that "not asserted" now means "fails the census if it is ever on screen", not "i
 * the hand-history **detail** panel (per-winner amounts); only the row pot is checked;
 * everything on a **BTC** table: `btc_table_1` is not registered in the lobby (T-05), so no
   scene can reach it, and the sats formatting path is therefore unexercised.
+
+### What COVERS what: the pixel gate
+
+Everything above reads `textContent`. None of it can see the only question a player's eye
+asks — **is the figure on screen, or is something on top of it**. Two defects proved that gap
+is not theoretical. Both were photographed by this harness and filed as **verified**, because
+the text was right:
+
+* `docs/DEFECTS.md` **T-22** — on a phone the winner's `100.00%` equity badge rendered as a
+  visible `0%`; the hero's own card covered the rest of it. The badge sat inside
+  `.player-nameplate` (`z-index: 6`, a stacking context) while the cards paint at `z-index: 7`
+  outside it, so no z-index the badge chose could win.
+* `docs/DEFECTS.md` **T-23** — the `+24.00` award chip covered the winner's revealed pair and,
+  on desktop, a community card's suit pip: the cards that justify the award.
+
+`lib/occlusion.mjs` runs centrally in `run.mjs`, like the census, so no scene can forget it. It
+enumerates every **money, equity or card figure** on screen and requires that nothing paints
+over it. A finding has to survive three stages:
+
+1. **Geometry** — the candidate's client rect intersects the figure's, inside the visible
+   viewport. Necessary, never sufficient: most intersections are containers.
+2. **Effective paint order** — CSS 2.1 Appendix E is simulated over the real computed styles
+   (stacking contexts from `transform`, `opacity`, `filter`, `contain`, `container-type`,
+   `position: fixed/sticky`, positioned-with-a-z-index, flex/grid items with one; the *pseudo*
+   stacking contexts that positioned `z-index: auto` elements form, whose positioned
+   descendants escape to the parent context; and the tree-order layers). Every element gets one
+   integer, so "is above" is one comparison that is right across contexts. **A naive z-index
+   comparison is not good enough in either direction** and the manifest proves it per scene:
+   across the full 22-shot sweep a naive gate would have raised **3,836** flags and an
+   effective-paint-order-plus-geometry gate **1,487**, all of them false.
+3. **Occlusion evidence**, which is what actually gates:
+   * **hit testing** — `elementFromPoint` on a 5×3 grid across the figure, recorded per point;
+   * **a four-shot pixel differential** per (figure, occluder): `A` both visible, `B` occluder
+     hidden, `C` figure hidden, `D` both hidden, all clipped to the figure's rect. The figure
+     paints ink at a pixel when hiding it changes that pixel (`|B−D|`), and it is **covered**
+     there when the occluder has suppressed at least 75% of that contribution (`|A−C|`).
+     Everything is hidden with `visibility: hidden`, which paints nothing and moves nothing, so
+     no reflow can contaminate the comparison.
+
+The pixel differential is the **authority**, and hit testing is corroboration, because hit
+testing cannot see an occluder with `pointer-events: none` — `.board-cluster` is exactly that
+in portrait — and because a rect intersection that covers only padding covers no ink at all.
+
+**Thresholds, and why they are defensible.** The fraction is of the figure's **own visible
+ink**, never of its box:
+
+| kind | limit | why |
+| --- | --- | --- |
+| money, equity, a card's rank or pip | **2%** of ink | These are read glyph by glyph, and half a covered glyph is a *different number*: T-22's `100.00%` was read off the screen as `0%`. One glyph of a seven-glyph badge is ~14% of its ink, so a 2% budget cannot hide any part of any digit — while an overlap that only touches padding, a shadow or a rounded corner measures exactly **0.0%**. |
+| a card's white face | **20%** of ink | A card is identified by its rank and its pip, and both are gated at 2% in their own right. What is left is a large blank plate: the hero's own bet disc touching the corner of the hero's own card measures 2.8%, and failing that would be a false red on the first scene anyone ran. |
+
+Total occlusion always fails (100% ≥ either limit), and so does a figure on which **no** probe
+point is hit-testable, unless the figure itself is `pointer-events: none` and therefore cannot
+answer a hit test at all.
+
+**A dialog covering the page behind it is the feature, not the defect.** An occluder inside an
+overlay layer (a `position: fixed` ancestor covering ≥40% of the viewport, or anything
+`role="dialog"` / `aria-modal="true"`) covering a figure on the page is reported as
+`behind-an-overlay`, measured and counted, and does not fail the scene — 186 figures in the
+sweep are in that class. The converse is **not** excused: a figure *inside* an overlay is gated
+normally, so a dialog that covers its own numbers still fails.
+
+**What the artifact carries.** `INDEX.md` gains two columns — how many figures the page renders
+and how many are covered, with the worst offender named inline. `manifest.json` carries, per
+finding, the occluded element (path, text, rect, glyph count), the occluder (path, text, rect,
+z-index, paint index, whether a naive z-index compare would have agreed), the fraction of ink
+and of box, the hit-test answers, and **two crops written beside the PNGs** — the figure as a
+player sees it and the same rect with the occluder hidden. It also carries every intersection
+the gate *declined* to report with the measurement that cleared it, so a gate that ever starts
+firing on decoration shows up there as a near miss first.
+
+**Self-check**: `node tools/shots/test-occlusion.mjs` — 15 cases on constructed fixtures, no
+replica and no app build needed. Six are real occlusions that must be caught (including T-22's
+exact three-context stacking shape, T-23's chip-over-card shape, an occluder a naive z-index
+compare misses, and one with `pointer-events: none`); the rest are overlaps that must **pass**
+(padding-only, painted-behind, a translucent veil the figure still shows through, the case a
+naive compare gets wrong in the direction of crying wolf, a dialog over the page) plus two
+harness invariants: the probe leaves no attribute or stylesheet behind, and a figure on a
+**scrolled** page is measured at the right rectangle — Playwright trims `clip` against the
+viewport, not the document, and the first draft's document coordinates threw on one scene and
+would silently have measured the wrong rectangle on any other scrolled one.
 
 ### Proving the assertion has teeth
 

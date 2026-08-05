@@ -1404,6 +1404,21 @@ export async function assertDepositAgreement(ctx, page, opts) {
                 'deposit modal "Network fee" vs the ledger\'s own icrc1_fee()',
                 Number(fee), nums[1], { currency: truth.currency },
             ));
+            // THE THIRD NUMBER, ADDED BY T-30 AND ASSERTED BY NOTHING UNTIL NOW.
+            // The notice now reads "... charged twice by the ledger, so you need
+            // 0.0004 ICP in your wallet to deposit the minimum". That figure is
+            // `MIN_DEPOSIT + 2 x TRANSFER_FEE` (DepositModal.svelte:125-127) and it
+            // is the number a player with a nearly-empty wallet acts on. Before this
+            // check the scene scraped nums[0] and nums[1] and dropped nums[2], so the
+            // token census reported it as unaccounted for and BOTH deposit shots were
+            // filed as UNVERIFIED — a real money figure going ungated because the
+            // copy grew and the assertion did not (docs/DEFECTS.md H-41).
+            if (nums.length >= 3) {
+                figures.push(checkFigure(
+                    'deposit modal "you need N in your wallet" vs minimum + 2 x icrc1_fee()',
+                    minimum + 2 * Number(fee), nums[2], { currency: truth.currency },
+                ));
+            }
         } else {
             structural.push(`the deposit modal's minimum/fee notice has fewer than two numbers: "${dom.minimumNotice}"`);
         }

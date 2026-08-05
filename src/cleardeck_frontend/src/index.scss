@@ -217,6 +217,27 @@ img {
    411.8 px `.header-right` that forces the 0.918 zoom-out -- not from the
    notices.
 
+   WAVE 5 DID EXACTLY THAT, AND THE ARITHMETIC ABOVE NO LONGER DESCRIBES THE
+   TABLE VIEW. Measured on the same 390x844 device, same replica, one tool, in
+   the only legal configuration (nothing hidden):
+
+                          layout vp   banner  header  above table   6-max felt
+     before (wave 4)       425x918     268     173.5     449.5      18.3%
+     after  (wave 5)       390x844      60      69.0     132.6      60.6%
+
+   Three changes, none of which takes a word away from a player: `initial-scale=1`
+   in app.html (the layout viewport is now the device, so nothing is painted at
+   0.918); a two-row table header whose `.header-right` fits 390 px; and, in
+   PORTRAIT ON THE TABLE VIEW ONLY, the four notices as a 60 px strip that quotes
+   the protected phrases verbatim -- all five literal strings both notice checks
+   in this repo look for -- and opens the full text over the whole screen in one
+   tap. Presentation changed; wording did not. The rules in +page.svelte's
+   stylesheet under "PORTRAIT, TABLE VIEW" carry the detail.
+
+   THE FOOTER RULE BELOW IS UNCHANGED and still matters: the phone still renders
+   the notices once, not twice, and the copy that survives is still the TOP one,
+   the one a player cannot scroll away from.
+
    WHAT THIS RULE MAY NEVER BECOME. It may not shorten, soften, summarise or
    restyle either block, it may not hide both, and it may not be the block that
    is off screen that survives. The wording lives in +page.svelte and is
@@ -225,7 +246,32 @@ img {
    Desktop is deliberately untouched and still renders BOTH copies: at 1440x900
    the banner is what keeps the felt height-capped at its measured 2.12 aspect,
    and removing it there grew the surface from 68% to 79% of the window, outside
-   bar 3's not-felt band. */
+   bar 3's not-felt band.
+
+   ---------------------------------------------------------------------------
+   WAVE 5 COHERENCE PASS: THE TRAP THIS RULE SETS, AND HOW IT WAS SPRUNG.
+
+   The rule above is "one copy per page, and it is the copy a player cannot
+   scroll away from". It says nothing about WHICH WORDS are in that copy, and
+   that is the gap wave 5 fell into.
+
+   The compact portrait strip was given the app's canonical no-rake sentence,
+   "No rake is taken from any pot on any table" -- one of the FIVE phrases
+   tools/shots/lib/protected-notices.mjs hit-tests. The strip is `display: none`
+   at every viewport except portrait-on-the-table-view. So the sentence reached
+   the screen on 4 of the 15 (surface, viewport) pairs a player can reach and on
+   1 of the 7 desktop ones. Worse, `.banner-content` -- the sheet a portrait
+   player OPENS to read the terms -- covered the strip and did not restate the
+   property, so asking to read the terms took a protected notice off the screen.
+   Measured, both viewports, real canisters; see docs/DEFECTS.md T-36.
+
+   THE STANDING RULE THAT FOLLOWS. Any collapsed, compact or in-dialog
+   presentation of the notices must be a SUBSET of a copy that is on screen at
+   every viewport, and the copy that replaces it when it opens must be a
+   SUPERSET of it. A protected phrase living in exactly one conditional carrier
+   is a phrase one media query away from nobody. Both halves of this are now
+   asserted centrally by tools/shots/run.mjs (notices on screen, and the felt
+   area they compete with) rather than by anyone remembering this comment. */
 @media (max-aspect-ratio: 1/1) {
   .footer-disclaimer { display: none; }
 }

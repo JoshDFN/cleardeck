@@ -825,14 +825,138 @@ tables registered, signed out.
 | capture | viewport | first row at | rows fully visible | data fields |
 |---|---|---|---|---|
 | before (wave-3 critic) | 1440×900 | y=796, **88.4%** | **1** of 3 | 7 in the row + 18 in the preview |
-| **after (this pass)** | 1440×900 | y=370, **41.1%** | **3** of 3 | unchanged |
+| after (wave 4) | 1440×900 | y=370, **41.1%** | **3** of 3 | unchanged |
+| **after (wave 5)** | 1440×900 | y=312.8, **34.8%** | **3** of 3 | unchanged |
 | before (wave-3 critic) | 390×844 | y=1004, **119%** | **0** of 3 | 6 in the card (preview hidden) |
-| **after (this pass)** | 390×844 | y=543, **64.3%** | **1** of 3 | unchanged |
+| after (wave 4) | 390×844 | y=543, **64.3%** | **1** of 3 | unchanged |
+| **after (wave 5)** | 390×844 | y=484.3, **57.4%** | **2** of 3 | unchanged |
+
+Side by side with the clients the band comes from, so the comparison is not left to a reader:
+
+| client / capture | window | first row at | rows fully visible | fields per row | preview |
+|---|---|---|---|---|---|
+| PokerStars (desktop) | 732×552 | **34.4%** | 24 | 9 | yes |
+| **ClearDeck, wave 5** | 1440×900 | **34.8%** | **3 of 3** (every table it has) | **7** | **yes, 18 fields** |
+| ClearDeck, wave 4 | 1440×900 | 41.1% | 3 of 3 | 7 | yes |
+| PokerNow (desktop) | 1512×945 | 36.1% | 7 (8th clipped) | 4 | no |
+| WPT Global (desktop) | 1127×798 | 26.6% | 5 (every table it had) | 4 | yes |
+| PokerStars (phone) | 568 px-tall panel | **20.4%** | 4 (5th clipped) | — | n/a |
+| **ClearDeck, wave 5** | 390×844 | **57.4%** | **2 of 3** | **6** | n/a (opens the real table) |
+| ClearDeck, wave 4 | 390×844 | 64.3% | 1 of 3 | 6 | n/a |
+
+Desktop is now *inside* the reference range and 0.4 points off its median. The phone is not, and
+§9.4.2c below shows why that is arithmetic rather than layout: **45.9% of the phone screen is spent
+before `Lobby.svelte` paints a pixel.**
+
+#### 9.4.2a Wave 5: the furniture, itemised
+
+Every number below was read with `getBoundingClientRect()` in the browser the screenshot harness
+drives, against the real local canisters, three tables registered, signed out, `scrollY = 0`, with
+all four protected notices measured **on screen** in the same pass (§9.4.2c). Scratch harness:
+`measure.mjs` / `sweep.mjs` (first-row %, rows fully visible, every horizontally clipped container,
+every pill's box, and each protected phrase's own glyph rects tested for viewport containment and
+`elementFromPoint` occlusion).
+
+| the lobby's own furniture, top of `.lobby` → top of first row | 1440×900 | 390×844 |
+|---|---|---|
+| wave 4: pane bar | 56.0 | 84.3 |
+| wave 4: drift strip, above the list | 26.2 | 56.8 |
+| wave 4: column header row | 34.3 | — (cards) |
+| wave 4: padding | 10.9 | 13.9 |
+| **wave 4 total** | **127.4** | **155.0** |
+| wave 5: pane bar (one row: heading, counts, 0% rake, drift chip, filters) | 35.0 | 78.3–94.8 |
+| wave 5: drift strip | 0 (moved below the rows) | 0 (moved below the rows) |
+| wave 5: column header row | 30.3 | — (cards) |
+| wave 5: padding | 5.0 | 2.0 |
+| **wave 5 total** | **70.3** | **80.3–96.8** |
+
+The phone bar has a range because the counts line grows a phrase (`· 2 hands in play`) whenever a
+hand is running anywhere in the lobby, and at 366 px that wraps it to a second line. 96.8 is the
+worst case and it is the number the table above uses.
+
+Desktop, **−57.1 px**, and the arithmetic closes:
+
+| change | px |
+|---|---|
+| the drift statement moved from above the rows to below them | **−26.2** |
+| the bar itself, 56.0 → 35.0 | **−21.0** |
+| column header row, 9 px of padding → 7 | **−4.0** |
+| `.lobby` top pad 10 → 4, bar pad 6 → 3 | **−5.9** |
+| | **−57.1** |
+
+The bar's own −21.0 is two changes that only work together, which is why they are one line:
+
+* **the heading moved beside the counts** instead of above them, one type step down: the title block
+  measures 21.8 px on one baseline against 43.0 stacked;
+* **the density and refresh controls moved to the list footer.** They were 121 px of the bar's one
+  row, and with the heading inline the row's content came to 890.5 px in an 884 px pane — so it
+  wrapped, and the bar measured **63.8**, worse than wave 4's 56. Moving the two controls out is
+  what let the row fit on one line. Neither is a control anybody reaches for *before* reading the
+  list: Refresh now sits beside the sentence stating the 12-second poll interval it overrides, with
+  its word back (the top bar could not afford the 52 px), and row density sits beside the rows it
+  changes. Both do exactly what they did.
+
+The drift statement's *count* stayed above the list as a `.drift-chip` inside the counts line, which
+costs no height at all and links to the full sentence; each affected row still carries
+`⚠ RECORD DIFFERS` in the money cell the stale record misquotes; and the full sentence is
+immediately under the rows it is about.
+
+On the phone the card itself came down from **194.6 px to 166.4 px** — `⚠ RECORD DIFFERS` and
+`n sitting out` are inline beside the figures they qualify instead of taking a line each. That is
+what makes the second table fit: 484.3 + 166.4 + 6 + 166.4 = 823.1 in an 844 px screen.
+
+**Nothing was deleted.** 7 facts in the row, 18 in the preview, 3 live tables signed out, all five
+filter pills rendered whole at every width. §9.4.2b is the sweep that says so.
+
+#### 9.4.2b Wave 5: the same measurement at every width the lobby declares
+
+Ten widths, one browser, same replica, same instant. `first row` is `%` of the viewport height;
+`clipped` counts containers whose `scrollWidth` exceeds their `clientWidth` **with** a non-visible
+`overflow-x`, anywhere on the page, `.bg-effects` excluded (a fixed decorative glow layer in
+`+page.svelte`, no content).
+
+| viewport | first row | rows fully visible | pills / lines / cut | clipped | notices on screen |
+|---|---|---|---|---|---|
+| 390×844 | **57.4%** | 2 of 3 | 5 / 1 / 0 | none | 4 of 4 |
+| 430×932 | **46.3%** | 2 of 3 | 5 / 1 / 0 | none | 4 of 4 |
+| 500×900 | **47.3%** | 2 of 3 | 5 / 1 / 0 | none | 4 of 4 |
+| 760×900 | **39.3%** | 2 of 3 | 5 / 1 / 0 | none | 4 of 4 |
+| 900×900 | **37.7%** | 3 of 3 | 5 / 1 / 0 | none | 4 of 4 |
+| 1000×900 | **34.8%** | 3 of 3 | 5 / 1 / 0 | none | 4 of 4 |
+| 1080×900 | **34.8%** | 3 of 3 | 5 / 1 / 0 | none | 4 of 4 |
+| 1240×900 | **37.7%** | 3 of 3 | 5 / 1 / 0 | none | 4 of 4 |
+| 1440×900 | **34.8%** | 3 of 3 | 5 / 1 / 0 | none | 4 of 4 |
+| 1920×1080 | **29.0%** | 3 of 3 | 5 / 1 / 0 | none | 4 of 4 |
+
+Two robustness cases, both simulated in the page and labelled as simulations:
+
+* **the filter set grows** (three pills injected, standing in for the currency row that appears the
+  moment a second currency is registered — [DEFECTS.md T-05](DEFECTS.md#t-05)): at 1440 the eight
+  pills still render on **one line, none cut**, first row 37.7%; at 390 they wrap to **two lines,
+  none cut**, first row 61.6% and 1 of 4 cards fully visible. BAR 28 holds in both; BAR 31's
+  second half does not survive the extra row on a phone, which is a fact the T-05 fix has to carry.
+* **the portrait notice strip applied to the lobby** — see the arithmetic below.
+
+#### 9.4.2c Wave 5: the notices, measured on the rendered page
+
+The wave-4 lesson is that `textContent` gates cannot see this, so each protected phrase is located
+by walking text nodes, a `Range` is put around the phrase itself, and **its own glyph rectangles**
+are tested for (a) full containment in the viewport at `scrollY = 0` and (b) `elementFromPoint` at
+each rect's centre resolving back to the phrase's own element.
+
+| phrase | 1440×900 | 390×844 | with the How-it-works dialog open |
+|---|---|---|---|
+| `Unaudited code with known bugs` | y 18–33 ✓ | y 18–33 ✓ | ✓ both viewports |
+| `your funds are NOT safe` | y 36.5–51.5 ✓ | y 54.5–69.5 ✓ | ✓ both viewports |
+| `18+ only` | y 54.5–69.5 ✓ | y 108.5–123.5 ✓ | ✓ both viewports |
+| `illegal in many jurisdictions` | y 36.5–51.5 ✓ | y 90.5–105.5 ✓ | ✓ both viewports |
+| `No middleman, no house` | y 80.5–95.5 ✓ | y 134.5–149.5 ✓ | ✓ both viewports |
+| `0% rake` (the lobby's own chip) | y 258.6–272.6 ✓ | y 412.5–426.5 ✓ | behind the dialog; the dialog states `No rake.` at its head, measured on screen ✓ |
 
 **The floor neither the lobby nor this bar can move.** The disclaimer banner and the app header are
 `+page.svelte`, and the disclaimer is protected copy. Measured at the same moment as the rows
-above, they occupy **160 + 83 = 243 px of a 900 px desktop viewport (27.0%)** and **268 + 120 =
-388 px of an 844 px phone (46.0%)**. So on a phone *no* lobby layout can reach the reference band:
+above, they occupy **160 + 82.5 = 242.5 px of a 900 px desktop viewport (26.9%)** and **268 + 119.5
+= 387.5 px of an 844 px phone (45.9%)**. So on a phone *no* lobby layout can reach the reference band:
 46.0% is the arithmetic floor before `Lobby.svelte` paints a pixel, and every threshold below is
 therefore expressed as **the lobby's own furniture**, which is the only part the lobby owns.
 
@@ -847,6 +971,32 @@ therefore expressed as **the lobby's own furniture**, which is the only part the
 > BAR 26's 243 px subtraction both inherit the same conflation. Left in place because the bars
 > themselves are still where the work should aim; the *reasoning under them* is what is wrong.
 
+> **WAVE 5: the phone deficit is now entirely chrome, and it is 28 px.** With the lobby's own
+> furniture at 96.8 px the phone's first card is at 57.4%. Drive the furniture to **zero** and the
+> first card still lands at **387.5 px = 45.9%**, which is 3.3 points outside the 42.6% ceiling.
+> **No change to `Lobby.svelte` can reach the band on a phone**: 28.0 px has to come out of the
+> 387.5 px above it, and every one of those pixels belongs to `+page.svelte` / `index.scss`.
+>
+> The mechanism to do it already exists in `+page.svelte` and is already argued for there. Wave 5's
+> concurrent pass added `.banner-strip` — a compact red strip carrying the protected phrases
+> **verbatim** (`Unaudited code with known bugs`, `your funds are NOT safe`, `illegal in many
+> jurisdictions`, `18+ only`, plus the no-house/0% rake property), one tap from the full text — and
+> scoped it to `class:on-table={view === 'table'}`, with the comment "the lobby in portrait still
+> gets the full banner in the flow, because on the lobby nothing is competing for the space".
+> On the lobby something is: this bar. Measured with that treatment applied to the lobby at 390×844
+> (simulated in the page by adding `on-table` to `.alpha-warning-banner` and `compact` to
+> `header` — `+page.svelte` was **not** edited):
+>
+> | | banner | header | chrome | first card | rows fully visible | notices on screen |
+> |---|---|---|---|---|---|---|
+> | lobby as it ships | 268.0 | 119.5 | 387.5 | y 484.3 = **57.4%** | 2 of 3 | 4 of 4 |
+> | lobby with the strip | 59.6 | 42.0 | 101.6 | y 198.3 = **23.5%** | **3 of 3** | **4 of 4** |
+>
+> 23.5% is inside the band and within 3.1 points of the PokerStars mobile reference (20.4%), with
+> every table on screen and every protected phrase measured on screen and unoccluded. The change is
+> one condition in a file this pass does not own; it is written up as
+> [DEFECTS.md L-03](DEFECTS.md#l-03).
+
 #### 9.4.3 The bars
 
 > **BAR 25 (restated numerically).** **Desktop: the first table row starts within the top 43% of
@@ -854,30 +1004,57 @@ therefore expressed as **the lobby's own furniture**, which is the only part the
 > than the widest of them, and that slack is exactly the price of the protected disclaimer, which
 > none of the three reference clients carries and which alone is 17.8% of a 900 px viewport. Note
 > what the floor implies: **27.0% is unreachable-from-below even with zero lobby furniture**, so
-> the bar is really "spend under 16 points of viewport on furniture". Today: **41.1%**. Was 88.4%.
-> (The wave-3 critic recorded PokerNow at 36.5% for the same capture; re-measured here at y≈341 of
-> 945 = 36.1%. Either way it is the widest reference.)
+> the bar is really "spend under 16 points of viewport on furniture". Today: **34.8%** at 1440×900,
+> and 29.0%–37.7% across every width from 900 px up (§9.4.2b). Was 41.1% in wave 4 and 88.4% in
+> wave 3. 34.8% is 0.4 points off the PokerStars reference (34.4%) and inside the 26.6%–36.1%
+> reference range, so the 6.9 points of slack this bar granted for the protected disclaimer are no
+> longer being spent. (The wave-3 critic recorded PokerNow at 36.5% for the same capture;
+> re-measured here at y≈341 of 945 = 36.1%. Either way it is the widest reference.)
 
 > **BAR 26 (new).** **The lobby's own furniture above the first row is ≤ 140 px at desktop and
 > ≤ 160 px at 390 px wide** — heading, counts, filters, controls, any warning strip, and the column
 > header row, everything between the app header and the first row. Derived from BAR 25 minus the
 > 243 px floor (0.43 × 900 − 243 = 144 px), and applied to the phone as the same absolute budget
-> because the furniture does not get cheaper on a smaller screen. Today: **127 px** desktop
-> (bar 56 + drift strip 26 + column header 34 + 11 px of padding), **155 px** phone.
+> because the furniture does not get cheaper on a smaller screen. Today: **70.3 px** desktop
+> (bar 35 + column header 30.3 + 5 px of padding — the drift strip is below the rows now) and
+> **80.3–96.8 px** phone (bar 78.3–94.8 + 2 px of padding; the range is a hand running or not,
+> §9.4.2a). Was 127.4 / 155.0 in wave 4. Both halves clear with 50 px to spare.
 
 > **BAR 27 (new).** **At least 3 table rows fully visible without scrolling, or every table that
 > exists, whichever is smaller.** Three is the smallest number that lets a player *compare* rather
 > than read one and scroll; the references do far better (PokerStars 24, PokerNow 7) and WPT Global
-> shows all 5 it has. Today: **3 of 3** at desktop, **1 of 3** on the phone — the phone fails this
-> bar and the reason is arithmetic, not layout: a 195 px card cannot fit twice below 543 px on an
-> 844 px screen. It clears once the 388 px of protected chrome above the lobby is revisited, or the
-> card is redesigned below ~150 px.
+> shows all 5 it has. Today: **3 of 3** at desktop (and 3 of 3 at every width from 900 px up),
+> **2 of 3** on the phone. Wave 4 read 1 of 3; the card came down from 194.6 px to 166.4 px
+> (§9.4.2a) and the furniture from 155 px to 96.8 px, which is what the second card is made of. The
+> third needs the chrome fix: with it, 3 of 3 at 390×844 — measured, in the wave-5 note above
+> §9.4.3 and in [DEFECTS.md L-03](DEFECTS.md#l-03).
 
 > **BAR 28 (new).** **No filter, tab or control may be clipped at any viewport.** WPT Global renders
 > all five stake tabs and all three game tabs at 1127 px; nothing in the corpus scroll-clips a
 > filter. Before this pass ClearDeck's phone filter strip measured `scrollWidth 434` against
 > `clientWidth 366` under `overflow-x: auto`, slicing "Micro" mid-word. Today the strip wraps:
-> `scrollWidth 366 == clientWidth 366`, nothing cut.
+> `scrollWidth 366 == clientWidth 366`, `overflow-x: visible`, all five pills on one line, **0 cut**
+> — re-verified this pass at ten widths from 390 to 1920, and with three extra pills injected, where
+> it wraps to a second line and still cuts nothing (§9.4.2b).
+>
+> **WAVE 5 FINDING: this bar was being failed by something nobody had measured — the row's own
+> action control.** At 1440×900 the table's min-content width was 934.5 px inside a 908 px pane and
+> `.list-pane { overflow: hidden }` clipped the right 26.5 px, so every row's `Sit` / `View` /
+> `Watch` label lost 10.5 px of itself, arrow included. It was not one breakpoint: four separate
+> width ranges clipped it (761–848, 1001–1064, 1081–1184, 1241–1288), because which columns fit is a
+> question about the PANE's width and every rule deciding it was written against the VIEWPORT's.
+> Fixed at the root with `container-type: inline-size` on the pane and two `@container` rules at the
+> measured floors (879 px of pane for seven columns, 807 for six, 687 for five), plus 12 px cell
+> padding instead of 16. Ten widths now report zero clipped containers.
+> [DEFECTS.md L-01](DEFECTS.md#l-01).
+>
+> A second control was failing it too, in a file the same pass owns: the **How-it-works dialog's own
+> close button**, centred on the viewport at `top: 50%` while the banner (`z-index: 100` on `.app`)
+> paints over everything inside `<main>` whatever its z-index. Measured at 1440×900 the dialog began
+> at y=67.5 under 243 px of chrome: its title row and its `×` were unclickable, and only the keyboard
+> path worked. The dialog now measures the chrome and opens under it (253 px at desktop, 398 on a
+> phone), which also keeps the four notices out from behind the scrim.
+> [DEFECTS.md L-02](DEFECTS.md#l-02).
 
 > **BAR 29 (new).** **A row states at least 4 facts about its table, and the desktop lobby ships a
 > master/detail preview.** 4 is the floor set by both PokerNow and WPT Global; the preview is what
@@ -885,7 +1062,11 @@ therefore expressed as **the lobby's own furniture**, which is the only part the
 > format tags, stakes, buy-in range, seat occupancy incl. sitting-out, hands dealt, live phase +
 > pot) and **18** in the preview, so this bar is a floor to defend, not a gap. **Compressing the
 > lobby must never be paid for with this bar** — the wave-3 rebuild moved furniture and deleted no
-> field.
+> field, and neither did wave 5: 7 in the row and 18 in the preview, re-counted on the rendered page
+> at every width in §9.4.2b. What wave 5 does do is make the column set depend on the pane's width
+> rather than the viewport's, so `Hands` (and below 807 px of pane, `Buy-in`) drop out where they
+> would otherwise have pushed the action control off the row — the buy-in range is still stated in
+> the preview's facts list at every width, and the desktop grid at 1440 still ships all seven.
 
 > **BAR 30 (new).** **Every price on the lobby screen comes from the table contract.** Not a
 > reference-derived bar — a correctness one, and it is here because it is a lobby-layout trap: the
@@ -894,14 +1075,36 @@ therefore expressed as **the lobby's own furniture**, which is the only part the
 > in the Stakes cell 222 px to its right. The name is still quoted verbatim — it is the table's
 > registered identity — but any figure inside it that the contract contradicts is struck through
 > and flagged, so exactly one figure on the row reads as a price and it is the contract's.
+>
+> **WAVE 5 AUDIT: every price on the lobby, read off the screen and compared with the chain.**
+> Six figures per ICP row and six in the preview, at 1440×900 and 390×844:
+>
+> | on screen | contract (`get_table_view().config`) | verdict |
+> |---|---|---|
+> | row `0.10/0.20 ICP`, buy-in `20.00 – 100.00` | table_3 `10_000_000 / 20_000_000`, `2e9 / 1e10` | agrees |
+> | row `0.01/0.02 ICP`, buy-in `2.00 – 10.00` | table_1 `1_000_000 / 2_000_000`, `2e8 / 1e9` | agrees |
+> | row `0.05/0.10 ICP`, buy-in `10.00 – 50.00` | table_2 `5_000_000 / 10_000_000`, `1e9 / 5e9` | agrees |
+> | preview `Blinds 0.10/0.20`, `Buy-in 20.00 – 100.00`, `Clock 60s + 30s`, `Ante None` | table_3, incl. `action_timeout_secs = 60`, `time_bank_secs = 30`, `ante = 0` | agrees |
+> | row NAME `9-Max - 0.01/0.02`, `6-Max - 0.01/0.02`; preview heading likewise | table_3 charges 0.10/0.20, table_2 charges 0.05/0.10 | **DISAGREES — 6 figures** |
+>
+> Every price the client *computes* is the contract's. The six that disagree are all the same
+> string: the name the LOBBY canister has registered. The client already strikes it through and
+> labels it `STALE NAME`, but the harness reads `textContent` and is right to: a struck figure is
+> still a figure on the screen. **This is a data defect, not a rendering one, and it is why the two
+> lobby scenes are red.** Fixing it needs one admin update call per table plus one new lobby method
+> that does not exist yet; both are specified, with the on-chain evidence, in
+> [DEFECTS.md L-04](DEFECTS.md#l-04). No engine file was touched this pass.
 
 > **BAR 31 (new, wave-4 coherence pass).** **Mobile: the first table row starts within the top 45%
 > of the screen, and at least 2 rows are fully visible.** Anchored on the one real mobile lobby
 > capture in the corpus, PokerStars at **20.4% with 4 rows** (§9.4.1). The bar is set 24.6 points
 > looser than the reference because ClearDeck carries 229 px of genuinely protected chrome that
 > PokerStars does not (see the correction above); it is *not* set at the reference, because nobody
-> should pretend that gap is closable this wave. Today: **first row at y = 543 = 64.3%, 1 of 3 rows
-> fully visible.** Fails on both halves.
+> should pretend that gap is closable this wave. Today: **first row at y = 484.3 = 57.4%, 2 of 3
+> rows fully visible.** The second half now passes. The first half fails by 12.4 points, and wave 5
+> establishes that **10.8 of those 12.4 points are not the lobby's to spend**: with the lobby's
+> furniture at zero the first card is still at 45.9%. See the wave-5 note under §9.4.2c for the
+> 28 px, and [DEFECTS.md L-03](DEFECTS.md#l-03) for the one-condition change that measures 23.5%.
 
 ### 9.5 Wave-4 coherence pass: bars superseded, and the mobile table restated
 
@@ -954,3 +1157,102 @@ Stated so a future reader does not mistake silence for a pass:
 * **Landscape phone.** One PokerNow capture exists; ClearDeck has no landscape scene.
 * **The seated bet-sizing strip.** PokerNow's could not be captured (game creation is behind a bot
   check we will not defeat), so bars 7 and 12 have no PokerNow anchor.
+
+---
+
+## 10. Wave-5 coherence pass, the measurements, corrected and now gated
+
+Everything in this section was measured on the rendered page against the real local canisters, in
+the only legal configuration (all five protected phrases on screen and hit-tested), and every
+number here is now an **assertion in the harness** rather than a figure in a document:
+`tools/shots/lib/felt-area.mjs`, run centrally from `run.mjs` for every scene at every viewport,
+records the geometry into `manifest.json` and prints it into a new **felt** column in `INDEX.md`
+beside a new **NOTICES** column ([DEFECTS.md H-40](DEFECTS.md#h-40)).
+
+### 10.1 Measure `.felt`, not `.poker-table`: the factor-of-two trap
+
+`.poker-table` is the whole stage: felt, seat pods, action dock. Measuring it at 1440×900 reads
+**1400×629 = 68% of the window area** where the playing surface is **31.7%**. The first version of
+this pass's own probe fell into it. `.felt` is the layout box of the visible green surface (the rail
+is drawn outside it with box-shadow rings so it costs no layout height), and it is the only element
+any felt figure in this repository should ever mean.
+
+Note that §9.1's "width %" column is felt width ÷ **window width** (962/1440 = 66.8%), while the
+new gate reports felt **area** ÷ window area. Both are useful; neither is the other, and a reader
+comparing 66.8% with 31.7% is comparing a length with an area.
+
+### 10.2 The settled geometry, both viewports, as gated
+
+| scene | table | 1440×900 | 390×844 |
+|---|---|---|---|
+| `table-preflop`, `table-facing-bet`, `table-showdown` | `table_2`, 6-max | 929.3×442.5 = **31.7%** area, **64.5%** width, aspect 2.10 | 332.8×599.5 = **60.6%** area, aspect 0.555 |
+| `table-empty`, `table-allin`, `table-sidepots` | `table_3`, 9-max | 950.3×452.5 = **33.2%** area, **66.0%** width, aspect 2.10 | 304.2×548.1 = **50.7%** area, aspect 0.555 |
+
+Floors asserted: **45.0%** of frame area at 390×844, **28.0%** at 1440×900. They are deliberately
+loose, a wave-4-scale regression is 18.3%, because a gate that flakes gets switched off, and the
+recorded number is what a reader compares wave to wave. Proved in both directions on the shipping
+build: changing one declaration in the shipped stylesheet, `--fw: min(86cqw, 55cqh)` →
+`min(50cqw, 32cqh)`, drops `table-preflop` mobile to **193.6×348.8 = 20.5%** and the scene goes red
+naming the number and the floor.
+
+### 10.3 Correction to §9.1: the desktop felt is 64.5% of window width, not 66.8%
+
+`table-preflop-desktop` and `table-facing-bet-desktop` read 962×452 in wave 5 and read
+**929.3×442.5** now. The 18 px of stage height came out of the desktop banner, because this pass
+had to put the canonical no-rake sentence somewhere a desktop player can see it
+([DEFECTS.md T-36](DEFECTS.md#t-36)): before the fix, *"No rake is taken from any pot on any
+table"* was on screen on **one** of the nine surfaces a player can reach, and on none of the
+desktop ones.
+
+**Bar 1 (70% ±8 of window width) is still CLEARED**, now at 64.5–66.0% instead of 66.8–68.3%, and
+bar 2 (aspect 1.9–2.3) is unchanged at 2.10. The trade is not negotiable under HARD RULE 2 and is
+recorded here so nobody has to rediscover where the 18 px went. The right place to buy it back is
+the non-protected marketing clause in the same paragraph ("Built to demonstrate the power of the
+Internet Computer…"), never a notice.
+
+### 10.4 The portrait numbers reproduce, and they are the SETTLED state
+
+`table-preflop` mobile 332.8×599.5 = **60.6%** reproduces exactly, three times, on three separate
+runs and on two independent probes. Against the references in this document: PokerNow's real
+portrait capture **49.1%**, GGPoker creative 40.3% (fill SUSPECT), PokerStars creative 27.4%. The
+9-max 50.7% is width-capped by `--fw: min(78cqw, 52cqh)` → min(304.2, 314.6) and no vertical budget
+moves it.
+
+**What was never distinguished until now: 60.6% is the settled state, and it is not the first
+paint.** `PokerTable.svelte:313` falls back to `max_players ?? 9`, so every table, including a
+6-max one, first draws a NINE-seat ring, and the felt corrects when the canister answers
+([DEFECTS.md T-32](DEFECTS.md#t-32)). Sampled per animation frame on entry to `table_2`:
+
+| viewport | first paint | held | settles to |
+|---|---|---|---|
+| 390×844 | 287.5×518.1 = **45.3%** rising to 50.7%, 9 pods | **336 ms** | 332.8×599.5 = **60.6%**, 6 pods |
+| 1440×900 | 950.3×452.5 = **33.2%**, 9 pods | **304 ms** | 929.3×442.5 = **31.7%**, 6 pods |
+
+That is a visible 9.4% linear jump of the whole table on every phone entry, and it is why the new
+gate records the pod count and the ring class beside every number: a felt figure without them does
+not say which of the two states it measured. **A new bar follows from it.**
+
+> **BAR 33 (new).** **The table must not resize under the player after it is drawn.** A client that
+> guesses the seat count and corrects it a third of a second later has published two different
+> tables, and every felt measurement in this document is then ambiguous. The ring must be drawn from
+> a known `max_players` — the lobby row the player clicked already carries it.
+
+### 10.5 Bar 32 (nothing may occlude a figure), and the notice it cannot see
+
+Bar 32 is now enforced in pixels by `tools/shots/lib/occlusion.mjs`, and the full run reports **0
+occluded** on all 22 shots. Two limits, recorded because a bar whose limits are unwritten reads as
+broader than it is:
+
+1. It measures **figures**: money, equity, card rank and pip. It does not measure **notices**,
+   which is why nothing in the harness noticed that the desktop table stated the no-rake property
+   nowhere a player could see it. That half is now `protected-notices.mjs`, run centrally.
+2. It measures figures the DOM scan **nominates as occluders**, so a full cover by an element its
+   paint model believes is underneath is not gated. The gate's own critic got five such constructions
+   past it. Filed by its author; not re-litigated here.
+
+### 10.6 What this section still cannot adjudicate
+
+The four gaps in §9.6 all stand. One is now sharper: **the harness photographs 390×844 and 1440×900
+only**, so the two viewports this wave had to fix by hand, 844×390 landscape phone (felt
+400.0×190.5 = 23.1%) and 320×568, have numbers, no bar, and no scene. A felt floor that no scene
+evaluates at those sizes is not protecting them.

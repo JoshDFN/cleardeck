@@ -53,6 +53,16 @@ path = "tests/regressions.rs"
 name = "fuzz"
 path = "tests/fuzz.rs"
 
+# Named explicitly for the same reason `regressions` and `fuzz` are, and for the
+# reason `deposit_replay` had to be named in scripts/dev.sh: a cargo-auto-discovered
+# target is a target no human ever types. This one reads src/table_canister/src/lib.rs
+# and the two money modals and fails when a limit the UI STATES stops matching the
+# limit the canister ENFORCES (docs/DEFECTS.md T-26). It needs no replica and no
+# wasm -- two file reads -- so it is in the fast gate.
+[[test]]
+name = "ui_limits"
+path = "tests/ui_limits.rs"
+
 # PocketIC instances are heavy (one replica per instance). Keep test binaries
 # from fighting over CPU by default; see README.md.
 [profile.test]

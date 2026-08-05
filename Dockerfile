@@ -21,6 +21,11 @@ RUN npm i -g @icp-sdk/icp-cli@1.0.0
 
 # Copy the manifest + Rust sources (the @dfinity/rust recipe builds from Cargo).
 COPY icp.yaml Cargo.toml Cargo.lock ./
+# poker_core carries the shuffle and the evaluator and every canister depends on
+# it. Omitting it made this image fail to compile from the moment the crate was
+# extracted, which silently broke the only build-verification path the README
+# offers a stranger. An independent auditor found it before we did.
+COPY src/poker_core ./src/poker_core
 COPY src/table_canister ./src/table_canister
 COPY src/lobby_canister ./src/lobby_canister
 COPY src/history_canister ./src/history_canister

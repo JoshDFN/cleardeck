@@ -74,10 +74,22 @@ export const idlFactory = ({ IDL }) => {
     'AllIn' : IDL.Null,
     'Check' : IDL.Null,
   });
+  // `phase` and `amount` are on the wire for EVERY action the table canister
+  // records (`ActionRecord` in src/table_canister/src/lib.rs, filled in
+  // `apply_player_action`), and they were missing here. This file is generated
+  // from src/table_canister/table_canister.did, which is stale in exactly this
+  // way -- docs/DEFECTS.md E-08 names these two fields by name. The consequence
+  // was invisible until something tried to read them: the agent decoded three
+  // fields off a five-field record, so no client could show a call's amount, an
+  // all-in's amount, or the street any action happened on, however it was
+  // written. docs/DEFECTS.md H-32. Adding fields a decoder can already see on
+  // the wire cannot break an older canister: the encoder is the Rust struct.
   const ActionRecord = IDL.Record({
     'action' : PlayerAction,
     'seat' : IDL.Nat8,
     'timestamp' : IDL.Nat64,
+    'phase' : IDL.Text,
+    'amount' : IDL.Nat64,
   });
   const ShuffleProof = IDL.Record({
     'timestamp' : IDL.Nat64,

@@ -1514,3 +1514,118 @@ back.
 `docs/DEFECTS.md` E-10 (`PENDING_WITHDRAWALS` / `LAST_WITHDRAWAL` are not persisted at all) is
 the same blind spot seen from the other side: nobody has ever exercised an upgrade across a
 version boundary, so nothing about persistence is known to work.
+
+---
+
+## FINDING 15 (critical, OPEN), one unguarded evaluator call locks a funded table: every path to a player's own money closes at once
+
+**Filed by the wave-5 coherence pass on the report of an independent auditor that was given the
+running local stack and no access to this repository's documents. Executed by that auditor on a
+funded local table. The call site is confirmed by code read in the current source. NOT PATCHED , 
+HARD RULE 3 says a fund finding is written up here and never quietly fixed, and this one needs a
+failing test first.**
+
+### What was executed
+
+Local `table_2` (`4zfnl-5t777-77775-aaadq-cai`), deployed module `0x5298915c…`. The auditor was
+playing an ordinary hand. **One seated player's client stopped sending heartbeats for thirty
+seconds while a pre-flop hand was live.** From that moment on:
+
+| call | result |
+|---|---|
+| `check_timeouts` | IC0503 trap, `IMPOSSIBLE HAND: evaluate_hand needs a 3-, 4- or 5-card board (flop/turn/river), got 0 community cards` |
+| `player_action` | the same trap |
+| `leave_table` | the same trap |
+| `withdraw` | `Err("Cannot withdraw while in a hand")` |
+| `cash_out` | `Err("Cannot cash out while in a hand")` |
+
+Unreachable at that moment: **38,000,000,000 e8s of escrow, 3,985,000,000 e8s of seated chips and a
+15,000,000 e8s pot, about 420 ICP.** Not one path a player has was open. It cleared only because
+the auditor happened to try `sit_out`, which does not advance the game and which no error message
+suggests.
+
+### Why it is a lock and not a hiccup
+
+A trap rolls the message back. The state is therefore **unchanged** after the failure, so the next
+call takes the identical path and traps identically. The client polls `check_timeouts`; that is the
+call that fails. The UI offers fold, leave, cash out and withdraw; those are exactly the calls that
+fail. From the player's chair this is indistinguishable from the operator having taken the deposit.
+
+### The mechanism, in the current source
+
+`poker_core::evaluate_hand` traps by design on an impossible input, that is E-09's fix, and the
+block comment above it argues for the trap and offers `try_evaluate_hand` to any caller that would
+rather handle the rejection. Three call sites in `table_canister` reach it from the settlement path.
+**Two guard the board length. One does not.**
+
+```rust
+// src/table_canister/src/lib.rs:4098  , guarded
+if !(3..=5).contains(&state.community_cards.len()) { return Vec::new(); }
+
+// src/table_canister/src/lib.rs:4505  , guarded
+.filter(|_| state.community_cards.len() >= 3)
+
+// src/table_canister/src/lib.rs:871   , NOT GUARDED, inside record_hand_to_history
+final_hand_rank: if show_cards {
+    p.hole_cards.as_ref().map(|cards| evaluate_hand(cards, &state.community_cards))
+} else {
+    None
+},
+```
+
+`determine_winners` calls `record_hand_to_history(state, &winners, true)` unconditionally
+(`:4631`), and `show_cards = went_to_showdown && !p.has_folded`. So **any** route to a showdown
+with fewer than three community cards traps, and both street-advance routines make that state
+reachable, because each sets the next phase whether or not it managed to deal a card:
+
+```rust
+// advance_to_next_street, GamePhase::PreFlop
+if state.deck_index + 3 < state.deck.len() {   // deal the flop …
+    …
+}
+state.phase = GamePhase::Flop;                 // … but advance regardless
+```
+
+`run_out_board` (`:3576-3610`) has the same shape at every street: `if state.deck_index <
+state.deck.len()` around each push, and an unconditional phase assignment after it. A hand whose
+deck cannot supply cards therefore walks PreFlop → Flop → Turn → River → Showdown with an **empty
+board** and then traps in the history recorder, permanently.
+
+This composes with [FINDING 12](#finding-12) and DEFECTS E-43: a missing heartbeat drops a seat from
+`count_players_can_act`, which is what closes the betting round early and hands control to
+`run_out_board` in the first place.
+
+### The fix, and the order to do it in
+
+1. **A failing test first.** A `TableState` at `Showdown` with an empty `community_cards` and at
+   least one unfolded seat holding hole cards, settled through `determine_winners`. It must trap
+   before the fix and settle after it. `tests/money_safety` is the right home: this is a money
+   invariant (M2 LEDGER REALITY holds, but *the player cannot reach the money* is not currently
+   any invariant at all, which is its own gap, see below).
+2. **One line.** `try_evaluate_hand(cards, &state.community_cards).ok()` at `:871`, so recording
+   history is lossy rather than fatal.
+3. **The auditor's own recommendation, which is broader and better:** *"make every settlement
+   evaluator call refuse rather than trap"*, and *"stop treating a missing heartbeat as an absence
+   of obligation in the betting state machine"*.
+4. **A guard against the class.** No `evaluate_hand` (as opposed to `try_evaluate_hand`) should be
+   reachable from an update entry point at all. That is a grep-able invariant and belongs in the
+   test suite.
+
+### The invariant this repository does not have
+
+Every money invariant here asks whether the arithmetic is right: chips conserved, escrow ≥
+liabilities, the right principal paid. **None of them asks whether a player can still get their
+money out.** A table can satisfy every invariant in `tests/money_safety` while being permanently
+frozen with funded seats, and that is the state the auditor reached in ordinary play. The missing
+invariant, stated so it can be built:
+
+> **M9 REACHABILITY.** For any state a sequence of legal calls can reach, there exists a sequence of
+> legal calls by each funded player that returns that player's balance to the ledger.
+
+### Why this outranks its own severity
+
+The auditor replayed the exact frozen state against the **current source** in its own host harness
+and it settled correctly. So the binary holding money and the source offered for inspection are not
+the same program, and the one holding money is worse
+([DEFECTS.md T-33](DEFECTS.md#t-33)). A verifiable shuffle inside an unverifiable binary buys a
+player very little.

@@ -28,12 +28,15 @@ import {
   burst, clearLatestVariants, gitDirty, gitShortSha, runDirs, shoot, writeIndex, writeManifest,
 } from './lib/capture.mjs';
 import {
-  getAppOrigin, launchBrowser, newContext, resetThirdPartyObservations, setAppOrigin,
+  getAppOrigin, launchBrowser, newContext, resetThirdPartyObservations, setAppOrigin, settle,
   thirdPartyObservations, watchCanisterCalls, watchPage,
 } from './lib/browser.mjs';
 import { scenesByName } from './scenarios/index.mjs';
 import { DRIFT_TARGETS, injectDrift, requestedDrift } from './lib/drift.mjs';
 import { assertEveryTokenAccountedFor } from './lib/token-census.mjs';
+import { assertNothingCoversAFigure } from './lib/occlusion.mjs';
+import { foldProtectedNotices, probeProtectedNotices } from './lib/protected-notices.mjs';
+import { foldFeltArea, measureFelt } from './lib/felt-area.mjs';
 
 const log = (msg) => console.log(msg);
 
@@ -242,6 +245,108 @@ async function runScene(scene, viewportName, ctx, browser, dirs) {
         ? `${verification.notes}; ${census.notes}`
         : `${census.notes} || ${verification.notes}`,
     };
+
+    // THE PIXEL GATE, run centrally for the same reason the census is: a scene
+    // cannot forget it. Every other gate in this repo reads `textContent`, so a
+    // correct number with a card painted over it was photographed and filed as
+    // verified twice (docs/DEFECTS.md T-22, T-23). This one asks whether the
+    // figure is ON SCREEN — geometry, then effective paint order, then hit
+    // testing, then a four-shot pixel differential that is the authority.
+    const occlusion = await assertNothingCoversAFigure(page, {
+      scene: scene.name,
+      viewport: viewportName,
+      outDir: path.join(dirs.shaDir, 'occlusion'),
+    });
+    verification = {
+      verified: verification.verified && occlusion.ok,
+      checks: { ...verification.checks, occlusion: occlusion.checks },
+      notes: occlusion.ok
+        ? `${verification.notes}; ${occlusion.notes}`
+        : `${occlusion.notes} || ${verification.notes}`,
+    };
+    for (const f of occlusion.checks.findings) {
+      log(`  ⚠ COVERED: ${(f.pixels.coveredInkFraction * 100).toFixed(1)}% of `
+        + `${f.occluded.kind} "${f.occluded.text}" (${f.occluded.path}) is painted over by `
+        + `${f.occluder.path}`);
+    }
+
+    // HARD RULE 2, RUN CENTRALLY, ON THE RENDERED PAGE.
+    //
+    // WHY IT IS HERE AND NOT IN A SCENE. `lib/protected-notices.mjs` was written
+    // in wave 5 and imported by exactly two scenarios — handhistory and
+    // handreplay — and by nothing else: not this file, not a table scene, not the
+    // lobby, not deposit. The cost of that was demonstrated with a build rather
+    // than an argument: flipping ONE declaration, `.banner-strip { display:
+    // block }` to `display: none`, shows a phone player ZERO of the five
+    // protected phrases on the table view, raises the felt, and leaves the
+    // occlusion gate, the token census and `./scripts/dev.sh hygiene` all green.
+    // That is wave 4's crime re-committed in one line with every gate passing,
+    // which is the precise structural failure wave 5 was chartered to end. Wave 4
+    // was green because hygiene greps the SOURCE; wave 5 was green because the
+    // probe that reads the SCREEN lived in a scratchpad.
+    //
+    // So it runs where the census and the pixel gate run: once, centrally, for
+    // every scene at every viewport, with no per-scene opt-in and no opt-out.
+    //
+    // WHAT SCROLL POSITION THE RULE IS ABOUT. Wave 4's crime was that the notices
+    // were 248 px of scroll BELOW the fold on the view as it lands, so the rule
+    // has to be evaluated at the top of the view or it is not the rule. Some
+    // scenes then scroll deliberately to frame something (`shuffleproof` scrolls
+    // the proof panel into shot on a phone, which puts the banner at y=-90), and
+    // failing those would be a false red that gets the gate switched off. So: probe
+    // where the scene left the page; if anything is off screen, probe again at
+    // scroll 0 and let THAT be the verdict, recording both. A notice that is off
+    // screen at the top of the view fails either way.
+    let notices = foldProtectedNotices(
+      await probeProtectedNotices(page),
+      `on the rendered page (scene ${scene.name}, ${viewportName})`,
+    );
+    if (!notices.ok) {
+      const wasAt = await page.evaluate(() => window.scrollY);
+      if (wasAt !== 0) {
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await settle(page);
+        const atTop = foldProtectedNotices(
+          await probeProtectedNotices(page),
+          `at the top of the view (scene ${scene.name}, ${viewportName}; `
+          + `the scene had scrolled to y=${wasAt})`,
+        );
+        await page.evaluate((y) => window.scrollTo(0, y), wasAt);
+        await settle(page);
+        notices = {
+          ...atTop,
+          measuredAtScrollTop: true,
+          sceneScrollY: wasAt,
+          atSceneScroll: { ok: false, onScreen: notices.onScreen, problems: notices.problems },
+        };
+      }
+    }
+    verification = {
+      verified: verification.verified && notices.ok,
+      checks: { ...verification.checks, protectedNotices: notices },
+      notes: notices.ok
+        ? `${verification.notes}; ${notices.onScreen}/${notices.total} protected notices on screen`
+        : `${notices.problems.join(' | ')} || ${verification.notes}`,
+    };
+    for (const p of notices.problems) log(`  ⚠ NOTICE OFF SCREEN: ${p}`);
+
+    // THE OTHER HALF OF THE SAME RULE. Hiding a notice makes the felt bigger, so
+    // a notice gate on its own is an incentive to shrink the felt instead. This
+    // asserts a floor under the playing surface and RECORDS the exact geometry,
+    // which nothing in the harness did before: wave 5's headline 60.6% existed
+    // only in prose and in a scratchpad script.
+    const feltArea = foldFeltArea(await measureFelt(page), {
+      viewport: viewportName, scene: scene.name,
+    });
+    verification = {
+      verified: verification.verified && feltArea.ok,
+      checks: { ...verification.checks, feltArea },
+      notes: feltArea.ok
+        ? `${verification.notes}; ${feltArea.notes}`
+        : `${feltArea.problems.join(' | ')} || ${verification.notes}`,
+    };
+    if (feltArea.felt) log(`  ▪ ${feltArea.notes}`);
+    for (const p of feltArea.problems) log(`  ⚠ FELT: ${p}`);
 
     // A PNG under the canonical name is EVIDENCE: someone browsing artifacts/
     // will read `table-showdown-desktop.png` as proof of a verified showdown. A

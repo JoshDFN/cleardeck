@@ -10,8 +10,9 @@
 DEV := ./scripts/dev.sh
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor local-up local-status wasm test fuzz diff-full diff-full-sevens \
-        settlement settlement-fast shots known-defects hygiene selftest phe-venv check
+.PHONY: help doctor local-up local-status wasm test fuzz fuzz-default diff-full \
+        diff-full-sevens settlement settlement-fast shots known-defects hygiene \
+        selftest phe-venv check
 
 help:            ## show this help
 	@$(DEV) help
@@ -30,7 +31,10 @@ wasm:            ## build table_canister.wasm and print its sha256
 test:            ## FAST gate: workspace + differential fast + money-safety fast. No replica needed.
 	@$(DEV) test
 
-fuzz:            ## LONG: 9 seeds x 600 hostile steps vs the real canister + real ICP ledger
+fuzz-default:    ## the fuzzer with NO environment: its own default seeds and steps (DEFECTS H-28)
+	@$(DEV) fuzz-default
+
+fuzz:            ## LONG: fuzz-default, then 9 seeds x 600 hostile steps vs the real canister + real ICP ledger
 	@$(DEV) fuzz
 
 settlement:      ## independent settlement oracle: what each seat is OWED vs what the canister paid
