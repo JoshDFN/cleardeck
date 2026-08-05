@@ -1077,7 +1077,55 @@ Two further boundaries:
 
 ---
 
-## FINDING 13 (NEW, high) -- the E-05 fix pays a departed player's stake to whoever takes their chair
+## FINDING 13 (high) -- the E-05 fix pays a departed player's stake to whoever takes their chair -- **DEMONSTRATED, THEN FIXED**
+
+> ### STATUS 2026-08-04, wave 3: escalated from "reachable" to **DEMONSTRATED**, then closed.
+>
+> Wave 2 filed this as high rather than as executed misdirection, because the two ingredients had
+> each been reached by the fuzzer but had never been observed **composed in one hand**. They
+> compose. The sequence below is five ordinary public API calls, needs no privilege, and was run
+> against the real table canister on PocketIC with the real ICP ledger. Observed, with the real
+> principals the run produced:
+>
+> ```
+> M8: stake 2000000 e8s left in the pot by 74yuz-2axoe-...-bqsze-dae;
+>     the chair was then taken by f6m43-ks6kd-...-xks4f-rae
+> M8:   74yuz-2axoe-at4sh-2qtsk-etfcs-ek6kq-nkw7x-d2qef-juk6h-bqsze-dae   -2000000
+> M8:   f6m43-ks6kd-wlgjj-l3da3-lu2nl-gxcrc-dyipl-ynbak-nad3v-xks4f-rae   +2000000
+>
+> M8_PRINCIPAL_ATTRIBUTION violated:
+>   delta=2000000 phase=HandComplete -- principal f6m43-... staked NOTHING in this hand and
+>   came out of it +2000000 e8s richer.
+> ```
+>
+> **0.02 ICP of one player's money credited to another player, through the public API, with every
+> total balancing.** The amount is the blind at the harness's table; nothing about the mechanism
+> bounds it -- the stake could be a full stack.
+>
+> **The fix** the owner now travels with the money. `Payout::principal` is a plain `Principal`
+> taken from the [`Stake`] that generated the payout (or from the live claim that won the layer),
+> `principal_of(state, seat)` is **deleted**, and there is no longer any function in `lib.rs` that
+> can turn a seat index into a payee. `apply_payouts` credits `payout.principal`: their stack if
+> they are sitting in that seat, otherwise their escrow.
+>
+> **The gates** four, and all four go RED against the pre-fix build:
+>
+> | gate | where | asserts |
+> |---|---|---|
+> | `payout_tests::finding13_*` (4 tests) | `src/table_canister/src/lib.rs` | the pure plan NAMES the owner; applying it credits the owner's escrow; two stakes at one seat reach two different owners; a pot share names the card-holder |
+> | `M8_PRINCIPAL_ATTRIBUTION` | `tests/money_safety/src/invariants/attribution.rs` | per-principal `escrow + chips` delta vs what the rules owe that PERSON, plus the oracle-free corollary: **a principal who staked nothing cannot gain** |
+> | `m8_a_departed_stake_is_paid_to_its_owner_and_not_to_whoever_took_the_chair` | `tests/money_safety/tests/invariants/principals.rs` | the composed sequence, end to end, on the real canister |
+> | `a_chair_that_changes_hands_mid_hand_pays_the_person_and_not_the_chair` | `tests/settlement/tests/settlement.rs` | the settlement oracle now has a PRINCIPAL column and `Bench::gate` fails on it |
+>
+> The settlement oracle's report on the pre-fix build is the clearest single statement of the
+> class:
+>
+> ```
+> Per-SEAT DIFF      [(0, -2), (1, 0), (2, 0), (3, 0)]
+> Per-PRINCIPAL DIFF [("2f6yp-...-bqe", +2), ("6ui2b-...-oae", -2)]
+> ```
+>
+> Everything below is the original write-up, kept because it is the evidence.
 
 Found 2026-08-04 by the wave-2 review, in the code the wave-2 payout fix introduced. **Every
 conservation invariant passes while this happens**: the plan awards exactly what it collected,
@@ -1152,6 +1200,25 @@ The two were **not** observed composed in one hand, so this is filed as high rat
 demonstrated fund theft. Both ingredients are individually reachable through the public API
 with no special privilege.
 
+> **WAVE 3 CLOSED THAT GAP: they compose, in five calls.** Now a permanent test
+> (`m8_a_departed_stake_is_paid_to_its_owner_and_not_to_whoever_took_the_chair`):
+>
+> ```text
+> alice(0) bob(1) carol(2) are dealt in; all three post to the flop
+> alice   leave_table()  -> departed stake (seat 0, owner alice) stays in the pot;
+>                           TWO active players remain, so the hand does NOT end
+> dave    join_table(0)  -> takes alice's CHAIR mid-hand: SittingOut, no hole cards
+> dave    sit_in()       -> Active (E-36), so count_active_players now counts him
+> bob     leave_table()  -> carol + dave remain, so the hand STILL does not end
+> carol   leave_table()  -> only dave is left and he holds no cards, so the hand settles
+>                           with no live claim on any layer: every stake is refunded
+> ```
+>
+> The refund of seat 0 is alice's money, and pre-fix it was credited to dave's stack. The reason
+> the two ingredients compose is the step nobody had written down: **`leave_table` only ends the
+> hand when `count_active_players` drops to one, and a mid-hand arrival who calls `sit_in()`
+> counts** -- so the newcomer keeps the hand alive while every real player walks out of it.
+
 **Second variant, same root cause** two departed stakes at ONE seat owed to two DIFFERENT
 principals (alice leaves seat 1; a stranger takes it, bets via E-36, then leaves too).
 `principal_of`'s `.find()` returns the FIRST match, so the second player's refund is credited
@@ -1163,6 +1230,38 @@ so `Payout.principal` should be populated from the stake that generated it, and 
 departed stake should always go to that stake's `principal`'s **escrow**, never to the chair.
 That also makes the `occupant != owed` arm reachable, which is what it was written for.
 
+### THE FIX AS LANDED (wave 3)
+
+Exactly that, plus one thing the suggestion did not say: make the mistake **unrepresentable**
+rather than merely corrected.
+
+* **`Stake { seat, owner, amount, relinquished }`** is the new payout basis (`hand_stakes`).
+  `poker_core::Contribution` stays seat-keyed and stays the input to the pot LAYERING, which is
+  genuinely a seat question; ownership is not, so it is carried alongside instead of being
+  looked up. `hand_contributions` is now `hand_stakes` with the owners dropped, and its doc
+  comment says it may only be used where ownership is irrelevant.
+* **`Payout::principal` is a plain `Principal`, not an `Option`.** A refund takes it from
+  `Stake::owner`; a pot share takes it from the live claim that won the layer, which by
+  construction is the player sitting in that seat holding those cards. The
+  `(None, None) -> trap` arm is gone because there is nothing left that can produce it.
+* **`principal_of(state, seat)` is DELETED, not fixed.** There is now no function in `lib.rs`
+  that turns a seat index into a payee, so a future edit cannot reach for the wrong helper.
+* **`apply_payouts` matches on the owner, not on the chair.** If the payout's principal is
+  sitting in that seat, the credit goes into their stack; otherwise into their escrow -- which
+  is where a departing player's stack went when they left, so it is the account they can
+  withdraw from. The log line for the occupied-by-somebody-else case is deliberately written
+  WITHOUT a `CRITICAL:`/`WARNING:` prefix: nothing is inconsistent, the engine is paying the
+  right person, and the money-safety classifier treats every self-reported `CRITICAL:`/
+  `WARNING:` line as a finding that stops the run.
+* **`push_winner` aggregates by `(seat, principal)`, not by seat**, and only attaches hole cards
+  when the seat's occupant IS the principal being credited. Otherwise the hand history reports
+  one player's money -- and one player's cards -- under another player's name. That is the
+  reporting face of the same defect, and the frontend reads that list.
+
+**Second variant** is closed by the same change: two `DepartedStake`s at one seat produce two
+`Stake`s with two owners, and each is refunded to its own owner
+(`finding13_two_departed_stakes_at_one_seat_each_reach_their_own_owner`).
+
 **Why no existing gate catches it** the settlement oracle compares per-SEAT deltas, and the
 seat is paid the right amount -- it is the principal behind the seat that is wrong. The
 money-safety invariants are conservation-based and this conserves exactly. The builder's own
@@ -1172,7 +1271,70 @@ PRINCIPALS, not on seats.
 
 ---
 
-## FINDING 14 (NEW, high) -- two agents each added a persisted field that is not a Candid-compatible addition, and one of them destroys every chip at the table SILENTLY
+## FINDING 14 (high) -- two agents each added a persisted field that is not a Candid-compatible addition, and one of them destroys every chip at the table SILENTLY -- **FIXED**
+
+> ### STATUS 2026-08-04, wave 3: both fields are `opt`, and a real cross-version upgrade test is the gate.
+>
+> **What landed, in one change** (either half alone is worse than neither, which is the whole
+> shape of this finding):
+>
+> * `PersistentState::deposit_watermark: Option<u64>` -- `None` restores as a floor of 0, and the
+>   restore only ever RAISES the floor, so no decode outcome can re-open a closed E-02 window.
+> * `TableState::departed_stakes: Option<Vec<DepartedStake>>`, read through
+>   `departed_stakes()` / `departed_stakes_mut()` / `clear_departed_stakes()` so no call site has
+>   to care whether it is `None` or `Some(vec![])`.
+>
+> **The gate**: `m7_state_written_by_the_previous_release_survives_the_upgrade_exactly` in
+> `tests/money_safety/tests/invariants/upgrade_across_versions.rs`. It builds `801aa79` from git
+> (`git archive` into `target/money-safety/`, then `cargo build`), installs it on PocketIC with
+> the real ICP ledger, creates escrow for three principals through the real ICRC-2 deposit path,
+> seats them, deals a hand and stops on the flop, then does a real
+> `install_code --mode upgrade` to the module under test and requires the upgrade to **succeed**
+> with every one of these unchanged: per-principal escrow, every seat's principal/chips/
+> contribution/fold flag/**hole cards**, the pot, the whole betting state, the board, the deck and
+> the deck cursor, the side-pot breakdown and the shuffle commitment. It then claims a ledger
+> block transferred before the upgrade, upgrades AGAIN, and requires the replay to still be
+> refused -- so the anti-replay record is shown to survive an upgrade -- and finally plays the
+> restored hand to completion and requires it to settle conserving.
+>
+> Observed on the fixed tree:
+>
+> ```
+> M7: on 5e12d25bf4d2 -> escrow 900000000 across 3 principals, seated chips 594000000,
+>     pot 6000000, hand 1 in phase Flop with board 3
+> M7: cross-version upgrade 5e12d25bf4d2 -> 5996594741af SUCCEEDED with every e8, every stack,
+>     every card and the anti-replay record intact, and the restored hand settled cleanly.
+> ```
+>
+> **It goes RED on either regression, by two different routes. Both executed:**
+>
+> Revert `deposit_watermark` to `u64` -- the upgrade is REJECTED:
+>
+> ```
+> Panicked at 'CRITICAL: Failed to restore state from stable memory:
+>   "Custom(Fail to decode argument 0 ... Subtyping error: field deposit_watermark is not
+>    optional field)". Upgrade REJECTED to protect user funds.'
+> the cross-version upgrade was REJECTED, so the module under test CANNOT BE DEPLOYED over
+> existing state.
+> ```
+>
+> Revert `departed_stakes` to `Vec` -- the upgrade is ACCEPTED and the table is wiped:
+>
+> ```
+> assertion `left == right` failed: an accepted upgrade changed the SEATS: ... HOLE CARDS.
+>   left: []
+>  right: [(0, <alice>, 198000000, 2000000, false, Some((Tc, Kc))),
+>          (1, <bob>,   198000000, 2000000, false, Some((Th, 3c))),
+>          (2, <carol>, 198000000, 2000000, false, Some((Ts, Ah)))]
+> ```
+>
+> 594,000,000 e8s of seated chips gone, upgrade reported successful. Note what the second case
+> proves about the digest guard: `table_was_present` restores as `None` from `801aa79` state, so
+> **the guard cannot fire for this upgrade at all**. It protects the NEXT non-`opt` addition, not
+> this one. The test, not the guard, is what catches it.
+>
+> **`pre_upgrade` now TRAPS on a failed `stable_save`** instead of logging and proceeding. See
+> "The pre_upgrade decision" at the end of this finding for the argument.
 
 Found 2026-08-04 by the wave-2 coherence pass, reconciling `src/table_canister/src/lib.rs`
 after three agents edited different regions of it. Neither agent could see the other's field.
@@ -1293,7 +1455,59 @@ Nothing in the repo installs a pre-wave-2 module and upgrades it.
    everything for every upgrade from this commit onwards. It buys the next agent a rejected
    upgrade instead of destroyed chips; it does not retro-fit safety onto state already written.
 
-Step 2 is done (M7). **Step 1 is NOT done and is the top of the wave-3 queue.**
+**All three steps are done as of wave 3.** Step 1 landed as one change; step 2 is M7, rewritten
+so that a REJECTED upgrade is now a FAILURE rather than an acceptable outcome (see the status
+box at the top of this finding); step 3 is the digest guard, kept, with its limit stated.
+
+Two more things landed with them:
+
+* **`m7b_a_departed_stake_and_its_owner_survive_an_upgrade`.** M7 cannot cover
+  `departed_stakes` at all, because `801aa79` has no such field to write. So a second test
+  creates a departed stake on the module under test, upgrades to the same module, and requires
+  the stake -- and above all its OWNER -- to come back identical, then settles the hand and
+  requires the money to reach that owner. This is the coupling between the two findings: the
+  FINDING 13 fix works by carrying an owner in persisted state, so that state has to survive an
+  upgrade or settlement has nobody to pay.
+* **The harness mirrors track the wire.** `tests/money_safety/src/table_api.rs` and
+  `tests/settlement/src/table_api.rs` both declare `departed_stakes: opt vec`. Candid lets a
+  non-`opt` wire value be read into an `opt` field, so a mirror declared `opt` can decode BOTH
+  the old and the new canister -- which is what makes it possible to observe a previous release
+  at all. A mirror declared `vec` cannot decode the new one, and that was a second face of H-16.
+
+### The pre_upgrade decision: it TRAPS now, and here is the argument
+
+`pre_upgrade` used to end like this:
+
+```rust
+if let Err(e) = ic_cdk::storage::stable_save((state,)) {
+    ic_cdk::println!("CRITICAL: Failed to save state to stable memory: {:?}", e);
+    // Log but don't panic - allow upgrade to proceed
+    // This is safer than trapping which could brick the canister
+}
+```
+
+**The comment is backwards on a canister that custodies funds, and the change was made
+deliberately rather than as a tidy-up.**
+
+* A trap in `pre_upgrade` aborts the **upgrade**. The old code keeps running with its heap
+  intact. Nothing is bricked; an *install* is refused, which is a state a human can act on.
+* Proceeding after a failed save has exactly two outcomes and both are worse.
+  * If stable memory is empty, `post_upgrade`'s `stable_restore` fails and it panics anyway --
+    the same refusal, minus the accurate reason, and with the operator told the wrong thing
+    about where the failure was.
+  * If stable memory still holds an **older snapshot** from a previous upgrade, `stable_restore`
+    SUCCEEDS and the canister silently rolls back to it. Every escrow balance, every chip and
+    every hand since that snapshot is gone -- and `verified_deposits` and `deposit_watermark`
+    roll back with them, which **re-opens the E-02 replay window on ledger blocks that were
+    already credited**. A silent rollback of the anti-replay record is a fund-theft primitive,
+    reached by a deploy.
+
+So the trap message states the escrow total it was about to save and says the old code is still
+running. It cannot be driven from outside on PocketIC -- there is no way to make `stable_save`
+fail on demand -- so what is pinned instead is that the decision has not been quietly reverted:
+`pre_upgrade_refuses_rather_than_proceeding_after_a_failed_save` reads `lib.rs`, requires
+`ic_cdk::trap(` inside `pre_upgrade`, and fails if the string `allow upgrade to proceed` comes
+back.
 
 ### Related, same root cause, lower stakes
 

@@ -13,6 +13,9 @@
   const isBTC = currency === 'BTC';
   const currencySymbol = isBTC ? 'BTC' : 'ICP';
   const minWithdrawal = isBTC ? 11n : 100000n; // 11 sats (fee is 10) vs 0.001 ICP
+  // Mirrors ICP_TRANSFER_FEE / CKBTC_TRANSFER_FEE in src/table_canister/src/lib.rs:36,40.
+  // The canister sends `amount - fee`, so this is what the wallet does NOT receive.
+  const transferFee = isBTC ? 10n : 10_000n;
 
   // Format balance for display
   function formatBalance(smallestUnit) {
@@ -71,7 +74,20 @@
     try {
       const result = await tableActor.withdraw(amountSmallest);
       if ('Ok' in result) {
-        success = `Withdrawal successful! ${formatWithUnit(result.Ok)} sent to your wallet.`;
+        // `withdraw` returns the LEDGER BLOCK INDEX, not an amount
+        // (src/table_canister/src/lib.rs:1894 `-> Result<u64, String>`, `Ok(block)`
+        // at :1991). This line used to run it through formatWithUnit and print it
+        // as ICP, so the confirmation stated a wrong amount of money — a block
+        // index of 4,000 renders as "0.0000 ICP sent to your wallet". docs/DEFECTS.md T-18.
+        //
+        // What actually happens: `transfer_tokens` sends `amount - fee`
+        // (lib.rs:1038), so the wallet receives LESS than the amount withdrawn and
+        // nothing on screen said so. Both figures are now stated, and the block
+        // index is labelled as what it is.
+        const received = amountSmallest > transferFee ? amountSmallest - transferFee : 0n;
+        success = `Withdrew ${formatWithUnit(amountSmallest)}. `
+          + `${formatWithUnit(received)} reached your wallet after the `
+          + `${formatWithUnit(transferFee)} network fee. Ledger block #${result.Ok}.`;
         setTimeout(() => {
           onWithdrawSuccess?.();
           onClose();
@@ -95,9 +111,16 @@
       withdrawAmount = isBTC ? maxDisplay.toFixed(8) : maxDisplay.toFixed(4);
     }
   }
+
+  // ONE dismissal contract for every dialog in this app (docs/DEFECTS.md T-13).
+  function onWindowKeydown(e) {
+    if (e.key === 'Escape') onClose();
+  }
 </script>
 
-<div class="modal-backdrop" onclick={onClose} onkeydown={(e) => e.key === 'Escape' && onClose()} role="button" tabindex="-1" aria-label="Close modal"></div>
+<svelte:window onkeydown={onWindowKeydown} />
+
+<div class="modal-backdrop" onclick={onClose} role="presentation"></div>
 
 <div class="modal-content" class:btc-modal={isBTC} role="dialog" aria-labelledby="withdraw-modal-title">
   <div class="modal-header">

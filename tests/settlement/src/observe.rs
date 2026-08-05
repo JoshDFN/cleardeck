@@ -49,6 +49,25 @@ pub struct SeatTrace {
     pub vacated: bool,
     pub chips_before: u64,
     pub chips_after: u64,
+    /// WHO the money at this seat belongs to, and how much of it is theirs.
+    ///
+    /// Normally one entry: the player who sat here. It can be two when the chair
+    /// was vacated mid-hand and taken by somebody else before the hand settled --
+    /// the state docs/SECURITY-FINDINGS.md FINDING 13 turns on. `principal` above
+    /// is the FIRST occupant seen, which is not the same question.
+    pub stake_owners: Vec<(Principal, u64)>,
+}
+
+impl SeatTrace {
+    /// The single owner of this seat's stake, or `None` when the chair carried
+    /// money for more than one person in the hand.
+    pub fn sole_owner(&self) -> Option<Principal> {
+        match self.stake_owners.as_slice() {
+            [(who, _)] => Some(*who),
+            [] => Some(self.principal),
+            _ => None,
+        }
+    }
 }
 
 /// Everything observed about one complete hand.
@@ -167,7 +186,18 @@ pub struct HandRecorder {
     num_seats: usize,
     hole: BTreeMap<u8, (Card, Card)>,
     contributed: BTreeMap<u8, u64>,
+    /// `(seat, principal) -> the largest stake seen for that pair`. Fed from the
+    /// seated players AND from `departed_stakes`, which is the only place a
+    /// vacated seat's owner is still recorded once the chair is empty.
+    stake_owners: BTreeMap<(u8, Principal), u64>,
     folded: BTreeSet<u8>,
+    /// Seats whose ORIGINAL occupant gave up their claim by leaving. Tracked
+    /// separately from `occupied_now` because a chair that has been TAKEN BY
+    /// SOMEBODY ELSE is still, for the player who left, a vacated seat -- and if
+    /// the oracle does not know that it will rank the departed player's hole cards
+    /// as a live contender (docs/SECURITY-FINDINGS.md FINDING 13, docs/DEFECTS.md
+    /// E-36).
+    owner_left: BTreeSet<u8>,
     present: BTreeSet<u8>,
     board: Vec<Card>,
     side_pots_first_seen: Vec<SidePot>,
@@ -203,7 +233,9 @@ impl HandRecorder {
             num_seats: state.players.len(),
             hole: BTreeMap::new(),
             contributed: BTreeMap::new(),
+            stake_owners: BTreeMap::new(),
             folded: BTreeSet::new(),
+            owner_left: BTreeSet::new(),
             present: BTreeSet::new(),
             board: Vec::new(),
             side_pots_first_seen: Vec::new(),
@@ -252,11 +284,33 @@ impl HandRecorder {
             }
             let entry = self.contributed.entry(p.seat).or_insert(0);
             *entry = (*entry).max(p.total_bet_this_hand);
+            if p.total_bet_this_hand > 0 {
+                let owned = self
+                    .stake_owners
+                    .entry((p.seat, p.principal))
+                    .or_insert(0);
+                *owned = (*owned).max(p.total_bet_this_hand);
+            }
             if p.has_folded {
                 self.folded.insert(p.seat);
             }
-            self.principal_at.entry(p.seat).or_insert(p.principal);
+            let first = *self.principal_at.entry(p.seat).or_insert(p.principal);
+            if first != p.principal {
+                // The chair changed hands during the hand.
+                self.owner_left.insert(p.seat);
+            }
             self.chips_before.entry(p.seat).or_insert(p.chips);
+        }
+        // A seat that has been vacated is gone from `players`, and this is the only
+        // record of whose money is still in the pot. It is cleared at settlement,
+        // so it has to be read while the hand is live.
+        for d in state.departed() {
+            if d.hand_number != state.hand_number || d.contributed == 0 {
+                continue;
+            }
+            let owned = self.stake_owners.entry((d.seat, d.principal)).or_insert(0);
+            *owned = (*owned).max(d.contributed);
+            self.owner_left.insert(d.seat);
         }
         self.logs.extend(world.new_canister_logs());
     }
@@ -282,11 +336,34 @@ impl HandRecorder {
                 seat,
                 principal,
                 hole: self.hole.get(&seat).copied(),
-                contributed: self.contributed.get(&seat).copied().unwrap_or(0),
+                // Every chip staked AT this chair, which is the sum over its owners
+                // when the chair changed hands mid-hand and both of them had money
+                // in. `self.contributed` alone is one player's running maximum.
+                contributed: self
+                    .contributed
+                    .get(&seat)
+                    .copied()
+                    .unwrap_or(0)
+                    .max(
+                        self.stake_owners
+                            .iter()
+                            .filter(|((s, _), _)| *s == seat)
+                            .fold(0u64, |a, (_, v)| a.saturating_add(*v)),
+                    ),
                 folded: self.folded.contains(&seat),
-                vacated: self.seats_at_open.contains(&seat) && !occupied_now.contains(&seat),
+                // Relinquished if the player who opened this seat is not in it any
+                // more, WHETHER OR NOT the chair is empty. A chair taken by
+                // somebody else is not a live claim for the player who left it.
+                vacated: self.owner_left.contains(&seat)
+                    || (self.seats_at_open.contains(&seat) && !occupied_now.contains(&seat)),
                 chips_before: self.chips_before.get(&seat).copied().unwrap_or(0),
                 chips_after: chips_after.get(&seat).copied().unwrap_or(0),
+                stake_owners: self
+                    .stake_owners
+                    .iter()
+                    .filter(|((s, _), _)| *s == seat)
+                    .map(|((_, who), amount)| (*who, *amount))
+                    .collect(),
             });
         }
 
@@ -342,6 +419,35 @@ pub struct SeatCompare {
     pub diff: i128,
 }
 
+/// What one PERSON's money did across the hand, against what they are owed.
+///
+/// # Why this exists (docs/SECURITY-FINDINGS.md FINDING 13)
+///
+/// [`SeatCompare`] compares seats, and a seat is a chair. A player can leave the
+/// table mid-hand -- their stake stays in the pot -- and somebody else can take
+/// that chair before the hand settles. Pay the chair and the per-seat diff is
+/// zero, every total balances, no chip is destroyed, and one player has another
+/// player's money. The entire class of "right amount, wrong owner" defect was
+/// outside this oracle's field of view by construction until this type existed.
+///
+/// The oracle's per-seat answer is attributed to owners by the stakes the recorder
+/// saw at each seat: normally one owner, and where there are two (E-36), the hand
+/// is flagged [`Anomaly::SeatWithTwoOwners`] so the attribution can never be
+/// silently guessed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrincipalCompare {
+    pub principal: Principal,
+    /// The seats this principal had money at.
+    pub seats: Vec<u8>,
+    /// What the canister actually did to this PERSON's money: the change in
+    /// `escrow + chips`.
+    pub engine: i128,
+    /// The sum of the oracle's per-seat answers for the seats they own.
+    pub oracle: i128,
+    /// `engine - oracle`. Positive: this person was paid somebody else's money.
+    pub diff: i128,
+}
+
 #[derive(Clone, Debug)]
 pub struct HandComparison {
     pub label: String,
@@ -349,7 +455,11 @@ pub struct HandComparison {
     pub facts: HandFacts,
     pub settlement: Settlement,
     pub seats: Vec<SeatCompare>,
-    /// True when every seat's delta matches the oracle exactly.
+    /// The same comparison, per PRINCIPAL. See [`PrincipalCompare`].
+    pub principals: Vec<PrincipalCompare>,
+    /// True when every seat's delta AND every principal's delta matches the oracle
+    /// exactly. Seats alone are not enough: docs/SECURITY-FINDINGS.md FINDING 13 is
+    /// a payout that is right at every seat and wrong at a principal.
     pub agrees: bool,
     /// Chips the canister collected and paid to nobody.
     pub destroyed: i128,
@@ -388,8 +498,65 @@ impl HandComparison {
                 diff: engine - oracle_delta,
             });
         }
-        let agrees = seats.iter().all(|s| s.diff == 0);
-        let anomalies = settlement.anomalies.clone();
+        // --- the principal dimension (FINDING 13) --------------------------
+        //
+        // Attribute each seat's oracle answer to the person whose money it is.
+        // A seat with two owners cannot be attributed by seat at all, so it is
+        // recorded as an anomaly and split by stake rather than guessed at.
+        let mut anomalies = settlement.anomalies.clone();
+        let mut owed: BTreeMap<Principal, i128> = BTreeMap::new();
+        let mut owns: BTreeMap<Principal, BTreeSet<u8>> = BTreeMap::new();
+        for trace in &record.seats {
+            let seat_delta = oracle_deltas.get(&trace.seat).copied().unwrap_or(0);
+            match trace.sole_owner() {
+                Some(who) => {
+                    *owed.entry(who).or_insert(0) += seat_delta;
+                    owns.entry(who).or_default().insert(trace.seat);
+                }
+                None => {
+                    anomalies.push(Anomaly::SeatWithTwoOwners {
+                        seat: trace.seat,
+                        owners: trace.stake_owners.len(),
+                    });
+                    for (who, _) in &trace.stake_owners {
+                        owns.entry(*who).or_default().insert(trace.seat);
+                    }
+                    if seat_delta == 0 {
+                        // The seat came out flat, which for a chair carrying two
+                        // relinquished stakes can only mean each stake was returned
+                        // in full: a relinquished stake cannot win a layer, so the
+                        // only thing it can ever receive is its own money back. Each
+                        // owner is therefore owed exactly zero net.
+                        for (who, _) in &trace.stake_owners {
+                            owed.entry(*who).or_insert(0);
+                        }
+                    } else {
+                        // The seat is owed something other than a plain refund and
+                        // the rules of poker do not say which of the two people at
+                        // this chair it belongs to. Attribute it to the occupant and
+                        // let the anomaly record that the answer is approximate.
+                        *owed.entry(trace.principal).or_insert(0) += seat_delta;
+                    }
+                }
+            }
+        }
+        let mut principals: Vec<PrincipalCompare> = Vec::new();
+        let mut everyone: BTreeSet<Principal> = owed.keys().copied().collect();
+        everyone.extend(record.value_deltas.keys().copied());
+        for who in everyone {
+            let engine = record.value_deltas.get(&who).copied().unwrap_or(0);
+            let oracle_delta = owed.get(&who).copied().unwrap_or(0);
+            principals.push(PrincipalCompare {
+                principal: who,
+                seats: owns.get(&who).map(|s| s.iter().copied().collect()).unwrap_or_default(),
+                engine,
+                oracle: oracle_delta,
+                diff: engine - oracle_delta,
+            });
+        }
+
+        let agrees =
+            seats.iter().all(|s| s.diff == 0) && principals.iter().all(|p| p.diff == 0);
         Self {
             label: label.to_string(),
             destroyed: record.chips_destroyed(),
@@ -397,9 +564,20 @@ impl HandComparison {
             facts,
             settlement,
             seats,
+            principals,
             agrees,
             anomalies,
         }
+    }
+
+    /// The largest amount that reached the WRONG PERSON in this hand.
+    pub fn worst_principal_diff(&self) -> i128 {
+        self.principals.iter().map(|p| p.diff.abs()).max().unwrap_or(0)
+    }
+
+    /// Principals whose money did not go where the rules of poker send it.
+    pub fn misattributed(&self) -> Vec<&PrincipalCompare> {
+        self.principals.iter().filter(|p| p.diff != 0).collect()
     }
 
     pub fn worst_diff(&self) -> i128 {
@@ -459,6 +637,20 @@ impl HandComparison {
                 s.engine,
                 s.oracle,
                 s.diff
+            ));
+        }
+        out.push_str(
+            "principal (WHO was paid, not which chair)          seats  engine_delta  \
+             oracle_delta  DIFF\n",
+        );
+        for p in &self.principals {
+            out.push_str(&format!(
+                "  {:<48}  {:>5}  {:>12}  {:>12}  {:>+6}\n",
+                p.principal.to_text(),
+                format!("{:?}", p.seats),
+                p.engine,
+                p.oracle,
+                p.diff
             ));
         }
         out.push_str(&format!(

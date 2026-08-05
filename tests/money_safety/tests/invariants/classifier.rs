@@ -145,6 +145,7 @@ fn never_excusable_severities_block_even_on_a_registered_check() {
         Severity::DoublePay,
         Severity::DurabilityLoss,
         Severity::SelfReportedFailure,
+        Severity::Misattribution,
     ] {
         let v = violation(
             Invariant::M1Conservation,
@@ -221,10 +222,53 @@ fn the_formerly_enumerated_bug_line_now_blocks_too() {
     assert_eq!(vs.len(), 1);
     assert_eq!(vs[0].severity, Severity::SelfReportedFailure);
     assert_eq!(reason(&vs[0]), BlockingReason::NeverExcusable);
-    assert!(
-        documented::TOLERATED_SELF_REPORTS.is_empty(),
-        "no log line may be tolerated while no defect is documented as producing one"
+    // The tolerated list must contain exactly the lines a DOCUMENTED open defect
+    // produces, and nothing else. It was empty until the coherence pass, which is
+    // the right default; the one entry names E-36. When E-36 is fixed the entry
+    // goes with it and this drops back to zero.
+    assert_eq!(
+        documented::TOLERATED_SELF_REPORTS,
+        ["carries both a live stake and a departed stake"],
+        "the tolerated-self-report list changed. Every entry must name an OPEN defect in \
+         docs/DEFECTS.md and must be deleted when that defect is fixed; adding one is \
+         admitting a money-path defect is shipping."
     );
+}
+
+/// E-36's dual-stake line is TOLERATED, not invisible.
+///
+/// The payout fix wrote it as `WARNING:` rather than `CRITICAL:`, which is a
+/// defensible severity -- nothing about the engine's accounting is inconsistent
+/// there -- but `check_self_reported_inconsistency` matched neither, so 296
+/// occurrences of a real open defect executing against the real canister were
+/// reported as `0 documented finding(s)` in a 1,200-step fuzz run. Tolerance living
+/// in a string the classifier does not read is exactly the H-03 pathology this
+/// module exists to prevent. docs/DEFECTS.md H-20.
+#[test]
+fn a_warning_line_is_a_finding_and_e36s_is_a_tolerated_one() {
+    let logs = vec![
+        "WARNING: seat 2 carries both a live stake and a departed stake in hand 6 \
+         (the chair was re-occupied mid-hand, docs/DEFECTS.md E-36)."
+            .to_string(),
+    ];
+    let vs = check_self_reported_inconsistency(&logs, &GamePhase::HandComplete);
+    assert_eq!(vs.len(), 1, "a WARNING: line must not be invisible");
+    assert_eq!(
+        vs[0].severity,
+        Severity::BreakdownDrift,
+        "E-36 is named in the register, so it is counted rather than blocking"
+    );
+}
+
+/// ...and a WARNING the register does NOT name blocks, so the next person who
+/// downgrades a self-report to `WARNING:` to keep a run green cannot.
+#[test]
+fn an_unregistered_warning_line_blocks() {
+    let logs = vec!["WARNING: something nobody documented just happened".to_string()];
+    let vs = check_self_reported_inconsistency(&logs, &GamePhase::River);
+    assert_eq!(vs.len(), 1);
+    assert_eq!(vs[0].severity, Severity::SelfReportedFailure);
+    assert_eq!(reason(&vs[0]), BlockingReason::NeverExcusable);
 }
 
 /// The payout path's own self-report -- the one line it can still write -- blocks.
@@ -330,6 +374,65 @@ fn every_register_entry_names_a_check_the_invariants_actually_emit() {
              is now BLOCKING and the entry is dead weight.",
             d.id,
             d.check
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Register hygiene (docs/DEFECTS.md H-19)
+// ---------------------------------------------------------------------------
+//
+// `documented.rs` has documented `register_entries_are_all_still_needed` since it
+// was written, as the mechanism that stops a stale tolerance surviving a fix:
+// "FIXING the defect means DELETING the entry ... so a fix cannot quietly leave
+// stale tolerance behind." `grep` found no such test. The register is empty, so
+// nothing was actually being excused -- and that is exactly when to write it,
+// before the first entry goes back in.
+
+/// Every REGISTER entry must name a defect that is still open in docs/DEFECTS.md,
+/// and every TOLERATED_SELF_REPORTS entry likewise.
+///
+/// This is a documentation-coupling test on purpose. It cannot tell whether a
+/// defect is really still present -- only running the engine can do that -- but it
+/// CAN tell that somebody deleted the defect entry and left the excuse behind,
+/// which is the failure mode that matters.
+#[test]
+fn register_entries_are_all_still_needed() {
+    let defects = std::fs::read_to_string(
+        money_safety::wasms::repo_root().join("docs/DEFECTS.md"),
+    )
+    .expect("docs/DEFECTS.md must be readable: the register is only meaningful with it");
+
+    for entry in documented::REGISTER {
+        assert!(
+            defects.contains(entry.id),
+            "register entry {} excuses a money-path finding, but {} does not appear in \
+             docs/DEFECTS.md. Either the defect was fixed and this entry should have been \
+             DELETED with it, or the id is wrong.",
+            entry.id,
+            entry.id
+        );
+        assert!(
+            !entry.why.trim().is_empty(),
+            "register entry {} has no `why`. An excuse with no reason is how tolerance \
+             becomes permanent.",
+            entry.id
+        );
+    }
+
+    // The tolerated self-reports are keyed on log substrings rather than ids, so
+    // check the other direction: the substring must still be produced by the
+    // engine source. If the line is gone, the tolerance is stale.
+    let engine = std::fs::read_to_string(
+        money_safety::wasms::repo_root().join("src/table_canister/src/lib.rs"),
+    )
+    .expect("the engine source must be readable");
+    for line in documented::TOLERATED_SELF_REPORTS {
+        assert!(
+            engine.contains(line),
+            "TOLERATED_SELF_REPORTS still excuses {line:?}, but src/table_canister/src/lib.rs \
+             no longer contains that text. The defect was fixed and the tolerance was left \
+             behind -- delete it."
         );
     }
 }

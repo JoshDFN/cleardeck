@@ -632,9 +632,19 @@
 
   // Use effective balance (from II or OISY depending on walletSource)
   const hasEnoughBalance = $derived(effectiveWalletBalance !== null && effectiveWalletBalance > Number(minDeposit));
+
+  // ONE dismissal contract for every dialog in this app (docs/DEFECTS.md T-13).
+  // The old handler sat on a `tabindex="-1"` backdrop that nothing ever focuses,
+  // so Escape could not close this modal — measured: Escape left the backdrop up
+  // and a following click on any header button was swallowed by it.
+  function onWindowKeydown(e) {
+    if (e.key === 'Escape') onClose();
+  }
 </script>
 
-<div class="modal-backdrop" onclick={onClose} onkeydown={(e) => e.key === 'Escape' && onClose()} role="button" tabindex="-1" aria-label="Close modal"></div>
+<svelte:window onkeydown={onWindowKeydown} />
+
+<div class="modal-backdrop" onclick={onClose} role="presentation"></div>
 
 <div class="modal-content" class:btc-modal={isBTC} role="dialog" aria-labelledby="deposit-modal-title">
   <div class="modal-header">

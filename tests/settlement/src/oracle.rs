@@ -201,6 +201,11 @@ pub enum Anomaly {
     ShortBoardAtShowdown { board_len: usize, contenders: usize },
     /// Money in the pot and nobody left with a claim on it at all.
     NoClaimants { amount: u64 },
+    /// One chair carried money belonging to more than one person in a single hand:
+    /// a player left mid-hand and somebody else took the seat (docs/DEFECTS.md
+    /// E-36). The rules of poker are stated per player, not per chair, so the
+    /// per-seat answer cannot be attributed to an owner without saying so.
+    SeatWithTwoOwners { seat: u8, owners: usize },
 }
 
 /// What the oracle says the hand owes.

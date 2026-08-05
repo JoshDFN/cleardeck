@@ -667,3 +667,124 @@ grep -oE '(transition-duration|animation)[^;]*' \
 CSS). PokerStars, GGPoker and WPT Global geometry comes from colour segmentation of
 third-party screenshots and is ±5%; their colours are reliable, their motion timings are
 unknown. Do not present a ±5% estimate as a hard bar.
+
+---
+
+## 9. Wave-3 re-measurement, and the two bars this file never had
+
+Everything in this section was measured on 2026-08-05 by the wave-3 coherence pass, with the
+**same** tool used on the reference corpus (`$SCRATCH/w3-felt.py`: one universal hue rule, largest
+4-connected component, gutter crop, `fill_vs_ellipse` and widest-row/tallest-column cross-checks —
+the §1.1 method), pointed at the shipped `artifacts/screens/latest/` PNGs and the corpus in one run.
+No per-file tuning, no separate tool for us.
+
+### 9.1 ClearDeck's desktop table now clears bars 1 and 2
+
+Wave 2 measured ClearDeck at **876×476, aspect 1.84, `fill_vs_ellipse` 104.7%** — the flattest
+surface in the comparison and the only non-elliptical one. The table redesign moved it:
+
+| capture (1440×900) | surface | aspect | width % | fill vs ellipse |
+|---|---|---|---|---|
+| `table-preflop-desktop` | 962×452 | **2.13** | 66.8% | 88.3% |
+| `table-facing-bet-desktop` | 962×452 | **2.13** | 66.8% | 88.3% |
+| `table-allin-desktop` | 980×463 | **2.12** | 68.1% | 84.4% |
+| `table-empty-desktop` | 984×505 | 1.95 | 68.3% | 91.6% |
+
+**Bar 2 (aspect 1.9–2.3): CLEARED**, and the fill figure says it is a genuine ellipse now rather
+than a rounded rectangle wearing one (>100% is straight sides showing up in the arithmetic).
+**Bar 1 (70% ±8 of window width): CLEARED at the bottom of the band**, 66.8–68.3%.
+
+Two scenes read 1.93–1.95 with `fill_vs_ellipse` near 61–63% (`table-showdown`, `table-sidepots`).
+That is mask contamination from the winner glow and the mint pod ring, not a different table — the
+DOM element is the same ellipse in every scene. Reported rather than quietly dropped.
+
+### 9.2 A bar this file was missing: **surface AREA, not just width**
+
+Width share alone is misleading, because it does not know how wide the window is. A player
+perceives area. Same measurements, expressed as felt bbox ÷ client window:
+
+| client | area % |
+|---|---|
+| WPT Global `beasts-1` | 29.5% |
+| WPT Global `beasts-3` | 29.7% |
+| PokerNow | 31.7% |
+| **ClearDeck (preflop)** | **33.6%** |
+| **ClearDeck (allin)** | **35.0%** |
+| PokerStars (green) | 37.8% |
+| **ClearDeck (empty)** | **38.3%** |
+| WPT Global `tphB-2` | 40.9% |
+| GGPoker | 45.6% |
+
+**Reference median 34.75%.** ClearDeck sits at 33.6–38.3%, i.e. **at or above the reference
+median on desktop surface area**.
+
+> **BAR 21 (new).** Desktop playing surface **≥ 30% of the client window by area**. Quote area
+> alongside width whenever either is used as an argument; a width-share deficit on a wider window
+> is not a deficit.
+
+This matters because it **contradicts the conclusion** wave 3's own table redesign nominated as its
+biggest gap ("the felt is 66.8–68.3% of window width against a reference median of 73.5%"). The
+width figure is right; the conclusion does not survive an area comparison, and area is what is seen.
+
+### 9.3 The bar this file was missing most: **mobile**
+
+Sections 1–8 contain no numeric mobile bar at all. That is the single biggest omission in this
+document, because mobile is where ClearDeck loses by the largest margin in the whole corpus.
+
+Measured at the **identical 390×844**, ours against PokerNow's real portrait capture (the only
+phone reference that is a real capture rather than an App Store creative, and therefore the only
+one that can carry a hard bar):
+
+| capture (390×844) | felt | width % | height % | **area %** |
+|---|---|---|---|---|
+| **PokerNow `mobile-portrait-1`** | 313×548 | 80.3% | 64.9% | **52.1%** |
+| ClearDeck `table-showdown-mobile` | 217×319 | 55.6% | 37.8% | **21.1%** |
+| ClearDeck `table-empty-mobile` | 217×316 | 55.6% | 37.5% | **20.9%** |
+| ClearDeck `table-allin-mobile` | 217×299 | 55.6% | 35.5% | **19.7%** |
+
+Weaker corroboration from the phone marketing creatives, which point the same way: GGPoker 50.7%,
+PokerStars 42.7%, WPT Global 35.6%.
+
+> **BAR 22 (new).** Portrait playing surface **≥ 40% of the screen by area** at 390×844.
+> Today: **19.7–21.1%**, i.e. **38–40% of PokerNow's** on the same device. Marketing creatives are
+> evidence of intent, not of geometry; the hard number is PokerNow's 52.1%.
+
+> **BAR 23 (new).** The felt must be **wholly inside the viewport** in every canonical capture.
+> Today two of six mobile table PNGs fail it: `table-preflop-mobile.png` and
+> `table-facing-bet-mobile.png` have the pot, the whole board and four of six pods above the top of
+> the frame. The measurer detects this without a human: `tallest_col_rel = 0.000` means the mask is
+> flush against the top edge of its own bounding box, which a centred ellipse can never be. **Wire
+> that check into the screenshot gate** — the DOM assertions cannot see it, and both files were
+> filed VERIFIED.
+
+> **BAR 24 (new).** Money glyphs **≥ 12 px tall** in portrait. Today ClearDeck's mobile stack digits
+> measure 8–10 px against PokerNow portrait's 15 px. Text follows surface: shrinking the felt
+> shrank the numbers a player has to read while deciding.
+
+### 9.4 A bar for the lobby, which this file also never had
+
+Section 3 and section 5 discuss the lobby only in prose, so no reviewer could adjudicate the scene.
+Measured: time-to-first-choice, as the y position of the first table row over the viewport height.
+
+| client | first row at | rows above the fold |
+|---|---|---|
+| PokerStars `web-ps-wpd2-1` (732×552) | 34.4% | 24 |
+| PokerNow `lobby-community-1` (1512×945) | **36.1%** (y≈341, measured here) | 7 |
+| WPT Global `web-wpt-tphB-1` (1127×798) | 26.6% | 5 |
+| **ClearDeck desktop (1440×900)** | **88.4%** (y=796, `getBoundingClientRect`) | **1** |
+| **ClearDeck mobile (390×844)** | **119%** (y=1004) | **0** |
+
+> **BAR 25 (new).** The first table row starts **within the top 45% of the viewport** at desktop,
+> and **above the fold** on a phone. Today: 88.4% and 119%. Every reference client is between 26.6%
+> and 36.5%.
+
+### 9.5 Bars this file still cannot adjudicate
+
+Stated so a future reader does not mistake silence for a pass:
+
+* **Motion.** Only PokerNow's timings are known (from its shipped CSS). Nothing in this document
+  can judge whether ClearDeck's transitions feel like the category.
+* **Sound.** No reference audio was collected.
+* **Landscape phone.** One PokerNow capture exists; ClearDeck has no landscape scene.
+* **The seated bet-sizing strip.** PokerNow's could not be captured (game creation is behind a bot
+  check we will not defeat), so bars 7 and 12 have no PokerNow anchor.

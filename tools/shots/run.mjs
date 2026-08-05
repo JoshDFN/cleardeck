@@ -20,7 +20,7 @@ import {
 } from './lib/config.mjs';
 import { readLocalIds, requireId } from './lib/ids.mjs';
 import { buildFrontend, deployFrontend } from './lib/frontend-build.mjs';
-import { startGatewayProxy } from './lib/proxy.mjs';
+import { overrideDistDir, startGatewayProxy } from './lib/proxy.mjs';
 import { lobbyActor, optional } from './lib/agent.mjs';
 import { controllerIdentityInUse } from './lib/table-driver.mjs';
 import { devPlayerPrincipal } from './lib/identities.mjs';
@@ -32,6 +32,7 @@ import {
   thirdPartyObservations, watchCanisterCalls, watchPage,
 } from './lib/browser.mjs';
 import { scenesByName } from './scenarios/index.mjs';
+import { DRIFT_TARGETS, injectDrift, requestedDrift } from './lib/drift.mjs';
 
 const log = (msg) => console.log(msg);
 
@@ -140,6 +141,7 @@ async function runScene(scene, viewportName, ctx, browser, dirs) {
   let files = [];
   let videoPath = null;
   let error = null;
+  let drift = [];
 
   try {
     staged = (await scene.stage(ctx, page)) || {};
@@ -153,6 +155,37 @@ async function runScene(scene, viewportName, ctx, browser, dirs) {
           everyMs: scene.motionEveryMs ?? 150,
         });
       advanced = (await scene.advance(ctx, page, { burst: burstFn })) || {};
+    }
+
+    // Fault injection, off unless SHOTS_INJECT_DRIFT names a target. The chain is
+    // untouched; only the rendered number is changed, so this is exactly the
+    // situation the agreement assertion exists to catch.
+    const driftTargets = requestedDrift();
+    if (driftTargets.length) {
+      drift = await injectDrift(page, driftTargets);
+      for (const d of drift) {
+        log(`  ⚠ DRIFT INJECTED [${d.target}] ${d.selector}: "${d.before}" -> "${d.after}"${d.note ? ` (${d.note})` : ''}`);
+      }
+      // A FAULT THAT WAS NOT INJECTED IS A FALSE NEGATIVE IN THE PROOF. If the
+      // selector no longer matches, the scene may still go UNVERIFIED for some
+      // other reason and be read as "the assertion caught my injected fault"
+      // when it caught nothing of the sort. Fail the scene instead, naming the
+      // dead selector.
+      const dead = drift.filter((d) => d.before === null);
+      // Doubling "0.00" is still "0.00". A no-op edit is indistinguishable from a
+      // correct screen, so it proves nothing either and is refused the same way.
+      const inert = drift.filter((d) => d.before !== null && d.before === d.after);
+      if (dead.length || inert.length) {
+        throw new Error(
+          'fault injection did not change what is on screen: '
+          + [
+            ...dead.map((d) => `${d.target} (${d.selector}) matched nothing`),
+            ...inert.map((d) => `${d.target} rewrote "${d.before}" to the same text`),
+          ].join('; ')
+          + '. Nothing was proven. Either pick a scene that renders a non-zero figure there, '
+          + 'or update DRIFT_TARGETS in lib/drift.mjs.',
+        );
+      }
     }
 
     verification = await scene.verify(ctx, page);
@@ -207,6 +240,7 @@ async function runScene(scene, viewportName, ctx, browser, dirs) {
     setup,
     verification,
     error,
+    driftInjected: drift,
     canisterIdsCalled: [...canisterCalls],
     consoleErrors: watchers.consoleErrors.slice(0, 8),
     pageErrors: watchers.pageErrors.slice(0, 8),
@@ -307,6 +341,7 @@ async function main() {
           pageErrors: result.pageErrors,
           failedRequests: result.failedRequests,
           onChainAfterAdvance: result.advancedOnChain,
+          driftInjected: result.driftInjected,
           error: result.error,
         });
       }
@@ -345,6 +380,35 @@ async function main() {
       'not available on this replica (network descriptor has ii:false).',
     bundleWiring: buildProof,
     proxyStats: proxy.stats(),
+    // Where the HTML/JS in these PNGs came from. Normally the asset canister on
+    // the local replica; on an A/B run (SHOTS_SERVE_DIST) an alternate build off
+    // local disk, with every canister call still going to the real replica. A
+    // reader must never have to infer which.
+    assetProvenance: overrideDistDir()
+      ? {
+        source: 'LOCAL DISK',
+        dir: overrideDistDir(),
+        warning:
+            'SHOTS_SERVE_DIST was set: the page in these PNGs was served from a build on '
+            + 'local disk, NOT from the deployed asset canister. Every canister query and '
+            + 'update still went to the real local replica, so the CHAIN side of every '
+            + 'agreement check is unaffected — but this is an A/B artifact, not a picture '
+            + 'of what the deployed app serves.',
+      }
+      : { source: 'the deployed local asset canister', canisterId: frontendId },
+    // Non-empty ONLY on a deliberate fault-injection run. Every scene in such a
+    // run is expected to be UNVERIFIED; the artifacts are proof that the
+    // agreement assertion fires, not evidence about the product.
+    faultInjection: requestedDrift().length
+      ? {
+        targets: requestedDrift(),
+        how: Object.fromEntries(requestedDrift().map((t) => [t, DRIFT_TARGETS[t].how])),
+        warning:
+            'SHOTS_INJECT_DRIFT was set: the RENDERED page was deliberately made to '
+            + 'disagree with the canister. No canister response was mocked. Every PNG in '
+            + 'this run is a fault-injection artifact.',
+      }
+      : null,
     // Provenance of every live-fact third-party response. Any fiat figure in a
     // PNG traces to one of these; a cached quote is never replayed as live.
     volatileThirdParty: summariseVolatile(thirdPartyObservations()),

@@ -7,6 +7,9 @@
 import { devLogin, enterTable, openApp, settle } from '../lib/browser.mjs';
 import { HERO_PLAYER } from '../lib/config.mjs';
 import { phaseOf } from '../lib/table-driver.mjs';
+import {
+  assertChainAgreement, assertHandHistoryAgreement, named, withAgreement,
+} from '../lib/chain-agreement.mjs';
 import { heroPrincipal, playCompletedHand, tableDisplayName } from './_shared.mjs';
 
 const TABLE = 'table_2';
@@ -90,10 +93,18 @@ export default {
     const rowText = ((await page.locator('.hand-row').first().textContent()) || '')
       .replace(/\s+/g, ' ').trim();
     const modal = await page.locator('.hand-history-modal').count();
-    return {
+    // Two surfaces state money here: the table behind the modal, and the modal's
+    // own per-hand pot. Both are compared with the canister.
+    const tableAgreement = named('table', await assertChainAgreement(ctx, page, {
+      table: TABLE, asPlayer: HERO_PLAYER, requireBalance: true,
+    }));
+    const historyAgreement = named('history', await assertHandHistoryAgreement(ctx, page, {
+      table: TABLE, asPlayer: HERO_PLAYER,
+    }));
+    return withAgreement({
       verified: modal === 1 && rows >= 1,
       checks: { modal, handRows: rows, firstRow: rowText.slice(0, 160) },
       notes: `${rows} hand row(s); first: ${rowText.slice(0, 80)}`,
-    };
+    }, tableAgreement, historyAgreement);
   },
 };

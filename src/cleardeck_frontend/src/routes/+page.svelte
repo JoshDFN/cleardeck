@@ -23,6 +23,7 @@
     IS_MAINNET_BUILD, MAINNET_CANISTER_IDS, NETWORK, statusCommandFor,
   } from "$lib/ic-config.js";
   import { lobbyCanisterId } from "$lib/canisters";
+  import { currencyOf, formatTokenAmount } from "$lib/utils.js";
   import { HttpAgent } from '@dfinity/agent';
   import { Principal } from '@dfinity/principal';
 
@@ -79,15 +80,46 @@
     return false;
   }
 
-  // Format e8s amount as ICP display
-  function formatICP(e8s) {
-    const num = typeof e8s === 'bigint' ? Number(e8s) : e8s;
-    const icp = num / 100_000_000;
-    if (icp >= 1000) return `${(icp / 1000).toFixed(1)}K`;
-    if (icp >= 1) return icp.toFixed(2);
-    if (icp >= 0.01) return icp.toFixed(2);
-    return icp.toFixed(4);
-  }
+  // There used to be a seventh private copy of "divide by 1e8 and round" here
+  // (`formatICP`), called by nothing. Six live copies of that function is already
+  // how the client came to display the same on-chain number differently in
+  // different panels, and it is the soil docs/DEFECTS.md T-08 (the pot at 2x)
+  // grew in. The canonical one now lives in $lib/utils.js as
+  // `formatTokenAmount()`; import it rather than writing an eighth.
+
+  /**
+   * The stakes pill next to the Lobby button.
+   *
+   * WHY THIS IS NOT JUST `currentTableInfo.name`. The lobby canister seeds every
+   * ICP table with table_1's config and bakes the blinds into the NAME string
+   * (`init_microstakes_tables` in src/lobby_canister/src/lib.rs hardcodes
+   * 1_000_000/2_000_000 for all three), while icp.yaml initialises table_2 at
+   * 0.05/0.10 and table_3 at 0.10/0.20. So the name says "6-Max - 0.01/0.02" on
+   * a table that charges 0.05/0.10, and "9-Max - 0.01/0.02" on one that charges
+   * 0.10/0.20: wrong by 5x and 10x, in the largest teal string on the screen,
+   * seven hundred pixels from the blind discs on the felt that are right.
+   *
+   * The lobby list already refuses to quote that record (it renders the STAKES
+   * column from the table contract and flags the row "record differs"). This
+   * makes the table header agree with the lobby list and with the felt: the
+   * FORMAT half of the name is kept (that part is true), the stale price half is
+   * dropped, and the blinds are read from the contract that will actually charge
+   * them. Until the view arrives the pill shows the format alone rather than a
+   * number nobody has checked. docs/DEFECTS.md T-11.
+   */
+  const tableFormatLabel = (name) =>
+    String(name ?? '').split(/\s+[-–]\s+/)[0].trim() || String(name ?? '');
+
+  const headerStakes = $derived.by(() => {
+    const name = currentTableInfo?.name;
+    if (!name) return null;
+    const cfg = tableState?.config;
+    if (!cfg) return tableFormatLabel(name);
+    const currency = currencyOf(cfg) ?? 'ICP';
+    const sb = formatTokenAmount(cfg.small_blind, { currency });
+    const bb = formatTokenAmount(cfg.big_blind, { currency });
+    return `${tableFormatLabel(name)} · ${sb}/${bb}`;
+  });
 
   // Extract currency from candid opt variant
   // Candid opt variants come through as arrays: [] for None, [{ BTC: null }] for Some(BTC)
@@ -687,7 +719,7 @@
           Lobby
         </button>
         {#if currentTableInfo}
-          <span class="current-table-name">{currentTableInfo.name}</span>
+          <span class="current-table-name">{headerStakes}</span>
         {/if}
       {/if}
     </div>

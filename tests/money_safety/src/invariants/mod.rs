@@ -20,7 +20,9 @@
 
 use serde::Serialize;
 
+pub mod attribution;
 pub mod relational;
+pub use attribution::*;
 pub use relational::*;
 
 use crate::table_api::{GamePhase, TableState};
@@ -68,6 +70,14 @@ pub enum Invariant {
     /// M6 NO DOUBLE PAY. A pot is awarded once; a withdrawal is paid at most
     /// once; a deposit block or allowance is credited at most once.
     M6NoDoublePay,
+
+    /// M8 PRINCIPAL ATTRIBUTION. The money reached the right PERSON, not merely
+    /// the right seat and the right total. See [`attribution`] and
+    /// docs/SECURITY-FINDINGS.md FINDING 13: paying a departed player's stake to
+    /// whoever took their chair conserves every total, awards exactly what was
+    /// collected, and lands the right amount in the right seat, so M1..M6 and the
+    /// settlement oracle's per-seat diff are all silent.
+    M8PrincipalAttribution,
 }
 
 impl Invariant {
@@ -80,6 +90,7 @@ impl Invariant {
             Invariant::M4NoNegativeNoOverflow => "M4_NO_NEGATIVE_NO_OVERFLOW",
             Invariant::M5UpgradeDurability => "M5_UPGRADE_DURABILITY",
             Invariant::M6NoDoublePay => "M6_NO_DOUBLE_PAY",
+            Invariant::M8PrincipalAttribution => "M8_PRINCIPAL_ATTRIBUTION",
         }
     }
 }
@@ -117,6 +128,12 @@ pub enum Severity {
     FundDestruction,
     /// `side_pots` disagrees with `pot`. Excusable ONLY where the register names it.
     BreakdownDrift,
+    /// The right amount reached the WRONG PRINCIPAL. Totals balance, seats balance,
+    /// and one player has another player's money. Never excusable: there is no
+    /// magnitude at which paying the wrong person is acceptable, and no direction
+    /// -- the loser's side of it looks like a shortfall and the winner's like a
+    /// windfall, and they are the same defect.
+    Misattribution,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

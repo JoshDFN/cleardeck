@@ -32,16 +32,19 @@ or **fixed-in-wave-1**.
 |---|---|---|---|---|
 | [E-01](#e-01) | **critical** | **FIXED-IN-WAVE-2** (with E-03 and E-05) | `determine_winners` / `advance_to_next_street` | every showdown after post-flop betting paid only the pre-flop pot and destroyed the rest permanently; the payout basis is now rebuilt from the players' contributions at payout time |
 | [E-02](#e-02) | **fund-theft** | **FIXED-IN-WAVE-2** (demonstrated as theft first) | `periodic_cleanup`, `deposit`, `notify_deposit`, `VERIFIED_DEPOSITS` | one real ledger transfer credited twice and the excess WITHDRAWN as real ICP; closed by a monotonic watermark plus a bounded record with one writer |
-| [E-37](#e-37) | **high** | executed | `principal_of`, `plan_payouts`, `apply_payouts` | the E-05 fix pays a departed player's refunded stake to whoever took their chair; conserves every chip, so no gate sees it. [FINDING 13](SECURITY-FINDINGS.md) |
-| [E-38](#e-38) | **high** | executed | `PersistentState::deposit_watermark`, `TableState::departed_stakes` | two agents each added a non-`opt` persisted field. As shipped an upgrade is REJECTED; fix only the first and the upgrade SILENTLY destroys every chip at the table. [FINDING 14](SECURITY-FINDINGS.md) |
-| [T-08](#t-08) | **high** | executed | `PokerTable.svelte` pot header | the table's headline POT is displayed at **2×** during every betting round, and disagrees with the pot-odds strip on the same screen |
-| [T-09](#t-09) | medium | executed | `PokerTable.svelte` showdown | the villain's revealed hand renders as two blank cards and the winning hand as `0`: an unwrapped Candid `opt` in two places |
+| [E-37](#e-37) | high | **FIXED** (demonstrated first, then fixed) | `Stake`, `plan_payouts`, `apply_payouts` (`principal_of` deleted) | the E-05 fix paid a departed player's refunded stake to whoever took their chair. Composed end to end on the real canister: `-2000000` from the player who left, `+2000000` to the stranger in her chair, every total balancing. The owner now travels with the stake and `M8_PRINCIPAL_ATTRIBUTION` + a PRINCIPAL column in the settlement oracle gate it. [FINDING 13](SECURITY-FINDINGS.md) |
+| [E-38](#e-38) | high | **FIXED** (both fields, in one change) | `PersistentState::deposit_watermark`, `TableState::departed_stakes` | two agents each added a non-`opt` persisted field. As shipped an upgrade was REJECTED; fixing only the first makes the upgrade SILENTLY destroy every chip at the table (re-measured on the wave-3 fixture: 594000000 seated e8s and three players' hole cards, gone, upgrade reported successful). Both are now `opt`; M7 upgrades `801aa79` state into the current wasm with every e8, stack, card and the anti-replay record intact, and `pre_upgrade` traps rather than proceeding after a failed save. [FINDING 14](SECURITY-FINDINGS.md) |
+| [T-08](#t-08) | **high** | **FIXED-IN-WAVE-3** | `PokerTable.svelte` pot header | the table's headline POT was displayed at **2×** during every betting round, and disagreed with the pot-odds strip on the same screen. The headline is now `get_pot()` unmodified, the two legs shown beside it are a decomposition that sums back to it, and the pot-odds strip spells out the same figure. Gated by the screenshot harness on every table scene |
+| [T-09](#t-09) | medium | **FIXED-IN-WAVE-3** | `PokerTable.svelte` showdown | the villain's revealed hand rendered as two blank cards and the winning hand as `0`: an unwrapped Candid `opt` in two places. Both are unwrapped now (`revealedHole()` and `handRankWords()`), and a revealed pair is lifted clear of its own plate so it can be read |
 | [H-16](#h-16) | high | **FIXED-IN-COHERENCE-PASS** | `tests/money_safety/src/world.rs`, `wasms.rs` | `World::upgrade` reused `self.table_wasm`, so every "survives an upgrade" assertion was new-wasm-to-itself. `upgrade_to_module_under_test` + `previous_release_table_canister()` + M7 now walk `801aa79` state into the current wasm |
 | [H-17](#h-17) | high | **FIXED-IN-COHERENCE-PASS** | `scripts/dev.sh` `cmd_test` | `tests/deposit_replay.rs` -- the E-02 fund-theft reproducer and its ten regressions -- was named by no make target for the whole wave |
 | [H-18](#h-18) | high | executed | `deposit_replay.rs` `dr02` | the named regression on the fund-theft primitive never presents the deposit block: the rate limiter skips it and the loop does not retry |
 | [H-19](#h-19) | medium | executed | `tests/money_safety/src/documented.rs` | `register_entries_are_all_still_needed`, documented as the thing that stops a stale tolerance surviving a fix, does not exist |
 | [H-20](#h-20) | medium | **FIXED-IN-COHERENCE-PASS** | `invariants/relational.rs` + `documented.rs` | the payout fix moved a live defect's self-report from `CRITICAL:` to `WARNING:`, which the detector does not match; 296 of them went unreported in one fuzz run |
 | [H-21](#h-21) | low | executed | `tests/money_safety/src/wasms.rs` | the harness's `cargo build` inherits `RUSTUP_TOOLCHAIN`, which overrides `rust-toolchain.toml`; a different toolchain produced a different module hash from identical source |
+| [H-22](#h-22) | medium | executed | `tests/settlement` re-deal search | the exact-deal search has no attempt cap, so a deck that stops varying HANGS the suite instead of failing it; contained by a timeout in `cmd_test`, not fixed |
+| [E-39](#e-39) | medium | **FIXED-IN-COHERENCE-PASS** | `leave_table` | reduced `state.pot` via `return_uncalled_bet` without the paired `refresh_side_pots`, so the side pots a player is SHOWN stopped summing to the pot. Found by `make fuzz` at its DEFAULT 9 seeds; the wave that caused it ran 3 |
+| [H-23](#h-23) | **high** | executed | `.github/workflows/ci.yml` | CI runs neither the money-safety suite nor the settlement oracle. Every fund-safety result in these documents comes from a harness no CI job invokes |
 | [E-03](#e-03) | high | **FIXED-IN-WAVE-2** (with E-01 and E-05) | `calculate_side_pots` → `poker_core::side_pots` | `state.pot` overrode the players' actual contributions in both directions, minting in one and destroying in the other through an `f64` ratio; it can no longer move a chip |
 | [E-04](#e-04) | high | **FIXED-IN-WAVE-2** (with E-02, in that order) | `notify_deposit` | could never credit a deposit (two independent decode bugs) and the ICP sent was stranded forever |
 | [E-05](#e-05) | high | **FIXED-IN-WAVE-2** (with E-01 and E-03) | `leave_table`, `cash_out`, `check_timeouts` | a seat vacated mid-hand orphaned its stake, moving contested money into the deepest stack's exclusive pot; the stake is now recorded independently of seat occupancy |
@@ -55,7 +58,7 @@ or **fixed-in-wave-1**.
 | [E-09](#e-09) | medium | executed | `poker_core::{evaluate_hand, evaluate_five_cards}` | no input validation: duplicate cards, wrong card counts and short boards produce plausible impossible hands instead of trapping |
 | [E-10](#e-10) | medium | code-read | `PENDING_WITHDRAWALS`, `LAST_WITHDRAWAL` | not in `PersistentState`, so the withdrawal cooldown resets on every upgrade |
 | [E-11](#e-11) | medium | code-read | `withdraw` across an upgrade | an upgrade mid-withdraw drops the reply callback, so the refund branch can never run |
-| [H-04](#h-04) | low | **MOSTLY-FIXED-IN-WAVE-2** | `src/table_canister/src/lib.rs` seam | 6 of the 7 seam mutations now die at canister level; the 7th (dropping the `BUG:` log line) has no reachable trigger in honest play |
+| [H-04](#h-04) | low | **MOSTLY-FIXED-IN-WAVE-2** (re-measured in wave 3) | `src/table_canister/src/lib.rs` seam | 6 of the 7 seam mutations die at canister level; the 7th (dropping the self-report line) has no reachable trigger in honest play. Re-run against the wave-3 payout rewrite: still **6 of 7**, same survivor |
 | [H-05](#h-05) | — | **FIXED-IN-WAVE-2** | `tools/differential/src/checks/reference_probe.rs` | both references are now called per probe and the measured verdict is reported; every probe emits a finding only while the engine still accepts the input |
 | [H-09](#h-09) | — | **FIXED-IN-WAVE-2** | `+page.svelte` `<main>`, `tools/shots` | spinner and lobby are now a real either/or; `data-lobby-state` is asserted by the lobby scene |
 | [H-11](#h-11) | medium | code-read | `tests/money_safety/src/table_api.rs:80-108` | the fuzzer only ever runs a 30 s action timeout at `table_1` stakes; `table_2`/`table_3` shapes are never exercised |
@@ -69,8 +72,8 @@ or **fixed-in-wave-1**.
 | [E-14](#e-14) | low | code-read | `leave_table` | missing the `check_rate_limit()?` that `player_action` has |
 | [E-15](#e-15) | low | executed | `poker_core::side_pots::level_pot` | the `partial_contributions` term is provably always zero: dead code on a fund path |
 | [E-16](#e-16) | — | **fixed-in-wave-2** | `poker_core::shuffle` (was `lib.rs:2314`) | `(draw as usize) % (i+1)` truncated to 32 bits on wasm32, so NO third party could reproduce a deal from the revealed seed |
-| [E-30](#e-30) | high | executed | `player_action`, the `AllIn` arm | an all-in that raises by less than a full min-raise reopened the betting to players who had already acted |
-| [E-31](#e-31) | high | executed | `player_action` timer check | an expired action timer was refused but never resolved, so nothing could move the hand and the table wedged |
+| [E-30](#e-30) | high | **FIXED-IN-WAVE-2, CORRECTED IN COHERENCE PASS** | `player_action`, the `AllIn` arm | an all-in that raises by less than a full min-raise reopened the betting. The first fix implemented "closed if facing anything at all", which is not the rule and is a regression on CUMULATIVE short all-ins (TDA 47-A). Now `amount_owed < min_raise`; pinned by `coherence_regressions.rs` |
+| [E-31](#e-31) | high | **FIXED-IN-WAVE-2, CORRECTED IN COHERENCE PASS** | `player_action` timer check | an expired action timer was refused but never resolved, so the table wedged. Resolving it before the whose-turn check then let a message composed on the flop be APPLIED on the turn; such an action is now refused while the table still unwedges |
 | [E-32](#e-32) | high | executed | `is_betting_round_complete` + `check_timeouts` | a `Disconnected` seat is skipped by the betting round yet stays live in the hand: a free showdown for money already in |
 | [E-33](#e-33) | medium | code-read | `join_table` / `start_new_hand` | no post-or-wait-for-the-big-blind rule, so a player can cycle in and out taking free non-blind hands |
 | [E-34](#e-34) | medium | code-read | `start_new_hand` blind assignment | no dead-button rule: when a seat between the button and the blinds empties, a player is skipped for the big blind |
@@ -1371,6 +1374,26 @@ register entry with an expected magnitude, not to a sign.
 > see was mutation 6 (a stubbed evaluator) or mutation 7 (a fixed deck) — the two that decide who
 > wins and what is dealt.
 >
+> **WAVE-3 RE-RUN, after the FINDING 13 / FINDING 14 rewrite of the payout path.** The wave-2
+> mutations targeted functions the rewrite changed, so each was translated again to its nearest
+> current site, keeping what the mutation MEANS. One at a time, restored between each, every
+> anchor asserted to match EXACTLY ONCE, and a mutation that fails to compile is reported as
+> `NOT-APPLIED` rather than counted as a kill. Gate per mutation: `cargo test --workspace` plus
+> `cd tests/money_safety && cargo test --test invariants`. Script:
+> `$SCRATCH/seam_mutations.py`, run against a `cp -Rc` copy of the tree; the repo's own `lib.rs`
+> was untouched and asserted byte-identical afterwards.
+>
+> | mutation (wave-3 site) | verdict | what convicted it |
+> |---|---|---|
+> | 1. `refresh_side_pots` made a no-op | **died** | `seam_a`, `seam_b` |
+> | 2. every stake halved in `plan_payouts` | **died** | `cargo test --workspace` (20 of 22) |
+> | 3. the breakdown written into a throwaway `Vec` | **died** | `seam_a`, `seam_b` |
+> | 4. `&[]` passed as the contributions | **died** | `cargo test --workspace` (14 of 22) |
+> | 5. the self-report line dropped | **SURVIVED** | — (equivalent mutant, see below) |
+> | 6. `evaluate_hand` stubbed to `RoyalFlush` | **died** | `cargo test --workspace` (8 of 22) |
+> | 7. every hand dealt from `b"CONSTANT"` | **died** | `seam_c`, `seam_honest_play_produces_no_self_reported_failure` |
+> | | **6 of 7** | unchanged from wave 2, same survivor |
+>
 > Killed by: mutations 1-4 by `seam_b_side_pots_sum_to_pot_at_the_moment_calculate_side_pots_runs`
 > and `seam_a_showdown_with_post_flop_betting_accounts_for_every_e8`; mutation 6 by
 > `seam_d_the_recorded_showdown_ranks_are_the_ranks_evaluate_hand_returns` (`the canister says seat 0
@@ -1648,7 +1671,30 @@ measured against table canister wasm
 `395696359b6d1a6e185fca9e2e051bbb6c8413b62e1545aae55c66d361d8342f`.
 
 <a id="e-37"></a>
-### E-37 — high — a departed player's refunded stake is paid to whoever took their chair
+### E-37 — high — a departed player's refunded stake is paid to whoever took their chair — FIXED
+
+> **FIXED 2026-08-04 (wave 3), after first being DEMONSTRATED.** Wave 2 filed this as high
+> because the two ingredients had each been reached but never composed in one hand. They compose
+> in five ordinary API calls, and the composition now runs against the real canister on every
+> `./scripts/dev.sh test`:
+>
+> ```
+> M8:   74yuz-2axoe-...-bqsze-dae   -2000000     (alice, who left with 0.02 ICP in the pot)
+> M8:   f6m43-ks6kd-...-xks4f-rae   +2000000     (the stranger who took her chair)
+> ```
+>
+> **The fix** the owner travels with the money. `Stake { seat, owner, amount, relinquished }` is
+> the payout basis, `Payout::principal` is a plain `Principal` sourced from the stake or from the
+> live claim that won the layer, and `principal_of(state, seat)` is **deleted** — there is no
+> longer any function in `lib.rs` that turns a seat index into a payee. `apply_payouts` credits
+> that principal: their stack if they are in that seat, otherwise their escrow. `push_winner`
+> aggregates by `(seat, principal)` and only attaches hole cards when the occupant IS the payee.
+>
+> **The gates** `payout_tests::finding13_*` (4 host tests),
+> `M8_PRINCIPAL_ATTRIBUTION` in `tests/money_safety/src/invariants/attribution.rs`,
+> `principals::m8_*` against the real canister, and a PRINCIPAL column in the settlement oracle
+> that `Bench::gate` fails on. All four are RED against the pre-fix build. Full write-up:
+> [SECURITY-FINDINGS.md FINDING 13](SECURITY-FINDINGS.md).
 
 Introduced by the E-05 fix. `principal_of()` resolves a payout's owner from the **seat**, looking
 `state.players[seat]` up first and only falling back to `departed_stakes` when the chair is empty.
@@ -1680,7 +1726,18 @@ a live stake and a departed stake` lines from E-36).
 that asserts on **principals**. Full write-up: [SECURITY-FINDINGS.md FINDING 13](SECURITY-FINDINGS.md).
 
 <a id="e-38"></a>
-### E-38 — high — two persisted fields that are not Candid-compatible additions, one of them silent
+### E-38 — high — two persisted fields that are not Candid-compatible additions, one of them silent — FIXED
+
+> **FIXED 2026-08-04 (wave 3).** Both fields are `opt` as of one change:
+> `PersistentState::deposit_watermark: Option<u64>` and
+> `TableState::departed_stakes: Option<Vec<DepartedStake>>`. The gate is
+> `m7_state_written_by_the_previous_release_survives_the_upgrade_exactly`, which builds `801aa79`
+> from git, creates escrow + seated chips + a live hand on it, and REQUIRES the upgrade to
+> succeed with every balance, stack, hole card, board card and the anti-replay record intact.
+> Executed both regressions: reverting the watermark gets the upgrade REJECTED; reverting
+> `departed_stakes` gets it ACCEPTED with 594,000,000 e8s of seated chips silently destroyed.
+> `pre_upgrade` now TRAPS on a failed `stable_save` rather than proceeding. Full write-up:
+> [SECURITY-FINDINGS.md FINDING 14](SECURITY-FINDINGS.md).
 
 `PersistentState::deposit_watermark: u64` (added by the E-02 fix) and
 `TableState::departed_stakes: Vec<DepartedStake>` (added by the E-05 fix). Both carry
@@ -1729,26 +1786,50 @@ that) and everything for upgrades from this commit onwards.
 See [SECURITY-FINDINGS.md FINDING 14](SECURITY-FINDINGS.md).
 
 <a id="t-08"></a>
-### T-08 — high — the table displays the pot at twice its size during every betting round
+### T-08 — high — FIXED IN WAVE 3 — the table displayed the pot at twice its size during every betting round
 
-`state.pot` already includes the live `current_bet`s, and the table header adds them again:
-the screen reads `POT 220.40 (110.20 + 110.20 betting)` while the pot-odds strip on the *same
-screen* reads `Call 69.80 to win 110.20`. Found by the frontend reviewer, in a scene that recorded
+`state.pot` already includes the live `current_bet`s, and the table header added them again:
+the screen read `POT 220.40 (110.20 + 110.20 betting)` while the pot-odds strip on the *same
+screen* read `Call 69.80 to win 110.20`. Found by the frontend reviewer, in a scene that recorded
 `verified: true` and quoted the wrong number in its own notes.
 
 A client that custodies real ICP and shows the pot at 2× is a defect on its own terms. It is also
 the strongest argument for the harness change in the same area: every screenshot scene asserts
 **presence** of an element, never **agreement** with `get_pot()`.
 
+**Fix (wave 3).** The canister raises `state.pot` in the same statement that raises a player's
+`current_bet` — blinds at `src/table_canister/src/lib.rs:2742`/`2754`, Call `3270`, Bet `3289`,
+Raise `3323`, AllIn `3356` — so the chain's pot is the WHOLE pot and the client had nothing to add.
+`PokerTable.svelte` now renders `totalPot = pot`, labelled `Total pot`. The two figures a player
+actually wants are published as a `.pot-breakdown` decomposition (`X collected + Y betting`) which
+must sum back to `get_pot()`, and the pot-odds strip carries a `.pot-odds-explanation`
+(`Call X to win Y`) quoting the same pot.
+
+**How it stays fixed.** The harness change this defect argued for exists and now has three
+assertions pointed at this component: `pot (headline) vs get_pot()`, `pot breakdown sums to
+get_pot()` with its `betting` leg equal to `sum(current_bet)`, and `pot-odds "to win Y" vs
+get_pot()`. Re-running `./scripts/dev.sh shots` against the defect reproduces it as a hard failure
+— that is how it was found again on 2026-08-05: *pot (headline) vs get_pot(): DISAGREES: screen
+"0.40" means 39500000 e8s..40500000 e8s, canister says 20000000 e8s (screen is 2.000x the chain)*.
+The pre-flop scene went from 6 money figures with one mismatch to 8 money figures, all agreeing.
+
 <a id="t-09"></a>
-### T-09 — medium — the showdown renders an unwrapped Candid `opt` twice
+### T-09 — medium — FIXED IN WAVE 3 — the showdown rendered an unwrapped Candid `opt` twice
 
 `table_3.did.d.ts` declares `'hole_cards': [] | [[Card, Card]]`, so `hole_cards[0]` is the whole
-tuple and `hole_cards[1]` is `undefined`; `PokerTable.svelte:793-794` passes both to `<Card>`, so
-the villain's revealed hand is two blank rectangles. Separately `formatHandRank` does
+tuple and `hole_cards[1]` is `undefined`; `PokerTable.svelte` passed both to `<Card>`, so
+the villain's revealed hand was two blank rectangles. Separately `formatHandRank` did
 `Object.keys(handRank)[0]` on an `opt` array, producing the literal string `0` where the winning
 hand's name belongs. The hand-history modal on the same table prints `(Pair)` correctly, so the
 data is there.
+
+**Fix (wave 3).** `revealedHole(player)` unwraps `Option<(Card, Card)>` properly (and tolerates a
+flattened `vec Card` shape, so a Candid change degrades to a correct render rather than back to two
+blanks); `handRankWords()` unwraps the rank option. Confirmed on the real showdown capture: the
+villain's hand rendered as one blank white card and one empty slot before, and as its actual two
+cards after. A second defect surfaced by the fix was fixed with it — a revealed pair was clipped by
+its own nameplate, legible only down to the suit pips, so face-up cards now lift clear of the plate
+(`.player-cards.shown`) while face-down ones still tuck behind it.
 
 <a id="h-16"></a>
 ### H-16 — high — the harness never upgrades across a version boundary
@@ -1903,3 +1984,599 @@ non-varying deck is a fund-safety defect.
 
 Note for reading the mutation table: S7's `settlement` and `disagreements` cells are `HUNG`, not
 `convicted`. `invariants` is what killed that mutant.
+
+---
+
+<a id="wave-3-queue"></a>
+## Wave 3 queue — ranked, with reasoning
+
+Written by the wave-2 coherence pass. Ranked by **what a player loses if it is not fixed**, then by
+what unblocks the most other work. The lead's question was whether the engine and trust work is
+solid enough to move to look-and-feel. **Answer: not quite. Two items first. They are both small.**
+
+### Do these two before anything else — BOTH DONE (wave 3)
+
+Both landed together, as one design, because they are coupled: FINDING 13's fix works by carrying
+an owner in persisted state, and FINDING 14 is about persisted state not surviving an upgrade.
+
+**1. ~~E-38 / FINDING 14 — make both persisted fields `opt`, in ONE change.~~ DONE.**
+`PersistentState::deposit_watermark: Option<u64>` and
+`TableState::departed_stakes: Option<Vec<DepartedStake>>`, in one change, because fixing the first
+alone is measured to accept the upgrade and destroy every seated chip while reporting success.
+`m7_state_written_by_the_previous_release_survives_the_upgrade_exactly` was rewritten so a
+REJECTED upgrade is now a FAILURE rather than an acceptable outcome: it builds `801aa79` from git,
+puts escrow, seated stacks and a LIVE hand on it, and requires the upgrade to succeed with every
+balance, stack, hole card, board card, deck cursor, shuffle commitment and the deposit anti-replay
+record intact — then plays the restored hand out and requires it to settle conserving. Both
+regressions were executed: the watermark reverted gets the upgrade rejected, `departed_stakes`
+reverted gets it accepted with 594,000,000 e8s of chips and three players' hole cards silently
+gone. `m7b` covers the field `801aa79` cannot write, by round-tripping a departed stake and its
+owner through a same-version upgrade.
+
+*The scenario-specific `notify_deposit` failure the previous draft of this item flagged is
+explained and closed: it is FINDING 06 in the PREVIOUS release, not a regression. `801aa79`
+declares the ledger's `AccountIdentifier` as a record with a `hash` field where the real ledger
+returns a bare `blob`, so the OLD build cannot decode `query_blocks` at all. The fixture now
+transfers before the upgrade and claims after it, which is a better test anyway: it shows the
+anti-replay record surviving a second upgrade.*
+
+**`pre_upgrade` now TRAPS on a failed `stable_save`** instead of logging and letting the upgrade
+proceed. Proceeding either gets rejected by `post_upgrade` anyway, or silently restores an OLDER
+snapshot — rolling back balances, chips AND `verified_deposits`/`deposit_watermark`, which
+re-opens the E-02 replay window on blocks already credited. The argument is written out in
+[SECURITY-FINDINGS.md FINDING 14](SECURITY-FINDINGS.md#the-pre_upgrade-decision-it-traps-now-and-here-is-the-argument).
+
+**2. ~~E-37 / FINDING 13 — carry the owner with the stake, and add ONE gate that asserts on
+principals.~~ DONE, and the defect was DEMONSTRATED first.** The two ingredients compose in five
+ordinary API calls, which wave 2 had not shown: a player leaves mid-hand, a stranger takes the
+chair and calls `sit_in()` (E-36) which keeps `count_active_players` above one while every real
+player walks out, and the hand then settles with no live claim on any layer. Observed on the real
+canister: `-2000000` from the departed player, `+2000000` to the stranger, every total balancing.
+
+The fix carries the owner: `Stake { seat, owner, amount, relinquished }` is the payout basis,
+`Payout::principal` is a plain `Principal` sourced from the stake or from the live claim that won
+the layer, and `principal_of(state, seat)` is **deleted** — there is no function left in `lib.rs`
+that can turn a seat index into a payee.
+
+The gate matters as much as the fix, and this is where the previous draft of this item was right:
+every measurement instrument in this repo was seat-indexed or aggregate. There are now four that
+are not, and all four are red against the pre-fix build:
+
+* `payout_tests::finding13_*` — the pure plan and its application, on principals, host-side.
+* `M8_PRINCIPAL_ATTRIBUTION` (`tests/money_safety/src/invariants/attribution.rs`) — per-principal
+  `escrow + chips` delta against what the rules owe that PERSON, plus the corollary that needs no
+  oracle at all: **a principal who staked nothing in a hand cannot come out of it richer.**
+* `principals::m8_*` — the composed sequence against the real canister.
+* a PRINCIPAL column in the settlement oracle, folded into `HandComparison::agrees` so
+  `Bench::gate` fails on it, plus two chair-swap scenarios that exercise it.
+
+### Then, in this order
+
+**3. T-08 — the pot is displayed at 2×.** Cheap, and it is the one defect on this list a player
+would notice in the first thirty seconds. Pair it with the harness change that makes it stay fixed:
+every screenshot scene that shows money must assert the rendered number equals `get_pot()` on the
+same table at the same moment, instead of asserting an element exists. That single policy change is
+what turns wave 3's screenshots from decoration into evidence, and it is a prerequisite for
+trusting anything the look-and-feel loops report. **T-09** (blank villain cards, winning hand
+rendered as `0`) is the same afternoon's work and the same unwrapped `opt`.
+
+**4. E-36 — a player who takes a chair mid-hand is dealt the action.** They can bet into a hand
+they hold no cards in and can never win that money. It is also half of E-37's exploit path, and
+fixing it deletes the one entry now in `TOLERATED_SELF_REPORTS`.
+
+**5. H-18 — make `dr02` actually present the deposit block.** Four lines. The named regression on
+the project's only fund-theft primitive is vacuous today; `dr09` is carrying it alone.
+
+**6. E-06 and E-07.** One lull runs the whole board out and settles (both timeouts are 30 s at
+`table_1`), and the documented recovery tool strands every seated player's chips. Neither is new,
+both are real, and E-07 is what the E-31 fix had to argue around.
+
+**7. H-22 — cap the settlement oracle's re-deal search.** Now that the oracle is in the default
+gate, its ability to hang instead of fail is a CI-budget hazard. The timeout wrapper in
+`cmd_test` contains the damage; the cap is the fix, and "the deck may not be varying" is a useful
+failure message in its own right.
+
+**8. Put a PocketIC job in CI.** Today `.github/workflows/ci.yml` runs the wasm build,
+`cargo test --workspace`, the wasm32 golden replay, Candid drift and the frontend build. It runs
+**neither the money-safety suite nor the settlement oracle**. Every fund-safety result in this
+document comes from a harness no CI job invokes. `./scripts/dev.sh test` now runs both, so the CI
+change is one job that calls it.
+
+**9. H-21 — pin the toolchain in `wasms.rs`'s `cargo build`.** One `.env()` call. Makes "the sha256
+the harness attests to is the sha256 that gets deployed" a property of the code rather than of how
+you happened to invoke it.
+
+**10. E-30's test name.** `two_successive_incomplete_all_ins_still_do_not_reopen_the_betting`
+asserts a rule that is false, and its fixture is one chip short of discriminating so it passes
+either way. The rule itself is fixed and pinned by
+`tda_47a_cumulative_short_all_ins_must_reopen_the_betting_to_seat_0`; what is left is a name that
+will actively mislead the next reader.
+
+### What can start in parallel right now
+
+The look-and-feel work on **layout, type, colour, motion and the felt geometry** has no dependency
+on any of the above and can begin immediately. What must NOT start before items 1-3 is anything
+that changes **what numbers the client displays or how money is presented**, because the harness
+cannot currently tell a right number from a wrong one, and shipping a prettier client that shows
+the pot at 2× is worse than shipping the current one.
+
+<a id="h-23"></a>
+### H-23 — high — CI runs none of the fund-safety harnesses
+
+`.github/workflows/ci.yml` has five jobs: build the canisters for wasm32, `cargo test --locked
+--workspace`, the `poker_core` wasm32 golden replay (plus the outsider verifiers), Candid interface
+drift, and the frontend build. That is a genuinely good set — the wasm32 job in particular is what
+would have caught FINDING-02 — but note what is absent:
+
+* the money-safety suite (`invariants`, `regressions`, `deposit_replay`, `fuzz`), and
+* the settlement oracle.
+
+**Every fund-safety claim in `WAVE-02.md` and `SECURITY-FINDINGS.md` comes from a harness that no
+CI job invokes.** They run when a human remembers to run them. The wave-2 evidence that this
+matters: `deposit_replay` was in no target at all (H-17) and nobody noticed for a whole wave, and
+the settlement oracle — the only gate that convicts a wrong-seat payment — was behind its own
+`make settlement`.
+
+Both are PocketIC-based, so they need a job that can fetch the pocket-ic binary and the pinned ICP
+ledger wasm. `./scripts/dev.sh test` now runs both, so the CI change is one job that calls it.
+
+<a id="e-39"></a>
+### E-39 — medium — `leave_table` reduced `state.pot` without rebuilding `state.side_pots`
+
+FIXED IN THIS PASS. Found by running `./scripts/dev.sh fuzz` at its shipped settings, which the
+wave that introduced the defect had not done: the payout work reported "3 seeds x 600 steps, 0
+blocking findings", and the default is **9** seeds x 600. Seed 5 is red.
+
+```
+money-fuzz: seed 0xc1b1576c1105 finished: 11 hands, 4 upgrades, 2 blocking finding(s),
+            0 documented finding(s), worst stranded 2000000 e8s
+money-fuzz: shrinking NEW violation M1b_POT_BREAKDOWN:side_pots_sum_to_pot|BreakdownDrift|PreFlop
+```
+
+with the sequence right above it in the canister log:
+
+```
+returned uncalled bet of 196000000 to seat 1 in hand 2
+seat 1 left hand 2 with 2000000 in the pot; the stake stays in the payout basis
+```
+
+**Cause.** The payout fix added an uncalled-bet return to `leave_table`. `return_uncalled_bet`
+REDUCES `state.pot`. Both of the other two `return_uncalled_bet` call sites are immediately followed
+by `refresh_side_pots`; this one was not, so `state.side_pots` kept the layering it had been built
+against the larger pot and stopped summing to it.
+
+**No money moved wrongly.** `plan_payouts` rebuilds the layering from `hand_contributions` and never
+reads `state.side_pots`, which is exactly the property E-03's fix was for. What was wrong is the
+breakdown a player is SHOWN: `get_table_view` returns `state.side_pots`, so the side pots on screen
+did not add up to the pot on screen. The money-safety harness classifies it `BreakdownDrift` and
+blocks, which is right — an engine whose two accounts of the pot disagree has to be believed about
+neither until you know why.
+
+**Fix** `refresh_side_pots(state)` after `record_departed_stake`, ordered that way deliberately: run
+before the stake is recorded and the rebuild would orphan it, which is E-05 again.
+
+**Two lessons worth more than the fix.** First, `./scripts/dev.sh fuzz` at its DEFAULT settings is
+the gate, and a wave that runs a third of it and reports zero findings has not run the gate. Second,
+depth matters as much as breadth: at `MONEY_FUZZ_STEPS=1200` seed 1 alone reported **6** blocking
+findings against the pre-fix build, so the reviewer who claimed the fuzz is red at 1,200 steps was
+right, and right about the default too.
+
+---
+
+## Found by the wave-3 coherence pass
+
+Wave 3 restyled four surfaces and rewrote the payout path, in parallel, blind to each other.
+Everything below was found by **walking the whole app once** in a real browser against the real
+local canisters — land, sign in, deposit, sit, play a hand to showdown, open the history, verify
+the shuffle, withdraw — which no single builder did, plus one measurement tool applied identically
+to every surface. Reproduce with the commands on each entry.
+
+| # | sev | status | where | one line |
+|---|---|---|---|---|
+| [T-10](#t-10) | **high** | **FIXED IN THIS PASS** | `PokerTable.svelte` `$effect` | `JSON.stringify` on a Candid `nat64` threw **19 uncaught TypeErrors in one ordinary hand**, killing the action log and starving the effects the fairness panel and hand history run on |
+| [T-11](#t-11) | **high** | **FIXED IN THIS PASS, now gated** | `+page.svelte` `.current-table-name` | the largest string on every table screen quoted the LOBBY's stale blinds: `6-Max - 0.01/0.02` on a table charging 0.05/0.10 and `9-Max - 0.01/0.02` on one charging 0.10/0.20. 18 scenes were filed "agrees with chain: yes" around it |
+| [E-40](#e-40) | **high** | open | `record_hand_to_history` (`lib.rs:871`) | the only unguarded `evaluate_hand` call left in the canister. Observed **trapping on the live local canister** during ordinary browser play: `IMPOSSIBLE HAND … got 0 community`. A trap here cannot settle the hand |
+| [T-14](#t-14) | **high** | open | `tools/shots/lib/frontend-build.mjs` `buildEnvFor` | the deployed local frontend points its agent at **127.0.0.1:4943** while the gateway is on 8077, so the app only works behind the screenshot harness's own shim. Opened in a plain browser it shows a raw fetch stack trace and "The lobby canister is reporting no tables" |
+| [H-24](#h-24) | **high** | open | `tools/shots/scenarios/shuffleproof.mjs` | the fairness scene asserts `.proof-item >= 2`, which is true **before** the verification runs. Both shipped shuffleproof PNGs show rungs 3 and 4 grey and "Re-deriving your cards locally", filed as verified |
+| [T-16](#t-16) | **high** | open | the whole client at 390×844 | the mobile playing surface is **19.7–21.1% of the screen against PokerNow's 52.1% on the identical device**, and two of the six mobile captures do not contain a poker table at all |
+| [D-03](#d-03) | medium | **partly fixed** (vocabulary landed) | every component `<style>` block | 16 border radii, 28 font sizes, 9 greens, 6 ambers, 11 greys, 8 panel tints, 8 panel strokes; four buttons in one header row with three heights, two radii, two font sizes and two accent families |
+| [T-15](#t-15) | medium | **partly fixed** (first consumer) | `lib/utils.js` `formatTokenAmount` | the "canonical money layer" written this wave, documented at length, was imported by **nobody**. Seven copies of "divide by 1e8", not one |
+| [T-12](#t-12) | low | **FIXED IN THIS PASS** | `PokerTable.svelte:769` | the MAIN pot was labelled `Side 1`, and on a single-layer pot it printed `SIDE 1 0.40` directly under `TOTAL POT 0.40` |
+| [T-13](#t-13) | low | **FIXED IN THIS PASS** | 3 of 4 dialogs | Escape closed `HowItWorks` and silently did nothing in `DepositModal`, `WithdrawModal` and `HandHistory`; each carried a keydown handler on a `tabindex="-1"` backdrop that nothing can focus |
+| [H-25](#h-25) | medium | open | `./scripts/dev.sh known-defects` | one marker, for one low-severity defect. Twelve open engine defects in this register have none |
+| [T-18](#t-18) | **high** | **FIXED IN THIS PASS** | `WithdrawModal.svelte:74` | the withdrawal confirmation printed the ledger **block index** as an ICP amount, and never stated the fee. Measured: withdrawing 1 ICP at block 1130 said "0.0000 ICP sent to your wallet" |
+| [T-17](#t-17) | low | **FIXED IN THIS PASS** | `HandHistory.svelte` download button | the per-hand JSON export threw on the same BigInt class as T-10; fixed here, but it was never on any screen the harness photographs |
+
+<a id="t-10"></a>
+### T-10 — high — FIXED IN THIS PASS — one uncaught BigInt threw 19 times a hand and starved three features
+
+`PokerTable.svelte` keyed the action feed on
+
+```js
+const key = `${lastAction.seat}-${lastAction.timestamp}-${JSON.stringify(lastAction.action)}`;
+```
+
+`lastAction.action` is a Candid variant carrying `nat64` amounts, which `@dfinity/agent` decodes to
+`BigInt`. **`JSON.stringify` throws on a BigInt.** The statement is inside an `$effect`, so the
+throw is uncaught, the effect dies, and nothing is ever pushed into `actionFeed`.
+
+**Measured on the real canisters, one ordinary heads-up hand at `table_2`** (Playwright counting
+`page.on('pageerror')`): **7 uncaught `TypeError: Do not know how to serialize a BigInt` before any
+click, 12 more from a single click on `Call 0.10`, 19 in total**, and `document.querySelectorAll('.feed-item')`
+returned **0** with the `.feed-empty` "Waiting for action…" state showing throughout.
+
+This is the mechanism behind a competitive deficit another agent recorded as a design choice.
+The A/B row "5 of 5 action lines carry no amount, and PokerNow interleaves the streets" is not a
+missing feature — the code writes both. With the throw removed and nothing else changed, the same
+hand produces:
+
+```
+▲ 02:16  Seat 2 raised to 0.20
+→ 02:16  Flop
+☎ 02:16  You called 0.10
+```
+
+amounts and street markers included.
+
+**Fix.** `actionKey()` builds the identity from the variant tag plus its amount, as strings, and
+never touches JSON. After the fix, on the same hand shape: **0 page errors before the click, 0
+after**, three feed items with amounts.
+
+**Reproduce** (before/after, same canisters, bundle served from disk so nothing is deployed):
+`SHOTS_SERVE_DIST=src/cleardeck_frontend/dist node …` — the harness's own A/B mode.
+
+**Not the whole story of the fairness panel.** With the table quiet (both seats sat out after a
+completed hand) the panel auto-verifies in **505 ms untouched, 0 page errors** — measured twice,
+with and without a BigInt-safe `JSON.stringify` shim, 502 ms and 505 ms, so on THAT state the
+throw was not what stopped it. What stopped the shipped screenshot is H-24, below.
+
+<a id="t-11"></a>
+### T-11 — high — FIXED IN THIS PASS — the table header priced the table 5× and 10× wrong
+
+`init_microstakes_tables` (`src/lobby_canister/src/lib.rs:258–330`) writes `1_000_000 / 2_000_000`
+into **all three** ICP table records and bakes those blinds into the NAME string, while `icp.yaml`
+initialises `table_2` at `5_000_000 / 10_000_000` and `table_3` at `10_000_000 / 20_000_000`.
+Verified directly on the chain:
+
+```
+lobby  get_tables      -> "9-Max - 0.01/0.02", "6-Max - 0.01/0.02", "Heads Up - 0.01/0.02", all 1_000_000/2_000_000
+table_2 get_table_view -> small_blind = 5_000_000   big_blind = 10_000_000
+table_3 get_table_view -> small_blind = 10_000_000  big_blind = 20_000_000
+```
+
+The lobby LIST already refuses to quote that record: it renders the STAKES column from the table
+contract and flags the row "⚠ record differs". The **table page did not**. `+page.svelte` rendered
+`{currentTableInfo.name}` verbatim, so the biggest teal string on the screen read `6-Max -
+0.01/0.02` seven hundred pixels from blind discs reading 0.10.
+
+**Why no gate caught it.** `.current-table-name` was on every table scene and in no scraper. The
+evidence agent's own critic proved this dynamically by rewriting the pill to `9.99/19.98` and
+watching the run still print "14 money figures on screen all equal the canister's" and file the
+canonical PNG.
+
+**Fix (client).** The header keeps the FORMAT half of the lobby name — that part is true — and
+reads the blinds from the contract that will charge them, through `formatTokenAmount()`. Before the
+view arrives it shows the format alone rather than an unchecked number. Measured after the fix,
+against `table_2`: pill `6-Max · 0.05/0.10`, chain `5_000_000 / 10_000_000`.
+
+**Fix (gate).** `dom-scrape.mjs` now reads `.current-table-name`; `chain-agreement.mjs` asserts any
+blinds it quotes against `view.config`. The pre-flop scene went 8 → 10 money figures and
+table-facing-bet 14 → 16. A `headerstakes` fault-injection target was added and **fires**:
+
+```
+SHOTS_INJECT_DRIFT=headerstakes ./scripts/dev.sh shots --scenes table-preflop --viewports desktop
+  ✗ CHAIN DISAGREEMENT (2): table header pill "6-Max · 0.10/0.20" small blind: DISAGREES:
+    screen "0.10" … canister says 5000000 e8s (screen is 2.000x the chain)
+  written as UNVERIFIED-table-preflop-desktop.png
+```
+
+**Still open, and deliberately not fixed here.** The LOBBY ROW NAME is the same lie on a different
+surface, and the lobby scene is UNVERIFIED because of it. Fixing the client there would turn the
+only red scene green and hide a live backend defect. The right fix is in the lobby canister:
+`init_microstakes_tables` must take the configs it is registering, or read them from the table
+canisters, instead of hardcoding table_1's. Until it does, the red scene is doing its job.
+
+<a id="e-40"></a>
+### E-40 — high — the one unguarded `evaluate_hand` left, and it traps on the live canister
+
+`poker_core::evaluate_hand` was deliberately made to **trap** on a board that is not 3–5 cards
+(E-09, wave 2). Wave 3's payout rewrite guarded two of the three call sites in the canister:
+
+```rust
+// lib.rs:4090  rank_claims
+if !(3..=5).contains(&state.community_cards.len()) { return Vec::new(); }
+
+// lib.rs:4503  the winner record
+PayoutReason::PotShare { .. } => shown
+    .filter(|_| state.community_cards.len() >= 3)
+    .map(|cards| evaluate_hand(&cards, &state.community_cards)),
+```
+
+The third has no guard at all:
+
+```rust
+// lib.rs:871  record_hand_to_history
+let show_cards = went_to_showdown && !p.has_folded;
+…
+final_hand_rank: if show_cards {
+    p.hole_cards.as_ref().map(|cards| evaluate_hand(cards, &state.community_cards))
+} else { None },
+```
+
+**Observed, not theorised.** During the coherence walk, four consecutive polls against the live
+`4zfnl-5t777-77775-aaadq-cai` returned:
+
+```
+[ERROR] Failed to load table state: RejectError: The replica returned a rejection error:
+  Reject code: 5
+  Reject text: Error from Canister 4zfnl-5t777-77775-aaadq-cai: Canister called `ic0.trap`
+  with message: 'Panicked at 'IMPOSSIBLE HAND: evaluate_hand needs a 3-, 4- or 5-card board
+  (flop/turn/river), got 0 community'
+```
+
+The frontend's poll loop opens with `await tableActor.check_timeouts()`, an **update**, so a trap
+on that path rolls the whole call back: the hand cannot settle and the chips stay in it. Both
+guarded sites and every code path that deals a board make the empty case look unreachable —
+`advance_to_next_street` and `run_out_board` both advance the phase even when their
+`deck_index + N < deck.len()` guard refuses to push a card, which is the shape that gets there —
+but the honest statement is that **it was reached on a real canister and I did not isolate the
+minimal sequence.** A scripted heads-up timeout fold-out (the nearest shape) does not reproduce it:
+that path settles through `end_hand_single_winner`, which passes `went_to_showdown = false`.
+
+**What to do.** Guard the third site exactly like the other two — `.filter(|_| state.community_cards.len() >= 3)`.
+It is a history record, not a payout, so degrading it to `None` costs nothing and a trap there
+costs a wedged table. Then reproduce the reachability with the fuzzer and add the sequence as a
+regression, because a hand-history writer that can abort a settlement is a fund-availability
+defect even though it moves no money to the wrong place.
+
+**Reproduce the observation**, not the minimal case: drive a browser through a hand at `table_2`
+while a second identity acts from Node, with a mid-hand `join` from the browser — the walk script
+is `$SCRATCH/w3-coherence/walk3.mjs`.
+
+<a id="t-14"></a>
+### T-14 — high — the app a human opens is not the app the gate tests
+
+`ic-config.js` resolves the local agent host from `VITE_LOCAL_GATEWAY_PORT`, defaulting to 4943.
+`buildEnvFor` in `tools/shots/lib/frontend-build.mjs` — the only wired build path — **does not set
+it**, so the bundle that is deployed to the local asset canister hardcodes `http://127.0.0.1:4943`
+while this project's gateway is pinned to **8077** in `icp.yaml`. T-03 was recorded as fixed by
+"it now comes from the build environment"; the build environment never supplies it.
+
+The screenshot harness papers over this with a reverse proxy that listens on 4943 and forwards to
+8077 (`tools/shots/lib/proxy.mjs`, whose own header says the frontend source could not be edited
+because "a later wave redesigns it" — wave 3 was that wave). **So every screenshot ever taken of
+this app was taken through a shim no user has.**
+
+What a person actually gets, opening `http://<frontend-id>.localhost:8077/` in Chrome — measured:
+
+* an unstyled toast covering a third of the viewport, containing a raw stack trace with bundle
+  paths and line numbers: `Failed to fetch HTTP request: TypeError: Failed to fetch at window.fetch
+  (…/_app/immutable/chunks/CjFkTVZV.js:1:1669) at requestFn …`;
+* `0 tables · 0 of 0 seats taken`, and an empty state reading **"The lobby canister is reporting no
+  tables."** The lobby canister is reporting three. The client blames the chain for its own
+  misconfiguration, on the one screen whose whole argument is "you can check this yourself".
+
+**Fix.** Set `VITE_LOCAL_GATEWAY_PORT: String(GATEWAY_PORT)` in `buildEnvFor`. Note the
+consequence before doing it: `run.mjs` would then be serving the page from `127.0.0.1:4943` while
+the agent calls `localhost:8077`, i.e. cross-origin, so the shim's "same origin removes CORS from
+the equation" property is lost and `run.mjs` needs to serve the app from the gateway origin
+instead. That is a harness change, not a one-liner, which is why it is left for wave 4 rather than
+done here. **Also fix the empty state**: distinguish "the canister answered with no tables" from
+"the request never completed", and never print a bundle stack trace to a player.
+
+<a id="h-24"></a>
+### H-24 — high — the fairness gate certifies a panel that has not verified anything
+
+```js
+await page.waitForSelector('.proof-item', { timeout: 30_000 });
+…
+verified: panel >= 1 && items >= 2 && revealed >= 1,
+```
+
+Rungs 1 and 2 (`commitment published`, `seed revealed`) render straight from the canister's
+`get_shuffle_proof()`, so `.proof-item >= 2` is satisfied **before the browser has computed
+anything**. The scene never looks at the verdict. Both shipped artifacts show the consequence:
+`shuffleproof-desktop.png` and `-mobile.png` have rungs 1–2 filled green, rungs 3–4 grey outline,
+the subtitle stuck on "Re-deriving your cards locally", no deck grid, no derived-vs-dealt pair and
+no tally — and they are filed under the canonical, verified filename.
+
+The verification itself is real. On a quiet table it reaches its verdict in **505 ms untouched**
+(`.headline.good`, "Verified on your machine…"), and the shutter simply fires first: `settle()`
+waits for fonts and two animation frames, which is tens of milliseconds.
+
+**Fix.** Wait for and assert `.headline.good`, plus the "N of N cards" tally, plus a 52-cell deck
+grid. Then add the negative control the rest of this harness already has: flip a byte in the
+revealed seed and require the scene to go UNVERIFIED. Counting `.proof-item` is exactly the
+"presence, not agreement" failure T-08 was raised against, surviving in the one panel whose entire
+purpose is agreement.
+
+<a id="t-16"></a>
+### T-16 — high — the phone is where this client loses, and it loses by more than 2×
+
+One tool, the same hue-mask/largest-component measurer used on the reference corpus, pointed at
+our captures and at PokerNow's real portrait capture at the **identical 390×844**:
+
+| capture | felt | % of screen width | % of height | **% of screen area** |
+|---|---|---|---|---|
+| PokerNow `mobile-portrait-1` | 313×548 | 80.3% | 64.9% | **52.1%** |
+| ClearDeck `table-showdown-mobile` | 217×319 | 55.6% | 37.8% | **21.1%** |
+| ClearDeck `table-empty-mobile` | 217×316 | 55.6% | 37.5% | **20.9%** |
+| ClearDeck `table-allin-mobile` | 217×299 | 55.6% | 35.5% | **19.7%** |
+
+Ours is **38–40% of PokerNow's playing surface on the same phone.** Every other phone reference
+in the corpus is at least 1.7× ours.
+
+Worse, two of the six mobile table captures **do not show a poker table**. In
+`table-preflop-mobile.png` and `table-facing-bet-mobile.png` the pot readout, all five board slots
+and four of the six pods are above the top of the frame; the measurer reads `tallest_col_rel=0.000`,
+i.e. the mask is flush against the top edge, and rows ~275–490 of the 844 are empty. Both were
+filed VERIFIED, because the DOM assertions never look at the picture.
+
+**The cheap half of the fix costs no protected text.** The four-notice disclaimer block is rendered
+**twice** on every page — `+page.svelte:666` (top banner) and `+page.svelte:835` (footer) — 183 px
+each on desktop, 235 px on the phone. Rule 2 of this project's brief says a notice may never be
+weakened and may always be made more prominent; deleting the SECOND, redundant copy is a judgement
+call about prominence and belongs to the lead, not to a coherence pass, so it was not done here.
+It is the single largest recoverable block of phone real estate and it is worth an explicit
+decision. **The other half is a real reflow**: the header is 120 px and the felt is given whatever
+is left after both.
+
+<a id="d-03"></a>
+### D-03 — medium — there was no design system, so four agents each invented one
+
+`src/cleardeck_frontend/src/index.scss` was a 57-line reset with no tokens. Everything visual lives
+in thirteen per-component `<style>` blocks. Counted across them:
+
+| axis | distinct values | detail |
+|---|---|---|
+| `border-radius` | **16** | 2 3 4 5 6 7 8 9 10 11 12 14 16 18 20 999 |
+| `font-size` | **28** | 8 → 44 px, including 8.5 9.5 10.5 11.5 12.5 13.5 14.5 |
+| "our" green | **9** | `#00d4aa` `#2ecc71` `#4ecdc4` `#7ee2b8` `#4ade80` `#22c55e` `#00b894` `#49a16e` `#7bf0d8` |
+| "our" amber | **6** | `#fbbf24` `#f59e0b` `#f1c40f` `#f0b429` `#d97706` `#e9ff63` |
+| muted grey | **11** | no scale between them |
+| panel tint | **8** | `rgba(255,255,255,0.02 … 0.09)` |
+| panel stroke | **8** | `rgba(255,255,255,0.05 … 0.15)` |
+
+`PokerTable.svelte` does not use the brand teal **at all** — its positives are `#49a16e` and
+`#7ee2b8` — so the felt and the header are two different products' greens, side by side, in every
+screenshot.
+
+Measured with `getComputedStyle` on the four buttons that sit in **one row** of the table header:
+
+| button | font | radius | height | accent |
+|---|---|---|---|---|
+| `Lobby` | 14px/400 | 10px | 42 | white 5% |
+| `History` | 13px/500 | 10px | 38 | **indigo** `rgb(99,102,241)` |
+| `Verify Fair` | 13px/500 | 10px | 38 | **teal** `rgb(0,212,170)` |
+| `ShadowDragon71` | 14px/500 | **8px** | 46 | teal |
+
+Three heights, two radii, two sizes, two weights, two accent families, for four controls that all
+mean "open a thing".
+
+Dialog chrome, same method: panel radius **20 px** (deposit) / **16 px** (fairness) / **14 px**
+(lobby panes); title **18px/700** (deposit) vs **16px/650** (hand replay) — 650 is not a weight on
+any scale.
+
+**Partly fixed.** `index.scss` now carries the vocabulary: surface, ink, accent, money, type,
+rhythm, radius and motion tokens, each set to the **majority existing value** on its axis so
+adopting one moves the fewest pixels. Thirteen stylesheets were deliberately NOT rewritten to use
+them — that is a redesign, and this was a coherence pass. One rule is enforced globally because it
+is invisible until it is wrong: money figures are now `tabular-nums`, keyed off the class names the
+components already use (`.chips`, `.pot-amount`, `.bet-amount`, `.side-pot-amount`, `.stakes-value`,
+`.balance-amount`), so `11.90` and `50.00` line up in adjacent seat pods.
+
+<a id="t-15"></a>
+### T-15 — medium — the canonical money layer has no consumers
+
+`lib/utils.js` opens with a 37-line comment naming the six divergent copies of "divide by 1e8 and
+round" and declaring `formatTokenAmount()` the canonical one. `grep -rn formatTokenAmount
+src/cleardeck_frontend/src` returned exactly **one** hit outside `utils.js` — a comment in
+`+page.svelte` telling the reader to import it. **No component imports `utils.js` at all.** Wave 3
+did not reduce seven copies to one; it made a seventh.
+
+The disagreement is live and visible in one screenshot: the deposit modal renders the wallet
+balance `0.0006 ICP` and `Minimum deposit: 0.0002 ICP (Network fee: 0.0001 ICP)` at four decimals,
+over a table balance reading `0.00 ICP` at two. That is wave 2's "50.00 next to 0.0000", moved.
+
+**Partly fixed**: the header stakes pill (T-11) is now the first real consumer. **Not** fixed: the
+rule itself needs stating before the rest can adopt it, because the deposit modal's four decimals
+are correct — the ledger fee is `0.0001` and a two-decimal render would print a fee of `0.00`. The
+honest unification is *two* documented precisions, not one function: **felt and lobby money is 2 dp
+(4 dp below 0.01), wallet-and-fee money is 4 dp**, and every surface picks one and says which.
+
+<a id="t-12"></a>
+### T-12 — low — FIXED IN THIS PASS — the main pot was labelled "Side 1"
+
+`build_side_pots_from_contributions` returns the **main** pot at index 0. `PokerTable.svelte`
+rendered `Side {i + 1}`, so index 0 was named with the wrong poker word, and because the block is
+rendered whenever `sidePots.length > 0` a perfectly ordinary single-layer flop printed
+`SIDE 1 0.40` immediately under `TOTAL POT 0.40` — the same number twice, one of the two
+mislabelled. Now `Main` / `Side 1` / `Side 2`. Verified live: `sidePotLabels: ["Main"]` on a
+single-layer pot of 0.40.
+
+The **duplication** is not fixed. Hiding the block at one layer would be right, but
+`chain-agreement.mjs` asserts `dom.sidePots.length === truth.sidePots.length`, so suppressing it
+would fail the gate that another agent owns. Wave 4: render the breakdown only when it says
+something the headline does not, and relax the count assertion to match.
+
+<a id="t-13"></a>
+### T-13 — low — FIXED IN THIS PASS — three of four dialogs ignored Escape
+
+`HowItWorks.svelte` binds `onkeydown` on `<svelte:window>` and Escape works from anywhere.
+`DepositModal`, `WithdrawModal` and `HandHistory` each put the same handler on their backdrop:
+
+```svelte
+<div class="modal-backdrop" onkeydown={(e) => e.key === 'Escape' && onClose()}
+     role="button" tabindex="-1" aria-label="Close modal"></div>
+```
+
+A `tabindex="-1"` element is not in the tab order and nothing ever focuses it, so the handler can
+never fire. Three copies of dead keyboard code. Measured: Escape left all three open, and the
+backdrop then **swallowed the next click on any header button** — which is how it was found, as a
+Playwright timeout on "History" while the deposit backdrop was still up.
+
+Fixed by giving all four the same contract: `<svelte:window onkeydown>` closes it, a backdrop click
+closes it, the close button closes it. Verified live: `depositEsc.escapeClosed: true`,
+`historyEsc.escapeClosed: true`.
+
+<a id="h-25"></a>
+### H-25 — medium — `known-defects` watches one defect
+
+```
+==> known-defect markers (expected RED until wave 2 fixes them)
+    red   defect_detect_straight_returns_the_best_straight
+==> result
+    1 of 1 engine defects still present
+```
+
+One marker, for **E-13**, the lowest-severity entry in this register ("unreachable today"). E-06
+(one timeout ends the hand for everybody), E-07 (`admin_reinit_table` strands chips), E-32
+(a `Disconnected` seat stays live in the hand), E-33, E-34, E-36 and now E-40 have none. The rule
+in the brief — "when you fix a defect, update its marker so `make known-defects` stays meaningful"
+— cannot bite on defects that never got a marker. The target reads as a green tick over an almost
+empty set.
+
+<a id="t-17"></a>
+### T-17 — low — FIXED IN THIS PASS — the hand-export button threw on the same BigInt class
+
+`HandHistory.svelte`'s "download this hand" builds a payload containing `amount_e8s` and `won_e8s`
+straight off the Candid records — `nat64`, i.e. `BigInt` — and called bare `JSON.stringify`. Same
+throw as T-10, in a control no scene photographs. Now uses a BigInt replacer that writes e8s as
+decimal strings, which is what a `nat64` is on the wire.
+
+Worth noting as a pattern rather than a bug: `+page.svelte` already carries a private
+`safeStringify()` doing exactly this, `HandHistory` did not know, and `PokerTable` had a third
+variant of the problem. Three components, three answers, two of them wrong.
+
+<a id="t-18"></a>
+### T-18 — high — FIXED IN THIS PASS — the withdrawal receipt stated the wrong amount of money
+
+`withdraw` is `-> Result<u64, String>` and the `u64` is the **ledger block index**
+(`src/table_canister/src/lib.rs:1894`, `Ok(block)` at `:1991`). `WithdrawModal.svelte:74` did
+
+```js
+success = `Withdrawal successful! ${formatWithUnit(result.Ok)} sent to your wallet.`;
+```
+
+so the confirmation ran a block index through the ICP formatter. Measured end to end on the real
+local ledger: withdrawing **1 ICP** returned block **1130**, and the old line renders 1130 e8s at
+four decimals as **"0.0000 ICP sent to your wallet"**. A player who withdrew a whole ICP was told
+they received nothing.
+
+Two things were wrong on the same line. `transfer_tokens` sends `amount - fee`
+(`lib.rs:1038`), so the wallet receives **less** than the amount withdrawn, and no screen said so:
+the modal's only mention was "A small network fee applies."
+
+**Fix.** Both real figures, plus the block index labelled as a block index. Measured after, on the
+same path against the same ledger:
+
+```
+escrow 35.0000 -> 34.0000 ICP   (delta 100_000_000 e8s, exactly the 1 ICP requested)
+"Withdrew 1.0000 ICP. 0.9999 ICP reached your wallet after the 0.0001 ICP network fee.
+ Ledger block #1130."
+```
+
+**Still ungated.** No screenshot scene reaches the withdrawal *confirmation* — `deposit` is a
+scene, withdraw is not — so nothing in the harness would catch this coming back. Wave 4: a
+`withdraw` scene that asserts the receipt's amount against the escrow delta and its fee against
+`ICP_TRANSFER_FEE`.

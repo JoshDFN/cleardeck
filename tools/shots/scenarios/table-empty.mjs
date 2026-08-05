@@ -9,6 +9,7 @@ import { devLogin, enterTable, openApp, settle } from '../lib/browser.mjs';
 import { HERO_PLAYER, icp } from '../lib/config.mjs';
 import { optional } from '../lib/agent.mjs';
 import { phaseOf, view } from '../lib/table-driver.mjs';
+import { assertChainAgreement, withAgreement } from '../lib/chain-agreement.mjs';
 import { prepareTable, tableDisplayName } from './_shared.mjs';
 
 const TABLE = 'table_3';
@@ -54,10 +55,15 @@ export default {
     const heroSeated = await page.locator('.player-nameplate.highlight-me').count();
     const phaseText = ((await page.locator('.phase-indicator').first().textContent()) || '').trim();
     const walletPanel = await page.locator('.wallet-panel').count();
-    return {
+    // Even an idle table states two money figures: the hero's stack and the
+    // escrow balance in the wallet panel.
+    const agreement = await assertChainAgreement(ctx, page, {
+      table: TABLE, asPlayer: HERO_PLAYER, requireBalance: true,
+    });
+    return withAgreement({
       verified: openSeats > 0 && heroSeated === 1,
       checks: { openSeatsRendered: openSeats, heroNameplate: heroSeated, phaseText, walletPanel },
       notes: `${openSeats} open seats, hero seated, phase "${phaseText}"`,
-    };
+    }, agreement);
   },
 };

@@ -1,0 +1,858 @@
+{
+ "assetProvenance": {
+  "source": "LOCAL DISK",
+  "dir": "/private/tmp/claude-501/-Users-josh/35f6f015-e487-40e8-91d2-993f2b0d3607/scratchpad/t08ab/src/cleardeck_frontend/dist",
+  "warning": "SHOTS_SERVE_DIST was set: the page in these PNGs was served from a build on local disk, NOT from the deployed asset canister. Every canister query and update still went to the real local replica, so the CHAIN side of every agreement check is unaffected — but this is an A/B artifact, not a picture of what the deployed app serves."
+ },
+ "setup": {
+  "scene": "table-facing-bet",
+  "title": "Facing a bet: call amount, pot odds and bet sizing on screen",
+  "verified": false,
+  "error": null,
+  "notes": "CHAIN DISAGREEMENT (4): pot (headline) vs get_pot(): DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain) | pot-odds \"to win Y\" vs get_pot(): DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain) | pot-odds ratio vs get_pot()/call_amount: DISAGREES: screen \"6.0:1\" (6.000:1) but pot 30000000 / call 10000000 = 3.000:1 (screen is 2.000x) | required-equity % vs call_amount/(get_pot()+call_amount): DISAGREES: screen \"need 14%\" means 13.5..14.5, expected 25% || BET SIZING DISAGREEMENT: bet preset \"½ Pot\" is sized from get_pot(): WOULD WAGER a raise-to of 55000000 e8s where a ½ Pot raise is 40000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed. | bet preset \"Pot\" is sized from get_pot(): WOULD WAGER a raise-to of 90000000 e8s where a Pot raise is 60000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed. || scene notes: facing a call: button \"Call 0.10\"",
+  "onChain": {
+   "actionButtons": [
+    "Fold",
+    "Call 0.10",
+    "Raise",
+    "All In",
+    "+30s"
+   ],
+   "callButton": "Call 0.10",
+   "potOddsStripRendered": true,
+   "potOddsNote": "the client renders a pot-odds ratio; it is asserted against get_pot()/call_amount",
+   "chain": {
+    "chainAgreement": "DISAGREES",
+    "attempts": 3,
+    "discardedAttempts": 0,
+    "moneyFiguresChecked": 14,
+    "moneyMismatches": [
+     "pot (headline) vs get_pot(): DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain)",
+     "pot-odds \"to win Y\" vs get_pot(): DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain)",
+     "pot-odds ratio vs get_pot()/call_amount: DISAGREES: screen \"6.0:1\" (6.000:1) but pot 30000000 / call 10000000 = 3.000:1 (screen is 2.000x)",
+     "required-equity % vs call_amount/(get_pot()+call_amount): DISAGREES: screen \"need 14%\" means 13.5..14.5, expected 25%"
+    ],
+    "structuralProblems": [],
+    "onChain": {
+     "getPot": 30000000,
+     "viewPot": 30000000,
+     "sumOfLiveBets": 30000000,
+     "sidePots": [],
+     "seats": [
+      {
+       "seat": 0,
+       "chips": 1190000000,
+       "bet": 10000000,
+       "allIn": false,
+       "folded": false
+      },
+      {
+       "seat": 1,
+       "chips": 1180000000,
+       "bet": 20000000,
+       "allIn": false,
+       "folded": false
+      }
+     ],
+     "board": [],
+     "balance": 1220000000,
+     "callAmount": 10000000,
+     "phase": "PreFlop",
+     "handNumber": 1,
+     "winners": [
+      {
+       "seat": 0,
+       "amount": 30000000
+      }
+     ]
+    },
+    "onScreen": {
+     "pot": "0.60",
+     "potBreakdown": "0.00 collected + 0.30 betting",
+     "sidePots": [],
+     "seats": [
+      {
+       "seat": 0,
+       "name": "You",
+       "chips": "11.90",
+       "bet": "0.10"
+      },
+      {
+       "seat": 1,
+       "name": "Nakamoto",
+       "chips": "11.80",
+       "bet": "0.20"
+      }
+     ],
+     "board": [
+      "empty",
+      "empty",
+      "empty",
+      "empty",
+      "empty"
+     ],
+     "balance": "12.20 ICP",
+     "potOdds": "Call 0.10 to win 0.60",
+     "winner": null
+    },
+    "figures": [
+     {
+      "label": "pot (headline) vs get_pot()",
+      "chain": 30000000,
+      "screen": "0.60",
+      "ok": false,
+      "detail": "DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain)"
+     },
+     {
+      "label": "pot breakdown sums to get_pot()",
+      "chain": 30000000,
+      "screen": "0.00 + 0.30",
+      "ok": true,
+      "detail": "screen 0.00 + 0.30 sums to 30000000 e8s (29000000 e8s..31000000 e8s)"
+     },
+     {
+      "label": "pot breakdown \"betting\" leg vs sum(current_bet)",
+      "chain": 30000000,
+      "screen": "0.30",
+      "ok": true,
+      "detail": "screen \"0.30\" == canister 30000000 e8s (±500000 e8s)"
+     },
+     {
+      "label": "seat 0 stack",
+      "chain": 1190000000,
+      "screen": "11.90",
+      "ok": true,
+      "detail": "screen \"11.90\" == canister 1190000000 e8s (±500000 e8s)"
+     },
+     {
+      "label": "seat 0 bet",
+      "chain": 10000000,
+      "screen": "0.10",
+      "ok": true,
+      "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+     },
+     {
+      "label": "seat 1 stack",
+      "chain": 1180000000,
+      "screen": "11.80",
+      "ok": true,
+      "detail": "screen \"11.80\" == canister 1180000000 e8s (±500000 e8s)"
+     },
+     {
+      "label": "seat 1 bet",
+      "chain": 20000000,
+      "screen": "0.20",
+      "ok": true,
+      "detail": "screen \"0.20\" == canister 20000000 e8s (±500000 e8s)"
+     },
+     {
+      "label": "table balance vs get_balance()",
+      "chain": 1220000000,
+      "screen": "12.20 ICP",
+      "ok": true,
+      "detail": "screen \"12.20 ICP\" == canister 1220000000 e8s (±500000 e8s)"
+     },
+     {
+      "label": "pot-odds \"Call X\" vs call_amount",
+      "chain": 10000000,
+      "screen": "0.10",
+      "ok": true,
+      "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+     },
+     {
+      "label": "pot-odds \"to win Y\" vs get_pot()",
+      "chain": 30000000,
+      "screen": "0.60",
+      "ok": false,
+      "detail": "DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain)"
+     },
+     {
+      "label": "pot-odds ratio vs get_pot()/call_amount",
+      "chain": 3,
+      "screen": "6.0:1",
+      "ok": false,
+      "detail": "DISAGREES: screen \"6.0:1\" (6.000:1) but pot 30000000 / call 10000000 = 3.000:1 (screen is 2.000x)"
+     },
+     {
+      "label": "required-equity % vs call_amount/(get_pot()+call_amount)",
+      "chain": 25,
+      "screen": "need 14%",
+      "ok": false,
+      "detail": "DISAGREES: screen \"need 14%\" means 13.5..14.5, expected 25%"
+     },
+     {
+      "label": "action button \"Call X\" vs call_amount",
+      "chain": 10000000,
+      "screen": "0.10",
+      "ok": true,
+      "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+     },
+     {
+      "label": "turn hint \"Call X\" vs call_amount",
+      "chain": 10000000,
+      "screen": "0.10 or raise",
+      "ok": true,
+      "detail": "screen \"0.10 or raise\" == canister 10000000 e8s (±500000 e8s)"
+     }
+    ]
+   },
+   "chain_betPresets": {
+    "betPresets": "DISAGREE",
+    "moneyFiguresChecked": 6,
+    "moneyMismatches": [
+     "bet preset \"½ Pot\" is sized from get_pot(): WOULD WAGER a raise-to of 55000000 e8s where a ½ Pot raise is 40000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed.",
+     "bet preset \"Pot\" is sized from get_pot(): WOULD WAGER a raise-to of 90000000 e8s where a Pot raise is 60000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed."
+    ],
+    "advisory": [],
+    "onChain": {
+     "getPot": 30000000,
+     "callAmount": 10000000,
+     "currentBet": 20000000,
+     "minRaise": 10000000,
+     "minBet": 10000000,
+     "legalFloor": 30000000,
+     "cap": 1200000000
+    },
+    "onScreen": [
+     {
+      "label": "½ Pot",
+      "available": true,
+      "amountText": "0.55",
+      "confirmText": "Raise to 0.55",
+      "sliderValue": "55000000",
+      "sliderValueE8s": 55000000,
+      "expectedRaiseToE8s": 40000000,
+      "impliedPotE8s": 60000000,
+      "impliedPotMultiple": 2
+     },
+     {
+      "label": "Pot",
+      "available": true,
+      "amountText": "0.90",
+      "confirmText": "Raise to 0.90",
+      "sliderValue": "90000000",
+      "sliderValueE8s": 90000000,
+      "expectedRaiseToE8s": 60000000,
+      "impliedPotE8s": 60000000,
+      "impliedPotMultiple": 2
+     }
+    ],
+    "figures": [
+     {
+      "label": "bet preset \"½ Pot\" slider readout vs the value that would be SENT",
+      "chain": 55000000,
+      "screen": "0.55",
+      "ok": true,
+      "detail": "screen \"0.55\" == canister 55000000 e8s (±500000 e8s)"
+     },
+     {
+      "label": "bet preset \"½ Pot\" confirm button vs the value that would be SENT",
+      "chain": 55000000,
+      "screen": "Raise to 0.55",
+      "ok": true,
+      "detail": "screen \"Raise to 0.55\" == canister 55000000 e8s (±500000 e8s)"
+     },
+     {
+      "label": "bet preset \"½ Pot\" is sized from get_pot()",
+      "chain": 40000000,
+      "screen": "55000000",
+      "ok": false,
+      "detail": "WOULD WAGER a raise-to of 55000000 e8s where a ½ Pot raise is 40000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed."
+     },
+     {
+      "label": "bet preset \"Pot\" slider readout vs the value that would be SENT",
+      "chain": 90000000,
+      "screen": "0.90",
+      "ok": true,
+      "detail": "screen \"0.90\" == canister 90000000 e8s (±500000 e8s)"
+     },
+     {
+      "label": "bet preset \"Pot\" confirm button vs the value that would be SENT",
+      "chain": 90000000,
+      "screen": "Raise to 0.90",
+      "ok": true,
+      "detail": "screen \"Raise to 0.90\" == canister 90000000 e8s (±500000 e8s)"
+     },
+     {
+      "label": "bet preset \"Pot\" is sized from get_pot()",
+      "chain": 60000000,
+      "screen": "90000000",
+      "ok": false,
+      "detail": "WOULD WAGER a raise-to of 90000000 e8s where a Pot raise is 60000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed."
+     }
+    ]
+   }
+  },
+  "shots": [
+   {
+    "viewport": "desktop",
+    "files": [
+     "artifacts/screens/7bc69db/UNVERIFIED-table-facing-bet-desktop.png",
+     "artifacts/screens/7bc69db/UNVERIFIED-table-facing-bet-desktop-full.png"
+    ],
+    "videoPath": null,
+    "frames": 0,
+    "timer": {
+     "matched": true,
+     "value": "40s"
+    },
+    "checks": {
+     "actionButtons": [
+      "Fold",
+      "Call 0.10",
+      "Raise",
+      "All In",
+      "+30s"
+     ],
+     "callButton": "Call 0.10",
+     "potOddsStripRendered": true,
+     "potOddsNote": "the client renders a pot-odds ratio; it is asserted against get_pot()/call_amount",
+     "chain": {
+      "chainAgreement": "DISAGREES",
+      "attempts": 3,
+      "discardedAttempts": 0,
+      "moneyFiguresChecked": 14,
+      "moneyMismatches": [
+       "pot (headline) vs get_pot(): DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain)",
+       "pot-odds \"to win Y\" vs get_pot(): DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain)",
+       "pot-odds ratio vs get_pot()/call_amount: DISAGREES: screen \"6.0:1\" (6.000:1) but pot 30000000 / call 10000000 = 3.000:1 (screen is 2.000x)",
+       "required-equity % vs call_amount/(get_pot()+call_amount): DISAGREES: screen \"need 14%\" means 13.5..14.5, expected 25%"
+      ],
+      "structuralProblems": [],
+      "onChain": {
+       "getPot": 30000000,
+       "viewPot": 30000000,
+       "sumOfLiveBets": 30000000,
+       "sidePots": [],
+       "seats": [
+        {
+         "seat": 0,
+         "chips": 1190000000,
+         "bet": 10000000,
+         "allIn": false,
+         "folded": false
+        },
+        {
+         "seat": 1,
+         "chips": 1180000000,
+         "bet": 20000000,
+         "allIn": false,
+         "folded": false
+        }
+       ],
+       "board": [],
+       "balance": 1220000000,
+       "callAmount": 10000000,
+       "phase": "PreFlop",
+       "handNumber": 1,
+       "winners": [
+        {
+         "seat": 0,
+         "amount": 30000000
+        }
+       ]
+      },
+      "onScreen": {
+       "pot": "0.60",
+       "potBreakdown": "0.00 collected + 0.30 betting",
+       "sidePots": [],
+       "seats": [
+        {
+         "seat": 0,
+         "name": "You",
+         "chips": "11.90",
+         "bet": "0.10"
+        },
+        {
+         "seat": 1,
+         "name": "Nakamoto",
+         "chips": "11.80",
+         "bet": "0.20"
+        }
+       ],
+       "board": [
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty"
+       ],
+       "balance": "12.20 ICP",
+       "potOdds": "Call 0.10 to win 0.60",
+       "winner": null
+      },
+      "figures": [
+       {
+        "label": "pot (headline) vs get_pot()",
+        "chain": 30000000,
+        "screen": "0.60",
+        "ok": false,
+        "detail": "DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain)"
+       },
+       {
+        "label": "pot breakdown sums to get_pot()",
+        "chain": 30000000,
+        "screen": "0.00 + 0.30",
+        "ok": true,
+        "detail": "screen 0.00 + 0.30 sums to 30000000 e8s (29000000 e8s..31000000 e8s)"
+       },
+       {
+        "label": "pot breakdown \"betting\" leg vs sum(current_bet)",
+        "chain": 30000000,
+        "screen": "0.30",
+        "ok": true,
+        "detail": "screen \"0.30\" == canister 30000000 e8s (±500000 e8s)"
+       },
+       {
+        "label": "seat 0 stack",
+        "chain": 1190000000,
+        "screen": "11.90",
+        "ok": true,
+        "detail": "screen \"11.90\" == canister 1190000000 e8s (±500000 e8s)"
+       },
+       {
+        "label": "seat 0 bet",
+        "chain": 10000000,
+        "screen": "0.10",
+        "ok": true,
+        "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+       },
+       {
+        "label": "seat 1 stack",
+        "chain": 1180000000,
+        "screen": "11.80",
+        "ok": true,
+        "detail": "screen \"11.80\" == canister 1180000000 e8s (±500000 e8s)"
+       },
+       {
+        "label": "seat 1 bet",
+        "chain": 20000000,
+        "screen": "0.20",
+        "ok": true,
+        "detail": "screen \"0.20\" == canister 20000000 e8s (±500000 e8s)"
+       },
+       {
+        "label": "table balance vs get_balance()",
+        "chain": 1220000000,
+        "screen": "12.20 ICP",
+        "ok": true,
+        "detail": "screen \"12.20 ICP\" == canister 1220000000 e8s (±500000 e8s)"
+       },
+       {
+        "label": "pot-odds \"Call X\" vs call_amount",
+        "chain": 10000000,
+        "screen": "0.10",
+        "ok": true,
+        "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+       },
+       {
+        "label": "pot-odds \"to win Y\" vs get_pot()",
+        "chain": 30000000,
+        "screen": "0.60",
+        "ok": false,
+        "detail": "DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain)"
+       },
+       {
+        "label": "pot-odds ratio vs get_pot()/call_amount",
+        "chain": 3,
+        "screen": "6.0:1",
+        "ok": false,
+        "detail": "DISAGREES: screen \"6.0:1\" (6.000:1) but pot 30000000 / call 10000000 = 3.000:1 (screen is 2.000x)"
+       },
+       {
+        "label": "required-equity % vs call_amount/(get_pot()+call_amount)",
+        "chain": 25,
+        "screen": "need 14%",
+        "ok": false,
+        "detail": "DISAGREES: screen \"need 14%\" means 13.5..14.5, expected 25%"
+       },
+       {
+        "label": "action button \"Call X\" vs call_amount",
+        "chain": 10000000,
+        "screen": "0.10",
+        "ok": true,
+        "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+       },
+       {
+        "label": "turn hint \"Call X\" vs call_amount",
+        "chain": 10000000,
+        "screen": "0.10 or raise",
+        "ok": true,
+        "detail": "screen \"0.10 or raise\" == canister 10000000 e8s (±500000 e8s)"
+       }
+      ]
+     },
+     "chain_betPresets": {
+      "betPresets": "DISAGREE",
+      "moneyFiguresChecked": 6,
+      "moneyMismatches": [
+       "bet preset \"½ Pot\" is sized from get_pot(): WOULD WAGER a raise-to of 55000000 e8s where a ½ Pot raise is 40000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed.",
+       "bet preset \"Pot\" is sized from get_pot(): WOULD WAGER a raise-to of 90000000 e8s where a Pot raise is 60000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed."
+      ],
+      "advisory": [],
+      "onChain": {
+       "getPot": 30000000,
+       "callAmount": 10000000,
+       "currentBet": 20000000,
+       "minRaise": 10000000,
+       "minBet": 10000000,
+       "legalFloor": 30000000,
+       "cap": 1200000000
+      },
+      "onScreen": [
+       {
+        "label": "½ Pot",
+        "available": true,
+        "amountText": "0.55",
+        "confirmText": "Raise to 0.55",
+        "sliderValue": "55000000",
+        "sliderValueE8s": 55000000,
+        "expectedRaiseToE8s": 40000000,
+        "impliedPotE8s": 60000000,
+        "impliedPotMultiple": 2
+       },
+       {
+        "label": "Pot",
+        "available": true,
+        "amountText": "0.90",
+        "confirmText": "Raise to 0.90",
+        "sliderValue": "90000000",
+        "sliderValueE8s": 90000000,
+        "expectedRaiseToE8s": 60000000,
+        "impliedPotE8s": 60000000,
+        "impliedPotMultiple": 2
+       }
+      ],
+      "figures": [
+       {
+        "label": "bet preset \"½ Pot\" slider readout vs the value that would be SENT",
+        "chain": 55000000,
+        "screen": "0.55",
+        "ok": true,
+        "detail": "screen \"0.55\" == canister 55000000 e8s (±500000 e8s)"
+       },
+       {
+        "label": "bet preset \"½ Pot\" confirm button vs the value that would be SENT",
+        "chain": 55000000,
+        "screen": "Raise to 0.55",
+        "ok": true,
+        "detail": "screen \"Raise to 0.55\" == canister 55000000 e8s (±500000 e8s)"
+       },
+       {
+        "label": "bet preset \"½ Pot\" is sized from get_pot()",
+        "chain": 40000000,
+        "screen": "55000000",
+        "ok": false,
+        "detail": "WOULD WAGER a raise-to of 55000000 e8s where a ½ Pot raise is 40000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed."
+       },
+       {
+        "label": "bet preset \"Pot\" slider readout vs the value that would be SENT",
+        "chain": 90000000,
+        "screen": "0.90",
+        "ok": true,
+        "detail": "screen \"0.90\" == canister 90000000 e8s (±500000 e8s)"
+       },
+       {
+        "label": "bet preset \"Pot\" confirm button vs the value that would be SENT",
+        "chain": 90000000,
+        "screen": "Raise to 0.90",
+        "ok": true,
+        "detail": "screen \"Raise to 0.90\" == canister 90000000 e8s (±500000 e8s)"
+       },
+       {
+        "label": "bet preset \"Pot\" is sized from get_pot()",
+        "chain": 60000000,
+        "screen": "90000000",
+        "ok": false,
+        "detail": "WOULD WAGER a raise-to of 90000000 e8s where a Pot raise is 60000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed."
+       }
+      ]
+     }
+    },
+    "notes": "CHAIN DISAGREEMENT (4): pot (headline) vs get_pot(): DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain) | pot-odds \"to win Y\" vs get_pot(): DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain) | pot-odds ratio vs get_pot()/call_amount: DISAGREES: screen \"6.0:1\" (6.000:1) but pot 30000000 / call 10000000 = 3.000:1 (screen is 2.000x) | required-equity % vs call_amount/(get_pot()+call_amount): DISAGREES: screen \"need 14%\" means 13.5..14.5, expected 25% || BET SIZING DISAGREEMENT: bet preset \"½ Pot\" is sized from get_pot(): WOULD WAGER a raise-to of 55000000 e8s where a ½ Pot raise is 40000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed. | bet preset \"Pot\" is sized from get_pot(): WOULD WAGER a raise-to of 90000000 e8s where a Pot raise is 60000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed. || scene notes: facing a call: button \"Call 0.10\"",
+    "canisterIdsCalled": [
+     "4qggx-l3777-77775-aaaca-cai",
+     "4caro-hl777-77775-aaaba-cai",
+     "4zfnl-5t777-77775-aaadq-cai",
+     "4fbx2-kt777-77775-aaabq-cai"
+    ],
+    "consoleErrors": [],
+    "pageErrors": [
+     "Do not know how to serialize a BigInt",
+     "Do not know how to serialize a BigInt",
+     "Do not know how to serialize a BigInt",
+     "Do not know how to serialize a BigInt",
+     "Do not know how to serialize a BigInt",
+     "Do not know how to serialize a BigInt",
+     "Do not know how to serialize a BigInt",
+     "Do not know how to serialize a BigInt"
+    ],
+    "failedRequests": [],
+    "onChainAfterAdvance": null,
+    "driftInjected": [],
+    "error": null
+   }
+  ]
+ },
+ "chain": {
+  "chainAgreement": "DISAGREES",
+  "attempts": 3,
+  "discardedAttempts": 0,
+  "moneyFiguresChecked": 14,
+  "moneyMismatches": [
+   "pot (headline) vs get_pot(): DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain)",
+   "pot-odds \"to win Y\" vs get_pot(): DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain)",
+   "pot-odds ratio vs get_pot()/call_amount: DISAGREES: screen \"6.0:1\" (6.000:1) but pot 30000000 / call 10000000 = 3.000:1 (screen is 2.000x)",
+   "required-equity % vs call_amount/(get_pot()+call_amount): DISAGREES: screen \"need 14%\" means 13.5..14.5, expected 25%"
+  ],
+  "structuralProblems": [],
+  "onChain": {
+   "getPot": 30000000,
+   "viewPot": 30000000,
+   "sumOfLiveBets": 30000000,
+   "sidePots": [],
+   "seats": [
+    {
+     "seat": 0,
+     "chips": 1190000000,
+     "bet": 10000000,
+     "allIn": false,
+     "folded": false
+    },
+    {
+     "seat": 1,
+     "chips": 1180000000,
+     "bet": 20000000,
+     "allIn": false,
+     "folded": false
+    }
+   ],
+   "board": [],
+   "balance": 1220000000,
+   "callAmount": 10000000,
+   "phase": "PreFlop",
+   "handNumber": 1,
+   "winners": [
+    {
+     "seat": 0,
+     "amount": 30000000
+    }
+   ]
+  },
+  "onScreen": {
+   "pot": "0.60",
+   "potBreakdown": "0.00 collected + 0.30 betting",
+   "sidePots": [],
+   "seats": [
+    {
+     "seat": 0,
+     "name": "You",
+     "chips": "11.90",
+     "bet": "0.10"
+    },
+    {
+     "seat": 1,
+     "name": "Nakamoto",
+     "chips": "11.80",
+     "bet": "0.20"
+    }
+   ],
+   "board": [
+    "empty",
+    "empty",
+    "empty",
+    "empty",
+    "empty"
+   ],
+   "balance": "12.20 ICP",
+   "potOdds": "Call 0.10 to win 0.60",
+   "winner": null
+  },
+  "figures": [
+   {
+    "label": "pot (headline) vs get_pot()",
+    "chain": 30000000,
+    "screen": "0.60",
+    "ok": false,
+    "detail": "DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain)"
+   },
+   {
+    "label": "pot breakdown sums to get_pot()",
+    "chain": 30000000,
+    "screen": "0.00 + 0.30",
+    "ok": true,
+    "detail": "screen 0.00 + 0.30 sums to 30000000 e8s (29000000 e8s..31000000 e8s)"
+   },
+   {
+    "label": "pot breakdown \"betting\" leg vs sum(current_bet)",
+    "chain": 30000000,
+    "screen": "0.30",
+    "ok": true,
+    "detail": "screen \"0.30\" == canister 30000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "seat 0 stack",
+    "chain": 1190000000,
+    "screen": "11.90",
+    "ok": true,
+    "detail": "screen \"11.90\" == canister 1190000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "seat 0 bet",
+    "chain": 10000000,
+    "screen": "0.10",
+    "ok": true,
+    "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "seat 1 stack",
+    "chain": 1180000000,
+    "screen": "11.80",
+    "ok": true,
+    "detail": "screen \"11.80\" == canister 1180000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "seat 1 bet",
+    "chain": 20000000,
+    "screen": "0.20",
+    "ok": true,
+    "detail": "screen \"0.20\" == canister 20000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "table balance vs get_balance()",
+    "chain": 1220000000,
+    "screen": "12.20 ICP",
+    "ok": true,
+    "detail": "screen \"12.20 ICP\" == canister 1220000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "pot-odds \"Call X\" vs call_amount",
+    "chain": 10000000,
+    "screen": "0.10",
+    "ok": true,
+    "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "pot-odds \"to win Y\" vs get_pot()",
+    "chain": 30000000,
+    "screen": "0.60",
+    "ok": false,
+    "detail": "DISAGREES: screen \"0.60\" means 59500000 e8s..60500000 e8s, canister says 30000000 e8s (screen is 2.000x the chain)"
+   },
+   {
+    "label": "pot-odds ratio vs get_pot()/call_amount",
+    "chain": 3,
+    "screen": "6.0:1",
+    "ok": false,
+    "detail": "DISAGREES: screen \"6.0:1\" (6.000:1) but pot 30000000 / call 10000000 = 3.000:1 (screen is 2.000x)"
+   },
+   {
+    "label": "required-equity % vs call_amount/(get_pot()+call_amount)",
+    "chain": 25,
+    "screen": "need 14%",
+    "ok": false,
+    "detail": "DISAGREES: screen \"need 14%\" means 13.5..14.5, expected 25%"
+   },
+   {
+    "label": "action button \"Call X\" vs call_amount",
+    "chain": 10000000,
+    "screen": "0.10",
+    "ok": true,
+    "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "turn hint \"Call X\" vs call_amount",
+    "chain": 10000000,
+    "screen": "0.10 or raise",
+    "ok": true,
+    "detail": "screen \"0.10 or raise\" == canister 10000000 e8s (±500000 e8s)"
+   }
+  ]
+ },
+ "betPresets": {
+  "betPresets": "DISAGREE",
+  "moneyFiguresChecked": 6,
+  "moneyMismatches": [
+   "bet preset \"½ Pot\" is sized from get_pot(): WOULD WAGER a raise-to of 55000000 e8s where a ½ Pot raise is 40000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed.",
+   "bet preset \"Pot\" is sized from get_pot(): WOULD WAGER a raise-to of 90000000 e8s where a Pot raise is 60000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed."
+  ],
+  "advisory": [],
+  "onChain": {
+   "getPot": 30000000,
+   "callAmount": 10000000,
+   "currentBet": 20000000,
+   "minRaise": 10000000,
+   "minBet": 10000000,
+   "legalFloor": 30000000,
+   "cap": 1200000000
+  },
+  "onScreen": [
+   {
+    "label": "½ Pot",
+    "available": true,
+    "amountText": "0.55",
+    "confirmText": "Raise to 0.55",
+    "sliderValue": "55000000",
+    "sliderValueE8s": 55000000,
+    "expectedRaiseToE8s": 40000000,
+    "impliedPotE8s": 60000000,
+    "impliedPotMultiple": 2
+   },
+   {
+    "label": "Pot",
+    "available": true,
+    "amountText": "0.90",
+    "confirmText": "Raise to 0.90",
+    "sliderValue": "90000000",
+    "sliderValueE8s": 90000000,
+    "expectedRaiseToE8s": 60000000,
+    "impliedPotE8s": 60000000,
+    "impliedPotMultiple": 2
+   }
+  ],
+  "figures": [
+   {
+    "label": "bet preset \"½ Pot\" slider readout vs the value that would be SENT",
+    "chain": 55000000,
+    "screen": "0.55",
+    "ok": true,
+    "detail": "screen \"0.55\" == canister 55000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "bet preset \"½ Pot\" confirm button vs the value that would be SENT",
+    "chain": 55000000,
+    "screen": "Raise to 0.55",
+    "ok": true,
+    "detail": "screen \"Raise to 0.55\" == canister 55000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "bet preset \"½ Pot\" is sized from get_pot()",
+    "chain": 40000000,
+    "screen": "55000000",
+    "ok": false,
+    "detail": "WOULD WAGER a raise-to of 55000000 e8s where a ½ Pot raise is 40000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed."
+   },
+   {
+    "label": "bet preset \"Pot\" slider readout vs the value that would be SENT",
+    "chain": 90000000,
+    "screen": "0.90",
+    "ok": true,
+    "detail": "screen \"0.90\" == canister 90000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "bet preset \"Pot\" confirm button vs the value that would be SENT",
+    "chain": 90000000,
+    "screen": "Raise to 0.90",
+    "ok": true,
+    "detail": "screen \"Raise to 0.90\" == canister 90000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "bet preset \"Pot\" is sized from get_pot()",
+    "chain": 60000000,
+    "screen": "90000000",
+    "ok": false,
+    "detail": "WOULD WAGER a raise-to of 90000000 e8s where a Pot raise is 60000000 e8s. The client is sizing from a pot of 60000000 e8s — 2x get_pot() (30000000). This number is SENT to the canister, not merely displayed."
+   }
+  ]
+ }
+}

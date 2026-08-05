@@ -455,21 +455,25 @@ fn regression_shared_board_chop_is_a_chop_in_all_three() {
 
 // ---- E-09: the input-validation boundary --------------------------------
 //
-// Each pair below is (characterises_*, defect_*_is_fixed). The `characterises_*`
-// test is part of `make test` and states what the engine does NOW; the
-// `defect_*_is_fixed` twin is `#[ignore]`d and is what `make known-defects` runs, so
-// it must STAY `#[ignore]`d (that target invokes it with `--ignored --exact` and
-// reports "ran 0 tests" -- a stale marker -- for anything it cannot find that way).
-//
-// 2026-08-04, wave 2: FOUR of the five E-09 legs have been FIXED in `poker_core`.
+// 2026-08-04, wave 2: FOUR of the five E-09 legs are FIXED in `poker_core`.
 // `evaluate_hand` and `evaluate_five_cards` now validate the card count AND
 // distinctness and refuse (`try_*` return `HandInputError`; the panicking aliases
-// panic with "IMPOSSIBLE HAND"). The four `characterises_*` tests below were
-// asserting the OLD wrong answers, so they went red the moment the fix landed;
-// they now assert the REFUSAL, which is what protects the fix from regressing.
-// `make known-defects` will report those four markers GREEN, which is its designed
-// "this defect is fixed" signal. The fifth leg, `detect_straight` preferring the
-// wheel, is still live and still pinned.
+// panic with "IMPOSSIBLE HAND").
+//
+// Each leg below is a pair: a `characterises_*` test stating what the engine does
+// NOW, and an `e09_*` test asserting the refusal. Both are ORDINARY GATES in
+// `./scripts/dev.sh test`.
+//
+// The `e09_*` tests were `#[ignore]`d markers run by `make known-defects`, which is
+// where a defect lives while it is still present. The wave-2 coherence pass
+// un-`#[ignore]`d them and removed them from `DEFECT_MARKERS` in scripts/dev.sh,
+// because a marker that has gone GREEN and stays in the list makes the target shout
+// on every run until everybody ignores it. The lifecycle is:
+// red-on-purpose marker -> defect fixed -> ordinary gate.
+//
+// The fifth leg, `detect_straight` preferring the wheel over a better straight
+// (E-13), is still live, still `#[ignore]`d, and still the one thing
+// `make known-defects` reports.
 
 /// FIXED (was: `evaluate_hand` returned `HandRank::HighCard([])` below five cards,
 /// which is `Ord`-EQUAL for every player and `Ord`-LESS than every real hand, so any
@@ -498,17 +502,14 @@ fn characterises_defect_short_board_returns_empty_high_card() {
     }
 }
 
-/// MARKER, run by `make known-defects` with `--ignored --exact`. Stays `#[ignore]`d
-/// (that target reports "ran 0 tests" -- a stale marker -- for anything it cannot
-/// find that way); GREEN here means the defect is fixed.
-///
-/// It must therefore assert the FIXED behaviour with a call that does not itself
-/// panic. `ours_hand` now panics on a short board, and a panicking marker reads as
-/// "still red", which made `make known-defects` report 5 of 5 defects present when
-/// four had been fixed.
+/// E-09 leg 1, now an ordinary gate: `evaluate_hand` must refuse a board that
+/// cannot make a five-card hand. Asserts the FIXED behaviour with a call that does
+/// not itself panic, because `ours_hand` panics on a short board.
 #[test]
-#[ignore = "known-defects marker: GREEN means evaluate_hand refuses a short board"]
-fn defect_short_board_is_fixed() {
+// Was a known-defects marker (red on purpose) until E-09 was fixed in wave 2. Now
+// an ordinary gate in the fast subset, which is where a FIXED defect belongs:
+// a marker that has gone green teaches everyone to ignore the marker list.
+fn e09_evaluate_hand_refuses_a_short_board() {
     let hand = parse_hand("Ah Kd Qc").unwrap();
     let hole = (to_cleardeck(hand[0]), to_cleardeck(hand[1]));
     let board: Vec<poker_core::Card> = hand[2..].iter().map(|&c| to_cleardeck(c)).collect();
@@ -552,8 +553,8 @@ fn characterises_defect_evaluate_five_cards_fabricates_a_straight_flush() {
 
 /// MARKER (see `defect_short_board_is_fixed`). GREEN means the defect is fixed.
 #[test]
-#[ignore = "known-defects marker: GREEN means evaluate_five_cards refuses more than five cards"]
-fn defect_evaluate_five_cards_rejects_more_than_five_cards() {
+// Was a known-defects marker until E-09 was fixed in wave 2.
+fn e09_evaluate_five_cards_refuses_more_than_five_cards() {
     let seven: Vec<poker_core::Card> = parse_hand("2h 3h 4h 5h 9h 6c 7c")
         .unwrap()
         .iter()
@@ -589,8 +590,8 @@ fn characterises_defect_duplicate_cards_are_ranked_silently() {
 
 /// MARKER (see `defect_short_board_is_fixed`). GREEN means the defect is fixed.
 #[test]
-#[ignore = "known-defects marker: GREEN means evaluate_five_cards refuses duplicate cards"]
-fn defect_duplicate_cards_are_rejected() {
+// Was a known-defects marker until E-09 was fixed in wave 2.
+fn e09_evaluate_five_cards_refuses_duplicate_cards() {
     let five: Vec<poker_core::Card> = parse_hand("Ah Ah Ah Ah Ah")
         .unwrap()
         .iter()
@@ -622,8 +623,8 @@ fn characterises_defect_duplicate_card_reaches_evaluate_hand() {
 
 /// MARKER (see `defect_short_board_is_fixed`). GREEN means the defect is fixed.
 #[test]
-#[ignore = "known-defects marker: GREEN means evaluate_hand refuses duplicate cards"]
-fn defect_evaluate_hand_rejects_duplicate_cards() {
+// Was a known-defects marker until E-09 was fixed in wave 2.
+fn e09_evaluate_hand_refuses_duplicate_cards() {
     let hand = parse_hand("Ah Ah Kh Qh Jh 2c 3d").unwrap();
     let hole = (to_cleardeck(hand[0]), to_cleardeck(hand[1]));
     let board: Vec<poker_core::Card> = hand[2..].iter().map(|&c| to_cleardeck(c)).collect();

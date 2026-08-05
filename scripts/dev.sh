@@ -576,12 +576,16 @@ Run '$0 local-up' first. This harness deliberately does not start the replica."
 #   `settlement`  pinned_e01 / pinned_e05 / pinned_odd_chips + a per-hand gate on
 #                 every hand the oracle drives
 
+# Four of the original five went GREEN when E-09 (poker_core input validation) was
+# fixed in wave 2. A marker that has gone green and STAYS in this list is worse than
+# no marker: the target shouts every run and everybody learns to ignore it. So they
+# were un-#[ignore]d in tools/differential/tests/fast_subset.rs -- where
+# `./scripts/dev.sh test` runs them as ordinary gates -- and removed from here.
+# That is the whole lifecycle: red-on-purpose marker -> defect fixed -> gate.
+#
+# What is left is E-13, which is genuinely still present.
 DEFECT_MARKERS=(
   defect_detect_straight_returns_the_best_straight
-  defect_duplicate_cards_are_rejected
-  defect_evaluate_hand_rejects_duplicate_cards
-  defect_short_board_is_fixed
-  defect_evaluate_five_cards_rejects_more_than_five_cards
 )
 
 cmd_known_defects() {

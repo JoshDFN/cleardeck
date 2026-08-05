@@ -1,6 +1,126 @@
 /* Import Inter font from Google Fonts */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
+/* ==========================================================================
+   ONE SYSTEM
+   ==========================================================================
+
+   Wave 3 restyled four surfaces (lobby, table, fairness/history, evidence) in
+   parallel, by agents who could not see each other's work, into per-component
+   <style> blocks with no shared vocabulary — this file was a 57-line reset and
+   nothing else. Counted across the thirteen components and the route:
+
+     border-radius   16 distinct px values  (2 3 4 5 6 7 8 9 10 11 12 14 16 18 20 999)
+     font-size       28 distinct px values  (8 → 44, including 8.5 9.5 10.5 11.5 12.5 13.5 14.5)
+     "our" green      9 distinct hexes      (#00d4aa #2ecc71 #4ecdc4 #7ee2b8 #4ade80
+                                             #22c55e #00b894 #49a16e #7bf0d8)
+     "our" amber      6 distinct hexes      (#fbbf24 #f59e0b #f1c40f #f0b429 #d97706 #e9ff63)
+     muted grey      11 distinct hexes with no scale between them
+     panel tint       8 distinct rgba(255,255,255,0.0x) fills
+     panel border     8 distinct rgba(255,255,255,0.x) strokes
+
+   Four buttons sit in ONE row on the table header. Measured with
+   getComputedStyle: three heights (38 / 42 / 46 px), two radii (8 / 10 px), two
+   font sizes (13 / 14 px), two weights (400 / 500) and two accent families —
+   "History" is indigo rgb(99,102,241) and "Verify Fair" is teal rgb(0,212,170),
+   for two buttons that do the same job.
+
+   THE TOKENS BELOW ARE THE MAJORITY VALUE ON EACH AXIS, not a new taste. Each
+   was chosen by counting the existing declarations, so adopting a token changes
+   the fewest pixels possible. They are the vocabulary for wave 4; this pass
+   deliberately did NOT rewrite thirteen component stylesheets to use them,
+   because that is a redesign and the brief was a coherence pass. What it did do
+   is write the vocabulary down, in the one file every surface already imports,
+   so the next change has somewhere to point.
+
+   What still disagrees, and what it should become, is listed scene by scene in
+   docs/WAVE-03.md § "Making it one product".
+   ========================================================================== */
+
+:root {
+  /* --- Surface -----------------------------------------------------------
+     The page is near-black; panels are a white tint on top of it, never a
+     solid fill, so the felt's glow shows through. */
+  --cd-bg: #0b0d12;
+  --cd-surface-1: rgba(255, 255, 255, 0.03); /* resting panel */
+  --cd-surface-2: rgba(255, 255, 255, 0.05); /* raised panel, chip  (38 uses) */
+  --cd-surface-3: rgba(255, 255, 255, 0.08); /* hover / active      (24 uses) */
+  --cd-scrim: rgba(0, 0, 0, 0.72);           /* modal backdrop */
+
+  --cd-line: rgba(255, 255, 255, 0.1);       /* default 1px stroke  (33 uses) */
+  --cd-line-soft: rgba(255, 255, 255, 0.06); /* inside a panel */
+  --cd-line-strong: rgba(255, 255, 255, 0.15);
+
+  /* --- Ink ---------------------------------------------------------------
+     Four steps, not eleven. Contrast measured against --cd-bg. */
+  --cd-ink: #ffffff;        /* 18.6:1  values, names, headlines */
+  --cd-ink-1: #e6e8ec;      /* 15.7:1  body */
+  --cd-ink-2: #8b93a7;      /*  6.2:1  labels, secondary */
+  --cd-ink-3: #6b7280;      /*  4.0:1  footnotes only — under AA for body text */
+
+  /* --- Accent ------------------------------------------------------------
+     ONE teal. #00d4aa is already the plurality (64 uses) and it is the brand
+     mark, the wallet chip and the primary button. Everything green that is not
+     this is drift: #2ecc71 (the fairness verdict), #4ecdc4 (the hashes),
+     #7ee2b8 (the seat-pod ring), #49a16e (the felt highlight), #4ade80,
+     #22c55e, #00b894, #7bf0d8. */
+  --cd-accent: #00d4aa;
+  --cd-accent-dim: rgba(0, 212, 170, 0.1);
+  --cd-accent-line: rgba(0, 212, 170, 0.3);
+
+  /* Money in motion. #fbbf24 is the plurality (17 uses) and it is what the pot,
+     the bet discs and the history pot already use. */
+  --cd-money: #fbbf24;
+  --cd-money-dim: rgba(251, 191, 36, 0.12);
+
+  --cd-danger: #ef4444;     /* fold, all-in, error  (13 uses) */
+  --cd-warn: #f59e0b;       /* drift, "record differs" */
+  --cd-btc: #f7931a;        /* Bitcoin brand orange, not ours to change */
+
+  /* NOTE: there is no indigo token, on purpose. rgb(99,102,241) / #818cf8 /
+     #a5b4fc are a SECOND accent family that arrived with the deposit modal and
+     the History button. Wave 4 should either promote indigo to a documented
+     "informational" role used everywhere, or delete it. Today it appears in
+     five components meaning five different things. */
+
+  /* --- Type --------------------------------------------------------------
+     Six steps. The 8.5 / 9.5 / 10.5 / 11.5 / 12.5 / 13.5 / 14.5 half-pixel
+     sizes in the tree are not a system, they are one-offs. */
+  --cd-text-xs: 11px;      /* micro labels, uppercase tracking */
+  --cd-text-sm: 13px;      /* secondary, buttons, table cells  (56 uses) */
+  --cd-text-md: 14px;      /* body                             (28 uses) */
+  --cd-text-lg: 18px;      /* dialog titles                    ( 9 uses) */
+  --cd-text-xl: 24px;      /* section headings */
+  --cd-text-display: 34px; /* the pot, the 0% rake figure */
+
+  --cd-weight-body: 400;
+  --cd-weight-medium: 500;
+  --cd-weight-strong: 600;
+  --cd-weight-figure: 700; /* stacks and pots — never 650 or 800 */
+
+  /* --- Rhythm ------------------------------------------------------------
+     A 4px grid. 8 and 12 are already the two most common gaps (80 and 59
+     declarations); 6 and 10 are next and are off-grid. */
+  --cd-space-1: 4px;
+  --cd-space-2: 8px;
+  --cd-space-3: 12px;
+  --cd-space-4: 16px;
+  --cd-space-5: 24px;
+  --cd-space-6: 32px;
+
+  /* --- Radius ------------------------------------------------------------
+     Four steps, from the four most common values in the tree. */
+  --cd-radius-chip: 8px;   /* buttons, inputs, hashes (majority) */
+  --cd-radius-card: 12px;  /* cards, rows */
+  --cd-radius-panel: 16px; /* dialogs, side panels, list panes */
+  --cd-radius-pill: 999px; /* filter chips, seat pods */
+
+  /* --- Motion ------------------------------------------------------------ */
+  --cd-fast: 120ms;
+  --cd-base: 200ms;
+  --cd-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
 /* Reset and base styles */
 *, *::before, *::after {
   box-sizing: border-box;
@@ -24,6 +144,27 @@ img {
   max-width: 100%;
   height: auto;
   display: block;
+}
+
+/* MONEY IS TABULAR, EVERYWHERE.
+   The one typographic rule this pass enforces globally, because it is invisible
+   until two figures sit in a column and then it is the whole difference between
+   a poker client and a web page. Every money figure in the app is proportional
+   Inter today, so "11.90" and "50.00" do not align in adjacent seat pods, and
+   the lobby's BUY-IN column does not align down the page.
+
+   This is opt-in by class so it cannot change layout anywhere unexpected; the
+   selectors below are the class names the components ALREADY use for money, so
+   no component had to be edited to get it. */
+.cd-figures,
+.chips,
+.pot-amount,
+.bet-amount,
+.side-pot-amount,
+.stakes-value,
+.balance-amount {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
 }
 
 /* Legacy form styles (can be removed if not needed) */

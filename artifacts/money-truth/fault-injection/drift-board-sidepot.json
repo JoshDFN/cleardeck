@@ -1,0 +1,7 @@
+{
+ "faultInjection": null,
+ "scene": "lobby",
+ "verified": false,
+ "driftInjected": [],
+ "notes": "LOBBY CHAIN DISAGREEMENT: \"9-Max - 0.01/0.02\": the LOBBY advertises smallBlind=1000000 but the TABLE canister enforces 10000000 — the row on screen is the lobby's number, so the player is shown stakes the table will not charge | \"9-Max - 0.01/0.02\": the LOBBY advertises bigBlind=2000000 but the TABLE canister enforces 20000000 — the row on screen is the lobby's number, so the player is shown stakes the table will not charge | \"9-Max - 0.01/0.02\": the LOBBY advertises minBuyIn=200000000 but the TABLE canister enforces 2000000000 — the row on screen is the lobby's number, so the player is shown stakes the table will not charge | \"9-Max - 0.01/0.02\": the LOBBY advertises maxBuyIn=1000000000 but the TABLE canister enforces 10000000000 — the row on screen is the lobby's number, so the player is shown stakes the table will not charge || scene notes: 3 live table rows; signed out; lobby state=\"ready\"; loading spinner absent"
+}

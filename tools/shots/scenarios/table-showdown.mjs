@@ -13,6 +13,7 @@ import {
   allInSeats, doAct, phaseOf, playUntil, sitOutAfterHand, startHand, tableActorFor, view,
   waitForState,
 } from '../lib/table-driver.mjs';
+import { assertChainAgreement, withAgreement } from '../lib/chain-agreement.mjs';
 import { prepareTable, tableDisplayName } from './_shared.mjs';
 
 const TABLE = 'table_2';
@@ -112,7 +113,12 @@ export default {
       .replace(/\s+/g, ' ').trim();
     const revealedCards = await page.locator('.player-cards .card').count();
     const v = await view(HERO_PLAYER, ctx.tableIds[TABLE]);
-    return {
+    // The winner banner is where the client states, in words, how much money
+    // changed hands. It has to be the canister's number.
+    const agreement = await assertChainAgreement(ctx, page, {
+      table: TABLE, asPlayer: HERO_PLAYER, requireBalance: true, requireWinnerBanner: true,
+    });
+    return withAgreement({
       verified: winnerVisible === 1 && phaseOf(v) === 'HandComplete' && v.last_hand_winners.length > 0,
       checks: {
         winnerBanner: winnerVisible,
@@ -122,6 +128,6 @@ export default {
         onChainWinners: v.last_hand_winners.length,
       },
       notes: winnerText.slice(0, 120),
-    };
+    }, agreement);
   },
 };

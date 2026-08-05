@@ -244,8 +244,14 @@ pub struct TableState {
     /// because M1b's attribution leg has to measure `pot` against the WHOLE basis;
     /// against the seated players alone it would report every departure as an
     /// orphaned stake, which is exactly what the fix stops being true.
+    ///
+    /// `opt vec`, matching the canister. It is `opt` because `TableState` is
+    /// persisted nested inside `opt TableState` and a non-`opt` addition there makes
+    /// an upgrade from older state silently restore a null table
+    /// (docs/SECURITY-FINDINGS.md FINDING 14). The mirror must track that, or this
+    /// harness cannot decode `get_table_state` at all.
     #[serde(default)]
-    pub departed_stakes: Vec<DepartedStake>,
+    pub departed_stakes: Option<Vec<DepartedStake>>,
 }
 
 #[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
@@ -277,9 +283,14 @@ impl TableState {
             .fold(0u64, |a, p| a.saturating_add(p.total_bet_this_hand))
     }
 
+    /// Every departed stake recorded on the table, whatever hand it belongs to.
+    pub fn departed(&self) -> &[DepartedStake] {
+        self.departed_stakes.as_deref().unwrap_or(&[])
+    }
+
     /// Stakes recorded for seats that left mid-hand, for THIS hand only.
     pub fn departed_total(&self) -> u64 {
-        self.departed_stakes
+        self.departed()
             .iter()
             .filter(|d| d.hand_number == self.hand_number)
             .fold(0u64, |a, d| a.saturating_add(d.contributed))
@@ -293,6 +304,11 @@ impl TableState {
 
     pub fn seat_of(&self, who: Principal) -> Option<u8> {
         self.seated().find(|p| p.principal == who).map(|p| p.seat)
+    }
+
+    /// Whoever is sitting in `seat`, if anybody.
+    pub fn player_at(&self, seat: u8) -> Option<&Player> {
+        self.players.get(seat as usize).and_then(|p| p.as_ref())
     }
 }
 

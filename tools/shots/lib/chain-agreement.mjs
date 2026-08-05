@@ -1,0 +1,1205 @@
+// "Is the number on the screen the number in the canister?"
+//
+// Before this file, a scene was verified by finding a DOM element. That is
+// PRESENCE, not truth, and it is how the screenshot run that shipped with wave 2
+// recorded `verified: true` for a table whose headline pot was twice the real pot
+// (docs/DEFECTS.md T-08) and whose villain's hand rendered as two blank cards
+// (T-09). An artifact that says "verified" while quoting a wrong number is worse
+// than no artifact.
+//
+// Every table scene now asserts AGREEMENT:
+//
+//   * the headline pot            == get_pot()
+//   * the pot breakdown           sums to get_pot(), and its "betting" leg is the
+//                                 real sum of current_bet
+//   * every seat's stack          == that seat's chips in get_table_view()
+//   * every seat's bet            == that seat's current_bet (absent iff zero)
+//   * every side pot              == side_pots[i].amount, in order
+//   * the board                   == get_community_cards(), rank and suit, in order
+//   * the table balance           == get_balance() for the signed-in principal
+//   * the pot-odds strip          == call_amount and get_pot()
+//   * the winner banner           == last_hand_winners[..].amount
+//
+// plus a mapping check (dealer/SB/BB badges, "me" highlight, all-in and fold
+// overlays) whose only job is to prove the DOM-order-is-seat-order assumption
+// this file relies on is still true after a redesign.
+//
+// RACE HANDLING. The page polls every 500 ms, so a screen can legitimately lag
+// the chain by one poll. A single read cannot tell lag from a lie. So each
+// attempt reads the chain, scrapes the DOM, and reads the chain AGAIN; if the two
+// chain reads differ the state moved under us and the attempt is discarded. A
+// disagreement has to survive several attempts spanning more than a poll interval
+// before it is reported. `attempts` is recorded so a reader can see how hard the
+// verdict was won.
+
+import { Principal } from '@dfinity/principal';
+import { ledgerBalance, tableActorFor } from './table-driver.mjs';
+import { historyActor, lobbyActor, optional, variantKey } from './agent.mjs';
+import {
+  checkFigure, checkPlainNumber, foldFigures, parseDisplayedAmount,
+  RANK_BY_GLYPH, SUIT_BY_SYMBOL, cardToText, fmt,
+} from './money.mjs';
+import {
+  closeBetPresets, readBetPreset, scrapeDeposit, scrapeHandHistory, scrapeLobby, scrapeTable,
+} from './dom-scrape.mjs';
+import { devPlayerPrincipal } from './identities.mjs';
+import { thirdPartyObservations } from './browser.mjs';
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Attempts before a disagreement is believed, and the gap between them. */
+const MAX_ATTEMPTS = Number(process.env.SHOTS_AGREEMENT_ATTEMPTS || 3);
+const ATTEMPT_GAP_MS = 700; // > the app's 500 ms poll, so one lagging frame cannot fail a scene
+
+/**
+ * Everything the canister says, read as the principal the browser is logged in as.
+ *
+ * @param {string} tableId
+ * @param {number} playerNum dev player number the browser is signed in as
+ */
+export async function readTableTruth(tableId, playerNum) {
+    const table = await tableActorFor(playerNum, tableId);
+    const [viewOpt, pot, board, balance] = await Promise.all([
+        table.get_table_view(),
+        table.get_pot(),
+        table.get_community_cards(),
+        table.get_balance(),
+    ]);
+    const view = optional(viewOpt);
+    if (!view) throw new Error(`get_table_view() returned null for ${tableId}`);
+
+    const seats = view.players.map((p, i) => {
+        const player = optional(p);
+        return player
+            ? {
+                index: i,
+                occupied: true,
+                chips: Number(player.chips),
+                currentBet: Number(player.current_bet),
+                folded: player.has_folded,
+                allIn: player.is_all_in,
+                isSelf: player.is_self,
+                displayName: optional(player.display_name),
+            }
+            : { index: i, occupied: false };
+    });
+
+    return {
+        tableId,
+        pot: Number(pot),
+        viewPot: Number(view.pot),
+        currency: variantKey(view.config.currency) === 'BTC' ? 'BTC' : 'ICP',
+        maxPlayers: Number(view.config.max_players),
+        phase: variantKey(view.phase),
+        seats,
+        sidePots: view.side_pots.map((sp) => ({ amount: Number(sp.amount) })),
+        board: board.map((c) => ({
+            rank: Object.keys(c.rank)[0],
+            suit: Object.keys(c.suit)[0],
+            text: cardToText(c),
+        })),
+        viewBoardLength: view.community_cards.length,
+        balance: Number(balance),
+        mySeat: optional(view.my_seat) === null ? null : Number(optional(view.my_seat)),
+        callAmount: Number(view.call_amount),
+        isMyTurn: view.is_my_turn,
+        dealerSeat: Number(view.dealer_seat),
+        smallBlindSeat: Number(view.small_blind_seat),
+        bigBlindSeat: Number(view.big_blind_seat),
+        smallBlind: Number(view.config.small_blind),
+        bigBlind: Number(view.config.big_blind),
+        handNumber: Number(view.hand_number),
+        winners: view.last_hand_winners.map((w) => ({
+            seat: Number(w.seat),
+            amount: Number(w.amount),
+        })),
+    };
+}
+
+/** Fields that must not move between the two chain reads bracketing a scrape. */
+function truthDigest(t) {
+    return JSON.stringify([
+        t.pot, t.viewPot, t.phase, t.balance, t.callAmount, t.mySeat,
+        t.dealerSeat, t.smallBlindSeat, t.bigBlindSeat, t.handNumber,
+        t.seats.map((s) => [s.occupied, s.chips ?? null, s.currentBet ?? null, s.folded ?? null, s.allIn ?? null]),
+        t.sidePots.map((s) => s.amount),
+        t.board.map((c) => c.text),
+        t.winners.map((w) => [w.seat, w.amount]),
+    ]);
+}
+
+/** Sum of every seated player's live bet, which is what "betting" means on screen. */
+const sumBets = (t) => t.seats.reduce((n, s) => n + (s.occupied ? s.currentBet : 0), 0);
+
+/**
+ * Two displayed numbers must add up to one chain number.
+ * The windows add, so the combined resolution is the sum of both resolutions.
+ */
+function checkSum(label, chainValue, texts, currency) {
+    const parsed = texts.map((t) => parseDisplayedAmount(t, { currency }));
+    if (parsed.some((p) => !p)) {
+        return {
+            label, chain: Number(chainValue), domText: texts.join(' + '),
+            agrees: false, discriminates2x: false, ok: false,
+            detail: `could not read two numbers out of ${JSON.stringify(texts)}`,
+        };
+    }
+    const low = parsed.reduce((n, p) => n + p.low, 0);
+    const high = parsed.reduce((n, p) => n + p.high, 0);
+    const chain = Number(chainValue);
+    const agrees = chain >= low - 1e-6 && chain <= high + 1e-6;
+    // Same overstatement-direction test as checkFigure: could a doubled chain
+    // value have produced this pair of on-screen numbers?
+    const resolution = high - low;
+    const discriminates2x = chain === 0 ? true : Math.abs(chain) > resolution / 2;
+    return {
+        label,
+        chain,
+        domText: parsed.map((p) => p.text).join(' + '),
+        agrees,
+        discriminates2x,
+        ok: agrees && (chain === 0 || discriminates2x),
+        detail: agrees
+            ? `screen ${parsed.map((p) => p.text).join(' + ')} sums to ${fmt(chain)} (${fmt(low)}..${fmt(high)})`
+            : `DISAGREES: screen ${parsed.map((p) => p.text).join(' + ')} sums to ${fmt(low)}..${fmt(high)}, `
+              + `canister says ${fmt(chain)}`,
+        window: [low, high],
+    };
+}
+
+/**
+ * A displayed ODDS RATIO ("3.5:1" or "1:2.0") against two chain amounts.
+ *
+ * Not a money figure, but it is derived from one, and it is the number a player
+ * uses to decide whether to put money in. Compared at the precision the client
+ * printed, so a client that rounds harder is judged more leniently and says so.
+ */
+function checkRatio(label, potE8s, callE8s, domText) {
+    const text = String(domText ?? '').trim();
+    const m = /(-?[\d.]+)\s*:\s*(-?[\d.]+)/.exec(text);
+    if (call0(callE8s)) {
+        return {
+            label, chain: null, domText: text, agrees: false, discriminates2x: false, ok: false,
+            detail: `a pot-odds ratio is on screen ("${text}") but call_amount is 0 — nothing to call`,
+        };
+    }
+    if (!m) {
+        return {
+            label, chain: null, domText: text || null, agrees: false, discriminates2x: false, ok: false,
+            detail: `could not read an "a:b" ratio out of ${JSON.stringify(domText ?? null)}`,
+        };
+    }
+    const chainRatio = potE8s / callE8s;
+    const shownRatio = Number(m[1]) / Number(m[2]);
+    // Both legs are printed to one decimal by the client; the coarser leg sets
+    // the window. Derive it from the text rather than assuming.
+    const dp = (s) => (s.includes('.') ? s.split('.')[1].length : 0);
+    const relSlack = 0.5 * Math.pow(10, -Math.min(dp(m[1]), dp(m[2]))) / Math.max(Number(m[1]), Number(m[2]));
+    const agrees = Math.abs(shownRatio - chainRatio) <= chainRatio * relSlack + 1e-9;
+    const render = (r) => (r >= 1 ? `${r.toFixed(1)}:1` : `1:${(1 / r).toFixed(1)}`);
+    const discriminates2x = render(chainRatio * 2) !== render(chainRatio);
+    return {
+        label,
+        chain: Math.round(chainRatio * 1000) / 1000,
+        domText: text,
+        agrees,
+        discriminates2x,
+        ok: agrees && discriminates2x,
+        detail: agrees
+            ? `screen "${text}" == pot ${potE8s} / call ${callE8s} = ${render(chainRatio)}`
+            : `DISAGREES: screen "${text}" (${shownRatio.toFixed(3)}:1) but pot ${potE8s} / call `
+              + `${callE8s} = ${chainRatio.toFixed(3)}:1 (screen is ${(shownRatio / chainRatio).toFixed(3)}x)`,
+    };
+}
+
+const call0 = (x) => !Number.isFinite(Number(x)) || Number(x) === 0;
+
+/** Non-money structural facts that keep the seat mapping honest. */
+function mappingChecks(truth, dom) {
+    const problems = [];
+    const seatCount = Math.min(dom.seats.length, truth.seats.length);
+
+    if (dom.seats.length === 0) problems.push('no .seat elements found on the table page');
+
+    for (let i = 0; i < seatCount; i += 1) {
+        const c = truth.seats[i];
+        const d = dom.seats[i];
+        if (c.occupied !== d.occupied) {
+            problems.push(`seat ${i}: canister says ${c.occupied ? 'occupied' : 'empty'}, screen says ${d.occupied ? 'occupied' : 'empty'}`);
+            continue;
+        }
+        if (!c.occupied) continue;
+        if (c.allIn !== d.allIn) problems.push(`seat ${i}: all-in badge ${d.allIn} but canister is_all_in=${c.allIn}`);
+        if (c.folded !== d.folded) problems.push(`seat ${i}: fold badge ${d.folded} but canister has_folded=${c.folded}`);
+        if (truth.mySeat !== null && (i === truth.mySeat) !== d.isMe) {
+            problems.push(`seat ${i}: "me" highlight ${d.isMe} but my_seat=${truth.mySeat}`);
+        }
+        if (c.occupied && (i === truth.dealerSeat) !== d.dealerBadge) {
+            problems.push(`seat ${i}: dealer badge ${d.dealerBadge} but dealer_seat=${truth.dealerSeat}`);
+        }
+    }
+    return problems;
+}
+
+/** Compares one DOM snapshot with one chain snapshot. */
+function compare(truth, dom, opts) {
+    const currency = truth.currency;
+    const figures = [];
+    const structural = [];
+
+    if (!dom.found.felt) structural.push('SCRAPE FAILED: no .felt / .poker-table on the page');
+    if (dom.found.seats === 0) structural.push('SCRAPE FAILED: no .seat elements');
+
+    // ---- the header stakes pill -----------------------------------------
+    // The largest teal string on a table screen, and until this pass nothing
+    // looked at it: it rendered the LOBBY canister's stale row name, which
+    // quotes blinds that are 5x and 10x below what table_2 and table_3 charge,
+    // while the scene was filed "agrees with chain: yes". A pill that quotes
+    // blinds must quote THIS table's blinds. A pill that quotes none (the
+    // format alone, which is what the client shows before the view lands) is
+    // fine and is not a figure. docs/DEFECTS.md T-11.
+    if (dom.headerStakesText) {
+        const pill = /(\d[\d.,]*)\s*\/\s*(\d[\d.,]*)/.exec(dom.headerStakesText);
+        if (pill) {
+            figures.push(checkFigure(
+                `table header pill "${dom.headerStakesText}" small blind`,
+                truth.smallBlind, pill[1], { currency },
+            ));
+            figures.push(checkFigure(
+                `table header pill "${dom.headerStakesText}" big blind`,
+                truth.bigBlind, pill[2], { currency },
+            ));
+        }
+    }
+
+    // ---- the pot ---------------------------------------------------------
+    // At HandComplete the winner banner replaces the pot display, so the pot is
+    // checked only where the app renders it.
+    const handComplete = truth.phase === 'HandComplete';
+    if (!handComplete) {
+        if (!dom.found.potAmount) {
+            structural.push('SCRAPE FAILED: no .pot-amount while a hand is live');
+        } else {
+            figures.push(checkFigure('pot (headline) vs get_pot()', truth.pot, dom.potAmountText, {
+                currency, allowAbsentWhenZero: true,
+            }));
+        }
+        // "(A + B betting)" — design-agnostic: whatever the two legs are, they
+        // must add up to the real pot, and the second must be the real live bets.
+        if (dom.potBreakdownText) {
+            const nums = dom.potBreakdownText.match(/-?[\d.,]+\s*[KM]?/g) || [];
+            if (nums.length >= 2) {
+                figures.push(checkSum('pot breakdown sums to get_pot()', truth.pot, [nums[0], nums[1]], currency));
+                figures.push(checkFigure('pot breakdown "betting" leg vs sum(current_bet)', sumBets(truth), nums[1], { currency }));
+            } else {
+                structural.push(`SCRAPE FAILED: .pot-breakdown "${dom.potBreakdownText}" has fewer than two numbers`);
+            }
+        }
+    }
+
+    // ---- side pots -------------------------------------------------------
+    if (dom.sidePots.length !== truth.sidePots.length) {
+        structural.push(
+            `side pot COUNT disagrees: screen ${dom.sidePots.length}, canister ${truth.sidePots.length}`,
+        );
+    }
+    for (let i = 0; i < Math.min(dom.sidePots.length, truth.sidePots.length); i += 1) {
+        figures.push(checkFigure(`side pot ${i + 1}`, truth.sidePots[i].amount, dom.sidePots[i].amountText, { currency }));
+    }
+    // The canister's own invariant (docs/DEFECTS.md E-03): `state.side_pots` is
+    // display-only state refreshed after every action, and it is a DECOMPOSITION
+    // of `pot`, not an addition to it. Checked here because the client renders the
+    // headline pot and the side pots side by side, so if the invariant ever broke
+    // the screen would be adding up to something that does not exist.
+    if (truth.sidePots.length > 0) {
+        const sum = truth.sidePots.reduce((n, s) => n + s.amount, 0);
+        if (sum !== truth.pot) {
+            structural.push(
+                `canister invariant broken: side pots sum to ${sum} e8s but get_pot() is ${truth.pot} e8s`,
+            );
+        }
+    }
+
+    // ---- per-seat stacks and bets ---------------------------------------
+    for (let i = 0; i < Math.min(dom.seats.length, truth.seats.length); i += 1) {
+        const c = truth.seats[i];
+        const d = dom.seats[i];
+        if (!c.occupied || !d.occupied) continue;
+        figures.push(checkFigure(`seat ${i} stack`, c.chips, d.chipsText, { currency }));
+        figures.push(checkFigure(`seat ${i} bet`, c.currentBet, d.betText, {
+            currency, allowAbsentWhenZero: true,
+        }));
+    }
+
+    // ---- the board -------------------------------------------------------
+    const boardProblems = [];
+    for (let i = 0; i < truth.board.length; i += 1) {
+        const slot = dom.board[i];
+        if (!slot) { boardProblems.push(`board slot ${i}: nothing rendered, canister dealt ${truth.board[i].text}`); continue; }
+        if (slot.unreadable) {
+            boardProblems.push(
+                `SCRAPE CONTRACT BROKEN at board slot ${i}: the card is face UP (.card-front is `
+                + 'present) but no known rank/suit selector matched, so this slot was NOT compared '
+                + `with the canister's ${truth.board[i].text}. Update readCard() in `
+                + `lib/dom-scrape.mjs. Markup: ${slot.markup}`,
+            );
+            continue;
+        }
+        if (slot.faceDown || slot.empty || !slot.rank || !slot.suit) {
+            boardProblems.push(`board slot ${i}: rendered ${slot.faceDown ? 'FACE DOWN' : slot.empty ? 'EMPTY' : 'blank'}, canister dealt ${truth.board[i].text}`);
+            continue;
+        }
+        const rank = RANK_BY_GLYPH[slot.rank];
+        const suit = SUIT_BY_SYMBOL[slot.suit];
+        if (rank !== truth.board[i].rank || suit !== truth.board[i].suit) {
+            boardProblems.push(`board slot ${i}: screen ${slot.rank}${slot.suit}, canister ${truth.board[i].text}`);
+        }
+    }
+    for (let i = truth.board.length; i < dom.board.length; i += 1) {
+        const slot = dom.board[i];
+        if (slot && !slot.faceDown && !slot.empty && slot.rank) {
+            boardProblems.push(`board slot ${i}: screen shows ${slot.rank}${slot.suit} but the canister has dealt only ${truth.board.length} cards`);
+        }
+    }
+    if (truth.viewBoardLength !== truth.board.length) {
+        boardProblems.push(
+            `canister disagrees with itself: get_community_cards()=${truth.board.length} `
+            + `but get_table_view().community_cards=${truth.viewBoardLength}`,
+        );
+    }
+
+    // ---- table balance ---------------------------------------------------
+    if (dom.tableBalanceText !== null && dom.tableBalanceText !== undefined) {
+        figures.push(checkFigure('table balance vs get_balance()', truth.balance, dom.tableBalanceText, { currency }));
+    } else if (opts.requireBalance) {
+        structural.push('SCRAPE FAILED: no wallet balance on screen');
+    }
+
+    // ---- pot odds strip --------------------------------------------------
+    if (dom.potOddsText) {
+        const nums = dom.potOddsText.match(/-?[\d.,]+\s*[KM]?/g) || [];
+        if (nums.length >= 2) {
+            figures.push(checkFigure('pot-odds "Call X" vs call_amount', truth.callAmount, nums[0], { currency }));
+            figures.push(checkFigure('pot-odds "to win Y" vs get_pot()', truth.pot, nums[1], { currency }));
+        }
+    }
+
+    // The redesigned dock renders pot odds as a RATIO and a required-equity
+    // percentage instead of "Call X to win Y". Neither is a chain field, but both
+    // are computed from the pot, so a pot that is wrong on the felt is wrong here
+    // too — and these two are worse than the headline, because a player reads
+    // them to decide whether calling is +EV. They are checked against the
+    // canister's own pot and call_amount, at the precision the client chose.
+    if (dom.potOddsValue) {
+        figures.push(checkRatio(
+            'pot-odds ratio vs get_pot()/call_amount',
+            truth.pot, truth.callAmount, dom.potOddsValue,
+        ));
+    }
+    if (dom.equityHint) {
+        const pct = truth.pot + truth.callAmount === 0
+            ? null
+            : (truth.callAmount / (truth.pot + truth.callAmount)) * 100;
+        figures.push(checkPlainNumber(
+            'required-equity % vs call_amount/(get_pot()+call_amount)',
+            pct === null ? null : Math.round(pct * 10) / 10, dom.equityHint, { unit: '%' },
+        ));
+    }
+
+    // ---- "Call X" wherever the client writes it --------------------------
+    // The call amount appears on the primary action button and in the turn hint.
+    // Both are money the player is about to commit, and both come from the same
+    // `call_amount` field, so both are asserted against it.
+    for (const label of dom.actionButtons || []) {
+        if (!/^call\b/i.test(label)) continue;
+        figures.push(checkFigure('action button "Call X" vs call_amount', truth.callAmount, label.replace(/^call/i, ''), { currency }));
+    }
+    if (dom.turnHint && /call/i.test(dom.turnHint) && /\d/.test(dom.turnHint)) {
+        figures.push(checkFigure('turn hint "Call X" vs call_amount', truth.callAmount, dom.turnHint.replace(/^[^\d-]*/, ''), { currency }));
+    }
+
+    // ---- winner banner ---------------------------------------------------
+    if (dom.winnerText) {
+        if (truth.winners.length === 0) {
+            structural.push(`winner banner on screen ("${dom.winnerText}") but last_hand_winners is empty`);
+        } else {
+            const mine = truth.mySeat === null ? undefined : truth.winners.find((w) => w.seat === truth.mySeat);
+            const shown = mine ?? truth.winners[0];
+            const nums = dom.winnerText.match(/-?[\d.,]+\s*[KM]?/g) || [];
+            // "Seat N wins X" leads with the seat number; "You won X" does not.
+            const amountText = mine ? nums[0] : nums[1];
+            if (!mine && nums.length >= 1 && Number(nums[0]) !== truth.winners[0].seat + 1) {
+                structural.push(`winner banner names seat ${nums[0]}, canister says seat ${truth.winners[0].seat + 1}`);
+            }
+            figures.push(checkFigure('winner amount vs last_hand_winners', shown.amount, amountText, { currency }));
+        }
+    } else if (handComplete && truth.winners.length > 0 && opts.requireWinnerBanner) {
+        structural.push(`canister has ${truth.winners.length} winner(s) for hand ${truth.handNumber} but no winner banner is on screen`);
+    }
+
+    // ---- structure that keeps the mapping honest -------------------------
+    structural.push(...mappingChecks(truth, dom));
+    structural.push(...boardProblems);
+
+    const folded = foldFigures(figures);
+    return {
+        ok: folded.ok && structural.length === 0,
+        moneyFiguresChecked: folded.checked,
+        moneyMismatches: folded.mismatches,
+        structuralProblems: structural,
+        figures,
+    };
+}
+
+/**
+ * The assertion every table scene runs before its screenshot is allowed the
+ * canonical filename.
+ *
+ * @param {object} ctx run context (ctx.tableIds)
+ * @param {import('playwright').Page} page
+ * @param {{table:string, asPlayer:number, requireBalance?:boolean, requireWinnerBanner?:boolean}} opts
+ * @returns {Promise<{ok:boolean, checks:object, notes:string}>}
+ */
+export async function assertChainAgreement(ctx, page, opts) {
+    const tableId = ctx.tableIds[opts.table];
+    if (!tableId) throw new Error(`No local canister id for ${opts.table}`);
+
+    let last = null;
+    let truth = null;
+    let dom = null;
+    let attempts = 0;
+    let discarded = 0;
+
+    for (let i = 0; i < MAX_ATTEMPTS; i += 1) {
+        const before = await readTableTruth(tableId, opts.asPlayer);
+        const snapshot = await scrapeTable(page);
+        const after = await readTableTruth(tableId, opts.asPlayer);
+        if (truthDigest(before) !== truthDigest(after)) {
+            // The chain moved while we were looking. Not evidence either way.
+            discarded += 1;
+            await sleep(ATTEMPT_GAP_MS);
+            continue;
+        }
+        attempts += 1;
+        truth = before;
+        dom = snapshot;
+        last = compare(before, snapshot, opts);
+        if (last.ok) break;
+        await sleep(ATTEMPT_GAP_MS);
+    }
+
+    if (!last) {
+        return {
+            ok: false,
+            checks: {
+                chainAgreement: 'INCONCLUSIVE',
+                reason: `on-chain state never held still across ${MAX_ATTEMPTS} attempts, so the screen could not be compared with it`,
+                discardedAttempts: discarded,
+            },
+            notes: 'chain agreement INCONCLUSIVE: state kept moving',
+        };
+    }
+
+    const checks = {
+        chainAgreement: last.ok ? 'AGREES' : 'DISAGREES',
+        attempts,
+        discardedAttempts: discarded,
+        moneyFiguresChecked: last.moneyFiguresChecked,
+        moneyMismatches: last.moneyMismatches,
+        structuralProblems: last.structuralProblems,
+        // The canister's own numbers, so a reader of manifest.json can redo the
+        // comparison by hand against the PNG without re-running anything.
+        onChain: {
+            getPot: truth.pot,
+            viewPot: truth.viewPot,
+            sumOfLiveBets: sumBets(truth),
+            sidePots: truth.sidePots.map((s) => s.amount),
+            seats: truth.seats.filter((s) => s.occupied)
+                .map((s) => ({ seat: s.index, chips: s.chips, bet: s.currentBet, allIn: s.allIn, folded: s.folded })),
+            board: truth.board.map((c) => c.text),
+            balance: truth.balance,
+            callAmount: truth.callAmount,
+            phase: truth.phase,
+            handNumber: truth.handNumber,
+            winners: truth.winners,
+        },
+        onScreen: {
+            pot: dom.potAmountText,
+            potBreakdown: dom.potBreakdownText,
+            sidePots: dom.sidePots.map((s) => s.amountText),
+            seats: dom.seats.filter((s) => s.occupied)
+                .map((s) => ({ seat: s.index, name: s.name, chips: s.chipsText, bet: s.betText })),
+            board: dom.board.map((c) => (c.faceDown ? 'down' : c.empty ? 'empty' : `${c.rank}${c.suit}`)),
+            balance: dom.tableBalanceText,
+            potOdds: dom.potOddsText,
+            winner: dom.winnerText,
+        },
+        figures: last.figures.map((f) => ({ label: f.label, chain: f.chain, screen: f.domText, ok: f.ok, detail: f.detail })),
+    };
+
+    const problems = [...last.moneyMismatches, ...last.structuralProblems];
+    const notes = last.ok
+        ? `chain agreement: ${last.moneyFiguresChecked} money figures on screen all equal the canister's`
+        : `CHAIN DISAGREEMENT (${problems.length}): ${problems.slice(0, 4).join(' | ')}`;
+
+    return { ok: last.ok, checks, notes };
+}
+
+/**
+ * THE BET-SIZING PRESETS: what the client would WAGER, not what it displays.
+ *
+ * `½ Pot` and `Pot` write an amount into the raise field that the next click
+ * sends to the canister. If the client's idea of "the pot" is wrong, this is not
+ * a cosmetic defect: the player commits real chips at a size they did not
+ * intend. So the presets are read off the live UI and compared with the
+ * canister's own `get_pot()`, using the poker definition the labels promise:
+ *
+ *   Pot   = raise TO (pot + amount_to_call)   — the pot after you call
+ *   ½ Pot = raise TO (pot/2), floored at the legal minimum raise
+ *
+ * WHAT "POT-SIZED" MEANS, WRITTEN DOWN ONCE.
+ *
+ * The value in the raise field is a RAISE TO: the player's total commitment for
+ * the round, not the chips added. A pot-sized raise is call first, then raise by
+ * the pot as it stands after that call, so with `B` = table `current_bet`,
+ * `m` = my `current_bet`, `P` = `get_pot()` and `c = B - m = call_amount`:
+ *
+ *     Pot    raise TO  B + P + c        ( = P + 2B - m )
+ *     ½ Pot  raise TO  B + floor(P/2 + c/2)
+ *
+ * `P` already contains every live bet, which is exactly the fact T-08 got wrong.
+ *
+ * Getting this arithmetic wrong in the HARNESS is as bad as getting it wrong in
+ * the client, and the first draft of this check did: it used `P + c` as a
+ * ceiling, which is a chips-added quantity compared against a raise-to figure,
+ * and it convicted a correct client. So the observed value is also inverted back
+ * into an IMPLIED POT, `implied = observed - B - c`, and reported next to
+ * `get_pot()`. That number is definition-free: if the client is sizing off twice
+ * the pot, `impliedPot / get_pot()` reads 2.0 and says so, whatever formula
+ * either side prefers.
+ *
+ * Both presets are floored at the legal minimum (`current_bet + min_raise`, or
+ * `min_bet` when there is no bet) and capped at the player's stack, so a preset
+ * that lands on the floor or the cap is reported as UNCONSTRAINING rather than as
+ * a pass — a preset pinned to the floor proves nothing about the pot behind it.
+ *
+ * Nothing is committed: the popover is opened, read and closed again.
+ *
+ * @param {object} ctx
+ * @param {import('playwright').Page} page
+ * @param {{table:string, asPlayer:number}} opts
+ */
+export async function assertBetPresetsAgree(ctx, page, opts) {
+    const tableId = ctx.tableIds[opts.table];
+    if (!tableId) throw new Error(`No local canister id for ${opts.table}`);
+    const truth = await readTableTruth(tableId, opts.asPlayer);
+    const raw = await readRaiseContext(tableId, opts.asPlayer);
+
+    if (!truth.isMyTurn) {
+        return {
+            ok: true,
+            checks: { betPresets: 'NOT APPLICABLE', reason: 'the hero is not on the clock, so no preset is reachable' },
+            notes: 'bet presets not checked (not the hero\'s turn)',
+        };
+    }
+
+    const results = [];
+    const figures = [];
+    const advisory = [];
+
+    const floor = raw.currentBet === 0 ? raw.minBet : raw.currentBet + raw.minRaise;
+    const cap = raw.myChips + raw.myCurrentBet;
+    const B = raw.currentBet;
+    const c = truth.callAmount;
+    const expectedRaiseTo = {
+        Pot: Math.min(cap, Math.max(floor, B + truth.pot + c)),
+        '½ Pot': Math.min(cap, Math.max(floor, B + Math.floor((truth.pot + c) / 2))),
+    };
+    /** The pot the client must have been sizing from, given what it proposed. */
+    const impliedPotFrom = (raiseTo, label) =>
+        (label === 'Pot' ? raiseTo - B - c : (raiseTo - B) * 2 - c);
+
+    for (const label of ['½ Pot', 'Pot']) {
+        const read = await readBetPreset(page, label);
+        const sliderValue = read.sliderValue === null || read.sliderValue === undefined
+            ? null : Number(read.sliderValue);
+        const impliedPot = sliderValue === null ? null : impliedPotFrom(sliderValue, label);
+        const entry = {
+            label,
+            ...read,
+            sliderValueE8s: sliderValue,
+            expectedRaiseToE8s: expectedRaiseTo[label],
+            impliedPotE8s: impliedPot,
+            impliedPotMultiple: impliedPot === null || truth.pot === 0
+                ? null : Math.round((impliedPot / truth.pot) * 1000) / 1000,
+        };
+        results.push(entry);
+        if (!read.available) {
+            advisory.push(`preset "${label}" is not reachable on this screen`);
+            continue;
+        }
+        if (sliderValue === null) {
+            advisory.push(`preset "${label}": no slider value to read`);
+            continue;
+        }
+        // The two places the client SHOWS the amount must agree with the amount
+        // it would SEND. A popover that displays one number and posts another is
+        // its own defect, so this is checked before anything about the pot.
+        for (const [what, text] of [['slider readout', read.amountText], ['confirm button', read.confirmText]]) {
+            if (!text) continue;
+            figures.push(checkFigure(
+                `bet preset "${label}" ${what} vs the value that would be SENT`,
+                sliderValue, text, { currency: truth.currency },
+            ));
+        }
+
+        const pinned = sliderValue === floor ? 'the legal FLOOR'
+            : sliderValue === cap ? 'the stack CAP' : null;
+        if (pinned) {
+            advisory.push(
+                `preset "${label}" landed on ${pinned} (${sliderValue} e8s), so this sample `
+                + 'cannot discriminate a wrong pot behind it',
+            );
+            continue;
+        }
+        const want = expectedRaiseTo[label];
+        const ok = sliderValue === want;
+        figures.push({
+            label: `bet preset "${label}" is sized from get_pot()`,
+            chain: want,
+            domText: String(sliderValue),
+            agrees: ok,
+            // Would a doubled pot have produced a different number here? It moves
+            // the target by exactly get_pot(), so yes whenever the pot is non-zero
+            // and the result is not pinned by the floor or the cap.
+            discriminates2x: truth.pot > 0,
+            ok,
+            detail: ok
+                ? `raise-to ${sliderValue} e8s == current_bet ${B} + get_pot() ${truth.pot} `
+                  + `${label === 'Pot' ? '+' : '/2 +'} call ${c} (implied pot ${impliedPot} e8s, `
+                  + `${entry.impliedPotMultiple}x get_pot())`
+                : `WOULD WAGER a raise-to of ${sliderValue} e8s where a ${label} raise is ${want} e8s. `
+                  + `The client is sizing from a pot of ${impliedPot} e8s — ${entry.impliedPotMultiple}x `
+                  + `get_pot() (${truth.pot}). This number is SENT to the canister, not merely displayed.`,
+        });
+    }
+    await closeBetPresets(page);
+
+    const folded = foldFigures(figures);
+    return {
+        ok: folded.ok,
+        checks: {
+            betPresets: folded.ok ? 'AGREE' : 'DISAGREE',
+            moneyFiguresChecked: folded.checked,
+            moneyMismatches: folded.mismatches,
+            advisory,
+            onChain: {
+                getPot: truth.pot, callAmount: truth.callAmount,
+                currentBet: raw.currentBet, minRaise: raw.minRaise, minBet: raw.minBet,
+                legalFloor: floor, cap,
+            },
+            onScreen: results,
+            figures: folded.figures.map((f) => ({ label: f.label, chain: f.chain, screen: f.domText, ok: f.ok, detail: f.detail })),
+        },
+        notes: folded.ok
+            ? `bet presets: ${folded.checked} sizing figure(s) match get_pot()`
+            : `BET SIZING DISAGREEMENT: ${folded.mismatches.slice(0, 3).join(' | ')}`,
+    };
+}
+
+/** The raise-legality fields the presets are floored and capped by. */
+async function readRaiseContext(tableId, playerNum) {
+    const table = await tableActorFor(playerNum, tableId);
+    const view = optional(await table.get_table_view());
+    if (!view) throw new Error(`get_table_view() returned null for ${tableId}`);
+    const mySeat = optional(view.my_seat);
+    const me = mySeat === null ? null : optional(view.players[Number(mySeat)]);
+    return {
+        currentBet: Number(view.current_bet),
+        minRaise: Number(view.min_raise ?? view.config.big_blind),
+        minBet: Number(view.min_bet ?? view.config.big_blind),
+        myChips: Number(me?.chips ?? 0),
+        myCurrentBet: Number(me?.current_bet ?? 0),
+    };
+}
+
+/**
+ * The lobby's money: every row's blinds and buy-in range against the canisters.
+ *
+ * Two sources are compared, because they can disagree and the player only ever
+ * sees one of them: the LOBBY canister's registration (what the row renders) and
+ * the TABLE canister's own `config` (what the table will actually charge). A row
+ * advertising blinds the table does not enforce is a money lie even though both
+ * numbers are "on chain".
+ *
+ * @param {object} ctx
+ * @param {import('playwright').Page} page
+ */
+export async function assertLobbyAgreement(ctx, page) {
+    const lobby = await lobbyActor(ctx.ids.lobby);
+    const registered = await lobby.get_tables();
+
+    const byName = new Map();
+    for (const t of registered) {
+        const cid = optional(t.canister_id);
+        byName.set(t.name, {
+            name: t.name,
+            canisterId: cid ? cid.toText() : null,
+            currency: variantKey(optional(t.currency) ?? t.config.currency) === 'BTC' ? 'BTC' : 'ICP',
+            lobbyConfig: {
+                smallBlind: Number(t.config.small_blind),
+                bigBlind: Number(t.config.big_blind),
+                minBuyIn: Number(t.config.min_buy_in),
+                maxBuyIn: Number(t.config.max_buy_in),
+                maxPlayers: Number(t.config.max_players),
+            },
+            playerCount: Number(t.player_count),
+        });
+    }
+
+    // The table canister's own view of the same numbers.
+    const readTableSide = async (entry) => {
+        if (!entry.canisterId) return;
+        try {
+            const table = await tableActorFor(1, entry.canisterId);
+            const [viewOpt, count, pot] = await Promise.all([
+                table.get_table_view(), table.get_player_count(), table.get_pot(),
+            ]);
+            const v = optional(viewOpt);
+            entry.tableConfig = v
+                ? {
+                    smallBlind: Number(v.config.small_blind),
+                    bigBlind: Number(v.config.big_blind),
+                    minBuyIn: Number(v.config.min_buy_in),
+                    maxBuyIn: Number(v.config.max_buy_in),
+                    maxPlayers: Number(v.config.max_players),
+                }
+                : null;
+            entry.livePlayerCount = Number(count);
+            entry.livePot = Number(pot);
+            entry.livePhase = v ? variantKey(v.phase) : null;
+        } catch (e) {
+            entry.tableError = String(e.message || e).split('\n')[0];
+        }
+    };
+
+    for (const entry of byName.values()) await readTableSide(entry);
+    const potsBefore = new Map([...byName.values()].map((e) => [e.name, e.livePot]));
+
+    const dom = await scrapeLobby(page);
+
+    // Second read, so a live pot that moved under us is reported as unstable
+    // rather than as a lie. Blinds and buy-ins are static and need no bracket.
+    for (const entry of byName.values()) await readTableSide(entry);
+    const figures = [];
+    const structural = [];
+    const advisory = [];
+
+    if (dom.rowCount === 0) structural.push('SCRAPE FAILED: no lobby rows on the page');
+
+    for (const row of dom.rows) {
+        const entry = byName.get(row.name);
+        if (!entry) {
+            structural.push(`lobby row "${row.name}" is not a table the lobby canister registered`);
+            continue;
+        }
+        const cur = entry.currency;
+        // WHICH NUMBER IS THE TRUTH.
+        // The row renders the LOBBY canister's registration. The money a player
+        // actually pays is set by the TABLE canister's own config. When those
+        // differ, rendering the lobby's copy faithfully still leaves a false
+        // number on screen, so the TABLE's config is what the gate compares
+        // against, and "the client rendered its own source correctly" is recorded
+        // separately so the diagnosis is never ambiguous.
+        const cfg = entry.tableConfig ?? entry.lobbyConfig;
+
+        // "0.05/0.10"
+        const stakeNums = (row.stakesText || '').match(/-?[\d.,]+\s*[KM]?/g) || [];
+        if (stakeNums.length >= 2) {
+            figures.push(checkFigure(`lobby "${row.name}" small blind (vs TABLE canister config)`, cfg.smallBlind, stakeNums[0], { currency: cur }));
+            figures.push(checkFigure(`lobby "${row.name}" big blind (vs TABLE canister config)`, cfg.bigBlind, stakeNums[1], { currency: cur }));
+            entry.renderedFaithfullyFromLobbyRecord =
+                checkFigure('sb', entry.lobbyConfig.smallBlind, stakeNums[0], { currency: cur }).agrees
+                && checkFigure('bb', entry.lobbyConfig.bigBlind, stakeNums[1], { currency: cur }).agrees;
+        } else {
+            structural.push(`lobby row "${row.name}": could not read two blinds out of "${row.stakesText}"`);
+        }
+
+        // "10.00 - 50.00"
+        const buyInNums = (row.buyInText || '').match(/-?[\d.,]+\s*[KM]?/g) || [];
+        if (buyInNums.length >= 2) {
+            figures.push(checkFigure(`lobby "${row.name}" min buy-in (vs TABLE canister config)`, cfg.minBuyIn, buyInNums[0], { currency: cur }));
+            figures.push(checkFigure(`lobby "${row.name}" max buy-in (vs TABLE canister config)`, cfg.maxBuyIn, buyInNums[1], { currency: cur }));
+        } else {
+            structural.push(`lobby row "${row.name}": could not read a buy-in range out of "${row.buyInText}"`);
+        }
+
+        // THE ROW NAME IS A MONEY FIGURE TOO.
+        // Every row is named "<shape> - <sb>/<bb>", written once into the LOBBY
+        // canister by `init_microstakes_tables` and never revised. When the
+        // table's real blinds move, the name keeps quoting the old ones, and the
+        // name is the largest, first thing a player reads on the row — larger
+        // than the Stakes cell it contradicts. So it is asserted against the
+        // TABLE canister's blinds like any other figure on screen.
+        const nameStakes = /(\d[\d.,]*)\s*\/\s*(\d[\d.,]*)/.exec(row.name || '');
+        if (nameStakes && entry.tableConfig) {
+            figures.push(checkFigure(
+                `lobby row NAME "${row.name}" quotes a small blind`,
+                entry.tableConfig.smallBlind, nameStakes[1], { currency: cur },
+            ));
+            figures.push(checkFigure(
+                `lobby row NAME "${row.name}" quotes a big blind`,
+                entry.tableConfig.bigBlind, nameStakes[2], { currency: cur },
+            ));
+        }
+
+        // The lobby canister's copy vs the table canister's own config.
+        //
+        // WHOSE DEFECT IS THIS. Two different failures wear the same symptom and
+        // must never be collapsed:
+        //   * the CLIENT rendered a number that is not the table's  -> a client
+        //     defect, and it is already caught by the figure checks above;
+        //   * the two ON-CHAIN sources disagree while the client renders the
+        //     table's live config faithfully (and says so) -> a canister-data
+        //     defect that the client is handling correctly.
+        // The message names which one it is, so nobody fixes the wrong file.
+        if (entry.tableConfig) {
+            const drifted = ['smallBlind', 'bigBlind', 'minBuyIn', 'maxBuyIn', 'maxPlayers']
+                .filter((key) => entry.tableConfig[key] !== entry.lobbyConfig[key]);
+            if (drifted.length) {
+                entry.configDrift = drifted.map((key) => ({
+                    field: key, lobbyRecord: entry.lobbyConfig[key], tableEnforces: entry.tableConfig[key],
+                }));
+                structural.push(
+                    `ON-CHAIN DATA DEFECT for "${row.name}": the LOBBY canister's stored record says `
+                    + drifted.map((k) => `${k}=${entry.lobbyConfig[k]}`).join(', ')
+                    + ' but the TABLE canister enforces '
+                    + drifted.map((k) => `${k}=${entry.tableConfig[k]}`).join(', ')
+                    + `. That is ${drifted.map((k) => `${(entry.tableConfig[k] / (entry.lobbyConfig[k] || 1)).toFixed(0)}x`).join('/')} `
+                    + 'the advertised figure. Fix is in src/lobby_canister (init_microstakes_tables), '
+                    + 'not in the client: the rendered cells were compared against the TABLE canister above.',
+                );
+            }
+        }
+
+        // The redesigned lobby renders a LIVE pot on any row with a hand in
+        // progress. That is a money figure in the lobby and it gets the same
+        // treatment as the pot on the felt — gated when it held still across the
+        // scrape, advisory when it did not.
+        if (row.livePotText) {
+            const stable = potsBefore.get(row.name) === entry.livePot;
+            const check = checkFigure(
+                `lobby "${row.name}" live pot vs get_pot()`, entry.livePot, row.livePotText, { currency: cur },
+            );
+            if (stable) figures.push(check);
+            else advisory.push(`${check.label}: pot moved during the scrape (${potsBefore.get(row.name)} -> ${entry.livePot}); ${check.detail}`);
+        } else if (entry.livePot > 0 && entry.livePhase && entry.livePhase !== 'WaitingForPlayers' && entry.livePhase !== 'HandComplete') {
+            advisory.push(
+                `"${row.name}" has a live pot of ${entry.livePot} e8s at ${entry.livePhase} but the row shows no pot`,
+            );
+        }
+
+        // Player counts move whenever any agent seats somebody on this shared
+        // replica, so they are recorded and NOT gated. Saying so is the honest
+        // alternative to a check that fails for reasons unrelated to the client.
+        const countNums = (row.playersText || '').match(/\d+/g) || [];
+        if (countNums.length >= 2 && entry.livePlayerCount !== undefined) {
+            if (Number(countNums[0]) !== entry.livePlayerCount) {
+                advisory.push(
+                    `"${row.name}" shows ${countNums[0]}/${countNums[1]} players, get_player_count() says `
+                    + `${entry.livePlayerCount} (not gated: other agents seat players on this replica concurrently)`,
+                );
+            }
+        }
+    }
+
+    const folded = foldFigures(figures);
+    const ok = folded.ok && structural.length === 0;
+    return {
+        ok,
+        checks: {
+            chainAgreement: ok ? 'AGREES' : 'DISAGREES',
+            moneyFiguresChecked: folded.checked,
+            moneyMismatches: folded.mismatches,
+            structuralProblems: structural,
+            advisory,
+            figures: folded.figures.map((f) => ({ label: f.label, chain: f.chain, screen: f.domText, ok: f.ok, detail: f.detail })),
+            onChain: [...byName.values()].map((e) => ({
+                name: e.name, lobbyConfig: e.lobbyConfig, tableConfig: e.tableConfig ?? null,
+                livePlayerCount: e.livePlayerCount ?? null,
+                renderedFaithfullyFromLobbyRecord: e.renderedFaithfullyFromLobbyRecord ?? null,
+            })),
+            onScreen: dom.rows,
+        },
+        notes: ok
+            ? `lobby: ${folded.checked} money figures (blinds + buy-ins) all equal the canisters'`
+            : `LOBBY CHAIN DISAGREEMENT: ${[...folded.mismatches, ...structural].slice(0, 4).join(' | ')}`,
+    };
+}
+
+/** The USD price the harness actually served this run, or null. */
+function servedIcpUsd() {
+    for (const o of thirdPartyObservations().slice().reverse()) {
+        if (!o.body) continue;
+        try {
+            const parsed = JSON.parse(o.body);
+            const usd = parsed?.['internet-computer']?.usd;
+            if (typeof usd === 'number') return { usd, mode: o.mode, observedAt: o.observedAt };
+        } catch { /* a truncated body is not a quote */ }
+    }
+    return null;
+}
+
+/**
+ * The deposit modal's money: the ledger balance it quotes, the escrow balance
+ * behind it, and the fiat conversion.
+ *
+ * @param {object} ctx
+ * @param {import('playwright').Page} page
+ * @param {{table:string, asPlayer:number}} opts
+ */
+export async function assertDepositAgreement(ctx, page, opts) {
+    const tableId = ctx.tableIds[opts.table];
+    const heroPrincipal = devPlayerPrincipal(opts.asPlayer);
+    const [truth, walletE8s] = await Promise.all([
+        readTableTruth(tableId, opts.asPlayer),
+        ledgerBalance(heroPrincipal),
+    ]);
+    const wallet = Number(walletE8s);
+    const dom = await scrapeDeposit(page);
+
+    const figures = [];
+    const structural = [];
+
+    if (!dom.found.modal) {
+        return {
+            ok: false,
+            checks: { chainAgreement: 'NOT CHECKED', reason: 'no deposit modal on screen' },
+            notes: 'deposit money figures NOT CHECKED: no modal on screen',
+        };
+    }
+
+    if (dom.cryptoBalances.length === 0) {
+        structural.push('SCRAPE FAILED: the deposit modal shows no .balance-crypto figure');
+    }
+    for (const text of dom.cryptoBalances) {
+        figures.push(checkFigure(
+            'deposit modal wallet balance vs ledger icrc1_balance_of',
+            wallet, text, { currency: truth.currency },
+        ));
+    }
+
+    const quote = servedIcpUsd();
+    if (dom.usdValues.length === 0) {
+        if (quote && quote.mode !== 'unavailable') {
+            structural.push(
+                `a live quote (${quote.usd} USD/ICP) was served but the modal shows no fiat figure`,
+            );
+        }
+    } else if (!quote) {
+        structural.push(`the modal shows a fiat figure (${dom.usdValues[0]}) but no price was served this run`);
+    } else {
+        // formatUsd(): `~$X.XX`, or `~$X.XXXX` below a cent.
+        const expected = (wallet / 100_000_000) * quote.usd;
+        for (const text of dom.usdValues) {
+            figures.push(checkPlainNumber(
+                `deposit modal fiat value vs (balance x ${quote.usd} USD/ICP, ${quote.mode})`,
+                expected, text, { unit: ' USD' },
+            ));
+        }
+    }
+
+    const folded = foldFigures(figures);
+    const ok = folded.ok && structural.length === 0;
+    return {
+        ok,
+        checks: {
+            chainAgreement: ok ? 'AGREES' : 'DISAGREES',
+            moneyFiguresChecked: folded.checked,
+            moneyMismatches: folded.mismatches,
+            structuralProblems: structural,
+            figures: folded.figures.map((f) => ({ label: f.label, chain: f.chain, screen: f.domText, ok: f.ok, detail: f.detail })),
+            onChain: {
+                heroPrincipal,
+                ledgerBalanceE8s: wallet,
+                tableEscrowBalanceE8s: truth.balance,
+                icpUsdQuote: quote,
+            },
+            onScreen: { cryptoBalances: dom.cryptoBalances, usdValues: dom.usdValues, priceError: dom.priceError },
+        },
+        notes: ok
+            ? `deposit modal: ${folded.checked} money figures equal the ledger + the served quote`
+            : `DEPOSIT CHAIN DISAGREEMENT: ${[...folded.mismatches, ...structural].slice(0, 4).join(' | ')}`,
+    };
+}
+
+/**
+ * The hand-history modal's money: each row's pot against the canister's own
+ * recorded hand.
+ *
+ * @param {object} ctx
+ * @param {import('playwright').Page} page
+ * @param {{table:string, asPlayer:number}} opts
+ */
+export async function assertHandHistoryAgreement(ctx, page, opts) {
+    const tableId = ctx.tableIds[opts.table];
+    const table = await tableActorFor(opts.asPlayer, tableId);
+    const truth = await readTableTruth(tableId, opts.asPlayer);
+    const structuralPre = [];
+
+    // TWO SOURCES, DELIBERATELY. `table.get_hand_history` (Candid type
+    // `HandHistory`) carries NO pot field at all — only `winners` — so "the pot
+    // of hand n" from the table canister is the sum of what it PAID. The HISTORY
+    // canister's `HandHistoryRecord` does carry `total_pot` (and `rake`), and it
+    // is the record the client actually renders. Both are read, and they are
+    // cross-checked against each other, because a modal that agrees with one
+    // while the two disagree is still showing the player a number the money did
+    // not follow.
+    //
+    // An earlier version of this function read `rec.total_pot` off the TABLE
+    // record. That field does not exist, so `Number(undefined)` was NaN and every
+    // comparison was vacuous — reported as a disagreement only by luck. Absence
+    // of a field is now a structural failure, never a silent NaN.
+    const hands = [];
+    for (let n = truth.handNumber; n >= 1 && hands.length < 10; n -= 1) {
+        const rec = optional(await table.get_hand_history(BigInt(n)));
+        if (!rec) continue;
+        if (!('winners' in rec)) {
+            structuralPre.push(`get_hand_history(${n}) has no 'winners' field: ${Object.keys(rec).join(', ')}`);
+            continue;
+        }
+        const winners = rec.winners.map((w) => ({ seat: Number(w.seat), amount: Number(w.amount) }));
+        hands.push({
+            handNumber: Number(rec.hand_number),
+            awardedByTable: winners.reduce((n2, w) => n2 + w.amount, 0),
+            winners,
+        });
+    }
+
+    // The history canister's own copy of the same hands, keyed by hand_number.
+    const byHandNumber = new Map();
+    if (ctx.ids?.history) {
+        try {
+            const history = await historyActor(ctx.ids.history);
+            const recs = await history.get_hands_by_table(
+                Principal.fromText(tableId), BigInt(0), BigInt(20),
+            );
+            for (const r of recs) {
+                byHandNumber.set(Number(r.hand_number), {
+                    handId: Number(r.hand_id),
+                    totalPot: Number(r.total_pot),
+                    rake: Number(r.rake),
+                    awarded: r.winners.reduce((n2, w) => n2 + Number(w.amount), 0),
+                });
+            }
+        } catch (e) {
+            byHandNumber.set('error', String(e.message || e).split('\n')[0]);
+        }
+    }
+
+    const dom = await scrapeHandHistory(page);
+    const figures = [];
+    const structural = [...structuralPre];
+
+    if (!dom.found.modal) structural.push('SCRAPE FAILED: no .hand-history-modal on screen');
+    if (dom.found.rows === 0) structural.push('SCRAPE FAILED: the history modal lists no hands');
+    if (dom.found.rows > hands.length) {
+        structural.push(`history lists ${dom.found.rows} hand(s) but the canister has recorded ${hands.length}`);
+    }
+
+    // Rows are newest-first in HandHistory.svelte, which is the order `hands` is
+    // built in above.
+    for (let i = 0; i < Math.min(dom.rows.length, hands.length); i += 1) {
+        const hand = hands[i];
+        const hist = byHandNumber.get(hand.handNumber);
+
+        // NO RAKE is a published property of this product, not a preference.
+        // The history record has a `rake` field, so it is asserted, per hand.
+        if (hist && hist.rake !== 0) {
+            structural.push(
+                `RAKE TAKEN: hand ${hand.handNumber} recorded rake=${hist.rake} e8s. ClearDeck `
+                + 'publishes a no-rake property; a non-zero rake contradicts it.',
+            );
+        }
+        // Money in equals money out, hand by hand.
+        if (hist && hist.totalPot !== hist.awarded + hist.rake) {
+            structural.push(
+                `hand ${hand.handNumber}: history says total_pot=${hist.totalPot} but the winners were `
+                + `paid ${hist.awarded} with rake ${hist.rake} (difference `
+                + `${hist.totalPot - hist.awarded - hist.rake} e8s)`,
+            );
+        }
+        if (hist && hist.awarded !== hand.awardedByTable) {
+            structural.push(
+                `hand ${hand.handNumber}: the TABLE canister paid ${hand.awardedByTable} e8s but the `
+                + `HISTORY canister recorded ${hist.awarded} e8s paid`,
+            );
+        }
+
+        // What the row must equal: the history record's own pot when there is
+        // one (that is the field the client renders), otherwise the amount the
+        // table actually paid out.
+        const expected = hist ? hist.totalPot : hand.awardedByTable;
+        figures.push(checkFigure(
+            `history row ${i + 1} pot vs ${hist ? `history total_pot (hand ${hand.handNumber})` : `sum of winners paid (hand ${hand.handNumber})`}`,
+            expected, dom.rows[i].potText, { currency: truth.currency },
+        ));
+    }
+
+    const folded = foldFigures(figures);
+    const ok = folded.ok && structural.length === 0;
+    return {
+        ok,
+        checks: {
+            chainAgreement: ok ? 'AGREES' : 'DISAGREES',
+            moneyFiguresChecked: folded.checked,
+            moneyMismatches: folded.mismatches,
+            structuralProblems: structural,
+            figures: folded.figures.map((f) => ({ label: f.label, chain: f.chain, screen: f.domText, ok: f.ok, detail: f.detail })),
+            onChain: {
+                fromTableCanister: hands,
+                fromHistoryCanister: Object.fromEntries(byHandNumber),
+                noRakeAsserted: true,
+            },
+            onScreen: dom.rows,
+        },
+        notes: ok
+            ? `hand history: ${folded.checked} pot figure(s) equal get_hand_history()`
+            : `HISTORY CHAIN DISAGREEMENT: ${[...folded.mismatches, ...structural].slice(0, 4).join(' | ')}`,
+    };
+}
+
+/**
+ * Folds a chain-agreement result into a scene's own verdict.
+ *
+ * Presence checks stay — they are what tells a reader the scene photographed the
+ * thing it claims to photograph — but they can no longer carry a scene on their
+ * own.
+ */
+export function withAgreement(base, ...agreements) {
+    let checks = { ...base.checks };
+    let verified = base.verified;
+    const good = [];
+    const bad = [];
+
+    for (const a of agreements) {
+        if (!a) continue;
+        verified = verified && a.ok;
+        // A scene can assert against more than one surface (the table behind a
+        // modal, and the modal). Namespace so nothing is silently overwritten.
+        const key = a.name || 'chain';
+        checks[key === 'chain' ? 'chain' : `chain_${key}`] = a.checks;
+        (a.ok ? good : bad).push(a.notes);
+    }
+
+    return {
+        verified,
+        checks,
+        notes: bad.length
+            ? `${bad.join(' || ')} || scene notes: ${base.notes}`
+            : [base.notes, ...good].filter(Boolean).join('; '),
+    };
+}
+
+/** Tags an agreement result so withAgreement can namespace it. */
+export const named = (name, agreement) => ({ ...agreement, name });

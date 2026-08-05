@@ -23,9 +23,14 @@
 //!
 //! * Adding an entry is admitting a defect is shipping. It requires an `id` that
 //!   exists in `docs/SECURITY-FINDINGS.md` / `docs/DEFECTS.md` and a `why`.
-//! * FIXING the defect means DELETING the entry. `register_entries_are_all_still_
-//!   needed` in the invariants test binary fails once an entry stops being hit, so a
-//!   fix cannot quietly leave stale tolerance behind.
+//! * FIXING the defect means DELETING the entry.
+//!   `classifier::register_entries_are_all_still_needed` in the invariants test
+//!   binary fails when an entry's id is no longer in `docs/DEFECTS.md`, or when a
+//!   tolerated log line is no longer in the engine source, so a fix cannot quietly
+//!   leave stale tolerance behind. (That test was documented here from the start
+//!   and did not exist until the wave-2 coherence pass wrote it: docs/DEFECTS.md
+//!   H-19. It is a documentation-coupling check, not proof the defect is still
+//!   live -- only running the engine can show that.)
 //! # The register is EMPTY, and that is the goal state
 //!
 //! It used to carry six entries: three for E-01 (post-flop money destroyed at every
@@ -94,7 +99,8 @@ pub struct DocumentedDefect {
 /// minted into the run, so this is a real -- if generous -- ceiling.
 pub const WORLD_TOTAL_E8S: i128 = 4 * crate::world::ACTOR_START_E8S as i128;
 
-/// Log lines the canister may emit and still be believed. THERE ARE NONE.
+/// Log lines the canister may emit and still be believed. THERE IS EXACTLY ONE,
+/// and it names an open defect.
 ///
 /// This used to hold `"BUG: Side pots ("`, the exact line
 /// `calculate_side_pots` wrote when its reconciliation against `state.pot`
@@ -104,12 +110,18 @@ pub const WORLD_TOTAL_E8S: i128 = 4 * crate::world::ACTOR_START_E8S as i128;
 ///
 /// That routine is no longer on the payout path (`poker_core::side_pots`'s archive
 /// section) and cannot be reached by the canister, so the line cannot be emitted.
-/// The whitelist is therefore empty and EVERY `BUG:` or `CRITICAL:` line the
-/// canister logs is a `SelfReportedFailure`, which nothing can excuse.
+/// EVERY `BUG:` and every `CRITICAL:` line the canister logs is a
+/// `SelfReportedFailure`, which nothing can excuse -- including the one the payout
+/// path can still write, `CRITICAL: pot accounting disagreement in hand N`, which
+/// fires only if `state.pot` and the contributions ever disagree.
 ///
-/// That includes the one the payout path can still write:
-/// `CRITICAL: pot accounting disagreement in hand N`, which fires only if
-/// `state.pot` and the contributions ever disagree. Honest play cannot produce it.
+/// `WARNING:` lines are matched too, and that is why this list is no longer empty.
+/// The payout fix wrote E-36's dual-stake condition as a `WARNING:`, defensibly --
+/// nothing about the accounting is inconsistent there -- but the detector matched
+/// neither `BUG:` nor `CRITICAL:` in it, so 296 occurrences of a real open defect
+/// executing against the real canister were reported as `0 documented finding(s)`.
+/// Tolerance had moved into a string the classifier did not read. It is named here
+/// instead, where `register_entries_are_all_still_needed` can police it.
 pub const TOLERATED_SELF_REPORTS: &[&str] = &[
     // docs/DEFECTS.md E-36. A player who takes an empty chair MID-HAND and calls
     // `sit_in()` is given the action and can bet into a hand they hold no cards in.
@@ -203,6 +215,7 @@ fn never_excusable(s: Severity) -> bool {
             | Severity::DurabilityLoss
             | Severity::RakeTaken
             | Severity::SelfReportedFailure
+            | Severity::Misattribution
     )
 }
 

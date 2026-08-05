@@ -135,8 +135,15 @@ export function writeIndex(shaDir, latestDir, manifest) {
       ? [`- fiat figures: **${manifest.volatileThirdParty.mode}** — ${manifest.volatileThirdParty.note}`]
       : []),
     '',
-    '| scene | viewport | file | state verified on-chain | notes |',
-    '| --- | --- | --- | --- | --- |',
+    ...(manifest.faultInjection
+      ? [
+        `> **FAULT INJECTION RUN** (\`SHOTS_INJECT_DRIFT=${manifest.faultInjection.targets.join(',')}\`). `
+        + `${manifest.faultInjection.warning}`,
+        '',
+      ]
+      : []),
+    '| scene | viewport | file | agrees with chain | money figures | notes |',
+    '| --- | --- | --- | --- | --- | --- |',
   ];
   for (const s of manifest.scenes) {
     for (const shot of s.shots) {
@@ -150,13 +157,19 @@ export function writeIndex(shaDir, latestDir, manifest) {
       const verdict = base.startsWith('UNVERIFIED-') || base.startsWith('FAILED-')
         ? 'NO'
         : 'yes';
+      // How many money figures on screen were compared with the canister, summed
+      // across every surface this shot asserted against. `0` is a warning sign,
+      // not a pass: it means the scene proved nothing about the numbers it shows.
+      const money = Object.entries(shot.checks || {})
+        .filter(([k]) => k === 'chain' || k.startsWith('chain_'))
+        .reduce((n, [, v]) => n + (Number(v?.moneyFiguresChecked) || 0), 0);
       lines.push(
         `| ${s.scene} | ${shot.viewport} | \`${shot.files[0]}\` | ` +
-          `${verdict} | ${(shot.notes || s.notes || '').replace(/\|/g, '/')} |`,
+          `${verdict} | ${money} | ${(shot.notes || s.notes || '').replace(/\|/g, '/')} |`,
       );
     }
     if (s.shots.length === 0) {
-      lines.push(`| ${s.scene} | - | (failed) | NO | ${(s.error || '').replace(/\|/g, '/')} |`);
+      lines.push(`| ${s.scene} | - | (failed) | NO | 0 | ${(s.error || '').replace(/\|/g, '/')} |`);
     }
   }
   lines.push('');

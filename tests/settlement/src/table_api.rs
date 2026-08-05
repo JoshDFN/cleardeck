@@ -193,9 +193,33 @@ pub struct TableState {
     pub bb_has_option: bool,
     pub first_hand: bool,
     pub auto_deal_at: Option<u64>,
+    /// Stakes of seats vacated mid-hand, each carrying the PRINCIPAL it belongs to.
+    ///
+    /// The oracle needs this to answer the question its per-seat diff cannot:
+    /// WHO the money in a seat belongs to when the chair changed hands mid-hand
+    /// (docs/SECURITY-FINDINGS.md FINDING 13).
+    ///
+    /// `opt vec`, matching the canister: `TableState` is persisted nested inside
+    /// `opt TableState`, so a non-`opt` addition here makes an upgrade from older
+    /// state silently restore a null table (FINDING 14).
+    #[serde(default)]
+    pub departed_stakes: Option<Vec<DepartedStake>>,
+}
+
+#[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub struct DepartedStake {
+    pub hand_number: u64,
+    pub seat: u8,
+    pub principal: Principal,
+    pub contributed: u64,
 }
 
 impl TableState {
+    /// Every departed stake recorded on the table right now.
+    pub fn departed(&self) -> &[DepartedStake] {
+        self.departed_stakes.as_deref().unwrap_or(&[])
+    }
+
     pub fn seated(&self) -> impl Iterator<Item = &Player> {
         self.players.iter().flatten()
     }

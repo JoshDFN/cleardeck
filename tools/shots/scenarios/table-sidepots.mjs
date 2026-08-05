@@ -16,6 +16,7 @@
 import { devLogin, enterTable, openApp, settle, stabilizeTimer } from '../lib/browser.mjs';
 import { HERO_PLAYER, icp } from '../lib/config.mjs';
 import { doAct, phaseOf, playUntil, startHand } from '../lib/table-driver.mjs';
+import { assertChainAgreement, withAgreement } from '../lib/chain-agreement.mjs';
 import { prepareTable, tableDisplayName } from './_shared.mjs';
 
 const TABLE = 'table_3'; // 9-max, min buy-in 20 ICP, max 100 ICP
@@ -84,7 +85,11 @@ export default {
     const sidePots = await page.locator('.side-pot').allTextContents();
     const allInBadges = await page.locator('.avatar-overlay.allin').count();
     const phaseText = ((await page.locator('.phase-indicator').first().textContent()) || '').trim();
-    return {
+    // Counting `.side-pot` elements proves nothing about the amounts in them.
+    const agreement = await assertChainAgreement(ctx, page, {
+      table: TABLE, asPlayer: HERO_PLAYER, requireBalance: true,
+    });
+    return withAgreement({
       verified: sidePots.length >= 2,
       checks: {
         sidePotsRendered: sidePots.map((t) => t.replace(/\s+/g, ' ').trim()),
@@ -92,6 +97,6 @@ export default {
         phaseText,
       },
       notes: `${sidePots.length} side pots rendered, ${allInBadges} ALL IN badges, phase ${phaseText}`,
-    };
+    }, agreement);
   },
 };

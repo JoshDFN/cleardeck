@@ -3,6 +3,9 @@
 import { devLogin, enterTable, openApp, settle } from '../lib/browser.mjs';
 import { HERO_PLAYER, icp } from '../lib/config.mjs';
 import { phaseOf, view } from '../lib/table-driver.mjs';
+import {
+  assertChainAgreement, assertDepositAgreement, named, withAgreement,
+} from '../lib/chain-agreement.mjs';
 import { prepareTable, tableDisplayName } from './_shared.mjs';
 
 const TABLE = 'table_2';
@@ -74,8 +77,14 @@ export default {
     const panelVisible = await page.locator('.wallet-panel').first().isVisible().catch(() => false);
     const viewport = page.viewportSize();
 
+    // The table is still on screen behind the modal, so its money figures are
+    // asserted either way.
+    const tableAgreement = named('table', await assertChainAgreement(ctx, page, {
+      table: TABLE, asPlayer: HERO_PLAYER, requireBalance: true,
+    }));
+
     if (modal === 0) {
-      return {
+      return withAgreement({
         verified: false,
         checks: {
           modals: 0,
@@ -90,10 +99,17 @@ export default {
         notes:
           `deposit modal UNREACHABLE at ${viewport?.width ?? '?'}px: the only trigger is inside `
           + '.feed-container, hidden below 900px. This is an app defect, not a staging failure.',
-      };
+      }, tableAgreement);
     }
 
-    return {
+    // The modal quotes the LEDGER balance and converts it to fiat. Both are money
+    // figures a player acts on, so both are checked against their sources: the
+    // real local ledger, and the exact quote this run served.
+    const depositAgreement = named('deposit', await assertDepositAgreement(ctx, page, {
+      table: TABLE, asPlayer: HERO_PLAYER,
+    }));
+
+    return withAgreement({
       verified: /deposit/i.test(title),
       checks: {
         modals: modal,
@@ -102,6 +118,6 @@ export default {
         walletSources: sourceToggle.map((t) => t.replace(/\s+/g, ' ').trim()).filter(Boolean),
       },
       notes: title,
-    };
+    }, tableAgreement, depositAgreement);
   },
 };

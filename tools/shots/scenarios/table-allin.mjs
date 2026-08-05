@@ -7,6 +7,7 @@
 import { devLogin, enterTable, openApp, settle, stabilizeTimer } from '../lib/browser.mjs';
 import { HERO_PLAYER, icp } from '../lib/config.mjs';
 import { allInSeats, doAct, phaseOf, playUntil, startHand } from '../lib/table-driver.mjs';
+import { assertChainAgreement, withAgreement } from '../lib/chain-agreement.mjs';
 import { prepareTable, tableDisplayName } from './_shared.mjs';
 
 const TABLE = 'table_3'; // 9-max, 0.10/0.20 ICP, 60s action clock
@@ -79,10 +80,15 @@ export default {
     const allInBadges = await page.locator('.avatar-overlay.allin').count();
     const potText = ((await page.locator('.main-pot').first().textContent()) || '').trim();
     const phaseText = ((await page.locator('.phase-indicator').first().textContent()) || '').trim();
-    return {
+    // The all-in scene is where the pot is largest and the 2x display defect is
+    // most visible, so the money check matters most here.
+    const agreement = await assertChainAgreement(ctx, page, {
+      table: TABLE, asPlayer: HERO_PLAYER, requireBalance: true,
+    });
+    return withAgreement({
       verified: allInBadges >= 2,
       checks: { allInBadges, potText, phaseText },
       notes: `${allInBadges} ALL IN badges rendered, pot "${potText.replace(/\s+/g, ' ')}"`,
-    };
+    }, agreement);
   },
 };

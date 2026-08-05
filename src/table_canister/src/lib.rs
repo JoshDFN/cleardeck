@@ -283,8 +283,24 @@ pub struct TableState {
     pub last_action: Option<LastActionInfo>, // Last action taken - for UI display
     /// Stakes of seats that were VACATED while the hand was still live.
     ///
-    /// `#[serde(default)]` so state written before this field existed restores as
-    /// empty, which is correct: at that point nothing had been recorded.
+    /// # Why this is `opt` and must stay `opt` (docs/SECURITY-FINDINGS.md FINDING 14)
+    ///
+    /// `TableState` is persisted NESTED inside `PersistentState::table_state`,
+    /// which is `opt TableState`. Candid's rule for `opt t` is that a value which
+    /// cannot be decoded as `t` arrives as **null**, not as an error, so the
+    /// moment this field is anything other than `opt` an upgrade from state
+    /// written before it existed restores `table_state = None`, `post_upgrade`
+    /// re-initialises an empty table, and every seated player's chips and the live
+    /// pot are destroyed with nothing in the log. This shipped once as a bare
+    /// `vec` with a `#[serde(default)]` and a comment claiming that was
+    /// backward-compatible: **Candid does not honour serde defaults.** Only `opt`,
+    /// `reserved` and `null` may be added to a record and still read older state.
+    ///
+    /// `None` and `Some(vec![])` mean the same thing here -- no seat has left this
+    /// hand -- and everything reads it through
+    /// [`TableState::departed_stakes`](TableState::departed_stakes) /
+    /// [`TableState::departed_stakes_mut`](TableState::departed_stakes_mut) so no
+    /// call site has to care which one it is.
     ///
     /// # Why this field exists (docs/DEFECTS.md E-05)
     ///
@@ -311,14 +327,39 @@ pub struct TableState {
     /// other hand, so a stale entry can never join a later hand's pot. They are
     /// cleared when the hand settles.
     #[serde(default)]
-    pub departed_stakes: Vec<DepartedStake>,
+    pub departed_stakes: Option<Vec<DepartedStake>>,
+}
+
+impl TableState {
+    /// Every stake recorded for a seat that left mid-hand. Empty when the field
+    /// is `None`, which is the same thing as an empty list.
+    pub fn departed_stakes(&self) -> &[DepartedStake] {
+        self.departed_stakes.as_deref().unwrap_or(&[])
+    }
+
+    /// The departed-stake list, created empty if it does not exist yet.
+    pub fn departed_stakes_mut(&mut self) -> &mut Vec<DepartedStake> {
+        self.departed_stakes.get_or_insert_with(Vec::new)
+    }
+
+    /// Forget every departed stake. Only correct at a hand boundary, when the
+    /// money they represent has already been paid out.
+    pub fn clear_departed_stakes(&mut self) {
+        self.departed_stakes = None;
+    }
 }
 
 /// The stake of a seat that was vacated while the hand was still live.
 ///
-/// Carries the principal as well as the seat, because money that nobody at the
-/// table can claim has to be refundable to the player who put it in, and by then
-/// they have no seat to credit. See [`TableState::departed_stakes`].
+/// # The `principal` is the OWNER, and the owner is what gets paid
+///
+/// A seat is a chair; a stake belongs to a person. Resolving a payout's owner
+/// from the seat instead of from the stake is
+/// [FINDING 13](../../../docs/SECURITY-FINDINGS.md): a departed player's refund
+/// was credited to whoever had since taken their chair, which conserves every
+/// chip and so was invisible to every conservation invariant. Nothing on the
+/// payout path may re-derive an owner from a seat index; it reads this field, via
+/// [`Stake`].
 #[derive(Clone, Debug, CandidType, Deserialize)]
 pub struct DepartedStake {
     pub hand_number: u64,
@@ -2504,7 +2545,7 @@ fn init_table_state(config: TableConfig) {
             first_hand: true, // Track first hand for dealer button init
             auto_deal_at: None,
             last_action: None,
-            departed_stakes: Vec::new(),
+            departed_stakes: None,
         });
     });
 
@@ -2652,7 +2693,7 @@ async fn start_new_hand() -> Result<ShuffleProof, String> {
         state.side_pots.clear();
         // Nothing has left this hand yet. Entries are tagged with the hand number
         // as well, so a leftover could not join this pot even if one survived.
-        state.departed_stakes.clear();
+        state.clear_departed_stakes();
         state.current_bet = state.config.big_blind;
         state.min_raise = state.config.big_blind;
         state.phase = GamePhase::PreFlop;
@@ -3005,6 +3046,25 @@ fn leave_table() -> Result<u64, String> {
 
         // Remove player from table
         state.players[seat] = None;
+
+        // Rebuild the displayed breakdown from the basis that now exists.
+        //
+        // PAIRED WITH `return_uncalled_bet` ABOVE, and it has to be: that call
+        // REDUCES `state.pot`, and `state.side_pots` was built against the larger
+        // figure. Every other `return_uncalled_bet` call site in this file is
+        // immediately followed by `refresh_side_pots`; this one was not, and the
+        // 9-seed money-safety fuzz found the drift on seed 5
+        // (`M1b_POT_BREAKDOWN:side_pots_sum_to_pot`, 2,000,000 e8s). No money moved
+        // wrongly -- `plan_payouts` rebuilds the layering from `hand_contributions`
+        // and never reads `state.side_pots` -- but the side pots a player is SHOWN
+        // no longer added up to the pot they were shown. See docs/DEFECTS.md E-39.
+        //
+        // Runs AFTER `record_departed_stake` so the departing seat's stake is in the
+        // basis the layering is built from; before it, the rebuild would itself
+        // orphan the stake, which is E-05 all over again.
+        if hand_is_live {
+            refresh_side_pots(state);
+        }
 
         // If player was in the hand, advance game state
         if was_in_hand {
@@ -3721,7 +3781,7 @@ fn report_pot_disagreement(state: &TableState, contributions: &[Contribution]) {
             state.hand_number,
             state.pot,
             state
-                .departed_stakes
+                .departed_stakes()
                 .iter()
                 .filter(|d| d.hand_number == state.hand_number)
                 .count(),
@@ -3771,19 +3831,74 @@ fn return_uncalled_bet(state: &mut TableState) -> Option<(u8, u64)> {
     Some((seat, excess))
 }
 
-/// Every stake in the current hand, whether or not its seat is still occupied.
+/// One stake in the hand being settled, WITH THE PRINCIPAL IT BELONGS TO.
+///
+/// # Why the owner travels with the money (docs/SECURITY-FINDINGS.md FINDING 13)
+///
+/// `poker_core::Contribution` is keyed by seat, and correctly so: pot LAYERING is
+/// a seat question -- who covered which bet level, who is eligible for which
+/// layer. **Ownership is not a seat question.** A seat is a chair, and a chair can
+/// be vacated mid-hand and taken by somebody else before the hand settles; the
+/// money already in the pot still belongs to the player who put it there.
+///
+/// The first version of the payout fix re-derived a payout's owner from its seat
+/// index (`principal_of(state, seat)`), so a departed player's refunded stake was
+/// credited to whoever had since taken their chair. It conserved every chip, the
+/// plan paid out exactly what it collected, and no conservation invariant, no
+/// settlement-oracle per-seat diff and no `CRITICAL:` line could see it, because
+/// the only thing wrong was WHO HAD THE MONEY.
+///
+/// So the owner is carried, never looked up. Every [`Payout`] this file builds
+/// takes its principal from the `Stake` or the live claim that generated it, and
+/// [`Payout::principal`] is not an `Option`: "a payout with no known owner" is
+/// unrepresentable rather than trapped-on.
+#[derive(Clone, Copy, Debug)]
+pub struct Stake {
+    /// Index into `TableState::players`. Two stakes CAN share a seat.
+    pub seat: u8,
+    /// The player whose chips these are. The only thing that may be paid.
+    pub owner: Principal,
+    pub amount: u64,
+    /// True when this stake has given up its claim: it folded, or its player left
+    /// the table. It is in the pot and counts towards the bet levels; it can never
+    /// win a layer.
+    pub relinquished: bool,
+}
+
+impl Stake {
+    fn contribution(&self) -> Contribution {
+        Contribution::new(self.seat, self.amount, self.relinquished)
+    }
+}
+
+/// Every stake in the current hand, with its owner, whether or not its seat is
+/// still occupied.
 ///
 /// THE payout basis. `collect_contributions` alone reads the seat vector, so a seat
 /// vacated mid-hand disappeared from it while its money stayed in the pot
 /// (docs/DEFECTS.md E-05); the departed stakes recorded by `leave_table` /
 /// `cash_out` are what closes that.
 ///
-/// A departed stake is carried with `has_folded = true`: it is in the pot, it
+/// A departed stake is carried with `relinquished = true`: it is in the pot, it
 /// counts towards the bet levels, and it can never win a layer.
-pub fn hand_contributions(state: &TableState) -> Vec<Contribution> {
-    let mut out = collect_contributions(&state.players);
+pub fn hand_stakes(state: &TableState) -> Vec<Stake> {
+    let mut out: Vec<Stake> = state
+        .players
+        .iter()
+        .enumerate()
+        .filter_map(|(seat, player)| {
+            let p = player.as_ref()?;
+            (p.total_bet_this_hand > 0).then_some(Stake {
+                seat: seat as u8,
+                owner: p.principal,
+                amount: p.total_bet_this_hand,
+                relinquished: p.has_folded,
+            })
+        })
+        .collect();
+
     for stake in state
-        .departed_stakes
+        .departed_stakes()
         .iter()
         .filter(|d| d.hand_number == state.hand_number && d.contributed > 0)
     {
@@ -3795,26 +3910,45 @@ pub fn hand_contributions(state: &TableState) -> Vec<Contribution> {
         // That is docs/DEFECTS.md E-36, and it belongs to the seating and betting
         // path, not to this one.
         //
-        // What this path must do about it is keep BOTH stakes. Dropping either is a
-        // destroyed chip. The new occupant is not in `live_claims` (no hole cards), so
-        // they cannot win the departed player's money or their own; it is carried to a
-        // layer that can be settled. Reported as a WARNING and not as `CRITICAL:`
-        // deliberately: nothing about the engine's accounting is inconsistent here,
-        // and `CRITICAL:` is reserved in this file for accounts that disagree, which
-        // the money-safety classifier treats as a failure that stops the run.
+        // What this path must do about it is keep BOTH stakes, WITH THEIR OWNERS.
+        // Dropping either is a destroyed chip; merging them is FINDING 13, one
+        // player's money paid to another. The new occupant is not in `live_claims`
+        // (no hole cards), so they cannot win the departed player's money or their
+        // own; it is carried to a layer that can be settled. Reported as a WARNING
+        // and not as `CRITICAL:` deliberately: nothing about the engine's accounting
+        // is inconsistent here, and `CRITICAL:` is reserved in this file for accounts
+        // that disagree, which the money-safety classifier treats as a failure that
+        // stops the run.
         if out.iter().any(|c| c.seat == stake.seat) {
             ic_cdk::println!(
                 "WARNING: seat {} carries both a live stake and a departed stake in hand {} \
                  (the chair was re-occupied mid-hand, docs/DEFECTS.md E-36). Both are in the \
-                 payout basis; the new occupant holds no cards and can win neither.",
+                 payout basis, each with its own owner; the new occupant holds no cards and \
+                 can win neither.",
                 stake.seat,
                 state.hand_number
             );
         }
-        out.push(Contribution::new(stake.seat, stake.contributed, true));
+        out.push(Stake {
+            seat: stake.seat,
+            owner: stake.principal,
+            amount: stake.contributed,
+            relinquished: true,
+        });
     }
+    // Stable, so two stakes at one seat keep live-then-departed order.
     out.sort_by_key(|c| c.seat);
     out
+}
+
+/// The payout basis as `poker_core` sees it: seat, amount, claim given up or not.
+///
+/// This is [`hand_stakes`] with the owners dropped, and it is ONLY correct to use
+/// where ownership is irrelevant -- pot layering, the uncalled-bet rule, the
+/// redundant `state.pot` cross-check. Anything that moves money must read
+/// [`hand_stakes`] (docs/SECURITY-FINDINGS.md FINDING 13).
+pub fn hand_contributions(state: &TableState) -> Vec<Contribution> {
+    hand_stakes(state).iter().map(Stake::contribution).collect()
 }
 
 /// Record the stake of a seat that is about to be vacated mid-hand.
@@ -3832,10 +3966,9 @@ fn record_departed_stake(state: &mut TableState, seat: usize) -> u64 {
     }
     let principal = player.principal;
     // Drop anything from an earlier hand: bounded by the number of seats per hand.
-    state
-        .departed_stakes
-        .retain(|d| d.hand_number == hand_number);
-    state.departed_stakes.push(DepartedStake {
+    let stakes = state.departed_stakes_mut();
+    stakes.retain(|d| d.hand_number == hand_number);
+    stakes.push(DepartedStake {
         hand_number,
         seat: seat as u8,
         principal,
@@ -3864,10 +3997,19 @@ pub enum PayoutReason {
 /// One credit the settlement must make.
 #[derive(Clone, Debug)]
 pub struct Payout {
+    /// Where the money came from. Used for the record and for deciding whether the
+    /// credit can go into a stack rather than into escrow. **Never** used to work
+    /// out who to pay.
     pub seat: u8,
-    /// `None` for a departed stake being refunded: it has no seat any more, so the
-    /// money goes to that principal's escrow.
-    pub principal: Option<Principal>,
+    /// WHO IS PAID. Carried from the [`Stake`] or the live claim that generated
+    /// this payout, never re-derived from `seat`.
+    ///
+    /// This used to be an `Option<Principal>` filled in by looking `seat` up in
+    /// `state.players`, which paid a departed player's stake to whoever had taken
+    /// their chair (docs/SECURITY-FINDINGS.md FINDING 13). Making it a plain
+    /// `Principal` sourced from the stake is what makes that unrepresentable
+    /// rather than merely unlikely.
+    pub principal: Principal,
     pub amount: u64,
     pub reason: PayoutReason,
 }
@@ -3898,6 +4040,18 @@ impl PayoutPlan {
         self.payouts
             .iter()
             .filter(|p| p.seat == seat)
+            .fold(0u64, |a, p| a.saturating_add(p.amount))
+    }
+
+    /// What this plan pays a given PRINCIPAL, across every seat and every layer.
+    ///
+    /// The question [`amount_for`](Self::amount_for) cannot answer, and the one
+    /// that matters: a seat is a chair, and two people can have money riding on
+    /// one chair in a single hand.
+    pub fn amount_for_principal(&self, who: Principal) -> u64 {
+        self.payouts
+            .iter()
+            .filter(|p| p.principal == who)
             .fold(0u64, |a, p| a.saturating_add(p.amount))
     }
 }
@@ -3994,8 +4148,22 @@ fn best_hands_among(
 ///
 /// Callers must return the uncalled bet BEFORE calling this ([`return_uncalled_bet`]);
 /// the plan then covers only money that was actually contested.
+///
+/// # Who each payout names (docs/SECURITY-FINDINGS.md FINDING 13)
+///
+/// Two sources, and no third:
+///
+/// * a **refund** names the owner of the [`Stake`] the money came from, so a
+///   departed player's stake reaches that player even if the chair has since been
+///   taken by somebody else, and two stakes at one seat owned by two different
+///   players each reach their own owner;
+/// * a **pot share** names the owner of the LIVE CLAIM that won the layer, which
+///   by construction is the player sitting in that seat holding those cards.
+///
+/// Nothing here reads a principal out of `state.players` by seat index.
 pub fn plan_payouts(state: &TableState) -> PayoutPlan {
-    let contributions = hand_contributions(state);
+    let stakes = hand_stakes(state);
+    let contributions: Vec<Contribution> = stakes.iter().map(Stake::contribution).collect();
     let collected = poker_core::total_contributed(&contributions);
     let side_pots = poker_core::build_side_pots_from_contributions(&contributions);
 
@@ -4003,6 +4171,25 @@ pub fn plan_payouts(state: &TableState) -> PayoutPlan {
     let ranked = rank_claims(state, &claim);
     let num_seats = state.players.len();
     let mut payouts: Vec<Payout> = Vec::new();
+
+    // The owner of a winning layer. `winners` only ever contains seats that came
+    // out of `claim`, so this always resolves; if it ever does not, the hand must
+    // NOT settle -- a payout with a guessed owner is FINDING 13. Panicking here
+    // traps the message, which rolls the whole settlement back and moves no chips.
+    let winner_principal = |seat: u8| -> Principal {
+        claim
+            .iter()
+            .find(|(s, _, _)| *s == seat)
+            .map(|(_, p, _)| *p)
+            .unwrap_or_else(|| {
+                panic!(
+                    "CRITICAL: refusing to settle hand {}: seat {} was awarded a pot layer but \
+                     holds no live claim, so there is no owner to pay. Nothing has been \
+                     credited. See docs/SECURITY-FINDINGS.md FINDING 13.",
+                    state.hand_number, seat
+                )
+            })
+    };
 
     let claimants_of = |pot: &SidePot| -> Vec<u8> {
         let mut c: Vec<u8> = pot
@@ -4023,11 +4210,12 @@ pub fn plan_payouts(state: &TableState) -> PayoutPlan {
     // Before this, the engine returned early here and left the money in `pot`,
     // where the next `start_new_hand` zeroed it: destroyed.
     if side_pots.iter().all(|p| claimants_of(p).is_empty()) {
-        for c in contributions.iter().filter(|c| c.total_bet_this_hand > 0) {
+        for s in stakes.iter().filter(|s| s.amount > 0) {
             payouts.push(Payout {
-                seat: c.seat,
-                principal: principal_of(state, c.seat),
-                amount: c.total_bet_this_hand,
+                seat: s.seat,
+                // THE OWNER OF THE STAKE, not the occupant of the chair.
+                principal: s.owner,
+                amount: s.amount,
                 reason: PayoutReason::Refund { layer: 0 },
             });
         }
@@ -4078,7 +4266,8 @@ pub fn plan_payouts(state: &TableState) -> PayoutPlan {
         {
             payouts.push(Payout {
                 seat,
-                principal: principal_of(state, seat),
+                // The owner of the live claim that won the layer.
+                principal: winner_principal(seat),
                 amount,
                 reason: PayoutReason::PotShare { layer },
             });
@@ -4093,20 +4282,18 @@ pub fn plan_payouts(state: &TableState) -> PayoutPlan {
     if carry > 0 {
         let total = poker_core::total_contributed(&contributions);
         let mut handed = 0u64;
-        let funders: Vec<&Contribution> = contributions
-            .iter()
-            .filter(|c| c.total_bet_this_hand > 0)
-            .collect();
-        for (i, c) in funders.iter().enumerate() {
+        let funders: Vec<&Stake> = stakes.iter().filter(|s| s.amount > 0).collect();
+        for (i, s) in funders.iter().enumerate() {
             let share = if i + 1 == funders.len() {
                 carry.saturating_sub(handed)
             } else {
-                ((carry as u128 * c.total_bet_this_hand as u128) / total.max(1) as u128) as u64
+                ((carry as u128 * s.amount as u128) / total.max(1) as u128) as u64
             };
             handed = handed.saturating_add(share);
             payouts.push(Payout {
-                seat: c.seat,
-                principal: principal_of(state, c.seat),
+                seat: s.seat,
+                // THE OWNER OF THE STAKE, not the occupant of the chair.
+                principal: s.owner,
                 amount: share,
                 reason: PayoutReason::Refund { layer: 0 },
             });
@@ -4126,23 +4313,27 @@ pub fn plan_payouts(state: &TableState) -> PayoutPlan {
     }
 }
 
-/// Who occupies `seat`, if anybody. Falls back to a departed stake's principal, so
-/// a refund can reach a player who has already left.
-fn principal_of(state: &TableState, seat: u8) -> Option<Principal> {
-    if let Some(p) = state.players.get(seat as usize).and_then(|p| p.as_ref()) {
-        return Some(p.principal);
-    }
-    state
-        .departed_stakes
-        .iter()
-        .find(|d| d.hand_number == state.hand_number && d.seat == seat)
-        .map(|d| d.principal)
-}
+// `principal_of(state, seat)` used to live here: it looked a payout's owner up in
+// `state.players` by seat index and only fell back to `departed_stakes` when the
+// chair was EMPTY. That is docs/SECURITY-FINDINGS.md FINDING 13 -- a departed
+// player's refunded stake credited to whoever had taken their chair -- and it is
+// deleted rather than fixed on purpose. There is now no function in this file that
+// can turn a seat index into a payee, so the mistake cannot be made again by
+// calling the wrong helper. Owners come from `Stake::owner` and from `live_claims`.
 
 /// Collect ALL players who bet this hand (including folded) with their bets.
 ///
 /// `pub` only so `tests/unit_tests.rs` can pin it; it is not an update/query
 /// method, so it is not part of the Candid surface.
+///
+/// **NOT ON THE PAYOUT PATH ANY MORE.** [`hand_stakes`] builds the same seated
+/// stakes in one pass so that each stake's OWNER comes from the same `Player` the
+/// amount came from, instead of being looked up by seat afterwards
+/// (docs/SECURITY-FINDINGS.md FINDING 13). The selection rule is identical -- a
+/// seated player with `total_bet_this_hand > 0`, carrying `has_folded` -- and
+/// `collect_contributions_and_hand_stakes_select_the_same_seated_stakes` in
+/// `payout_tests` pins that the two never drift apart. This function is retained
+/// as the small, directly unit-tested statement of that rule.
 ///
 /// NOTE: the seat recorded is the INDEX into `players`, matching the original
 /// implementation, which enumerated the seat vector rather than reading
@@ -4174,11 +4365,19 @@ pub fn collect_contributions(players: &[Option<Player>]) -> Vec<Contribution> {
 /// the code can be fixed and the message retried); paying out a plan that does not
 /// add up is not.
 ///
-/// Returns one aggregated [`Winner`] per credited seat. A refund of money nobody
-/// could win is included in that list: `Winner::amount` means "chips credited to
-/// this seat when the hand settled", which is what keeps
+/// Returns one aggregated [`Winner`] per credited (seat, PRINCIPAL) pair. A refund
+/// of money nobody could win is included in that list: `Winner::amount` means
+/// "chips credited to this player when the hand settled", which is what keeps
 /// `sum(winners) == collected` -- the identity the money-safety suite checks as
 /// M3 NO RAKE.
+///
+/// # Where the money goes (docs/SECURITY-FINDINGS.md FINDING 13)
+///
+/// `payout.principal` decides, and nothing else. If that player is sitting in the
+/// payout's seat, the credit goes into their stack; otherwise it goes into their
+/// ESCROW -- which is where a departing player's stack went when they left, so it
+/// is the account they can withdraw from. The chair is never consulted for
+/// identity, only for "can this be a stack credit".
 fn apply_payouts(state: &mut TableState, plan: &PayoutPlan) -> Vec<Winner> {
     if !plan.conserves() {
         ic_cdk::trap(&format!(
@@ -4204,82 +4403,99 @@ fn apply_payouts(state: &mut TableState, plan: &PayoutPlan) -> Vec<Winner> {
             .and_then(|p| p.as_ref())
             .map(|p| p.principal);
 
-        match (seated, payout.principal) {
-            // The seat is occupied, but by somebody OTHER than the player this money
-            // is owed to: the original occupant left and a new player took the chair.
-            // Pay the person who is owed it, into their escrow, not the chair.
-            // `join_table` seats a mid-hand arrival as SittingOut with no cards, so
-            // this cannot arise from ordinary play; it is here because crediting a
-            // stranger would be a real loss and the check costs one comparison.
-            (Some(occupant), Some(owed)) if occupant != owed => {
-                BALANCES.with(|b| {
-                    let mut balances = b.borrow_mut();
-                    let current = balances.get(&owed).copied().unwrap_or(0);
-                    balances.insert(owed, current.saturating_add(payout.amount));
-                });
-                ic_cdk::println!(
-                    "CRITICAL: seat {} is occupied by {} but {} is owed {}; paid to their \
-                     escrow instead of the seat",
-                    payout.seat,
-                    occupant,
-                    owed,
-                    payout.amount
-                );
-                push_winner(state, &mut winners, payout, owed);
-            }
-            // The usual case: the seat is still occupied by the player being paid.
-            (Some(occupant), _) => {
+        let owed = payout.principal;
+        match seated {
+            // The usual case: the player being paid is sitting in the payout's seat,
+            // so the credit goes into their stack.
+            Some(occupant) if occupant == owed => {
                 if let Some(ref mut p) = state.players[payout.seat as usize] {
                     p.chips = p.chips.saturating_add(payout.amount);
                 }
-                push_winner(state, &mut winners, payout, occupant);
+                push_winner(state, &mut winners, payout, owed);
             }
-            // The seat is empty and this is a refund to a player who left. Their
-            // stack already went back to escrow when they left, so this goes to the
-            // same place.
-            (None, Some(who)) => {
-                BALANCES.with(|b| {
-                    let mut balances = b.borrow_mut();
-                    let current = balances.get(&who).copied().unwrap_or(0);
-                    balances.insert(who, current.saturating_add(payout.amount));
-                });
+            // The payout's seat is occupied by somebody ELSE. Reached when a player
+            // leaves mid-hand and another takes the chair before the hand settles
+            // (docs/DEFECTS.md E-36), and the sole reason FINDING 13 was a defect
+            // rather than an impossibility. The money belongs to `owed`, so it goes
+            // to `owed`'s escrow -- exactly where their stack went when they left.
+            //
+            // Logged WITHOUT a `CRITICAL:`/`WARNING:` prefix on purpose: nothing
+            // about the engine's accounting is inconsistent here, the engine is
+            // paying the right person, and the money-safety classifier treats every
+            // self-reported `CRITICAL:`/`WARNING:` line as a finding that stops the
+            // run. The condition that produced the empty chair is already reported
+            // by `hand_stakes`.
+            Some(occupant) => {
+                credit_escrow(owed, payout.amount);
+                ic_cdk::println!(
+                    "paid {} to the escrow of {} for seat {} in hand {}: that chair is now \
+                     occupied by {}, and this stake belongs to {}",
+                    payout.amount,
+                    owed,
+                    payout.seat,
+                    state.hand_number,
+                    occupant,
+                    owed
+                );
+                push_winner(state, &mut winners, payout, owed);
+            }
+            // The seat is empty: a refund to a player who left. Their stack already
+            // went back to escrow when they left, so this goes to the same place.
+            None => {
+                credit_escrow(owed, payout.amount);
                 ic_cdk::println!(
                     "refunded {} to the escrow of {} (seat {} left hand {})",
                     payout.amount,
-                    who,
+                    owed,
                     payout.seat,
                     state.hand_number
                 );
-                push_winner(state, &mut winners, payout, who);
+                push_winner(state, &mut winners, payout, owed);
             }
-            // No seat and no recorded principal: there is nobody to credit, so
-            // paying this plan out would destroy the chips. Refuse.
-            (None, None) => ic_cdk::trap(&format!(
-                "CRITICAL: refusing to settle hand {}: {} chips are owed to seat {} but that \
-                 seat is empty and no departed stake records who was in it. Nothing has been \
-                 credited.",
-                state.hand_number, payout.amount, payout.seat
-            )),
         }
     }
     winners
 }
 
+/// Add `amount` to `who`'s escrow balance. The only way settlement pays a player
+/// who is not sitting in the seat the money came from.
+fn credit_escrow(who: Principal, amount: u64) {
+    BALANCES.with(|b| {
+        let mut balances = b.borrow_mut();
+        let current = balances.get(&who).copied().unwrap_or(0);
+        balances.insert(who, current.saturating_add(amount));
+    });
+}
+
 /// Fold one payout into the aggregated winner list.
+///
+/// Aggregated by `(seat, principal)`, NOT by seat. One chair can carry two stakes
+/// belonging to two different players in a single hand (docs/DEFECTS.md E-36), and
+/// merging them into one `Winner` would report one player's money under the other
+/// player's name -- the reporting face of docs/SECURITY-FINDINGS.md FINDING 13.
 fn push_winner(
     state: &TableState,
     winners: &mut Vec<Winner>,
     payout: &Payout,
     principal: Principal,
 ) {
-    if let Some(existing) = winners.iter_mut().find(|w| w.seat == payout.seat) {
+    if let Some(existing) = winners
+        .iter_mut()
+        .find(|w| w.seat == payout.seat && w.principal == principal)
+    {
         existing.amount = existing.amount.saturating_add(payout.amount);
         return;
     }
+    // The cards belong to the person in the chair, and this record belongs to
+    // `principal`. If those are not the same player -- a departed stake refunded at
+    // a chair somebody else has taken -- then there is no hand to attach, and
+    // attaching the occupant's would publish one player's hole cards under another
+    // player's name.
     let shown = state
         .players
         .get(payout.seat as usize)
         .and_then(|p| p.as_ref())
+        .filter(|p| p.principal == principal)
         .and_then(|p| p.hole_cards);
     let rank = match payout.reason {
         // A refund is not a win, so it carries no hand.
@@ -4336,7 +4552,11 @@ fn settle_hand(state: &mut TableState) -> Vec<Winner> {
             principal: *principal,
             cards: Some(*cards),
             hand_rank: Some(rank.clone()),
-            amount_won: plan.amount_for(*seat),
+            // By PRINCIPAL, not by seat. One chair can carry money belonging to two
+            // people in a single hand (docs/DEFECTS.md E-36), and `amount_for(seat)`
+            // would report the departed player's refund as this player's winnings.
+            // See docs/SECURITY-FINDINGS.md FINDING 13.
+            amount_won: plan.amount_for_principal(*principal),
         })
         .collect();
 
@@ -4369,7 +4589,7 @@ fn finish_hand(state: &mut TableState, now: u64) {
     // is what `apply_payouts` refuses to proceed without -- so the pot is empty.
     state.pot = 0;
     state.side_pots.clear();
-    state.departed_stakes.clear();
+    state.clear_departed_stakes();
     state.phase = GamePhase::HandComplete;
     state.action_timer = None;
 
@@ -5154,11 +5374,23 @@ fn get_max_players() -> u8 {
 struct PersistentState {
     balances: Vec<(Principal, u64)>,
     verified_deposits: Vec<(u64, Principal)>,
-    /// Deposit replay-protection floor. `#[serde(default)]` so state written
-    /// before this field existed restores as 0, which is correct: at that point
-    /// nothing had been dropped, so no index was below the floor.
+    /// Deposit replay-protection floor.
+    ///
+    /// `opt`, and it must stay `opt` (docs/SECURITY-FINDINGS.md FINDING 14). This
+    /// shipped as a bare `nat64` with a `#[serde(default)]` and a comment claiming
+    /// that made it backward-compatible. **Candid does not honour serde defaults.**
+    /// Only `opt`, `reserved` and `null` may be added to a record and still read
+    /// state written before the field existed, so as a bare `nat64` at the TOP level
+    /// of the persisted record it made the whole `stable_restore` fail with
+    /// `Subtyping error: field deposit_watermark is not optional field`, and the
+    /// deposit fix -- the fix for the only proven fund theft in this project --
+    /// could not be deployed by upgrade at all.
+    ///
+    /// `None` means "state written before this field existed", which restores as a
+    /// floor of 0. That is the correct reading: at that point nothing had been
+    /// dropped from `verified_deposits`, so no block index was below the floor.
     #[serde(default)]
-    deposit_watermark: u64,
+    deposit_watermark: Option<u64>,
     controllers: Vec<Principal>,
     history_id: Option<Principal>,
     #[serde(default)] // For backwards compatibility with old state
@@ -5192,19 +5424,22 @@ struct PersistentState {
     // pot are destroyed with nothing in the log. `#[serde(default)]` does NOT
     // prevent this: Candid does not honour serde defaults, only `opt`.
     //
-    // That has already happened once in this file. `TableState::departed_stakes` is
-    // a bare `vec`, so it is live right now -- currently masked only because
-    // `deposit_watermark` is a bare `nat64` at the TOP level, which fails the whole
-    // restore and gets the upgrade rejected instead. Fixing that one field alone
-    // converts a rejected upgrade into silent chip destruction.
+    // That has already happened once in this file: `TableState::departed_stakes`
+    // shipped as a bare `vec`, masked only because `deposit_watermark` was a bare
+    // `nat64` at the TOP level, which failed the whole restore and got the upgrade
+    // rejected instead. Both are `opt` as of this change, and the cross-version
+    // upgrade test (`tests/money_safety/tests/invariants/upgrade_across_versions.rs`)
+    // goes RED if either one regresses.
     //
     // An `opt` wrapping a flat scalar is the one shape that cannot itself be
     // silently dropped, so these stay readable when `table_state` does not, and
     // `post_upgrade` refuses the upgrade when they disagree with what came back.
     //
-    // THIS IS A GUARD RAIL, NOT THE FIX. The fix is to make both fields `opt`, in
-    // one change, plus a harness that upgrades from a PREVIOUS RELEASE's wasm
-    // (docs/DEFECTS.md H-16). All this does is turn silent loss into a refusal.
+    // THIS IS A GUARD RAIL, NOT THE FIX, and it is kept because it protects fields
+    // that do not exist yet: it turns the NEXT non-`opt` addition to `TableState`
+    // from silent chip destruction into a rejected upgrade, for every upgrade from
+    // this commit onwards. It cannot fire for state written before the digest
+    // existed, which is why the cross-version test, not the guard, is the gate.
     #[serde(default)]
     table_was_present: Option<bool>,
     #[serde(default)]
@@ -5229,13 +5464,36 @@ fn table_digest() -> Option<(u64, u64)> {
     })
 }
 
+/// Write everything the canister owes into stable memory.
+///
+/// # This TRAPS if the save fails, and that is the whole point
+///
+/// It used to log `CRITICAL: Failed to save state to stable memory` and let the
+/// upgrade proceed, with a comment arguing that trapping "could brick the
+/// canister". That reasoning is backwards on a canister that custodies funds:
+///
+/// * A trap in `pre_upgrade` ABORTS the upgrade. The old code keeps running with
+///   its heap intact and nothing is lost -- the canister is not bricked, the
+///   *upgrade* is refused, which is a state a human can act on.
+/// * Proceeding after a failed save has exactly two outcomes, and both are worse.
+///   If stable memory is empty, `post_upgrade`'s `stable_restore` fails and it
+///   panics anyway -- the same refusal, minus the accurate reason. If stable memory
+///   still holds an OLDER snapshot from a previous upgrade, `stable_restore`
+///   SUCCEEDS and the canister silently rolls back to it: every escrow balance,
+///   every chip and every hand since that snapshot is gone, and worse,
+///   `verified_deposits` and `deposit_watermark` roll back with it, which re-opens
+///   the E-02 replay window on ledger blocks that were already credited. A silent
+///   rollback of the anti-replay record is a fund-theft primitive.
+///
+/// An upgrade that proceeds after failing to save is how state is lost. So it does
+/// not proceed.
 #[ic_cdk::pre_upgrade]
 fn pre_upgrade() {
     let digest = table_digest();
     let state = PersistentState {
         balances: BALANCES.with(|b| b.borrow().iter().map(|(k, v)| (*k, *v)).collect()),
         verified_deposits: VERIFIED_DEPOSITS.with(|v| v.borrow().iter().map(|(k, v)| (*k, *v)).collect()),
-        deposit_watermark: deposit_watermark(),
+        deposit_watermark: Some(deposit_watermark()),
         controllers: CONTROLLERS.with(|c| c.borrow().clone()),
         history_id: HISTORY_ID.with(|h| *h.borrow()),
         dev_mode: false, // Always false, kept for backwards compatibility
@@ -5254,10 +5512,24 @@ fn pre_upgrade() {
         table_seated_chips_at_save: Some(digest.map(|(_, chips)| chips).unwrap_or(0)),
     };
 
+    let escrow_at_save = state
+        .balances
+        .iter()
+        .fold(0u64, |a, (_, v)| a.saturating_add(*v));
+
     if let Err(e) = ic_cdk::storage::stable_save((state,)) {
-        ic_cdk::println!("CRITICAL: Failed to save state to stable memory: {:?}", e);
-        // Log but don't panic - allow upgrade to proceed
-        // This is safer than trapping which could brick the canister
+        // See the doc comment above: refuse the UPGRADE rather than proceed with an
+        // unsaved or stale snapshot. The trap rolls the message back; the running
+        // canister and its heap are untouched.
+        ic_cdk::trap(&format!(
+            "CRITICAL: failed to save state to stable memory: {:?}. Upgrade REFUSED rather \
+             than proceeding with an unsaved snapshot -- proceeding would either be rejected \
+             by post_upgrade anyway or silently restore an OLDER snapshot, rolling back \
+             {} e8s of escrow, every chip at the table, and the deposit anti-replay record. \
+             The old code is still running and nothing has been lost. \
+             See docs/SECURITY-FINDINGS.md FINDING 14.",
+            e, escrow_at_save
+        ));
     }
 }
 
@@ -5287,10 +5559,17 @@ fn post_upgrade() {
 
     // Restore the anti-replay record. The watermark FIRST, so that if anything
     // below it somehow survived in the saved set it is still refused.
+    //
+    // `None` means the saved state predates the field, so the floor is 0: nothing
+    // had been dropped from `verified_deposits` at that point, so no block index
+    // was below the floor. The `>` keeps this monotonic -- a restore can only ever
+    // RAISE the floor, never lower it -- so no decode outcome can re-open a
+    // window that was already closed (docs/DEFECTS.md E-02).
+    let saved_watermark = state.deposit_watermark.unwrap_or(0);
     DEPOSIT_WATERMARK.with(|w| {
         let mut w = w.borrow_mut();
-        if state.deposit_watermark > *w {
-            *w = state.deposit_watermark;
+        if saved_watermark > *w {
+            *w = saved_watermark;
         }
     });
     VERIFIED_DEPOSITS.with(|v| {
@@ -5749,7 +6028,7 @@ mod payout_tests {
             first_hand: false,
             auto_deal_at: None,
             last_action: None,
-            departed_stakes: Vec::new(),
+            departed_stakes: None,
         }
     }
 
@@ -6438,8 +6717,9 @@ mod payout_tests {
     #[test]
     fn a_stale_departed_stake_is_ignored() {
         let mut state = table(vec![seat(0, 0, 20, "As 8d"), seat(1, 0, 20, "4d 9h")], "Kd Tc 3d 2c Ad", 1);
-        state.departed_stakes.push(DepartedStake {
-            hand_number: state.hand_number - 1,
+        let stale_hand = state.hand_number - 1;
+        state.departed_stakes_mut().push(DepartedStake {
+            hand_number: stale_hand,
             seat: 4,
             principal: principal(4),
             contributed: 1_000_000,
@@ -6447,5 +6727,247 @@ mod payout_tests {
         let plan = plan_payouts(&state);
         assert_eq!(plan.collected, 40, "the stale stake is not in the basis");
         assert!(plan.conserves());
+    }
+
+    // -----------------------------------------------------------------------
+    // FINDING 13: the payee is the OWNER OF THE STAKE, never the chair
+    //
+    // Every assertion in this section is on a PRINCIPAL. That is the point: the
+    // defect these pin conserved every chip, awarded exactly what it collected,
+    // paid the right AMOUNT to the right SEAT, and gave one player's money to
+    // another. Nothing that compares totals or seats can see it.
+    // -----------------------------------------------------------------------
+
+    /// Build the FINDING 13 state: seat 1's player left mid-hand with `stake` in the
+    /// pot, and a DIFFERENT principal has since taken that chair.
+    ///
+    /// `alice` is `principal(1)` -- the seat's original occupant, whose money this
+    /// is. The stranger is `principal(9)`, who was never dealt in: `join_table`
+    /// seats a mid-hand arrival `SittingOut` with no hole cards.
+    fn departed_seat_retaken(stake: u64) -> (TableState, Principal, Principal) {
+        let alice = principal(1);
+        let stranger = principal(9);
+        // Only seat 1 has money in, and it is a departed stake, so no seat at the
+        // table has a live claim on any layer: the refund branch.
+        let mut state = table(vec![], "Kd Tc 3d 2c Ad", 0);
+        state.pot = stake;
+        let hand = state.hand_number;
+        state.departed_stakes_mut().push(DepartedStake {
+            hand_number: hand,
+            seat: 1,
+            principal: alice,
+            contributed: stake,
+        });
+        state.players[1] = Some(Player {
+            principal: stranger,
+            seat: 1,
+            chips: 7,
+            hole_cards: None,
+            current_bet: 0,
+            total_bet_this_hand: 0,
+            has_folded: false,
+            has_acted_this_round: false,
+            is_all_in: false,
+            status: PlayerStatus::SittingOut,
+            last_seen: 0,
+            timeout_count: 0,
+            time_bank_remaining: 30,
+            is_sitting_out_next_hand: false,
+            broke_at: None,
+            sitting_out_since: Some(0),
+        });
+        (state, alice, stranger)
+    }
+
+    /// THE REPRODUCER. A departed player's stake is owed to that player, and the
+    /// plan must NAME that player, not whoever is now in the chair.
+    ///
+    /// This is the assertion the whole class of defect turns on, and it is stated on
+    /// principals because every seat-level and total-level assertion passes either
+    /// way: note `plan.conserves()` below.
+    #[test]
+    fn finding13_a_departed_stake_is_planned_for_its_owner_not_for_the_new_occupant() {
+        let (state, alice, stranger) = departed_seat_retaken(50);
+        let plan = plan_payouts(&state);
+
+        assert!(
+            plan.conserves(),
+            "the plan must still pay out exactly what it collected: {} of {}",
+            plan.awarded,
+            plan.collected
+        );
+        assert_eq!(plan.amount_for(1), 50, "seat 1 is owed the whole stake");
+
+        let named: Vec<Principal> = plan.payouts.iter().map(|p| p.principal).collect();
+        assert_eq!(
+            named,
+            vec![alice],
+            "the stake belongs to {alice}; the plan named {named:?}. The chair is occupied by \
+             {stranger}, who was never dealt in. See docs/SECURITY-FINDINGS.md FINDING 13."
+        );
+        assert_eq!(plan.amount_for_principal(alice), 50);
+        assert_eq!(
+            plan.amount_for_principal(stranger),
+            0,
+            "{stranger} put nothing into this hand and must be paid nothing"
+        );
+    }
+
+    /// And applying that plan must move the money to alice, not into the stranger's
+    /// stack. Measured on BALANCES (escrow) and on the stranger's chips.
+    #[test]
+    fn finding13_applying_the_plan_credits_the_owners_escrow_and_not_the_strangers_stack() {
+        let (mut state, alice, stranger) = departed_seat_retaken(50);
+        BALANCES.with(|b| b.borrow_mut().clear());
+        let stranger_chips_before = chips_at(&state, 1);
+
+        let plan = plan_payouts(&state);
+        let winners = apply_payouts(&mut state, &plan);
+
+        let escrow = |who: Principal| BALANCES.with(|b| b.borrow().get(&who).copied().unwrap_or(0));
+        assert_eq!(
+            escrow(alice),
+            50,
+            "alice ({alice}) left the table, so her stake must reach her ESCROW"
+        );
+        assert_eq!(
+            escrow(stranger),
+            0,
+            "the stranger ({stranger}) must not be credited anything"
+        );
+        assert_eq!(
+            chips_at(&state, 1),
+            stranger_chips_before,
+            "the stranger's stack must not change: it was {stranger_chips_before} and the \
+             defect made it {stranger_chips_before} + 50"
+        );
+
+        // The record has to name the right person too, or the hand history and the
+        // frontend both attribute alice's money to the stranger.
+        assert_eq!(winners.len(), 1);
+        assert_eq!(winners[0].principal, alice);
+        assert_eq!(winners[0].seat, 1);
+        assert_eq!(winners[0].amount, 50);
+        assert!(
+            winners[0].cards.is_none() && winners[0].hand_rank.is_none(),
+            "a refund is not a win and must never carry the occupant's cards"
+        );
+        BALANCES.with(|b| b.borrow_mut().clear());
+    }
+
+    /// The second variant from the finding: TWO departed stakes at ONE seat, owed to
+    /// TWO DIFFERENT principals. Resolving the owner from the seat returned the
+    /// first match for both, so the second player's money went to the first player.
+    #[test]
+    fn finding13_two_departed_stakes_at_one_seat_each_reach_their_own_owner() {
+        let alice = principal(1);
+        let bob = principal(2);
+        let mut state = table(vec![], "Kd Tc 3d 2c Ad", 0);
+        state.pot = 30;
+        let hand = state.hand_number;
+        state.departed_stakes_mut().push(DepartedStake {
+            hand_number: hand,
+            seat: 1,
+            principal: alice,
+            contributed: 10,
+        });
+        state.departed_stakes_mut().push(DepartedStake {
+            hand_number: hand,
+            seat: 1,
+            principal: bob,
+            contributed: 20,
+        });
+
+        let plan = plan_payouts(&state);
+        assert!(plan.conserves(), "{} of {}", plan.awarded, plan.collected);
+        assert_eq!(
+            plan.amount_for_principal(alice),
+            10,
+            "alice put in 10 and must get 10 back, not 0 and not 30"
+        );
+        assert_eq!(
+            plan.amount_for_principal(bob),
+            20,
+            "bob put in 20 and must get 20 back"
+        );
+
+        BALANCES.with(|b| b.borrow_mut().clear());
+        apply_payouts(&mut state, &plan);
+        let escrow = |who: Principal| BALANCES.with(|b| b.borrow().get(&who).copied().unwrap_or(0));
+        assert_eq!((escrow(alice), escrow(bob)), (10, 20));
+        BALANCES.with(|b| b.borrow_mut().clear());
+    }
+
+    /// `hand_stakes` builds the seated stakes itself so that each owner comes from
+    /// the same `Player` the amount came from. That duplicates the SELECTION rule
+    /// `collect_contributions` states, and duplicated rules drift, so this pins
+    /// that they agree on every seated stake.
+    #[test]
+    fn collect_contributions_and_hand_stakes_select_the_same_seated_stakes() {
+        let mut state = table(
+            vec![
+                seat(0, 100, 20, "As 8d"),
+                folded_seat(1, 0, 35),
+                seat(3, 100, 200, "7s Th"),
+            ],
+            "Kd Tc 3d 2c Ad",
+            1,
+        );
+        // A departed stake as well, which `collect_contributions` cannot see: it is
+        // the difference between the two, and the only difference.
+        let hand = state.hand_number;
+        state.departed_stakes_mut().push(DepartedStake {
+            hand_number: hand,
+            seat: 4,
+            principal: principal(4),
+            contributed: 55,
+        });
+
+        let from_seats = collect_contributions(&state.players);
+        let seated_stakes: Vec<Contribution> = hand_stakes(&state)
+            .iter()
+            .filter(|s| state.players[s.seat as usize].is_some())
+            .map(|s| Contribution::new(s.seat, s.amount, s.relinquished))
+            .collect();
+        assert_eq!(
+            seated_stakes, from_seats,
+            "hand_stakes and collect_contributions must select the same seated stakes"
+        );
+        assert_eq!(
+            hand_stakes(&state).len(),
+            from_seats.len() + 1,
+            "the departed stake is the only thing hand_stakes adds"
+        );
+        // And every seated stake names the player actually in that chair.
+        for s in hand_stakes(&state) {
+            if let Some(p) = state.players[s.seat as usize].as_ref() {
+                assert_eq!(s.owner, p.principal);
+            }
+        }
+    }
+
+    /// A pot SHARE names the player holding the winning cards, and that is read
+    /// from the live claim rather than from the seat vector, so the two can never
+    /// diverge.
+    #[test]
+    fn finding13_a_pot_share_names_the_player_holding_the_cards() {
+        let state = table(
+            vec![seat(0, 100, 20, "As Ad"), seat(1, 100, 20, "2c 3d")],
+            "Kd Tc 3h 7c 9d",
+            0,
+        );
+        let plan = plan_payouts(&state);
+        assert_eq!(plan.amount_for_principal(principal(0)), 40);
+        assert_eq!(plan.amount_for_principal(principal(1)), 0);
+        for p in &plan.payouts {
+            assert_eq!(
+                p.principal,
+                state.players[p.seat as usize]
+                    .as_ref()
+                    .expect("a pot share is only ever awarded to an occupied seat")
+                    .principal,
+                "a pot share must name the seat's own occupant"
+            );
+        }
     }
 }

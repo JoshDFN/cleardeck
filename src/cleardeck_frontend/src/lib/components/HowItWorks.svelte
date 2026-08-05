@@ -1,10 +1,24 @@
 <script>
   const { onClose } = $props();
+
+  // Escape has to work from anywhere in the dialog, not only while the backdrop
+  // happens to hold focus (which it never does, since it is not in the tab
+  // order). Bound on <svelte:window> so it fires wherever the caret is.
+  function onKeydown(e) {
+    if (e.key === 'Escape') onClose();
+  }
+
+  /** Focus the close button when the dialog opens, so Escape/Tab land somewhere. */
+  function autofocus(node) {
+    node.focus();
+  }
 </script>
 
-<div class="modal-backdrop" onclick={onClose} onkeydown={(e) => e.key === 'Escape' && onClose()} role="button" tabindex="-1" aria-label="Close modal"></div>
+<svelte:window onkeydown={onKeydown} />
 
-<div class="modal-content" role="dialog" aria-labelledby="how-it-works-title">
+<div class="modal-backdrop" onclick={onClose} role="presentation"></div>
+
+<div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="how-it-works-title">
   <div class="modal-header">
     <h2 id="how-it-works-title">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -13,7 +27,7 @@
       </svg>
       How ClearDeck Works
     </h2>
-    <button class="close-btn" onclick={onClose} aria-label="Close">
+    <button class="close-btn" onclick={onClose} aria-label="Close" use:autofocus>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M18 6L6 18M6 6l12 12"/>
       </svg>
@@ -21,6 +35,24 @@
   </div>
 
   <div class="modal-body">
+    <!-- The strongest claim first, because it is the one a rake-funded operator
+         structurally cannot make. It is a property of the payout code, not a
+         promotion, so it is stated as a fact and not as an offer. -->
+    <section class="section">
+      <div class="rake-banner">
+        <span class="rake-figure">0%</span>
+        <div>
+          <strong>No rake. Not on any pot, not at any stake.</strong>
+          <p>
+            There is no house cut anywhere in the settlement code. Every chip that goes
+            into a pot is paid back out to the players eligible for it, down to the last
+            e8s, and the remainder of an odd split goes to a player rather than the house.
+            There is no fee at the table, no time charge, and no tournament juice.
+          </p>
+        </div>
+      </div>
+    </section>
+
     <section class="section">
       <h3>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -160,23 +192,64 @@
         <div class="guarantee">
           <span class="icon">2</span>
           <div>
-            <strong>Immutable History</strong>
-            <p>All hands are recorded on-chain and cannot be altered</p>
+            <strong>Self-checking history</strong>
+            <p>Every hand is stored with its own commitment and revealed seed, so a hand that had been rewritten would no longer hash to its published commitment</p>
           </div>
         </div>
         <div class="guarantee">
           <span class="icon">3</span>
           <div>
             <strong>Open Source</strong>
-            <p>All canister code can be inspected and verified</p>
+            <p>All canister code can be inspected, and the deployed module hash is reproducible from this source</p>
           </div>
         </div>
         <div class="guarantee">
           <span class="icon">4</span>
           <div>
-            <strong>Non-Custodial</strong>
-            <p>You control your funds via Internet Identity - we can't access them</p>
+            <strong>No rake on settlement</strong>
+            <p>The payout path has no house cut: the pot is distributed in full to the winning players</p>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- The two claims this modal used to make that were not true, corrected.
+         A fairness page that overstates its own guarantees is worse than one
+         that has none, because it is the page a player trusts. -->
+    <section class="section">
+      <h3>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        What This Does NOT Guarantee
+      </h3>
+      <div class="limits">
+        <div class="limit">
+          <strong>Your chips are held by the table canister, not by you.</strong>
+          <p>
+            Deposits are credited to a balance the canister keeps for your principal. That
+            is a custodial arrangement. Internet Identity proves who you are; it does not
+            hold your chips and it cannot recover them if the canister misbehaves.
+          </p>
+        </div>
+        <div class="limit">
+          <strong>A controller can upgrade these canisters.</strong>
+          <p>
+            Upgradeable code means the rules and the stored history can change. What a
+            controller cannot do is retroactively make an already-published commitment
+            hash match a different deck, which is why the commit-reveal record above is
+            the part worth checking rather than the promise.
+          </p>
+        </div>
+        <div class="limit danger">
+          <strong>Unaudited code with known bugs.</strong>
+          <p>
+            This is published for education and testing. Any deposit is at your own risk
+            and your funds are NOT safe: expect to lose everything you deposit. Online
+            gambling is illegal in many jurisdictions. Only use it where legally
+            permitted. 18+ only.
+          </p>
         </div>
       </div>
     </section>
@@ -469,6 +542,76 @@
     color: rgba(255, 255, 255, 0.5);
   }
 
+  /* No rake — the lead claim */
+  .rake-banner {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 18px;
+    align-items: center;
+    padding: 16px 18px;
+    border-radius: 12px;
+    background:
+      linear-gradient(100deg, rgba(0, 212, 170, 0.18), rgba(0, 212, 170, 0.05) 70%),
+      rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(0, 212, 170, 0.3);
+  }
+
+  .rake-figure {
+    font-size: 44px;
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    color: #00d4aa;
+  }
+
+  .rake-banner strong {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 15px;
+    color: #fff;
+  }
+
+  .rake-banner p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.62);
+  }
+
+  /* Limits — stated as plainly as the guarantees */
+  .limits {
+    display: grid;
+    gap: 12px;
+  }
+
+  .limit {
+    padding: 14px;
+    border-radius: 10px;
+    background: rgba(240, 180, 41, 0.07);
+    border: 1px solid rgba(240, 180, 41, 0.22);
+  }
+
+  .limit.danger {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.3);
+  }
+
+  .limit strong {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 13.5px;
+    color: #f0b429;
+  }
+
+  .limit.danger strong { color: #f87171; }
+
+  .limit p {
+    margin: 0;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.62);
+  }
+
   /* Responsive */
   @media (max-width: 600px) {
     .modal-content {
@@ -493,6 +636,9 @@
     .guarantees {
       grid-template-columns: 1fr;
     }
+
+    .rake-banner { gap: 14px; padding: 14px; }
+    .rake-figure { font-size: 34px; }
 
     .section h3 {
       font-size: 15px;

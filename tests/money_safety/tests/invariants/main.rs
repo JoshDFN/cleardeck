@@ -14,6 +14,7 @@ use money_safety::{assert_holds, assert_violated};
 use std::time::Duration;
 
 mod classifier;
+mod principals;
 mod seam;
 mod upgrade_across_versions;
 

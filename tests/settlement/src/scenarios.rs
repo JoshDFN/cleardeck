@@ -69,7 +69,23 @@ pub struct Bench {
 impl Bench {
     /// Fund every actor, seat them with exact stacks, and snapshot the position.
     pub fn new(config: TableConfig, seats: &[(&str, u8, u64)], escrow_each: u64) -> Self {
-        let names: Vec<&str> = seats.iter().map(|(n, _, _)| *n).collect();
+        Self::with_bystanders(config, seats, &[], escrow_each)
+    }
+
+    /// As [`Bench::new`], plus principals who exist and have escrow but are NOT
+    /// seated.
+    ///
+    /// Needed for the docs/SECURITY-FINDINGS.md FINDING 13 shape: somebody has to
+    /// be available to take a chair that a player vacates MID-HAND, and they must
+    /// not have been at the table when the hand was dealt.
+    pub fn with_bystanders(
+        config: TableConfig,
+        seats: &[(&str, u8, u64)],
+        bystanders: &[&str],
+        escrow_each: u64,
+    ) -> Self {
+        let mut names: Vec<&str> = seats.iter().map(|(n, _, _)| *n).collect();
+        names.extend_from_slice(bystanders);
         let world = World::new(config, &names);
         drive::fund(&world, &names, escrow_each);
         drive::seat_exact(&world, seats);
@@ -238,16 +254,24 @@ impl Bench {
             return;
         }
         panic!(
-            "`{}` was settled differently from the rules of poker. Per-seat DIFF \
-             (engine minus what the rules owe): {:?}. Every chip may still be \
-             conserved -- {} destroyed -- and the totals may still be right; what is \
-             wrong is WHO HAS THE MONEY.\n\n{}\n\nIf this is a deliberate, documented \
+            "`{}` was settled differently from the rules of poker.\n\
+             Per-SEAT DIFF   (engine minus what the rules owe): {:?}\n\
+             Per-PRINCIPAL DIFF (WHO was paid, by principal):   {:?}\n\
+             Every chip may still be conserved -- {} destroyed -- and the totals may \
+             still be right; what is wrong is WHO HAS THE MONEY. A run where the SEAT \
+             column is all zeroes and the PRINCIPAL column is not is \
+             docs/SECURITY-FINDINGS.md FINDING 13 exactly: the right amount, the right \
+             chair, the wrong person.\n\n{}\n\nIf this is a deliberate, documented \
              defect, add `{}` to Bench::allow_disagreement AND an entry to \
              docs/DEFECTS.md in the same change. Do not delete the scenario.",
             cmp.label,
             cmp.seats
                 .iter()
                 .map(|s| (s.seat, s.diff))
+                .collect::<Vec<_>>(),
+            cmp.misattributed()
+                .iter()
+                .map(|p| (p.principal.to_text(), p.diff))
                 .collect::<Vec<_>>(),
             cmp.destroyed,
             cmp.report(),

@@ -88,6 +88,93 @@ which may belong to an entirely unrelated project. `resolveControllerIdentity()`
 explicit message listing what it tried if none qualifies. The identity actually used is
 recorded in the manifest as `controllerIdentity`.
 
+## What a scene asserts: agreement with the chain, not presence of an element
+
+A scene is verified when **every money figure on the screen equals the number the canister
+reports for it**, checked at the precision the client chose to display. Presence checks still
+run — they are what tells a reader the scene photographed the thing it claims to — but they
+can no longer carry a scene on their own.
+
+`lib/chain-agreement.mjs` is the assertion; `lib/dom-scrape.mjs` is the only place that knows
+a CSS selector belonging to another agent's component; `lib/money.mjs` decodes a displayed
+figure back into the interval of chain values that could have produced it.
+
+### The coverage table
+
+Being explicit about what is **not** covered matters as much as what is: a reader who assumes
+a surface is gated when it is not is worse off than one who knows it is open.
+
+| surface on screen | asserted against | where |
+| --- | --- | --- |
+| headline pot | `get_pot()` | every table scene |
+| pot breakdown ("X collected + Y betting") | sums to `get_pot()`; the second leg is `sum(current_bet)` | table scenes that render it |
+| each seat's stack | that seat's `chips` in `get_table_view()` | every table scene |
+| each seat's live bet | that seat's `current_bet` (absent iff zero) | every table scene |
+| each side pot, and the count | `side_pots[i].amount`, in order; also that they sum to `get_pot()` | `table-sidepots` |
+| the board | `get_community_cards()`, rank and suit, in order | every table scene |
+| pot-odds ratio | `get_pot() / call_amount` | `table-facing-bet` |
+| required-equity % | `call / (get_pot() + call)` | `table-facing-bet` |
+| "Call X" on the button and in the turn hint | `call_amount` | `table-facing-bet` |
+| **½ Pot / Pot bet presets** — the amount that would be **sent** | `current_bet + get_pot()(/2) + call_amount`, plus the implied pot | `table-facing-bet` |
+| wallet / table balance | `get_balance()` for the signed-in principal | table scenes, deposit |
+| winner banner amount and seat | `last_hand_winners[..]` | `table-showdown` |
+| lobby blinds and buy-in range | the **TABLE** canister's config, with the lobby's own record cross-checked | `lobby` |
+| lobby **row name** ("9-Max - 0.01/0.02") | the TABLE canister's blinds — the name is the biggest money figure on the row | `lobby` |
+| lobby live pot per row | `get_pot()` on that table | `lobby` |
+| deposit modal wallet balance | ledger `icrc1_balance_of` | `deposit` |
+| deposit modal fiat value | balance × the quote actually served this run | `deposit` |
+| hand-history row pot | history canister `total_pot`, cross-checked against the table's `sum(winners.amount)` | `handhistory` |
+| **no rake** | history canister `rake == 0`, per hand | `handhistory` |
+
+**Not asserted today** — open surfaces, listed so nobody mistakes silence for a pass:
+
+* the **action log** (`ActionFeed`) bet/raise/win amounts — the drawer is closed in every
+  scene, so no scene reaches them;
+* the **withdraw modal** — no scene opens it (and see `docs/DEFECTS.md` for what is wrong
+  behind it);
+* the header wallet balance in `WalletButton` as distinct from the table wallet panel;
+* the hand-history **detail** panel (per-winner amounts); only the row pot is checked;
+* everything on a **BTC** table: `btc_table_1` is not registered in the lobby (T-05), so no
+  scene can reach it, and the sats formatting path is therefore unexercised.
+
+### Proving the assertion has teeth
+
+Two mechanisms, both off by default:
+
+```bash
+# 1. FAULT INJECTION. The chain is untouched; the RENDERED number is falsified.
+#    Every listed target must actually change something on screen or the scene FAILS —
+#    a fault that did not inject proves nothing, and is refused rather than reported.
+SHOTS_INJECT_DRIFT=pot,stack,bet,potodds,callbutton \
+  node tools/shots/run.mjs --scenes table-facing-bet --viewports desktop
+SHOTS_INJECT_DRIFT=board,sidepot \
+  node tools/shots/run.mjs --scenes table-sidepots --viewports desktop
+
+# 2. A/B AGAINST A DIFFERENT BUILD, without deploying anything.
+#    Static assets come from a build on disk; every /api/* call still goes to the real
+#    local replica, so the chain side of the comparison is identical. The manifest records
+#    `assetProvenance: LOCAL DISK` so such a run can never be mistaken for the deployed app.
+SHOTS_SERVE_DIST=/path/to/other/dist \
+  node tools/shots/run.mjs --scenes table-facing-bet --skip-build --skip-deploy
+```
+
+`node tools/shots/test-money.mjs` self-checks the figure parser against the shapes the app
+really renders, including the case it must refuse: a figure displayed so coarsely that `x` and
+`2x` render identically is reported as **blind**, not as agreeing.
+
+### Whose defect is it
+
+Two different failures produce the same red scene and the verdict says which:
+
+* **the client rendered a number the canister does not hold** — a frontend defect;
+* **two on-chain sources disagree and the client faithfully renders the authoritative one** —
+  a canister-data defect, prefixed `ON-CHAIN DATA DEFECT` and naming the canister to fix.
+
+The `lobby` scene is red today for the second reason and only the second reason: all 16 stakes
+and buy-in figures in the cells agree with the TABLE canister, and the four that fail are the
+row *names*, strings written once into the lobby canister by `init_microstakes_tables` and
+never revised.
+
 ## Scenes
 
 | scene | what it must show | how the state is reached |
@@ -95,6 +182,7 @@ recorded in the manifest as `controllerIdentity`.
 | `lobby` | table list as a new visitor sees it | signed out; rows and player counts are live lobby + table canister reads |
 | `table-empty` | table with open seats (README state) | `table_3` reset to empty, hero signed in but not seated |
 | `table-preflop` | seated, cards dealt, action on us, bet controls live | `table_2`, hero + opponent buy in, hand started, opponent calls, stop when `action_on == hero && phase == PreFlop` |
+| `table-facing-bet` | the decision screen: an amount owed, pot odds, bet sizing | `table_2`, the opponent RAISES every turn, stop with the hero on the clock owing a real call; refuses to pass if `call_amount == 0` |
 | `table-allin` | the all-in moment, two players committed | `table_3`, three players go all in in turn order; stop the instant two are all in and the action is pending on the third |
 | `table-showdown` | showdown with a winner, winning hand, pot awarded | `table_2` heads-up all-in; the opponent calls `sit_out_next_hand` first so auto-deal cannot start the next hand and the finished hand stays on screen |
 | `table-sidepots` | multiple side pots | `table_3` with **four** players (see note below): two short stacks all in, two deep stacks call, hand rests on the flop with side pots on screen |

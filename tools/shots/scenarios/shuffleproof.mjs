@@ -8,6 +8,7 @@ import { devLogin, enterTable, openApp, settle } from '../lib/browser.mjs';
 import { HERO_PLAYER } from '../lib/config.mjs';
 import { optional } from '../lib/agent.mjs';
 import { phaseOf } from '../lib/table-driver.mjs';
+import { assertChainAgreement, withAgreement } from '../lib/chain-agreement.mjs';
 import { playCompletedHand, tableDisplayName } from './_shared.mjs';
 
 const TABLE = 'table_2';
@@ -52,7 +53,12 @@ export default {
     const items = await page.locator('.proof-item').count();
     const revealed = await page.locator('.hash.revealed').count();
     const hashes = await page.locator('.proof-item .hash').allTextContents();
-    return {
+    // The fairness panel is not a money surface, but the table underneath it is,
+    // and it is on screen in the same PNG.
+    const agreement = await assertChainAgreement(ctx, page, {
+      table: TABLE, asPlayer: HERO_PLAYER, requireBalance: true, requireWinnerBanner: true,
+    });
+    return withAgreement({
       verified: panel >= 1 && items >= 2 && revealed >= 1,
       checks: {
         proofPanels: panel,
@@ -61,6 +67,6 @@ export default {
         hashes: hashes.map((h) => h.trim()),
       },
       notes: `${items} proof rows, revealed seed ${revealed ? 'shown' : 'MISSING'}`,
-    };
+    }, agreement);
   },
 };

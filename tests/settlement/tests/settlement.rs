@@ -182,6 +182,102 @@ fn the_engine_settles_every_class_of_hand_the_way_the_rules_of_poker_do() {
     );
 }
 
+/// FINDING 13: THE ORACLE NOW ASKS WHO WAS PAID, NOT ONLY WHICH CHAIR.
+///
+/// The scenarios in `run_all` all settle with the same people in the same seats
+/// from deal to showdown, so "the seat was paid the right amount" and "the person
+/// was paid the right amount" are the same sentence. These two are the hands where
+/// they come apart: a player leaves with money in the pot and somebody else takes
+/// their chair before the hand settles.
+///
+/// Measured against a build that resolves a payout's owner from the seat, the
+/// second hand reports (real principals, real e8s):
+///
+/// ```text
+/// Per-SEAT DIFF   [(0, 0), (1, 0), (2, 0), (3, 0)]
+/// Per-PRINCIPAL DIFF [("74yuz-...", -2), ("f6m43-...", +2)]
+/// ```
+///
+/// Zero at every seat. That is the whole point of this test.
+#[test]
+fn a_chair_that_changes_hands_mid_hand_pays_the_person_and_not_the_chair() {
+    let mut bench = suite::chair_swap_bench();
+    println!(
+        "\ntable_canister wasm under test: {}\n",
+        bench.world.table_wasm_sha256
+    );
+    let stranger = bench.world.actor("mallory");
+
+    suite::run_chair_swap(&mut bench);
+    assert_eq!(
+        bench.comparisons.len(),
+        2,
+        "both chair-swap scenarios must actually have run"
+    );
+    for c in &bench.comparisons {
+        println!("{}", c.report());
+    }
+
+    // The fixture has to have done what it says: a chair really changed hands, and
+    // the newcomer really staked nothing.
+    let swapped = bench
+        .comparisons
+        .iter()
+        .filter(|c| {
+            c.record
+                .seats
+                .iter()
+                .any(|t| t.vacated && t.contributed > 0)
+        })
+        .count();
+    assert_eq!(
+        swapped, 2,
+        "each chair-swap hand must contain a seat that was vacated with money in the pot;          otherwise this test is measuring nothing"
+    );
+    assert!(
+        bench
+            .world
+            .table_state()
+            .seated()
+            .any(|p| p.principal == stranger),
+        "the newcomer must have actually taken a chair"
+    );
+
+    // THE ASSERTION. Not a seat in sight.
+    for c in &bench.comparisons {
+        let wrong = c.misattributed();
+        assert!(
+            wrong.is_empty(),
+            "`{}`: money reached the wrong PERSON. Per-principal diffs: {:?}. Note the \
+             per-seat diffs: {:?} -- this is docs/SECURITY-FINDINGS.md FINDING 13, which is \
+             invisible to every seat-level and total-level check.\n\n{}",
+            c.label,
+            wrong
+                .iter()
+                .map(|p| (p.principal.to_text(), p.diff))
+                .collect::<Vec<_>>(),
+            c.seats.iter().map(|s| (s.seat, s.diff)).collect::<Vec<_>>(),
+            c.report()
+        );
+        let m = c
+            .principals
+            .iter()
+            .find(|p| p.principal == stranger)
+            .unwrap_or_else(|| panic!("`{}` never observed the newcomer at all", c.label));
+        assert_eq!(
+            m.engine, 0,
+            "`{}`: the newcomer staked nothing and must end where they started; they moved \
+             {:+}. That is somebody else's money.",
+            c.label, m.engine
+        );
+    }
+    assert_all_agree(&bench.comparisons, "the chair-swap suite");
+    assert_eq!(
+        bench.coverage.destroyed_total, 0,
+        "chips were collected and paid to nobody"
+    );
+}
+
 /// Same shapes at real ICP magnitudes, to show nothing depends on the one-e8s chip.
 #[test]
 fn the_findings_are_not_an_artefact_of_the_micro_chip_unit() {

@@ -2,6 +2,7 @@
 
 import { devLogin, enterTable, openApp, settle, stabilizeTimer } from '../lib/browser.mjs';
 import { HERO_PLAYER, icp } from '../lib/config.mjs';
+import { assertChainAgreement, withAgreement } from '../lib/chain-agreement.mjs';
 import { doAct, phaseOf, playUntil, startHand, view } from '../lib/table-driver.mjs';
 import { prepareTable, tableDisplayName } from './_shared.mjs';
 
@@ -93,7 +94,12 @@ export default {
       .isVisible().catch(() => false);
     const actionClockVisible = await page.locator('.turn-timer').first()
       .isVisible().catch(() => false);
-    return {
+    // THE MONEY CHECK. Presence of an action bar says nothing about whether the
+    // pot, the stacks and the bets on screen are the canister's own numbers.
+    const agreement = await assertChainAgreement(ctx, page, {
+      table: TABLE, asPlayer: HERO_PLAYER, requireBalance: true,
+    });
+    return withAgreement({
       verified: actionBarLive && buttons.length >= 3 && phaseText.toLowerCase().includes('pre'),
       checks: {
         actionBarLive,
@@ -111,6 +117,6 @@ export default {
       notes:
         `action buttons: ${buttons.map((b) => b.trim()).filter(Boolean).join(' / ')}`
         + `; action clock ${actionClockVisible ? 'visible' : 'HIDDEN at this viewport'}`,
-    };
+    }, agreement);
   },
 };

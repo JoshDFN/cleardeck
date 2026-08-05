@@ -1,0 +1,259 @@
+{
+ "assetProvenance": {
+  "source": "the deployed local asset canister",
+  "canisterId": "5uljf-s3777-77775-aaaea-cai"
+ },
+ "chain": {
+  "chainAgreement": "AGREES",
+  "attempts": 1,
+  "discardedAttempts": 0,
+  "moneyFiguresChecked": 14,
+  "moneyMismatches": [],
+  "structuralProblems": [],
+  "onChain": {
+   "getPot": 30000000,
+   "viewPot": 30000000,
+   "sumOfLiveBets": 30000000,
+   "sidePots": [],
+   "seats": [
+    {
+     "seat": 0,
+     "chips": 1190000000,
+     "bet": 10000000,
+     "allIn": false,
+     "folded": false
+    },
+    {
+     "seat": 1,
+     "chips": 1180000000,
+     "bet": 20000000,
+     "allIn": false,
+     "folded": false
+    }
+   ],
+   "board": [],
+   "balance": 20000000,
+   "callAmount": 10000000,
+   "phase": "PreFlop",
+   "handNumber": 1,
+   "winners": [
+    {
+     "seat": 0,
+     "amount": 30000000
+    }
+   ]
+  },
+  "onScreen": {
+   "pot": "0.30",
+   "potBreakdown": "0.00 collected + 0.30 betting",
+   "sidePots": [],
+   "seats": [
+    {
+     "seat": 0,
+     "name": "You",
+     "chips": "11.90",
+     "bet": "0.10"
+    },
+    {
+     "seat": 1,
+     "name": "Nakamoto",
+     "chips": "11.80",
+     "bet": "0.20"
+    }
+   ],
+   "board": [
+    "empty",
+    "empty",
+    "empty",
+    "empty",
+    "empty"
+   ],
+   "balance": "0.20 ICP",
+   "potOdds": "Call 0.10 to win 0.30",
+   "winner": null
+  },
+  "figures": [
+   {
+    "label": "pot (headline) vs get_pot()",
+    "chain": 30000000,
+    "screen": "0.30",
+    "ok": true,
+    "detail": "screen \"0.30\" == canister 30000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "pot breakdown sums to get_pot()",
+    "chain": 30000000,
+    "screen": "0.00 + 0.30",
+    "ok": true,
+    "detail": "screen 0.00 + 0.30 sums to 30000000 e8s (29000000 e8s..31000000 e8s)"
+   },
+   {
+    "label": "pot breakdown \"betting\" leg vs sum(current_bet)",
+    "chain": 30000000,
+    "screen": "0.30",
+    "ok": true,
+    "detail": "screen \"0.30\" == canister 30000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "seat 0 stack",
+    "chain": 1190000000,
+    "screen": "11.90",
+    "ok": true,
+    "detail": "screen \"11.90\" == canister 1190000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "seat 0 bet",
+    "chain": 10000000,
+    "screen": "0.10",
+    "ok": true,
+    "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "seat 1 stack",
+    "chain": 1180000000,
+    "screen": "11.80",
+    "ok": true,
+    "detail": "screen \"11.80\" == canister 1180000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "seat 1 bet",
+    "chain": 20000000,
+    "screen": "0.20",
+    "ok": true,
+    "detail": "screen \"0.20\" == canister 20000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "table balance vs get_balance()",
+    "chain": 20000000,
+    "screen": "0.20 ICP",
+    "ok": true,
+    "detail": "screen \"0.20 ICP\" == canister 20000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "pot-odds \"Call X\" vs call_amount",
+    "chain": 10000000,
+    "screen": "0.10",
+    "ok": true,
+    "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "pot-odds \"to win Y\" vs get_pot()",
+    "chain": 30000000,
+    "screen": "0.30",
+    "ok": true,
+    "detail": "screen \"0.30\" == canister 30000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "pot-odds ratio vs get_pot()/call_amount",
+    "chain": 3,
+    "screen": "3.0:1",
+    "ok": true,
+    "detail": "screen \"3.0:1\" == pot 30000000 / call 10000000 = 3.0:1"
+   },
+   {
+    "label": "required-equity % vs call_amount/(get_pot()+call_amount)",
+    "chain": 25,
+    "screen": "need 25%",
+    "ok": true,
+    "detail": "screen \"need 25%\" == expected 25%"
+   },
+   {
+    "label": "action button \"Call X\" vs call_amount",
+    "chain": 10000000,
+    "screen": "0.10",
+    "ok": true,
+    "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "turn hint \"Call X\" vs call_amount",
+    "chain": 10000000,
+    "screen": "0.10 or raise",
+    "ok": true,
+    "detail": "screen \"0.10 or raise\" == canister 10000000 e8s (±500000 e8s)"
+   }
+  ]
+ },
+ "betPresets": {
+  "betPresets": "AGREE",
+  "moneyFiguresChecked": 6,
+  "moneyMismatches": [],
+  "advisory": [],
+  "onChain": {
+   "getPot": 30000000,
+   "callAmount": 10000000,
+   "currentBet": 20000000,
+   "minRaise": 10000000,
+   "minBet": 10000000,
+   "legalFloor": 30000000,
+   "cap": 1200000000
+  },
+  "onScreen": [
+   {
+    "label": "½ Pot",
+    "available": true,
+    "amountText": "0.40",
+    "confirmText": "Raise to 0.40",
+    "sliderValue": "40000000",
+    "sliderValueE8s": 40000000,
+    "expectedRaiseToE8s": 40000000,
+    "impliedPotE8s": 30000000,
+    "impliedPotMultiple": 1
+   },
+   {
+    "label": "Pot",
+    "available": true,
+    "amountText": "0.60",
+    "confirmText": "Raise to 0.60",
+    "sliderValue": "60000000",
+    "sliderValueE8s": 60000000,
+    "expectedRaiseToE8s": 60000000,
+    "impliedPotE8s": 30000000,
+    "impliedPotMultiple": 1
+   }
+  ],
+  "figures": [
+   {
+    "label": "bet preset \"½ Pot\" slider readout vs the value that would be SENT",
+    "chain": 40000000,
+    "screen": "0.40",
+    "ok": true,
+    "detail": "screen \"0.40\" == canister 40000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "bet preset \"½ Pot\" confirm button vs the value that would be SENT",
+    "chain": 40000000,
+    "screen": "Raise to 0.40",
+    "ok": true,
+    "detail": "screen \"Raise to 0.40\" == canister 40000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "bet preset \"½ Pot\" is sized from get_pot()",
+    "chain": 40000000,
+    "screen": "40000000",
+    "ok": true,
+    "detail": "raise-to 40000000 e8s == current_bet 20000000 + get_pot() 30000000 /2 + call 10000000 (implied pot 30000000 e8s, 1x get_pot())"
+   },
+   {
+    "label": "bet preset \"Pot\" slider readout vs the value that would be SENT",
+    "chain": 60000000,
+    "screen": "0.60",
+    "ok": true,
+    "detail": "screen \"0.60\" == canister 60000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "bet preset \"Pot\" confirm button vs the value that would be SENT",
+    "chain": 60000000,
+    "screen": "Raise to 0.60",
+    "ok": true,
+    "detail": "screen \"Raise to 0.60\" == canister 60000000 e8s (±500000 e8s)"
+   },
+   {
+    "label": "bet preset \"Pot\" is sized from get_pot()",
+    "chain": 60000000,
+    "screen": "60000000",
+    "ok": true,
+    "detail": "raise-to 60000000 e8s == current_bet 20000000 + get_pot() 30000000 + call 10000000 (implied pot 30000000 e8s, 1x get_pot())"
+   }
+  ]
+ }
+}

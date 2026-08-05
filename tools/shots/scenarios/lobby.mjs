@@ -1,6 +1,7 @@
 // Scene: the lobby as a brand-new visitor sees it (not signed in).
 
 import { openApp, settle } from '../lib/browser.mjs';
+import { assertLobbyAgreement, withAgreement } from '../lib/chain-agreement.mjs';
 import { lobbyStateOf, waitForLobbySettled } from './_shared.mjs';
 
 export default {
@@ -38,12 +39,16 @@ export default {
       lobbyState,
       loadingSpinnerVisible: spinnerVisible,
     };
-    return {
+    // The lobby's money figures are the stakes and the buy-in range: the numbers a
+    // player uses to choose a table. They are asserted against the table
+    // canisters' own configs, not merely counted.
+    const agreement = await assertLobbyAgreement(ctx, page);
+    return withAgreement({
       verified: rows > 0 && anonymous && disclaimer && lobbyState === 'ready' && !spinnerVisible,
       checks,
       notes:
         `${rows} live table rows; signed out; lobby state="${lobbyState}"; ` +
         `loading spinner ${spinnerVisible ? 'VISIBLE (defect H-09 is back)' : 'absent'}`,
-    };
+    }, agreement);
   },
 };

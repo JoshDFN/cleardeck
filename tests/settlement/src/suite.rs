@@ -231,6 +231,121 @@ pub fn vacate_before_the_side_pots_are_built(bench: &mut Bench) -> Option<HandCo
     )
 }
 
+/// THE CHAIR CHANGES HANDS MID-HAND: the shape the per-seat oracle is blind to.
+///
+/// # What this scenario is for (docs/SECURITY-FINDINGS.md FINDING 13)
+///
+/// A player leaves the table with money already in the pot -- the stake stays in
+/// the payout basis, correctly -- and a DIFFERENT principal then takes that empty
+/// chair before the hand settles. Every per-seat number is right afterwards; the
+/// question this scenario asks is whose escrow the money landed in.
+///
+/// Requires a bench built with a bystander, because the newcomer must not have
+/// been at the table when the hand was dealt. See [`chair_swap_bench`].
+pub fn a_vacated_chair_is_taken_mid_hand(bench: &mut Bench) -> Option<HandComparison> {
+    bench.hand(
+        "a_vacated_chair_is_taken_mid_hand",
+        None,
+        1,
+        &mut |w, r, _| {
+            // Get everybody's blinds and calls in, then stop on the flop.
+            drive::play_out_until_phase(w, r, GamePhase::Flop, drive::passive(), 120);
+            let state = w.table_state();
+            // Whoever has money in and is NOT on the clock can leave cleanly.
+            let leaver = state
+                .seated()
+                .find(|p| p.total_bet_this_hand > 0 && p.seat != state.action_on)
+                .map(|p| (p.seat, p.principal));
+            let Some((seat, who)) = leaver else { return };
+            if w.leave_table(who).is_err() {
+                return;
+            }
+            r.observe(w);
+            // The bystander takes the chair mid-hand. `join_table` seats a mid-hand
+            // arrival SittingOut with no cards, and `sit_in` makes them Active
+            // (docs/DEFECTS.md E-36) -- which is the state that made FINDING 13
+            // reachable rather than theoretical.
+            let stranger = w.actor("mallory");
+            if w.join_table(stranger, seat).is_ok() {
+                let _ = w.sit_in(stranger);
+            }
+            r.observe(w);
+            drive::play_out(w, r, drive::passive(), 200);
+        },
+    )
+}
+
+/// THE FINDING 13 SHAPE, end to end: a chair changes hands mid-hand and then every
+/// player still holding cards leaves, so NOBODY can win and every stake has to go
+/// back to whoever put it in.
+///
+/// This is the hand where "pay the chair" and "pay the person" give different
+/// answers, and it is reachable entirely through the public API. Under the defect
+/// the departed player's refund lands in the NEW OCCUPANT's stack: totals balance,
+/// the seat is paid the right amount, and the per-seat diff is zero. Only the
+/// principal column moves.
+pub fn every_card_holder_leaves_after_a_chair_swap(bench: &mut Bench) -> Option<HandComparison> {
+    bench.hand(
+        "every_card_holder_leaves_after_a_chair_swap",
+        None,
+        1,
+        &mut |w, r, _| {
+            drive::play_out_until_phase(w, r, GamePhase::Flop, drive::passive(), 120);
+            let state = w.table_state();
+            let Some((seat, first_owner)) = state
+                .seated()
+                .find(|p| p.total_bet_this_hand > 0 && p.seat != state.action_on)
+                .map(|p| (p.seat, p.principal))
+            else {
+                return;
+            };
+            if w.leave_table(first_owner).is_err() {
+                return;
+            }
+            r.observe(w);
+
+            let stranger = w.actor("mallory");
+            if w.join_table(stranger, seat).is_err() {
+                return;
+            }
+            let _ = w.sit_in(stranger);
+            r.observe(w);
+
+            // Everybody else who is holding cards leaves too. The hand ends the
+            // moment only the newcomer -- who holds none -- is left, and no layer
+            // has a claimant, so every stake is refunded to its owner.
+            loop {
+                let state = w.table_state();
+                if !state.phase.hand_in_progress() {
+                    break;
+                }
+                let Some(who) = state
+                    .seated()
+                    .find(|p| p.principal != stranger && p.hole_cards.is_some() && !p.has_folded)
+                    .map(|p| p.principal)
+                else {
+                    break;
+                };
+                if w.leave_table(who).is_err() {
+                    break;
+                }
+                r.observe(w);
+            }
+        },
+    )
+}
+
+/// A bench for [`a_vacated_chair_is_taken_mid_hand`]: four seated players and one
+/// funded, UNSEATED principal ready to take a chair.
+pub fn chair_swap_bench() -> Bench {
+    Bench::with_bystanders(
+        TableConfig::micro_six_max(),
+        DEEP_EVEN,
+        &["mallory"],
+        1_000_000,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // the whole suite
 // ---------------------------------------------------------------------------
@@ -261,6 +376,16 @@ pub fn run_all(bench: &mut Bench) {
     folded_money_above_a_short_all_in(bench);
     vacate_after_the_flop(bench);
     vacate_before_the_side_pots_are_built(bench);
+}
+
+/// The scenarios that need a bystander, so they cannot run on the ladder bench.
+///
+/// Kept separate rather than folded into [`run_all`] because the bench itself is
+/// different: `Bench::with_bystanders` puts a funded, unseated principal in the
+/// world, which is the whole precondition.
+pub fn run_chair_swap(bench: &mut Bench) {
+    a_vacated_chair_is_taken_mid_hand(bench);
+    every_card_holder_leaves_after_a_chair_swap(bench);
 }
 
 /// A short subset for the planted-bug runs: no card searches, so it is fast, and

@@ -116,7 +116,7 @@ fn flop_table(stacks: &[u64], now: u64) -> TableState {
         first_hand: false,
         auto_deal_at: None,
         last_action: None,
-        departed_stakes: Vec::new(),
+        departed_stakes: None,
     }
 }
 
