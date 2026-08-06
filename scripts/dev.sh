@@ -325,11 +325,73 @@ path cannot work without it. It is provisioned by the managed network itself; a 
 without it needs '--reset'."
 }
 
+# HOW THE LOCAL MODULES WERE BUILT, WRITTEN DOWN WHERE THE VERIFIER CAN READ IT.
+#
+# docs/DEFECTS.md E-58. `verify-build.sh --local` used to rebuild in the
+# digest-pinned linux/amd64 container and compare that against canisters this
+# function had just installed from a native macOS build. Those two are not
+# byte-identical and never can be -- rustc emits different wasm per host OS and
+# architecture, which the Dockerfile has documented all along -- so the
+# documented pair of commands, `local-up` then `verify-build.sh --local`,
+# produced 6 of 6 MISMATCH on a stack that was in fact perfectly consistent. An
+# auditor followed the instructions literally and read that as possible
+# tampering, which is exactly the wrong signal from a verification tool.
+#
+# The two paths now agree because the verifier stops guessing: this note says
+# which builder produced the modules that are installed, and the verifier
+# rebuilds the same way.
+PROVENANCE_FILE="$REPO_ROOT/.icp/cache/cleardeck-build-provenance.txt"
+write_provenance() {
+  local builder="$1"
+  mkdir -p "$(dirname "$PROVENANCE_FILE")"
+  {
+    printf 'builder=%s\n' "$builder"
+    printf 'written_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'revision=%s\n' "$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+    printf 'dirty=%s\n' "$([ -n "$(git status --porcelain 2>/dev/null)" ] && echo dirty || echo clean)"
+    printf 'cargo=%s\n' "$(cargo --version 2>/dev/null || echo unknown)"
+    printf 'uname=%s\n' "$(uname -sm)"
+    printf '# read by scripts/verify-build.sh --local to pick a builder (docs/DEFECTS.md E-58)\n'
+  } > "$PROVENANCE_FILE"
+}
+
+# $1 = "host" | "docker"
 up_deploy() {
+  local builder="${1:-host}" emitted name
+
+  # Always run the ordinary deploy first: it creates the canisters, applies the
+  # init args from icp.yaml and installs a working module. The container path
+  # then UPGRADES each canister to the container-built bytes, which keeps the
+  # init-arg handling in exactly one place (the manifest) instead of duplicating
+  # it here where it would drift.
   icp_local deploy "${BACKEND_CANISTERS[@]}" --mode auto -y
+
+  if [ "$builder" = docker ]; then
+    step "[3b/6] swap in container-built modules"
+    local ctl ctl_flag=()
+    ctl="$(resolve_controller_identity lobby)" \
+      || die "no local icp identity controls the backend canisters, so they cannot be upgraded"
+    ctl_flag=(--identity "$ctl")
+    emitted="$(mktemp -d -t cleardeck-emit)"
+    "$REPO_ROOT/scripts/verify-build.sh" --emit "$emitted" \
+      || die "the container build failed; the local stack is up on host-built modules"
+    for name in "${BACKEND_CANISTERS[@]}"; do
+      call_or_die "$name install (container-built)" \
+        icp_local canister install "$name" --wasm "$emitted/$name.wasm" \
+          --mode upgrade -y "${ctl_flag[@]}" >/dev/null
+      info "$name <- $(basename "$emitted")/$name.wasm"
+    done
+    rm -rf "$emitted"
+    ok "every backend canister is running the linux/amd64 container build (as $ctl)"
+  fi
+
+  write_provenance "$builder"
+
   local f; f="$(local_ids_file)" || die "deploy left no local id mapping"
   ok "ids in $f"
   jq -r 'to_entries[] | "      \(.key)  \(.value)"' "$f"
+  info "build provenance recorded in $(basename "$PROVENANCE_FILE"): builder=$builder"
+  info "verify with: ./scripts/verify-build.sh --local"
 }
 
 # `icp canister call` EXITS ZERO when the method returns `variant { Err = ... }`.
@@ -486,21 +548,30 @@ up_frontend() {
 }
 
 cmd_local_up() {
-  local do_reset=0 skip_frontend=0
+  local do_reset=0 skip_frontend=0 builder=host
   while [ $# -gt 0 ]; do
     case "$1" in
       --reset) do_reset=1 ;;
       --no-frontend) skip_frontend=1 ;;
+      # Deploy the modules the reproducible-build image produces, instead of the
+      # ones your own toolchain produces. Slow (an emulated linux/amd64 build)
+      # and unnecessary for development, but it makes the local replica a real
+      # rehearsal of the mainnet verification: after this,
+      # `./scripts/verify-build.sh --local` runs the same container check a
+      # stranger runs against mainnet, end to end, on a stack you control.
+      --docker) builder=docker ;;
       *) die "local-up: unknown option $1" ;;
     esac
     shift
   done
 
   require_cmd icp; require_cmd jq; require_cmd curl; require_cmd cargo; require_cmd node
+  [ "$builder" = docker ] && { require_cmd docker; docker info >/dev/null 2>&1 \
+    || die "--docker needs the Docker daemon running"; }
 
   step "[1/6] replica";              up_replica "$do_reset"
   step "[2/6] ICP ledger";           up_ledger
-  step "[3/6] deploy backend";       up_deploy
+  step "[3/6] deploy backend";       up_deploy "$builder"
   step "[4/6] wire history + lobby"; up_wire
   step "[5/6] fund local players";   up_fund
   step "[6/6] frontend"
@@ -571,6 +642,36 @@ cmd_test() {
     # canister accepted 11). Two file reads, no replica, so it belongs in the fast
     # gate. Named explicitly for the deposit_replay reason above.
     cargo test --test ui_limits &&
+    # admin_custody is the gate on the ADMIN CUSTODY SURFACE
+    # (docs/SECURITY-FINDINGS.md FINDING 07: one controller call destroyed 100% of a
+    # funded table's chips, and it survived four waves because nothing in the project
+    # ever drove the admin surface with money on the table). It carries the sweep --
+    # every controller-callable update, asserting that none of them can reduce what
+    # the canister owes players without paying them -- and the census that fails when
+    # a NEW controller-gated method appears unaudited. Named explicitly for the
+    # deposit_replay reason above.
+    cargo test --test admin_custody -- --test-threads=2 &&
+    # wave6_coherence carries probe1 (the first auditor's fund lock, reached by real
+    # silence), probe4 (docs/SECURITY-FINDINGS.md FINDING 17: the fold-out winner
+    # must be PAID the pot -- an OUTCOME assertion, because the totals were exact
+    # while that defect was live) and probe5 (FINDING 07). All three assert now; the
+    # file spent wave 6 outside every target because two of them only RECORDED
+    # defects, and a target that passes while the defect is present teaches nobody
+    # anything. Named explicitly for the deposit_replay reason above.
+    cargo test --test wave6_coherence -- --test-threads=1 &&
+    # timers is the gate on THE ON-CHAIN CLOCK (docs/SECURITY-FINDINGS.md FINDING 19,
+    # docs/DEFECTS.md E-54/E-55/E-56). Every test in it drives the table with NO
+    # ingress message at all after setup -- only subnet ticks and queries -- so it is
+    # the only place that can tell whether anything on chain moves the game. It
+    # carries: the dead window with every client closed (unbounded before the clock,
+    # 30 s after), the post_upgrade re-arm (timers do not survive upgrades, and a
+    # canister that silently loses its clock looks fine from outside), the gate that
+    # a STALLED hand is played out rather than voided (E-56, which the fuzzer does
+    # NOT catch on its own -- reverting that fix leaves `--test fuzz` green), the
+    # proof that check_timeouts and the clock reach the same state, and the measured
+    # idle-table cycle burn the clock adds. Named explicitly for the deposit_replay
+    # reason above.
+    cargo test --test timers -- --test-threads=1 &&
     MONEY_FUZZ_SEEDS="${CLEARDECK_SMOKE_FUZZ_SEEDS:-1}" \
     MONEY_FUZZ_STEPS="${CLEARDECK_SMOKE_FUZZ_STEPS:-40}" \
     MONEY_FUZZ_SHRINK=10 \
@@ -958,6 +1059,10 @@ ${B}ClearDeck dev entry point${R}   (make <target> works for all of these)
   ${B}local-up${R}        bring the local stack up end to end (idempotent)
                     --reset        DELETE unresumable local network state first
                     --no-frontend  skip the frontend build/deploy
+                    --docker       install the reproducible container build instead
+                                   of your own toolchain's, so that
+                                   'verify-build.sh --local' runs the same check
+                                   a stranger runs against mainnet
   ${B}local-status${R}    alias for doctor
   ${B}wasm${R}            build table_canister.wasm and print its sha256
 

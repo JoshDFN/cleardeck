@@ -175,6 +175,21 @@ export interface TableState {
   'side_pots' : Array<SidePot>,
   'shuffle_proof' : [] | [ShuffleProof],
 }
+export interface CustodyStatus {
+  'escrow' : bigint,
+  'chips_at_table' : bigint,
+  'committed_in_pot' : bigint,
+  'committed_is_stuck' : boolean,
+  'abandonable_in_ns' : [] | [bigint],
+  'total' : bigint,
+  'advice' : string,
+}
+export interface StuckHandStatus {
+  'is_stuck' : boolean,
+  'hand_in_progress' : boolean,
+  'abandonable_in_ns' : [] | [bigint],
+  'refundable_pot' : bigint,
+}
 export interface TableView {
   'id' : bigint,
   'pot' : bigint,
@@ -202,6 +217,8 @@ export interface TableView {
   'shuffle_proof' : [] | [ShuffleProof],
   'is_my_turn' : boolean,
   'can_raise' : boolean,
+  'my_committed_in_pot' : bigint,
+  'hand_is_unmovable' : boolean,
 }
 export type TimeoutCheckResult = { 'AutoDealReady' : null } |
   { 'PlayerTimedOut' : number } |
@@ -323,7 +340,10 @@ export interface _SERVICE {
   /**
    * Cash out and leave the table
    */
+  'abandon_stuck_hand' : ActorMethod<[], Result_1>,
   'cash_out' : ActorMethod<[], Result_1>,
+  'get_custody_status' : ActorMethod<[], CustodyStatus>,
+  'get_stuck_hand_status' : ActorMethod<[], StuckHandStatus>,
   /**
    * Check for timeouts, auto-fold, and auto-deal
    * This should be called periodically or before each action

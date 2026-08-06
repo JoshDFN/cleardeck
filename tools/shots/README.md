@@ -93,10 +93,53 @@ false: `./scripts/dev.sh local-up` runs `icp deploy` with no `--identity`, so th
 end up controlled by whatever identity happens to be the machine's **current default** —
 which may belong to an entirely unrelated project. `resolveControllerIdentity()` in
 `lib/ids.mjs` reads the real controller list off a local canister with
-`icp canister status` and picks a local identity that is actually in it (preferring
-`CONTROLLER_IDENTITY`, then the funders, then the current default), and fails with an
-explicit message listing what it tried if none qualifies. The identity actually used is
-recorded in the manifest as `controllerIdentity`.
+`icp canister status` and picks a local identity that is actually in it — preferring
+`CONTROLLER_IDENTITY`, then the funders, then **every name in `icp identity list`**, then the
+current default — and fails with an explicit message listing what it tried if none qualifies.
+The identity actually used is recorded in the manifest as `controllerIdentity`.
+
+That name enumeration is the wave-7 half of the fix (docs/DEFECTS.md E-53). Resolving from a
+four-name allowlist plus whatever was selected was still an assumption: on this machine the
+tables are controlled by `cyclepay-hotwallet`, none of the four, and the entire sweep aborted
+with `No local icp identity controls 46el7-…`. Since the pixel gate, the occlusion gate and
+the protected-notice gate all live behind this sweep, one stale name list disabled three
+fund-adjacent gates at once and reported it as a setup error rather than a red gate.
+
+**The frontend deploy needs the same treatment, and did not have it.** `deployFrontend()` in
+`lib/frontend-build.mjs` ran `icp deploy -e local frontend` with no identity at all, and
+`icp deploy` starts with a controller-only `update_settings` call. On this machine that is a
+third identity again — the asset canister belongs to `oms-port-trial` — so `local-up` died in
+step `[6/6]` with `IC0512` *after* a successful backend deploy. It now resolves the controller
+the same way, and skips the lookup when the canister does not exist yet, because a canister
+that has never been created has no controller list and the deploy is what creates it.
+
+## An aborted run does not delete the previous run's evidence
+
+`latest/` is wiped by a full run, because a verified PNG left over from an earlier commit is
+exactly the artifact a reader would trust. That wipe is **lazy**: `run.mjs` hands
+`claimLatestDir` to the scene runner and it fires from `writeShot`, one statement before the
+first PNG is written. It used to run in the preamble of step `[6/6]`, before the first scene,
+and the identity check above fires inside the scenes — so a run that captured nothing still
+deleted `INDEX.md`, `manifest.json` and every PNG, and a wave-6 reconciler had to rebuild
+`latest/` by hand out of two older run directories.
+
+## Every scene is also measured with an error toast up
+
+HARD RULE 2 says the four protection notices and the no-rake property are on screen and
+legible **at any viewport on any view**. `lib/protected-notices.mjs` measures that on the
+rendered pixels — and it was green throughout a wave in which any error covered all five at
+portrait (docs/DEFECTS.md E-52), because no scene in this harness had ever raised one. The
+notices were measured on the rendered page; the *set of rendered pages* was the blind spot.
+
+So `lib/toast-notices.mjs` runs centrally, for every scene at every viewport, right where the
+census and the pixel gate run: it raises a toast, re-runs the notice probe with it up, and
+asserts three separate things — the hit test, that the toast's box fits inside the viewport,
+and that it starts at or below the bottom of the notice banner. The toast it raises carries the
+component's own Svelte scope class and must `matches()` one of the `.toast` rules in the live
+CSSOM, so it is painted by the app's own rule rather than by a lookalike. The `toast-notices`
+scenario then raises a **real** one through the app's own error path and compares the two,
+property by property, so "the injected node is the thing the player sees" is a measurement
+rather than a promise.
 
 ## What a scene asserts: agreement with the chain, not presence of an element
 

@@ -222,6 +222,22 @@ impl World {
         self.pic.tick();
     }
 
+    /// Move the clock forward WITHOUT executing a round.
+    ///
+    /// `advance` ticks, and a tick is when a canister timer gets to run. That is
+    /// usually what a test wants -- it is what a real subnet does -- but it makes
+    /// one class of state unobservable: the moment AFTER a deadline passes and
+    /// BEFORE anything has reacted to it. On a real subnet that window is however
+    /// long the canister goes unexecuted; here it is zero unless the test asks for
+    /// it.
+    ///
+    /// Used by the custody tests to look at a hand that has just become
+    /// unmovable, through QUERIES (which execute no round), before the on-chain
+    /// clock has had its turn.
+    pub fn advance_time_only(&self, d: Duration) {
+        self.pic.advance_time(d);
+    }
+
     // -----------------------------------------------------------------------
     // raw plumbing
     // -----------------------------------------------------------------------
@@ -236,6 +252,18 @@ impl World {
         self.pic
             .query_call(self.table, sender, method, arg)
             .map_err(describe)
+    }
+
+    /// An arbitrary query, sent AS `sender`, returning the raw reply.
+    ///
+    /// Exists for [`crate::invariants::custody`], which has to ask the canister
+    /// what a specific PLAYER can see and must survive a method that does not
+    /// exist on the build under test -- a probe that only compiles against the
+    /// fixed canister cannot convict the defect. Every other reader in this
+    /// harness is the controller, which is exactly how FINDING 18 stayed
+    /// invisible.
+    pub fn query_as(&self, sender: Principal, method: &str, arg: Vec<u8>) -> Outcome<Vec<u8>> {
+        self.query_raw(sender, method, arg)
     }
 
     /// A `Result<T, String>`-returning update.

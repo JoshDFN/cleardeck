@@ -79,6 +79,38 @@ export function readLocalIds() {
 }
 
 /**
+ * Every identity name `icp` knows about on this machine, in list order.
+ *
+ * `icp identity list` prints `name  principal` per line and marks the current
+ * default with a leading `*`, which is the same shape `scripts/dev.sh` parses.
+ * Failures are swallowed on purpose: this is an ADDITION to the caller's
+ * candidate list, so a machine where the command does not work degrades to the
+ * old behaviour instead of refusing to run.
+ *
+ * @returns {string[]}
+ */
+function localIdentityList() {
+  let out;
+  try {
+    out = icp(['identity', 'list'], { timeoutMs: 30_000 });
+  } catch {
+    return [];
+  }
+  const entries = [];
+  for (const raw of out.split('\n')) {
+    const line = raw.replace(/^\s*\*?\s*/, '').trimEnd();
+    if (!line) continue;
+    const fields = line.split(/\s+/).filter(Boolean);
+    if (fields.length < 2) continue; // no principal on the line: not an entry
+    const name = fields[0];
+    const principal = fields[fields.length - 1];
+    if (entries.some((e) => e.name === name)) continue;
+    entries.push({ name, principal });
+  }
+  return entries;
+}
+
+/**
  * Resolves which local icp identity ACTUALLY controls a local canister.
  *
  * The harness used to hardcode `cd-local-deployer` as the controller. That is an
@@ -91,7 +123,20 @@ export function readLocalIds() {
  *
  * So: read the real controller list off the canister and pick a local identity
  * that is in it. Preference order is `preferred` first, then the rest of the
- * candidates, then the current default identity.
+ * candidates, then EVERY identity `icp identity list` knows about, then the
+ * current default identity.
+ *
+ * docs/DEFECTS.md E-53. The version before this one stopped at "candidates, then
+ * the default", which is a four-name allowlist plus whatever happened to be
+ * selected. On this machine the local tables are controlled by
+ * `cyclepay-hotwallet` -- an unrelated project's identity that `local-up`
+ * happened to be signed in as -- and the whole screenshot sweep aborted with
+ * "No local icp identity controls 46el7-...". The pixel gate, the occlusion gate
+ * and the protected-notice gate all live behind that sweep, so one stale name
+ * list silently disabled three fund-adjacent gates and reported it as a setup
+ * error rather than a red gate. `scripts/dev.sh resolve_controller_identity`
+ * already enumerated `icp identity list`; this is that same behaviour, ported,
+ * so the two harnesses cannot disagree about who the controller is.
  *
  * @param {string} canisterId a local canister to read the controller list from
  * @param {object} [opts]
@@ -109,18 +154,25 @@ export function resolveControllerIdentity(canisterId, { preferred, candidates = 
     .map((s) => s.trim())
     .filter(Boolean);
 
+  // One `icp identity list` gives every name AND its principal, so the loop
+  // below spawns a subprocess only for names the list did not already answer.
+  const listed = localIdentityList();
+  const principalOf = new Map(listed.map((e) => [e.name, e.principal]));
+
   const names = [];
-  for (const n of [preferred, ...candidates]) {
+  for (const n of [preferred, ...candidates, ...listed.map((e) => e.name)]) {
     if (n && !names.includes(n)) names.push(n);
   }
 
   const checked = [];
   for (const name of names) {
-    let principal;
-    try {
-      principal = icp(['identity', 'principal', '--identity', name]).trim();
-    } catch {
-      continue; // identity does not exist on this machine
+    let principal = principalOf.get(name);
+    if (!principal) {
+      try {
+        principal = icp(['identity', 'principal', '--identity', name]).trim();
+      } catch {
+        continue; // identity does not exist on this machine
+      }
     }
     const isController = controllers.includes(principal);
     checked.push({ identity: name, principal, isController });

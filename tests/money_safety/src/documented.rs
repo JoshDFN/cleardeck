@@ -31,26 +31,25 @@
 //!   and did not exist until the wave-2 coherence pass wrote it: docs/DEFECTS.md
 //!   H-19. It is a documentation-coupling check, not proof the defect is still
 //!   live -- only running the engine can show that.)
-//! # The register holds EXACTLY ONE entry, and it excuses ZERO e8s
+//! # THE REGISTER IS EMPTY, AND SO IS THE TOLERATED-LOG-LINE LIST
 //!
-//! It used to carry six: three for E-01 (post-flop money destroyed at every
+//! It used to carry six entries: three for E-01 (post-flop money destroyed at every
 //! showdown, seen as stranded on the ledger, as value leaving the table, and as
 //! `awarded < collected`), one for E-03's `side_pots` drift, one for E-03's
 //! self-reported `BUG: Side pots (...)` line, and one for E-05's orphaned stake.
-//! All four defects were fixed in wave 2, so all six entries were DELETED, which is
-//! what fixing a defect is supposed to do to its tolerance. That left the register
-//! empty, and empty is still the goal state.
+//! All four defects were fixed in wave 2 and all six entries were DELETED, which is
+//! what fixing a defect is supposed to do to its tolerance.
 //!
-//! The one entry that is back names E-36 on the check
-//! `canister_reports_its_own_inconsistency`, direction `Unsigned`, bound **0 e8s**
-//! (docs/DEFECTS.md H-28). It is the other half of the
-//! [`TOLERATED_SELF_REPORTS`] line below, which had no register entry to meet, so a
-//! tolerated log line blocked exactly as hard as an untolerated one and the fuzzer's
-//! own default invocation was red at HEAD. It cannot excuse a single e8 moving
-//! anywhere: **nothing on the money path is excused.** Every violation that touches
-//! a balance still fails the run. If a money defect has to ship, add an entry here
-//! with an id, a document, a direction and a bound -- and know that the fuzzer can
-//! then explore past it.
+//! A seventh went in for E-36 in wave 6 (docs/DEFECTS.md H-28), on the check
+//! `canister_reports_its_own_inconsistency`, direction `Unsigned`, bound 0 e8s. It
+//! is gone too: E-36 is fixed (docs/SECURITY-FINDINGS.md FINDING 17), so the
+//! `WARNING:` it excused can no longer be emitted, and the entry left with it
+//! together with the [`TOLERATED_SELF_REPORTS`] line it was paired with. The engine
+//! still contains that log line, deliberately, as an untolerated tripwire.
+//!
+//! **Nothing is excused.** If a money defect has to ship, add an entry here with an
+//! id, a document, a direction and a bound -- and know that the fuzzer can then
+//! explore past it.
 //!
 //! The classifier's own tests do not depend on the register having entries: they
 //! drive [`classify_against`] with a synthetic register, so the mechanism stays
@@ -106,8 +105,7 @@ pub struct DocumentedDefect {
 /// minted into the run, so this is a real -- if generous -- ceiling.
 pub const WORLD_TOTAL_E8S: i128 = 4 * crate::world::ACTOR_START_E8S as i128;
 
-/// Log lines the canister may emit and still be believed. THERE IS EXACTLY ONE,
-/// and it names an open defect.
+/// Log lines the canister may emit and still be believed. THERE ARE NONE.
 ///
 /// This used to hold `"BUG: Side pots ("`, the exact line
 /// `calculate_side_pots` wrote when its reconciliation against `state.pot`
@@ -122,86 +120,38 @@ pub const WORLD_TOTAL_E8S: i128 = 4 * crate::world::ACTOR_START_E8S as i128;
 /// path can still write, `CRITICAL: pot accounting disagreement in hand N`, which
 /// fires only if `state.pot` and the contributions ever disagree.
 ///
-/// `WARNING:` lines are matched too, and that is why this list is no longer empty.
-/// The payout fix wrote E-36's dual-stake condition as a `WARNING:`, defensibly --
-/// nothing about the accounting is inconsistent there -- but the detector matched
-/// neither `BUG:` nor `CRITICAL:` in it, so 296 occurrences of a real open defect
-/// executing against the real canister were reported as `0 documented finding(s)`.
-/// Tolerance had moved into a string the classifier did not read. It is named here
-/// instead, where `register_entries_are_all_still_needed` can police it.
+/// `WARNING:` lines are matched too, and that is why this list was not always
+/// empty. The wave-2 payout fix wrote E-36's dual-stake condition as a `WARNING:`,
+/// defensibly -- nothing about the accounting was inconsistent there -- but the
+/// detector matched neither `BUG:` nor `CRITICAL:` in it, so 296 occurrences of a
+/// real open defect executing against the real canister were reported as
+/// `0 documented finding(s)`. Tolerance had moved into a string the classifier did
+/// not read, and the answer was to name it here where
+/// `register_entries_are_all_still_needed` could police it. E-36 is now fixed and
+/// the name is gone with it. The engine's line stays, untolerated: emitting it
+/// again would block a run rather than be counted.
 pub const TOLERATED_SELF_REPORTS: &[&str] = &[
-    // docs/DEFECTS.md E-36. A player who takes an empty chair MID-HAND and calls
-    // `sit_in()` is given the action and can bet into a hand they hold no cards in.
-    // `hand_contributions` reports it and keeps BOTH stakes, which is the correct
-    // thing for the PAYOUT path to do -- dropping either is a destroyed chip -- so
-    // this line is not an accounting inconsistency and must not stop the run.
+    // EMPTY, and that is the goal state. It held one entry for the whole of wave 6:
+    // E-36's `"carries both a live stake and a departed stake"`, the line
+    // `hand_stakes` writes when one chair carries two owners' money in a single
+    // hand. E-36 is FIXED (docs/SECURITY-FINDINGS.md FINDING 17): a mid-hand
+    // arrival is never dealt the action, so it can never put money into a hand,
+    // so a re-occupied chair can never carry a second live stake and the line
+    // cannot be emitted.
     //
-    // It is listed here, rather than left as a `WARNING:` the detector did not
-    // match, because an untolerated-but-invisible defect is the worst of both:
-    // a 1,200-step fuzz run emitted 296 of these and reported
-    // `0 documented finding(s)`.
-    //
-    // DELETE THIS ENTRY when E-36 is fixed (a seat taken mid-hand must not be
-    // dealt the action). The line will stop being emitted, and leaving a stale
-    // tolerance behind is exactly what H-19 is about.
-    "carries both a live stake and a departed stake",
+    // The line itself is deliberately STILL IN `src/table_canister/src/lib.rs`. It
+    // is now an untolerated tripwire: if that state ever becomes reachable again,
+    // the engine says so and `check_self_reported_inconsistency` blocks the run
+    // instead of counting it.
 ];
 
 pub const REGISTER: &[DocumentedDefect] = &[
-    // THE ONLY ENTRY. It admits E-36 is shipping, which it is, and it is what
-    // closes docs/DEFECTS.md H-28: the fuzzer's OWN DEFAULT INVOCATION was red.
+    // EMPTY. Nothing is excused, in any direction, at any magnitude.
     //
-    // The two halves of the tolerance mechanism did not meet.
-    // `check_self_reported_inconsistency` matched E-36's `WARNING:` against
-    // `TOLERATED_SELF_REPORTS` and, because it matched, downgraded it from
-    // `SelfReportedFailure` to `BreakdownDrift` on the check
-    // `canister_reports_its_own_inconsistency` -- "where it can be counted". But
-    // nothing in this register named that (invariant, check) pair, so `classify`
-    // answered `Blocking(NotRegistered)` and the run failed. The downgrade bought
-    // nothing: a line on the tolerated list blocked exactly as hard as one that was
-    // not on it. `cargo test --test fuzz` with no environment at all failed at seed
-    // 0xC1EA_2DEC_0003, shrunk to 12 ops, and no make target ever ran that
-    // invocation because every caller passed MONEY_FUZZ_SEEDS.
-    //
-    // WHY THIS DIRECTION AND NOT THE OTHER. H-28 offered two fixes: name the
-    // tolerance here, or stop emitting a violation for a tolerated line. The second
-    // puts tolerance back into a place the register cannot see, which is the exact
-    // H-03/H-20 pathology this file exists to prevent -- 296 occurrences of a real
-    // open defect once reported as `0 documented finding(s)`. So it is named here,
-    // counted, printed per run, and policed by
-    // `register_entries_are_all_still_needed`.
-    //
-    // WHAT THIS DOES NOT EXCUSE. `directions` is `Unsigned` only and the bound is
-    // ZERO e8s, so this entry can excuse exactly one thing: a zero-delta log-line
-    // finding on that one check. It cannot excuse a single e8 moving anywhere. The
-    // engine's handling of the dual-stake state is correct -- both stakes stay in
-    // the payout basis, each under its own owner, because dropping either destroys a
-    // chip -- so there is no accounting inconsistency to excuse, only a `WARNING:`
-    // about a seat that E-36 should never have dealt the action to.
-    //
-    // DELETE THIS ENTRY when E-36 is fixed, together with its
-    // `TOLERATED_SELF_REPORTS` line. `register_entries_are_all_still_needed` fails
-    // on both halves if only one is removed.
-    DocumentedDefect {
-        id: "E-36",
-        doc: "docs/DEFECTS.md#e-36 (the defect) and #h-28 (why this entry exists)",
-        invariant: Invariant::M1bPotBreakdown,
-        check: "canister_reports_its_own_inconsistency",
-        // The violation is constructed with `delta_e8s: 0`, so `Direction::of(0)` is
-        // `Unsigned`. A signed one on this check would be a DIFFERENT finding and
-        // blocks.
-        directions: &[Direction::Unsigned],
-        max_abs_delta_e8s: Some(0),
-        why: "E-36 is open and shipping: a player who takes an empty chair MID-HAND and calls \
-              sit_in() is dealt the action and can bet into a hand it holds no cards in. The \
-              payout path detects the resulting dual-stake seat and says so in a WARNING:, then \
-              keeps BOTH stakes with their own owners -- which is the correct thing to do, since \
-              dropping either destroys a chip. The line is therefore not an accounting \
-              inconsistency and must not stop a fund-safety run; it is counted here instead so \
-              the fuzzer can explore past a defect the project has already decided to ship.",
-    },
-    // The six entries that used to live here named E-01, E-03 and E-05, and all
-    // three are fixed. Their markers are now gates:
+    // Six entries used to live here for E-01, E-03 and E-05, and a seventh for E-36
+    // (docs/DEFECTS.md H-28). All are fixed and all are deleted, which is what
+    // fixing a defect is supposed to do to its tolerance. Their markers are gates
+    // now:
     //
     //   E-01  tests/regressions.rs reg01 (the winner is paid every e8 collected),
     //         tests/invariants/seam.rs seam_a, and the settlement oracle's
@@ -211,6 +161,9 @@ pub const REGISTER: &[DocumentedDefect] = &[
     //         test in poker_core::side_pots.
     //   E-05  tests/regressions.rs reg05 and reg08 (a vacated seat's stake stays in
     //         the payout basis), and pinned_e05_* in the settlement oracle.
+    //   E-36  tests/wave6_coherence.rs probe4 (the fold-out winner IS paid),
+    //         src/table_canister/tests/coherence_regressions.rs predicate_table,
+    //         and M11 OUTCOME on every fuzz step.
     //
     // Adding an entry here is admitting a money defect is shipping.
 ];
@@ -279,6 +232,30 @@ fn never_excusable(s: Severity) -> bool {
             // documented defect, it is a custody failure.
             // docs/SECURITY-FINDINGS.md FINDING 15.
             | Severity::FundsUnreachable
+            // Money inside the canister that belongs to NOBODY. Deliberately its
+            // own severity and not a `FundDestruction`, which this register is
+            // allowed to excuse: FINDING 07 destroyed 40 ICP through a labelled
+            // recovery button while every instrument anchored to "what does the
+            // canister say it owes" reported a clean table. There is no id that
+            // excuses unowned money and no magnitude at which it is acceptable.
+            // docs/SECURITY-FINDINGS.md FINDING 07.
+            | Severity::OrphanedCustody
+            // The player's own money, invisible to the player. No id excuses
+            // telling somebody they have nothing while holding their stake: the
+            // recovery path might as well not exist if the only way to learn it is
+            // needed is to read the interface definition.
+            // docs/SECURITY-FINDINGS.md FINDING 18.
+            | Severity::CustodyInvisible
+            // The right totals and the wrong result: a hand that did not end when
+            // the rules say it ended, or a pot paid to somebody other than the seat
+            // that held the last live claim. There is no magnitude at which the
+            // wrong player wins the hand, and no direction -- the winner's side of
+            // it looks like a shortfall and everybody else's like a refund, and
+            // they are the same defect. Three separate defects in this project have
+            // had exactly this shape and all three were invisible to every gate
+            // that asked about totals.
+            // docs/SECURITY-FINDINGS.md FINDING 17.
+            | Severity::WrongOutcome
     )
 }
 

@@ -109,6 +109,21 @@
   const minRaise = $derived(Number(tableState?.min_raise ?? tableState?.config?.big_blind ?? 0));
   const minBet = $derived(Number(tableState?.min_bet ?? tableState?.config?.big_blind ?? 10));
   const mySeat = $derived(tableState?.my_seat?.length > 0 ? tableState.my_seat[0] : null);
+
+  // ---------------------------------------------------------------------------
+  // MONEY OF MINE THAT IS IN THE MIDDLE (docs/SECURITY-FINDINGS.md FINDING 18)
+  // ---------------------------------------------------------------------------
+  //
+  // `tableBalance` is `get_balance()`: what can be withdrawn right now. It does
+  // not include a stake of mine in the current pot, and it CANNOT, because a
+  // stake in a pot is not withdrawable. An auditor read that number as zero and
+  // walked away from 2.98 ICP.
+  //
+  // The view now carries the figure per caller, so it is on screen beside the
+  // balance it corrects. Non-zero with `mySeat === null` is the finding itself:
+  // money of mine in a hand I am no longer sitting in.
+  const myCommittedInPot = $derived(Number(tableState?.my_committed_in_pot ?? 0));
+  const handIsUnmovable = $derived(tableState?.hand_is_unmovable === true);
   const isMyTurn = $derived(tableState?.is_my_turn === true);
   const gameInProgress = $derived(phaseKey !== 'WaitingForPlayers' && phaseKey !== 'HandComplete');
   const myPlayer = $derived(mySeat !== null && mySeat < players.length ? players[mySeat] : null);
@@ -1681,12 +1696,41 @@
               <span class="balance-label">Table balance</span>
               <span class="balance-value">{formatWithUnit(tableBalance)}</span>
             </div>
+            <!-- IN FLOW, directly under the balance it corrects. Never an overlay:
+                 nothing in this app may cover the four notices (HARD RULE 2). -->
+            {#if myCommittedInPot > 0}
+              <div class="wallet-committed" class:stuck={handIsUnmovable}>
+                <span class="committed-label">
+                  {handIsUnmovable ? 'Stuck in the pot' : 'In the pot'}
+                </span>
+                <span class="committed-value">{formatWithUnit(myCommittedInPot)}</span>
+                <span class="committed-note">
+                  {#if handIsUnmovable}
+                    This hand cannot move, so nobody can win it. Open Withdraw to get it back.
+                  {:else if mySeat === null}
+                    You have left this table and this is still yours in hand {handNumber}.
+                  {:else}
+                    Yours, in hand {handNumber}, until the hand settles.
+                  {/if}
+                </span>
+              </div>
+            {/if}
             <div class="wallet-actions">
               {#if onShowDeposit}
                 <button class="wallet-action-btn deposit" onclick={onShowDeposit}>Deposit</button>
               {/if}
               {#if onShowWithdraw}
-                <button class="wallet-action-btn withdraw" onclick={onShowWithdraw} disabled={tableBalance <= 0}>
+                <!-- ALSO OPEN WHEN THE BALANCE IS ZERO AND A STAKE IS OUTSTANDING.
+                     `disabled={tableBalance <= 0}` alone locked the one player who
+                     most needed this screen out of it: the auditor, whose escrow
+                     read 0 precisely because their 2.98 ICP was in a pot. The
+                     withdraw dialog is where the stake and its recovery button
+                     live. docs/SECURITY-FINDINGS.md FINDING 18. -->
+                <button
+                  class="wallet-action-btn withdraw"
+                  onclick={onShowWithdraw}
+                  disabled={tableBalance <= 0 && myCommittedInPot <= 0}
+                >
                   Withdraw
                 </button>
               {/if}
@@ -3162,6 +3206,50 @@
     color: #7ee2b8;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+
+  /* MONEY OF MINE THAT IS IN THE MIDDLE (docs/SECURITY-FINDINGS.md FINDING 18).
+     Static flow, no z-index, no positioning: it sits inside the wallet panel and
+     cannot cover anything. */
+  .wallet-committed {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 6px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 184, 0, 0.5);
+    background: rgba(255, 184, 0, 0.1);
+    min-width: 0;
+  }
+
+  .wallet-committed.stuck {
+    border-color: rgba(255, 92, 92, 0.65);
+    background: rgba(255, 92, 92, 0.12);
+  }
+
+  .committed-label {
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #ffc84d;
+    white-space: nowrap;
+  }
+
+  .wallet-committed.stuck .committed-label { color: #ff9a9a; }
+
+  .committed-value {
+    font-size: 13px;
+    font-weight: 800;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .committed-note {
+    font-size: 10px;
+    line-height: 1.35;
+    color: rgba(255, 255, 255, 0.72);
   }
 
   .wallet-actions { display: flex; gap: 6px; }

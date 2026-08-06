@@ -41,9 +41,11 @@ function controllerArgs(canisterId) {
       throw new Error(
         `No local icp identity controls ${canisterId}.\n` +
           `  controllers on the canister: ${found.controllers.join(', ') || '(none reported)'}\n` +
-          `  identities tried: ${found.checked.map((c) => `${c.identity}=${c.principal}`).join(', ')}\n` +
+          `  identities tried (${found.checked.length}, i.e. every name in \`icp identity list\` ` +
+          `plus the current default): ${found.checked.map((c) => c.identity).join(', ')}\n` +
           'Controller-only calls (reset_table) cannot be made, so scenes cannot be reset.\n' +
-          `Redeploy the local backend as ${CONTROLLER_IDENTITY}, or add it as a controller.`,
+          `Redeploy the local backend as ${CONTROLLER_IDENTITY}, or add one of the identities ` +
+          'above as a controller of the canister.',
       );
     }
     controllerCache = { identity: found.identity };

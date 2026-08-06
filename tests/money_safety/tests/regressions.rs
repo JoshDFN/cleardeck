@@ -631,7 +631,9 @@ fn reg08_a_timed_out_player_can_cash_out_mid_hand_and_orphan_their_stake() {
 ///
 /// What is asserted now, on the identical sequence:
 ///
-/// 1. one 30 s lull folds EXACTLY ONE seat -- the one on the clock;
+/// 1. one 30 s lull folds EXACTLY ONE seat -- **the one on the clock, named**,
+///    whether the on-chain clock or the `check_timeouts` call got there first
+///    (docs/DEFECTS.md E-54; see the comment at the assertion);
 /// 2. the hand is still in progress, with two live seats;
 /// 3. the board did NOT run out: it is still one street on from where it was;
 /// 4. nobody was marked `Disconnected` by a 31 s lull at all;
@@ -693,16 +695,51 @@ fn reg09_one_timeout_folds_only_the_seat_on_the_clock() {
 
     // A 30-second lull. No heartbeats: exactly what a browser tab losing its
     // connection produces.
+    let seat_on_the_clock = before.table.action_on;
     world.advance(Duration::from_secs(31));
     let outcome = world.check_timeouts(seats[0]).expect("check_timeouts");
-    println!("REG-09 check_timeouts -> {outcome:?}");
+    println!("REG-09 check_timeouts -> {outcome:?} (seat on the clock was {seat_on_the_clock})");
 
     let after = world.snapshot();
 
     // 1. EXACTLY ONE seat was folded, and it is the one that was on the clock.
+    //
+    // THIS ASSERTION USED TO READ THE RETURN VALUE: `matches!(outcome,
+    // PlayerTimedOut(_))`. That stopped being the right question when the on-chain
+    // clock landed (docs/DEFECTS.md E-54). `world.advance` produces a block, the
+    // clock's watchdog resolves the expired action timer in that block, and the
+    // `check_timeouts` call that follows correctly reports `NoAction` because there
+    // is nothing left to do. The seat is folded either way, and by the SAME
+    // function -- `advance_table_clock` -- reached from two entry points.
+    //
+    // So the assertion now names the SEAT rather than the messenger, which is
+    // strictly stronger than what it replaced: `PlayerTimedOut(_)` accepted any
+    // seat, and `NoAction` with nothing folded (a real regression) would have been
+    // caught by neither the old form nor a naive relaxation of it. Which entry
+    // point did the work is gated separately, and required to agree, by
+    // `tests/money_safety/tests/timers.rs::the_clock_and_check_timeouts_cannot_drift`.
     assert!(
-        matches!(outcome, TimeoutCheckResult::PlayerTimedOut(_)),
-        "one lull past a 30 s action clock must time out the seat on the clock, got {outcome:?}"
+        matches!(
+            outcome,
+            TimeoutCheckResult::PlayerTimedOut(_) | TimeoutCheckResult::NoAction
+        ),
+        "one lull past a 30 s action clock must fold the seat on the clock, by the timer or by \
+         the call; got {outcome:?}"
+    );
+    assert!(
+        after
+            .table
+            .player_at(seat_on_the_clock)
+            .map(|p| p.has_folded)
+            .unwrap_or(false),
+        "PINNED FIX (E-06 / E-54): the seat whose own 30 s clock expired ({seat_on_the_clock}) \
+         is NOT folded after a 31 s lull plus a check_timeouts. Nothing resolved the clock -- \
+         neither the on-chain timer nor the manual path. Seats: {:?}",
+        after
+            .table
+            .seated()
+            .map(|p| (p.seat, p.has_folded))
+            .collect::<Vec<_>>()
     );
     let folded_after = after.table.seated().filter(|p| p.has_folded).count();
     assert_eq!(
@@ -798,19 +835,26 @@ fn reg09_one_timeout_folds_only_the_seat_on_the_clock() {
 }
 
 // ---------------------------------------------------------------------------
-// REG-06 -- admin_reinit_table destroys every seated player's chips
+// REG-06 -- admin_reinit_table must return every seated chip, not destroy it
 // ---------------------------------------------------------------------------
 
-/// `admin_reinit_table` is controller-only, but it calls `init_table_state`, which
-/// builds a brand new `TableState` with empty seats. Every seated player's chips
-/// and the whole pot are dropped on the floor: not returned to escrow, not
-/// withdrawable, gone. The canister's ledger balance is unchanged, so the money is
-/// stranded exactly as in REG-01.
+/// **PINNED FIX (docs/SECURITY-FINDINGS.md FINDING 07, docs/DEFECTS.md E-07).**
 ///
-/// Documented rather than patched: it needs an owner decision (return chips to
-/// escrow first, or refuse while anyone is seated).
+/// What this test USED to assert, word for word: *"every chip stack is gone"*,
+/// *"and NOTHING was returned to escrow"*, *"the tokens are still in the canister,
+/// owed to nobody"*. `admin_reinit_table` is controller-only, but it called
+/// `init_table_state`, which builds a brand new `TableState` with empty seats, so
+/// every seated player's chips and the whole pot were dropped on the floor. The
+/// test then REQUIRED M1 to be red by exactly the destroyed amount. It was a pin,
+/// and it was left as one for four waves on the grounds that the fix "needs an
+/// owner decision".
+///
+/// The decision, taken 2026-08-05: a CONFIG reset (`reset_table`) refuses while
+/// the table holds custody, and the RECOVERY door (`admin_reinit_table`) returns
+/// every chip to the escrow of the player who owns it before it rebuilds anything.
+/// Every assertion below is the inverse of the one it replaced.
 #[test]
-fn reg06_admin_reinit_table_strands_every_seated_players_chips() {
+fn reg06_admin_reinit_table_returns_every_seated_chip_to_its_owner() {
     let world = World::new(TableConfig::six_max_icp(), &["alice", "bob"]);
     let alice = world.actor("alice");
     let bob = world.actor("bob");
@@ -836,23 +880,37 @@ fn reg06_admin_reinit_table_strands_every_seated_players_chips() {
     assert!(out.is_ok(), "admin_reinit_table returned {out:?}");
 
     let after = world.snapshot();
-    assert_eq!(after.chips_total, 0, "every chip stack is gone");
+    assert_eq!(after.chips_total, 0, "the table was rebuilt, so the seats are empty");
     assert_eq!(
-        after.escrow_total, before.escrow_total,
-        "and NOTHING was returned to escrow"
+        after.escrow_total,
+        before.escrow_total + before.chips_total,
+        "PINNED FIX (FINDING 07): every chip must have been returned to escrow. This assertion \
+         used to read `after.escrow_total == before.escrow_total` -- \"and NOTHING was returned \
+         to escrow\" -- which is what destroying 40 ICP on a live table looked like from here."
     );
     assert_eq!(
         after.ledger_main, before.ledger_main,
-        "the tokens are still in the canister, owed to nobody"
+        "no money left the canister; it only changed which account owes it"
     );
+    for who in [alice, bob] {
+        let gained = after.escrow.get(&who).copied().unwrap_or(0)
+            - before.escrow.get(&who).copied().unwrap_or(0);
+        assert_eq!(
+            gained,
+            world.config.min_buy_in,
+            "{who} must get their OWN stack back, not a share of the total"
+        );
+    }
 
+    // And the harness must now agree, on every leg: M1 conservation AND the
+    // ledger-anchored orphan check that FINDING 07 walked straight past.
     let vs = check_world(&world);
-    let m1 = vs
-        .iter()
-        .find(|v| v.invariant == Invariant::M1Conservation)
-        .expect("M1 must flag the stranded chips");
-    assert_eq!(m1.delta_e8s, before.chips_total as i128);
-    println!("REG-06: {}", m1.detail);
+    assert!(
+        vs.is_empty(),
+        "PINNED FIX (FINDING 07): no invariant may fire after a reinit. This test used to REQUIRE \
+         M1 to be red here by exactly {} e8s. Got: {vs:?}",
+        before.chips_total
+    );
 }
 
 // ---------------------------------------------------------------------------

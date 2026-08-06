@@ -11,7 +11,8 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ENV, FRONTEND_DIR, FRONTEND_DIST, ICP_LEDGER_CANISTER_ID, REPO_ROOT } from './config.mjs';
-import { assertNotMainnet, icp, readLocalIds } from './ids.mjs';
+import { assertNotMainnet, icp, readLocalIds, resolveControllerIdentity } from './ids.mjs';
+import { CONTROLLER_IDENTITY, FUNDER_IDENTITIES } from './config.mjs';
 
 /**
  * Environment the vite build needs.
@@ -106,10 +107,50 @@ export function buildFrontend({ log = console.log } = {}) {
   return { ids, proof };
 }
 
-/** Deploys the asset canister to the local network only. */
+/**
+ * Deploys the asset canister to the local network only.
+ *
+ * THE IDENTITY IS RESOLVED, NOT ASSUMED -- docs/DEFECTS.md E-53, third instance.
+ *
+ * `icp deploy` with no `--identity` runs as whatever identity happens to be
+ * selected on the machine, and its FIRST action is `update_settings` on the
+ * canister, which is controller-only. On this machine the frontend asset
+ * canister is controlled by `oms-port-trial` while the backend canisters are
+ * controlled by `cyclepay-hotwallet` and the docs name `cd-local-deployer` --
+ * three different identities for one stack, because each was created by
+ * whatever was selected at the time. `./scripts/dev.sh local-up` therefore died
+ * in step [6/6] with `IC0512 Only controllers of canister ... can call ic00
+ * method update_settings`, AFTER a successful backend deploy, so the stack was
+ * left with new canisters and a stale frontend.
+ *
+ * Same fix as the table driver: read the controller list off the canister and
+ * use an identity that is actually in it. A fresh machine, where the canister
+ * does not exist yet, has no controller list to read -- there the deploy runs
+ * with the default identity and creates it, which is correct.
+ */
 export function deployFrontend({ log = console.log } = {}) {
-  log('  icp deploy -e local frontend');
-  const out = icp(['deploy', '-e', ENV, 'frontend'], { timeoutMs: 15 * 60_000 });
+  const existing = readLocalIds().frontend;
+  const idFlag = [];
+  if (existing) {
+    const found = resolveControllerIdentity(existing, {
+      preferred: CONTROLLER_IDENTITY,
+      candidates: FUNDER_IDENTITIES,
+    });
+    if (found.identity === undefined) {
+      throw new Error(
+        `No local icp identity controls the frontend asset canister ${existing}.\n`
+        + `  controllers on the canister: ${found.controllers.join(', ') || '(none reported)'}\n`
+        + `  identities tried: ${found.checked.length} (every name in \`icp identity list\`)\n`
+        + '`icp deploy` starts with a controller-only update_settings call, so it cannot '
+        + 'redeploy this canister. Add one of your identities as a controller, or delete the '
+        + 'canister and let the deploy recreate it.',
+      );
+    }
+    if (found.identity) idFlag.push('--identity', found.identity);
+    log(`  frontend controller: ${found.identity ?? '(default identity)'}`);
+  }
+  log(`  icp deploy -e local frontend${idFlag.length ? ` ${idFlag.join(' ')}` : ''}`);
+  const out = icp(['deploy', '-e', ENV, 'frontend', ...idFlag], { timeoutMs: 15 * 60_000 });
   const ids = readLocalIds();
   if (!ids.frontend) {
     throw new Error(

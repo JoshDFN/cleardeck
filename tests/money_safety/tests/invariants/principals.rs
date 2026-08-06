@@ -240,26 +240,40 @@ fn play_the_finding13_sequence() -> (
         "dave has staked nothing in this hand"
     );
 
-    // 3. bob leaves. carol and dave are still 'active', so the hand continues.
+    // 3. bob leaves. Leaving mid-hand relinquishes the claim, so CAROL is now the
+    //    only seat still holding cards -- dave holds none -- and the hand is over
+    //    the instant bob's departure is applied. Carol wins it.
+    //
+    //    THIS IS WHAT THE FINDING 17 FIX CHANGED, and this fixture is where it is
+    //    visible in money. Before it, the cardless seat 0 kept
+    //    `count_active_players` at 2, the hand ran on, carol could leave too, and
+    //    the hand settled with NO live claim on it: every stake handed back to its
+    //    funder, including alice's and bob's, and carol -- who had won -- paid
+    //    nothing. That un-played settlement was the state this test used to assert.
+    //    See docs/SECURITY-FINDINGS.md FINDING 17.
     world.leave_table(bob).expect("bob leaves mid-hand");
-    // 4. carol leaves. Only dave is left, and he holds no cards, so the hand
-    //    settles with NO live claim on any layer: every stake is refunded.
-    world.leave_table(carol).expect("carol leaves mid-hand");
 
     let end = world.table_state();
     assert!(
         !end.phase.hand_in_progress(),
-        "the hand must have settled once the last card-holder left, phase is {:?}",
+        "the hand must settle the instant only one seat still holds cards, phase is {:?}.          A cardless mid-hand arrival must not keep it alive: docs/SECURITY-FINDINGS.md          FINDING 17.",
         end.phase
     );
     assert_eq!(end.pot, 0, "a settled hand leaves no pot");
 
-    // Every stake was refunded to whoever put it in, so nobody's value changed.
+    // alice and bob both gave up their claims by leaving; carol held the only live
+    // one and takes both their stakes. dave took a chair and staked nothing, so he
+    // is owed nothing -- and THAT is the FINDING 13 assertion, now made while real
+    // money is moving instead of while everything is flat.
     let staked: BTreeSet<Principal> = [alice, bob, carol].into_iter().collect();
-    let expected: BTreeMap<Principal, i128> = [alice, bob, carol, dave]
-        .iter()
-        .map(|p| (*p, 0i128))
-        .collect();
+    let expected: BTreeMap<Principal, i128> = [
+        (alice, -(stake as i128)),
+        (bob, -(stake as i128)),
+        (carol, 2 * stake as i128),
+        (dave, 0i128),
+    ]
+    .into_iter()
+    .collect();
     (world, before, staked, expected, stake)
 }
 
@@ -286,44 +300,53 @@ fn m8_a_departed_stake_is_paid_to_its_owner_and_not_to_whoever_took_the_chair() 
         "a principal who staked nothing must not be paid",
     );
 
-    // And the full statement: every stake back to its own owner, to the e8.
+    // And the full statement: every e8 to the person the rules of poker name.
     let vs = check_principal_attribution(&before, &after, &expected, &GamePhase::HandComplete);
     assert_holds(
         &vs,
         Invariant::M8PrincipalAttribution,
-        "every refunded stake reaches the principal who put it in",
+        "every stake reaches the principal the rules of poker say it belongs to",
     );
 
     // Stated again as bare numbers, so a reader of the failure sees the two sides
     // of the same e8 rather than a violation list.
     let d = value_deltas(&before, &after);
+    let carol = world.actor("carol");
     assert_eq!(
         d.get(&alice).copied().unwrap_or(0),
-        0,
-        "alice put {stake} into the pot and must have got exactly {stake} back; she is the \
-         only person that money ever belonged to"
+        -(stake as i128),
+        "alice left the hand with {stake} in the pot: she gave up her claim on it, so she \
+         forfeits it to the seat that still held one"
+    );
+    assert_eq!(
+        d.get(&carol).copied().unwrap_or(0),
+        2 * stake as i128,
+        "carol held the ONLY live claim when bob left, so she wins both forfeited stakes. \
+         If she is level here, the hand was un-played and every stake went back to its \
+         funder: docs/SECURITY-FINDINGS.md FINDING 17."
     );
     assert_eq!(
         d.get(&dave).copied().unwrap_or(0),
         0,
-        "dave took alice's chair and staked nothing. Any gain here is alice's money in his \
-         hands: docs/SECURITY-FINDINGS.md FINDING 13."
+        "dave took alice's chair and staked nothing. Any gain here is somebody else's money \
+         in his hands: docs/SECURITY-FINDINGS.md FINDING 13."
     );
 
-    // Where the money physically went: alice's escrow, not dave's stack.
+    // Where the money physically did NOT go: dave's stack, which is untouched.
     let end = world.table_state();
     assert_eq!(
         end.player_at(0).map(|p| p.chips),
         Some(world.config.min_buy_in),
-        "dave's stack must still be exactly his buy-in"
+        "dave's stack must still be exactly his buy-in: he staked nothing and won nothing"
     );
     assert!(
         end.player_at(0).map(|p| p.principal) == Some(dave),
         "seat 0 is still dave's chair"
     );
 
-    // And the RECORD names alice, so the hand history and the client cannot report
-    // her money as his.
+    // And the RECORD names carol, at HER seat, for the whole pot -- and does not
+    // name dave at all. A record that credited seat 0 would be crediting the chair
+    // rather than the person: docs/SECURITY-FINDINGS.md FINDING 13.
     let history = world
         .hand_history(end.hand_number)
         .expect("the settled hand must be in the history");
@@ -333,12 +356,21 @@ fn m8_a_departed_stake_is_paid_to_its_owner_and_not_to_whoever_took_the_chair() 
         .map(|w| (w.seat, w.principal, w.amount))
         .collect();
     assert!(
-        named.iter().any(|(s, p, a)| *s == 0 && *p == alice && *a == stake),
-        "the recorded winner list must credit seat 0's {stake} to {alice}; it says {named:?}"
+        named
+            .iter()
+            .any(|(s, p, a)| *s == 2 && *p == carol && *a == 3 * stake),
+        "the recorded winner list must credit the whole {} pot to {carol} at seat 2; it says \
+         {named:?}",
+        3 * stake
     );
     assert!(
         !named.iter().any(|(_, p, _)| *p == dave),
         "the recorded winner list must not name {dave} at all; it says {named:?}"
+    );
+    assert!(
+        !named.iter().any(|(_, p, _)| *p == alice),
+        "alice gave up her claim by leaving; the record must not credit her anything. It says \
+         {named:?}"
     );
     assert_eq!(
         history.awarded_total(),
@@ -709,28 +741,34 @@ fn m8_each_attribution_leg_convicts_the_misdirection_it_exists_for() {
     );
 }
 
-/// A CHAIR THAT CARRIES TWO PEOPLE'S MONEY MUST REPORT BOTH OF THEM.
+/// A CHAIR THAT CARRIES TWO PEOPLE'S MONEY IS NOW UNREACHABLE, AND THIS IS THE
+/// TEST THAT SAYS SO.
 ///
-/// # Why this hand exists
+/// # What this test used to be, and why it changed
 ///
-/// `push_winner` aggregates by `(seat, principal)` rather than by seat, and the
-/// comment on it says why: one chair can carry two stakes belonging to two
-/// different players in a single hand (docs/DEFECTS.md E-36), and merging them
-/// reports one player's money under the other player's name.
+/// It used to BUILD the two-owner chair on purpose. alice leaves a live hand with
+/// money in the pot, dave takes her chair and calls `sit_in()`, and -- because
+/// `find_next_active_seat` asked only for `status == Active` -- dave was then
+/// given the action and could bet into a hand he had never been dealt into. That
+/// put a second owner's money at seat 0, which is the first half of
+/// docs/DEFECTS.md E-36, and the test asserted that `push_winner` reported both
+/// stakes under their own names rather than merging them.
 ///
-/// Nothing tested that. Aggregating by seat alone leaves every chip in the right
-/// escrow -- `credit_escrow` has already run by the time the record is written --
-/// so conservation, the settlement oracle's per-seat and per-principal diffs, and
-/// the canister's own logs are all silent. The only thing wrong is the RECORD: the
-/// winner list the UI shows, the history canister archives, and a player would
-/// quote in a dispute.
+/// **E-36 is fixed** (docs/SECURITY-FINDINGS.md FINDING 17): `can_still_act`
+/// requires cards, so a mid-hand arrival is never offered the action and can never
+/// put a chip into a hand it holds none in. The premise is gone. Rather than delete
+/// the hand -- which would leave nothing asserting the fix from this direction --
+/// it now drives the identical sequence and asserts that **dave never gets the
+/// action, is refused every action he sends, and never ends up with a stake.**
 ///
-/// So this hand builds the two-owner chair on purpose and asserts on the record,
-/// by principal. It is also the hand where `check_award_reaches_the_person_it_names`
-/// has two names to tell apart at one seat.
+/// `push_winner`'s aggregation by `(seat, principal)` stays as it is. It is now
+/// defence in depth rather than a live requirement, and the reason to keep it is
+/// that the merge it prevents publishes one player's money under another player's
+/// name -- silently, because `credit_escrow` has already run by the time the record
+/// is written, so conservation and the oracle are both blind to it.
 #[test]
-fn m8_a_chair_with_two_owners_credits_each_of_them_under_their_own_name() {
-    let world = World::new(
+fn a_mid_hand_arrival_is_never_dealt_the_action_and_can_never_stake_the_hand() {
+    let mut world = World::new(
         TableConfig::six_max_icp(),
         &["alice", "bob", "carol", "dave"],
     );
@@ -746,110 +784,104 @@ fn m8_a_chair_with_two_owners_credits_each_of_them_under_their_own_name() {
     world.join_table(carol, 2).expect("carol sits");
     world.advance(Duration::from_secs(4));
 
-    let mut watch = HandAttributionWatch::new();
-    let feed = |world: &World, watch: &mut HandAttributionWatch| -> Option<HandAttribution> {
-        let snap = world.snapshot();
-        let history = world.hand_history(snap.table.hand_number);
-        watch.observe(&snap, world.uncredited_raw_deposits, history.as_ref())
-    };
-    feed(&world, &mut watch);
-
     deal_to_the_flop(&world);
-    feed(&world, &mut watch);
     let live = world.table_state();
     assert_eq!(live.phase, GamePhase::Flop, "the fixture needs a live flop");
     let alice_stake = live.player_at(0).expect("alice seated").total_bet_this_hand;
     assert!(alice_stake > 0);
 
-    // alice leaves with money in the pot; dave takes her CHAIR and sits in.
+    // alice leaves with money in the pot; dave takes her CHAIR and sits in. Both
+    // calls still return Ok -- taking an empty chair is legal, and this test is
+    // not about refusing it.
     world.leave_table(alice).expect("alice leaves mid-hand");
-    feed(&world, &mut watch);
     world.join_table(dave, 0).expect("dave takes seat 0");
     world.sit_in(dave).expect("dave sits in");
-    feed(&world, &mut watch);
 
-    // Drive until dave is given the action -- E-36 -- and make him bet into a hand
-    // he holds no cards in. That is the second stake at seat 0.
-    let mut dave_stake = 0u64;
+    let retaken = world.table_state();
+    assert_eq!(retaken.player_at(0).map(|p| p.principal), Some(dave));
+    assert_eq!(
+        retaken.player_at(0).and_then(|p| p.hole_cards),
+        None,
+        "a mid-hand arrival holds no cards"
+    );
+
+    // Drive the hand and watch the clock. dave must never be on it, and every
+    // action he sends must be refused.
+    let mut dave_was_on_the_clock = false;
+    let mut dave_refusals = 0usize;
     for _ in 0..16 {
         let t = world.table_state();
         if !t.phase.hand_in_progress() {
             break;
         }
+        if t.player_at(t.action_on).map(|p| p.principal) == Some(dave) {
+            dave_was_on_the_clock = true;
+        }
+        match world.player_action(dave, PlayerAction::Bet(4_000_000)) {
+            Err(_) => dave_refusals += 1,
+            Ok(()) => panic!(
+                "docs/DEFECTS.md E-36 HAS RETURNED: dave holds no cards in this hand and the \
+                 engine accepted a bet from him. He can lose money he cannot win, and his \
+                 stake makes seat 0 carry two owners' money in one hand."
+            ),
+        }
         let Some(who) = on_clock(&t) else {
             world.advance(Duration::from_secs(1));
-            feed(&world, &mut watch);
             continue;
         };
-        if who == dave {
-            let _ = world.player_action(dave, PlayerAction::Bet(4_000_000));
-            feed(&world, &mut watch);
-            dave_stake = world
-                .table_state()
-                .player_at(0)
-                .map(|p| p.total_bet_this_hand)
-                .unwrap_or(0);
-            break;
-        }
         if world.player_action(who, PlayerAction::Check).is_err() {
             let _ = world.player_action(who, PlayerAction::Call);
         }
-        feed(&world, &mut watch);
     }
+
     assert!(
-        dave_stake > 0,
-        "the fixture must get a second owner's money into seat 0 (docs/DEFECTS.md E-36); \
-         without it this test is not measuring the two-owner chair at all"
+        !dave_was_on_the_clock,
+        "docs/DEFECTS.md E-36 HAS RETURNED: seat 0 holds no cards and was given the action. \
+         A seat on the clock can be FOLDED by that clock, which is how FINDING 17 reached a \
+         settlement with no live claim on it."
     );
-    let mid = world.table_state();
-    assert_eq!(
-        mid.departed()
-            .iter()
-            .filter(|d| d.hand_number == mid.hand_number)
-            .map(|d| (d.seat, d.principal, d.contributed))
-            .collect::<Vec<_>>(),
-        vec![(0u8, alice, alice_stake)],
-        "alice's stake must still be recorded at seat 0 under HER name"
+    assert!(
+        dave_refusals > 0,
+        "the fixture must actually have tried to make dave act; it never got the chance"
     );
 
-    // Everybody still holding cards leaves, so no layer has a claimant and every
-    // stake goes back to whoever put it in -- including both stakes at seat 0.
+    // No second stake at seat 0, ever.
+    let mid = world.table_state();
+    assert_eq!(
+        mid.player_at(0).map(|p| p.total_bet_this_hand),
+        Some(0),
+        "dave must have nothing in this hand"
+    );
+
+    // And the engine never reported the two-owner state. That `WARNING:` is no
+    // longer on `TOLERATED_SELF_REPORTS`, so if it were emitted the money-safety
+    // classifier would BLOCK on it rather than count it.
+    let logs = world.new_canister_logs().join("\n");
+    assert!(
+        !logs.contains("carries both a live stake and a departed stake"),
+        "the engine reported a chair carrying two owners' stakes, which E-36's fix is \
+         supposed to have made unreachable:\n{logs}"
+    );
+
+    // Settle the hand however it ends, and check dave got nothing out of it.
+    let before_settle = values_now(&world);
     let _ = world.leave_table(bob);
-    feed(&world, &mut watch);
-    let _ = world.leave_table(carol);
-    let settled = feed(&world, &mut watch);
+    world.advance(Duration::from_secs(4));
+    let _ = world.check_timeouts(carol);
+    let after = values_now(&world);
     let end = world.table_state();
     assert!(
         !end.phase.hand_in_progress(),
-        "the hand must have settled once the last card-holder left, phase {:?}",
+        "the hand must have settled, phase {:?}",
         end.phase
     );
-
-    // --- THE ASSERTION: the record names both of them, separately -----------
-    //
-    // Measured against what each of them ACTUALLY had in the pot when the hand
-    // settled, not against what they bet: dave's bet was uncalled, so the engine
-    // handed part of it straight back mid-hand and only the rest was ever at
-    // stake. `a.staked` is that figure, reconstructed from `total_bet_this_hand`
-    // and `departed_stakes` and never from the payout code.
-    let a = settled.expect("the watch must have produced an attribution for this hand");
-    println!("two-owner chair: {}", a.summary());
-    assert!(
-        a.is_measurable(),
-        "the two-owner hand must be measurable: {:?}",
-        a.incompleteness
-    );
-    let alice_effective = a.staked.get(&alice).copied().unwrap_or(0);
-    let dave_effective = a.staked.get(&dave).copied().unwrap_or(0);
     assert_eq!(
-        alice_effective, alice_stake,
-        "alice's stake is the one she left in the pot"
-    );
-    assert!(
-        dave_effective > 0,
-        "dave bet {dave_stake} into a hand he holds no cards in and must still have \
-         something at stake after the uncalled part came back; staked={:?}",
-        a.staked
+        value_deltas(&before_settle, &after)
+            .get(&dave)
+            .copied()
+            .unwrap_or(0),
+        0,
+        "dave staked nothing and must be paid nothing: docs/SECURITY-FINDINGS.md FINDING 13"
     );
 
     let history = world
@@ -860,38 +892,9 @@ fn m8_a_chair_with_two_owners_credits_each_of_them_under_their_own_name() {
         .iter()
         .map(|w| (w.seat, w.principal, w.amount))
         .collect();
-    println!("winner list for the two-owner chair: {named:?}");
+    println!("winner list with a re-occupied chair: {named:?}");
     assert!(
-        named
-            .iter()
-            .any(|(s, p, x)| *s == 0 && *p == alice && *x == alice_effective),
-        "seat 0's {alice_effective} e8s belong to {alice} and the record must say so; it \
-         says {named:?}"
-    );
-    assert!(
-        named
-            .iter()
-            .any(|(s, p, x)| *s == 0 && *p == dave && *x == dave_effective),
-        "the other {dave_effective} e8s at seat 0 belong to {dave} and the record must say \
-         so SEPARATELY; it says {named:?}. Merging the two is one player's money published \
-         under another player's name (docs/DEFECTS.md E-36, SECURITY-FINDINGS FINDING 13)."
-    );
-    let for_alice: u64 = named
-        .iter()
-        .filter(|(_, p, _)| *p == alice)
-        .map(|(_, _, x)| *x)
-        .sum();
-    assert_eq!(
-        for_alice, alice_effective,
-        "the record must credit {alice} with exactly her own {alice_effective} e8s, not \
-         with anybody else's: {named:?}"
-    );
-
-    // --- and the money agrees with the record, per person -------------------
-    let vs = check_hand_attribution(&a);
-    assert_holds(
-        &vs,
-        Invariant::M8PrincipalAttribution,
-        "a chair with two owners must pay, and report, each of them",
+        !named.iter().any(|(_, p, _)| *p == dave),
+        "the record must not name {dave}; it says {named:?}"
     );
 }

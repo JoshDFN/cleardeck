@@ -224,6 +224,28 @@ export const idlFactory = ({ IDL }) => {
     'shuffle_proof' : IDL.Opt(ShuffleProof),
     'is_my_turn' : IDL.Bool,
     'can_raise' : IDL.Bool,
+    // THE CALLER's own money in this pot, including the stake of a seat they have
+    // already left. Non-zero with `my_seat: []` is money of yours in a hand you
+    // are no longer sitting in. docs/SECURITY-FINDINGS.md FINDING 18.
+    'my_committed_in_pot' : IDL.Nat64,
+    'hand_is_unmovable' : IDL.Bool,
+  });
+  // Everything the canister holds for the caller, including what get_balance
+  // cannot report. docs/SECURITY-FINDINGS.md FINDING 18.
+  const CustodyStatus = IDL.Record({
+    'escrow' : IDL.Nat64,
+    'chips_at_table' : IDL.Nat64,
+    'committed_in_pot' : IDL.Nat64,
+    'committed_is_stuck' : IDL.Bool,
+    'abandonable_in_ns' : IDL.Opt(IDL.Nat64),
+    'total' : IDL.Nat64,
+    'advice' : IDL.Text,
+  });
+  const StuckHandStatus = IDL.Record({
+    'is_stuck' : IDL.Bool,
+    'hand_in_progress' : IDL.Bool,
+    'abandonable_in_ns' : IDL.Opt(IDL.Nat64),
+    'refundable_pot' : IDL.Nat64,
   });
   const Result_3 = IDL.Variant({
     'Ok' : IDL.Tuple(Card, Card),
@@ -320,7 +342,12 @@ export const idlFactory = ({ IDL }) => {
       ),
     'admin_update_config' : IDL.Func([TableConfig], [Result_5], []),
     'buy_in' : IDL.Func([IDL.Nat8, IDL.Nat64], [Result], []),
+    // End a hand no message can move; every stake goes back to whoever put it in.
+    // Any principal may call it. docs/SECURITY-FINDINGS.md FINDING 15 and 18.
+    'abandon_stuck_hand' : IDL.Func([], [Result_1], []),
     'cash_out' : IDL.Func([], [Result_1], []),
+    'get_custody_status' : IDL.Func([], [CustodyStatus], ['query']),
+    'get_stuck_hand_status' : IDL.Func([], [StuckHandStatus], ['query']),
     'check_timeouts' : IDL.Func([], [TimeoutCheckResult], []),
     'deposit' : IDL.Func([IDL.Nat64], [Result_1], []),
     'deposit_from_external' : IDL.Func(

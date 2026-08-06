@@ -22,14 +22,23 @@ reader can tell a demonstrated defect from a suspected one.
 >
 > | | finding | what it costs | status |
 > |---|---|---|---|
-> | 1 | [FINDING 07](#finding-07) **CRITICAL** | one controller call destroys 100% of a table's seated chips, irreversibly. Re-measured this wave: **4.00000000 ICP gone**, canister holding 40 ICP against 36 ICP of claims, **every invariant silent** | OPEN since wave 2 |
-> | 2 | [FINDING 18](#finding-18) high | `cash_out` of a stuck hand walks away from your stake and tells you nothing. Composes with FINDING 07 into permanent loss with no malice | OPEN, found by the auditor |
-> | 3 | [FINDING 19](#finding-19) high | no on-chain timer: nothing moves the game, so a table freezes for ≥ 5.5 minutes when clients drop, and cycles exhaustion would lock every withdrawal at once | OPEN, found by the auditor |
-> | 4 | [FINDING 17](#finding-17) high | a hand can settle with NO live claim on it and refund every stake to the players who FOLDED. The fold-out winner loses the pot to an ordinary disconnection | OPEN, found by the wave-6 coherence pass |
+> | 1 | [FINDING 07](#finding-07) **CRITICAL** | one controller call destroys 100% of a table's seated chips, irreversibly, and **every invariant is silent** | **FIXED 2026-08-05.** Reproduced live on the replica first (**40.00000000 ICP destroyed by one `reset_table`**, canister still holding it, both players reading `get_balance = 0`, no restore path), then fixed and re-verified live: `reset_table` REFUSES while the table holds custody, `admin_reinit_table` returns every chip to its owner's escrow, `init_table_state` traps rather than rebuild over money. Total claims now unchanged to the e8 across both calls. Gated by **`tests/money_safety/tests/admin_custody.rs`**, including a sweep over EVERY controller-callable method and a census that fails when a new one appears unaudited |
+> | 1b | [FINDING 20](#finding-20) high | found while auditing the surface for FINDING 07's shape: a controller could change `TableConfig::currency` on a funded table. Currency selects the LEDGER withdrawals are paid from, so every balance becomes unpayable without a single write to `BALANCES` | **FIXED 2026-08-05** in the same change |
+> | 2 | [FINDING 18](#finding-18) high | `cash_out` of a stuck hand walks away from your stake and tells you nothing. Composes with FINDING 07 into permanent loss with no malice | **FIXED 2026-08-05.** The exit doors now SETTLE an unmovable hand before they vacate the seat, so `Ok = 0` became `Ok = 298_000_000`; a live hand cannot outlive its last player; `get_custody_status`, the table view and `withdraw`'s refusals all name the stake and `abandon_stuck_hand`. Gated by **M10 CUSTODY VISIBILITY** |
+> | 3 | [FINDING 19](#finding-19) high | no on-chain timer: nothing moves the game. The dead window was not 5.5 minutes, it was **unbounded** — a live pot sat untouched for 20 simulated minutes with no client attached | **CLOCK FIXED 2026-08-05** (30 s to self-resolve, 210 s to release every seat, no caller). **The CYCLES half is OPEN and now WORSE**: see below |
+> | 3b | [FINDING 19 §cycles](#finding-19) **high** | no cycles monitoring and **no top-up anywhere in the tree**. A canister below its freezing threshold rejects `deposit`, `withdraw`, `cash_out` and `abandon_stuck_hand` at once — total custody failure, no attacker. The new clock raises idle burn **~630x** (0.00007 → 0.0442 T/day), cutting the runway at 10 T cycles from centuries to **226 days** | **OPEN, and made worse on purpose by the fix above.** `get_cycle_status` now makes it visible; nothing tops it up |
+> | 4 | [FINDING 17](#finding-17) high | a hand can settle with NO live claim on it and refund every stake to the players who FOLDED. The fold-out winner loses the pot to an ordinary disconnection | **FIXED 2026-08-05.** Reproduced first (52,000,000 e8 pot, three seats, all three back on exactly their buy-in), then closed by making participation and eligibility ONE function: `live_claims` now CALLS `is_in_hand`, and `is_in_hand` no longer accepts a seat that holds no cards. Re-measured: the fold-out winner is paid 202,000,000 against a 200,000,000 buy-in and the folder pays for it. Gated by **M11 OUTCOME** on every fuzz step, `probe4`, and the predicate table in `src/table_canister/tests/hand_membership.rs` |
 >
-> None of the four is fund THEFT. Numbers 1 and 2 are fund LOSS. **Number 1 is the largest
-> unfixed fund-loss path in the project and it has now survived four waves.** See
-> docs/WAVE-06.md for the full accounting and the shortest path to a different answer.
+> None of these is fund THEFT. Numbers 1, 2 and 4 were fund LOSS or fund MISDIRECTION and are
+> all closed.
+> **Number 1 was the largest unfixed fund-loss path in the project and had survived four waves.**
+> See docs/WAVE-06.md for the full accounting and the shortest path to a different answer.
+>
+> **What FINDING 07's fix does NOT do is undo the damage already done.** The local `table_3` on
+> this machine holds **120.00000000 ICP that belongs to nobody** — 80 destroyed by the auditor's
+> run and 40 by the reproduction that opened this wave. No code change returns it: there is no
+> restore path, and adding one would be a mint. That number was invisible to every instrument in
+> the project until this wave; it is now what M9's new `money_belongs_to_nobody` check reports.
 
 > ## 🚨 STATUS, 2026-08-04: FINDING 10 WAS LIVE IN THE WORKING TREE, WAS DEMONSTRATED AS THEFT, AND IS NOW CLOSED
 >
@@ -92,9 +101,10 @@ reader can tell a demonstrated defect from a suspected one.
 > [DEFECTS.md E-01](DEFECTS.md#e-01), [E-03](DEFECTS.md#e-03), [E-05](DEFECTS.md#e-05) and
 > [E-35](DEFECTS.md#e-35), and `FINDING-01-chip-destruction.md`.
 >
-> **FINDING 07 still reaches the same terminal state by another route** (`admin_reinit_table`
-> strands every seated player's chips), and **FINDING 12 still ends a hand early** on a
-> 30-second lull on `table_1` / `btc_table_1` — it just no longer destroys the pot when it does.
+> ~~**FINDING 07 still reaches the same terminal state by another route** (`admin_reinit_table`
+> strands every seated player's chips)~~ **FIXED 2026-08-05, see the status block above and
+> [FINDING 07](#finding-07).** **FINDING 12 still ends a hand early** on a 30-second lull on
+> `table_1` / `btc_table_1` — it just no longer destroys the pot when it does.
 >
 > **2. FUND-THEFT, DEMONSTRATED, NOW FIXED. FINDING 10.** A single on-ledger transfer could be
 > credited to a player's escrow **twice** and the excess **withdrawn as real ICP**. Two mechanisms:
@@ -139,7 +149,8 @@ work.
 | FINDING 04 | [E-13](DEFECTS.md#e-13) | low |
 | FINDING 05 + FINDING 08 | [E-05](DEFECTS.md#e-05) | high — **FIXED 2026-08-04** |
 | FINDING 06 | [E-04](DEFECTS.md#e-04) | high |
-| FINDING 07 | [E-07](DEFECTS.md#e-07) | high |
+| FINDING 07 | [E-07](DEFECTS.md#e-07) | critical — **FIXED 2026-08-05** |
+| FINDING 20 | [E-45](DEFECTS.md#e-45) | high — **FIXED 2026-08-05** |
 | FINDING 10 | [E-02](DEFECTS.md#e-02) | **fund-theft (demonstrated, FIXED)** |
 | FINDING 11 | [E-12](DEFECTS.md#e-12) | low |
 | FINDING 12 | [E-06](DEFECTS.md#e-06) | high |
@@ -568,87 +579,362 @@ is silent, so fixing only BUG A would replace a clear error with a misleading on
 
 <a id="finding-07"></a>
 
-## FINDING 07 -- `admin_reinit_table` strands every seated player's chips -- **RAISED TO CRITICAL IN WAVE 6: `reset_table` IS A SECOND DOOR, AND IT IS THE ONE THE INTERFACE POINTS AT**
+## FINDING 07 -- one controller call destroyed 100% of a funded table's chips -- **FIXED 2026-08-05, REPRODUCED LIVE FIRST**
 
-> ## 🚨 STILL OPEN. RE-MEASURED 2026-08-05 ON MODULE `5e07edf6…`. THIS IS THE LARGEST UNFIXED FUND-LOSS PATH IN THE PROJECT.
+> ## ✅ CLOSED IN WAVE 7. It was the largest unfixed fund-loss path in the project and it had survived four waves.
 >
-> An independent auditor, run AFTER this wave's fixes and given no access to these documents,
-> found it again from the outside and ranked it their number-one blocker. They left `table_3`
-> **holding 80.00000000 ICP against total claims of 0**, with both players reading
-> `get_balance = 0`.
->
-> **The escalation is that there are two doors, not one, and they are the same function.**
+> **What it was.** `reset_table` and `admin_reinit_table` had byte-identical bodies:
 >
 > ```rust
-> fn reset_table(config: TableConfig)       -> { require_controller()?; validate_config(&config)?; init_table_state(config); }
+> fn reset_table(config: TableConfig)        -> { require_controller()?; validate_config(&config)?; init_table_state(config); }
 > fn admin_reinit_table(config: TableConfig) -> { require_controller()?; validate_config(&config)?; init_table_state(config); }
 > ```
 >
-> Byte-for-byte the same body. `init_table_state` builds a brand-new `TableState` with empty
-> seats, so **every seated player's chips cease to exist**: not returned to escrow, not
-> withdrawable, not recoverable. `admin_restore_balance` was deliberately removed
+> `init_table_state` builds a brand-new `TableState` with empty seats, so **every seated
+> player's chips ceased to exist**: not returned to escrow, not withdrawable, not recoverable.
+> `admin_restore_balance` was deliberately removed
 > (`// REMOVED: admin_restore_balance - unnecessary attack surface`), so a well-meaning
-> controller cannot undo it either.
+> controller could not undo it either. The Candid described `admin_reinit_table` as *"for
+> recovery after upgrade issues"* — the interface pointed an honest operator at the button that
+> deletes everybody's money. A second independent auditor found it from the outside, with no
+> access to these documents, and ranked it their number-one blocker; they left `table_3` holding
+> **80.00000000 ICP against total claims of 0**, both players reading `get_balance = 0`.
 >
-> Re-measured this wave on the module built from THIS tree, two players seated with 2 ICP each
-> (`tests/money_safety/tests/wave6_coherence.rs::probe5`):
+> ### REPRODUCED FIRST, on the running local replica, module `5e07edf6…`
+>
+> `table_3`, min buy-in 20 ICP, `cd-alice` and `cd-bob` deposited and seated. Every figure below
+> is `icrc1_balance_of` against the real local ICP ledger and the canister's own
+> `admin_get_all_balances` / `admin_get_table_chips` / `get_pot`:
 >
 > ```
-> BEFORE            internal_total=4000000000  chips=400000000  escrow: 1800000000 + 1800000000
-> reset_table       -> Ok
-> AFTER             chips=0                    escrow unchanged
-> admin_reinit_table-> Ok
-> AFTER             chips=0                    escrow unchanged
-> canister still holds on the ledger:            4000000000 e8s
-> full drain by both players recovered:          3600000000 e8s
-> ----------------------------------------------------------------
-> DESTROYED, unrecoverable by anybody:            400000000 e8s   (4.00000000 ICP)
+> T0 start                    ledger_main=8000000000   claims=0             ORPHANED=8000000000
+>                             (the auditor's 80 ICP, already destroyed, already unrecoverable)
+> T1 after two 20 ICP deposits ledger_main=12000000000 claims=4000000000    ORPHANED=8000000000
+> T2 seated                   ledger_main=12000000000  chips=4000000000     ORPHANED=8000000000
+> reset_table                 -> Ok
+> T3 after reset_table        ledger_main=12000000000  chips=0  claims=0    ORPHANED=12000000000
+> admin_reinit_table          -> Ok      (nothing left to destroy)
+> alice cash_out              -> Err("Not at table")
+> alice withdraw(20 ICP)      -> Err("Insufficient balance. Have: 0.0000 ICP, requested: 20.0000 ICP")
+> -----------------------------------------------------------------------------------------
+> DESTROYED BY ONE CALL, unrecoverable by anybody:   4000000000 e8s   (40.00000000 ICP)
 > ```
 >
-> **AND EVERY INVARIANT IN THE PROJECT IS SILENT.** M9's drain reported `fully_drained`,
-> because `internal_total` counts what the canister SAYS it owes, and after the reset it says
-> it owes nothing. M2 solvency is silent because holding MORE than you owe is not insolvency.
-> This is the wave-6 lesson exactly: the instrument was built by people who already knew the
-> answer, and it asks "can each player reach the balance the canister admits to" rather than
-> "is the canister still admitting to the balance".
+> One correction to the wave-6 write-up, measured rather than assumed: **escrow is NOT zeroed.**
+> `init_table_state` never wrote `BALANCES`. In the auditor's run escrow read zero because the
+> players had already converted it into chips by sitting down, and it is the CHIPS and the POT
+> that were destroyed. Verified directly: a player with 0.6 ICP in escrow and no seat survives
+> both calls with the balance intact and can still withdraw it. This matters, because it is why
+> the fix keys on table custody rather than on escrow.
 >
-> **The auditor's own framing, which is the right one:** *"An IC controller can always upgrade a
-> canister to sweep funds, but that is a deliberate act. This is a labelled recovery button that
-> silently deletes everyone's balance."* `reset_table`'s comment says only *"CAUTION: destroys
-> all state"* — it destroys MONEY, not state — and `admin_reinit_table` was described in the
-> Candid as *"for recovery after upgrade issues"*, i.e. exactly the situation in which an honest
-> operator reaches for it.
+> ### AND EVERY INVARIANT IN THE PROJECT WAS SILENT
 >
-> **The fix, unchanged from wave 2 and still not taken:** refuse unless chips and escrow are
-> both zero, or return every chip to escrow BEFORE resetting and leave `BALANCES` strictly
-> untouched. There is no legitimate use of a config reset that also zeroes custody. Both
-> functions need it; fixing one and not the other is how this survived four waves.
+> M9's drain reported `fully_drained`, because `internal_total` counts what the canister SAYS it
+> owes and after the reset it said it owed nothing. M2 was silent because holding MORE than you
+> owe is not insolvency. **An attack that changes what is owed cannot be caught by an instrument
+> anchored to what is owed.** That is the deepest part of this finding and it is what the new
+> invariant below is for.
 >
-> **It composes with [FINDING 18](#finding-18).** A player who cash_out's a stuck hand leaves a
-> stake in the pot and is told nothing. That stake is recoverable by `abandon_stuck_hand` — right
-> up until an operator calls `reset_table`, after which it is gone. Neither step requires malice.
+> ### THE FIX
+>
+> The two doors are no longer the same function, and the destructive helper guards itself.
+>
+> 1. **`reset_table` is a CONFIG operation and refuses while the table holds custody.** There is
+>    no legitimate reason a config reset touches custody. The refusal names the recovery call.
+>    It does NOT require escrow to be empty: `BALANCES` is a separate map this path provably
+>    never writes, and that claim is a test
+>    (`admin_custody::reset_table_never_touches_escrow`), not an assertion.
+> 2. **`admin_reinit_table` is a RECOVERY operation and conserves.** It returns every seated
+>    stack and every stake in the live hand to the escrow of the player who OWNS it — through
+>    `hand_stakes`, the same payout basis settlement uses, so a stake left behind by a player who
+>    already walked away reaches THEM and not whoever took their chair ([FINDING 13](#finding-13))
+>    — and only then rebuilds the table.
+> 3. **`admin_return_all_chips_to_escrow` is a new, standalone, conserving primitive.** It is
+>    what the refusal in (1) points at, and it reports what it moved. It is not the
+>    `admin_restore_balance` mistake: that could MINT escrow from nothing, this can only MOVE
+>    money the table already holds, and it refuses — changing nothing — if `state.pot` and the
+>    attributed stakes disagree, because paying out only the attributed part would destroy the
+>    difference. (The escape from that state is `abandon_stuck_hand`, which is public.)
+> 4. **`init_table_state` TRAPS if the table it is about to replace holds custody.** The guard is
+>    at the helper as well as at both doors, because the reason this survived four waves is that
+>    the destructive step was a shared helper and writing a second door was one copy-paste.
+>
+> ### VERIFIED LIVE, same replica, same script, module rebuilt from this tree
+>
+> ```
+> T2 seated                   chips=4000000000   TOTAL_CLAIMS=54060000000
+> reset_table            -> Err("Refusing: reset_table rebuilds the table, and this table is
+>                               holding 4000000000 in seated chips and 0 in the pot for real
+>                               players. ... Call admin_return_all_chips_to_escrow first ...")
+> admin_reinit_table     -> Ok
+> T4 after both doors         chips=0            TOTAL_CLAIMS=54060000000   <-- UNCHANGED, to the e8
+> get_balance    alice 0 -> 2000000000 ;  bob 2000000000 -> 4000000000
+> alice withdraw(20 ICP) -> Ok ; ledger_main and claims each fall by exactly 2000000000
+> ```
+>
+> **What the fix cannot do:** un-destroy what was already destroyed. `table_3` on this machine
+> still holds **120.00000000 ICP that belongs to nobody** — 80 from the auditor, 40 from the
+> reproduction above — and no code change can return it, because there is no restore path and
+> adding one would be a mint. That number is now visible: it is what the new invariant reports.
+>
+> **It composed with [FINDING 18](#finding-18)** and no longer can: a stake left in a stuck hand
+> by a player who cashed out is recoverable by `abandon_stuck_hand`, and `reset_table` can no
+> longer take it away in the meantime.
 
-**Severity:** ~~HIGH~~ **CRITICAL**, controller-only. Permanent, unrecoverable loss.
-**Status:** CONFIRMED by execution in wave 2, **STILL OPEN**, re-confirmed by an independent
-auditor and re-measured by the wave-6 coherence pass. Reproducer:
-`reg06_admin_reinit_table_strands_every_seated_players_chips`.
-**Where:** `admin_reinit_table` AND `reset_table`, both -> `init_table_state`,
-`src/table_canister/src/lib.rs`
+**Severity:** **CRITICAL**, controller-only. Was permanent, unrecoverable loss.
+**Status:** **FIXED 2026-08-05.** Reproduced live on the replica first, fixed, re-verified live.
+The reproducer that used to PIN the destruction is now the gate that convicts it returning:
+`reg06_admin_reinit_table_returns_every_seated_chip_to_its_owner` (was
+`reg06_admin_reinit_table_strands_every_seated_players_chips`) and
+`wave6_coherence::probe5` (was `#[ignore]`d because it recorded the defect; the `#[ignore]` is
+gone with the pin).
+**Where:** `reset_table`, `admin_reinit_table`, `init_table_state`,
+`src/table_canister/src/lib.rs`. See [DEFECTS.md E-07](DEFECTS.md#e-07).
 
-`admin_reinit_table` is documented as being "for recovery after upgrade issues". It calls
-`init_table_state(config)`, which builds a brand new `TableState` with empty seats. Every
-seated player's chips, and the whole pot, are dropped: not returned to escrow, not
-withdrawable, gone. Real output, two players seated with 2 ICP each:
+### The instrument that was missing, and now exists
+
+`M9 FUND REACHABILITY` asked *"can each player reach the balance the canister admits to"*. The
+attack works by changing what the canister admits to. So M9 has a third leg, anchored to the
+ledger rather than to the canister's books:
+
+> **The canister's ledger balance may never exceed total claims by more than the deposits it has
+> not been asked to credit yet. Money inside the canister that belongs to NOBODY is a defect,
+> not a surplus.**
+
+* `reachability::check_no_orphaned_custody`, on every snapshot, wired into `check_point_in_time`
+  so the fuzzer and every invariants test evaluate it.
+* `DrainReport::orphaned_e8s()` / `table_is_really_empty()`, so the end-of-run drain — the thing
+  the auditor and the fuzzer both read — stops taking `owed_after == 0` for an answer.
+* A new severity, `OrphanedCustody`, added to the **never-excusable** list. It is deliberately
+  not a `FundDestruction`, which the documented register is allowed to excuse.
+
+Driven against a module with the guards removed, it reports exactly the finding:
 
 ```
-before   escrow 800000000   chips 400000000   pot 0   ledger_main 1200000000
-after    escrow 800000000   chips         0   pot 0   ledger_main 1200000000
-M1       delta = +400000000 (chips DESTROYED: money stranded in the canister that nobody owns)
+[M9_FUND_REACHABILITY] money_belongs_to_nobody OrphanedCustody delta=400000000
+  the ledger says this canister holds 4000000000 e8s and the canister says it owes 3600000000
+  (escrow 3600000000 + chips 0 + pot 0) ... That leaves 400000000 e8s inside a canister that
+  owes them to NOBODY
+  BLOCKS BECAUSE: this severity is never excusable
 ```
 
-This needs an owner decision rather than a drive-by patch: either return every seated
-player's chips to escrow first, or refuse while anyone is seated. Either way it should not be
-possible for a recovery tool to be the thing that loses the funds.
+### THE WHOLE CONTROLLER SURFACE, AUDITED
+
+The question asked of every controller-callable method: *can this admin action reduce what the
+canister owes players without paying them?*
+
+| method | kind | verdict |
+|---|---|---|
+| `reset_table` | update | **WAS THE DEFECT.** Now refuses while the table holds chips or a pot |
+| `admin_reinit_table` | update | **WAS THE DEFECT.** Now returns every chip to its owner's escrow first |
+| `admin_return_all_chips_to_escrow` | update | NEW. Conserving by construction; escrow only goes up; ledger untouched |
+| `admin_update_config` | update | Never replaced `TableState`, but could re-denominate a funded table: **[FINDING 20](#finding-20)**, fixed |
+| `add_controller` / `remove_controller` | update | Privilege only, no custody. Note `is_controller()` also honours the real IC controller list, so `remove_controller` cannot lock the operator out |
+| `set_history_canister` | update | Writes `HISTORY_ID`. No custody. Can misdirect the fairness archive, which is [FINDING 19](#finding-19)'s territory, not this one |
+| `set_dev_mode` | update | Permanently returns `Err` for every caller. No custody, and no gate needed |
+| `flush_unrecorded_hands` | update | Not controller-gated on purpose (a player must be able to make their own evidence durable). No custody |
+| `admin_get_balance`, `admin_get_all_balances`, `admin_get_table_chips` | query | Read-only |
+
+`post_upgrade` is not on this list because it is not callable, but it is the other path that can
+replace `TableState`, and it already refuses rather than rebuild over money — that guard is
+[FINDING 14](#finding-14).
+
+**This table is a test, not a promise.**
+`admin_custody::census_every_controller_gated_method_is_classified_here` parses
+`src/table_canister/src/lib.rs` for every function that calls `require_controller()` and fails if
+one appears that has not been audited here, or if a method recorded as deliberately open acquires
+a gate. `admin_custody::sweep_no_admin_call_reduces_what_is_owed` then drives every one of the
+updates against a funded, seated table and asserts, after each call, that
+`owed_before - owed_after <= ledger_before - ledger_after`: liability may only fall by money that
+actually left the canister.
+
+### One bug in the first version of the fix, found by deploying it rather than by testing it
+
+`Player::total_bet_this_hand` is cleared only by `start_new_hand`. Between hands, every seat
+still reports the finished hand's bets while `state.pot` is back to zero. The first
+`table_custody` read the stakes unconditionally, double-counted them, and the conservation guard
+then refused every ordinary post-hand table:
+
+```
+admin_reinit_table -> Err("Refusing to touch this table: at phase complete state.pot says 0
+                          but the stakes that can be attributed to an owner sum to 2000000000")
+```
+
+**Every PocketIC test written for the fix was green**, because not one of them had played a hand
+before calling the admin path. It was caught by deploying the module to the local replica and
+calling the method on a real table. `admin_custody::the_admin_doors_work_on_a_table_that_has_
+already_played_a_hand` is the gate that now convicts it, and it was verified to convict it by
+re-introducing the mutation in a copy of the tree.
+
+<a id="finding-20"></a>
+
+## FINDING 20 (high) -- a controller could re-denominate a funded table, making every balance unpayable -- **FIXED 2026-08-05**
+
+**Severity:** HIGH, controller-only, reversible. Fund LOCK, not fund loss.
+**Status:** Found while auditing the controller surface for FINDING 07's shape. Fixed in the
+same change. Reproducer / gate:
+`admin_custody::currency_cannot_be_changed_while_the_canister_owes_anybody_anything`.
+**Where:** `reset_table`, `admin_reinit_table`, `admin_update_config` — all three take a whole
+`TableConfig`. See [DEFECTS.md E-45](DEFECTS.md#e-45).
+
+`TableConfig::currency` is not a display setting. `Currency::ledger_canister()` is the ledger
+`transfer_tokens` pays out of, and `min_withdrawal`, `transfer_fee` and `format_amount` all
+follow it. A controller could flip an ICP table to BTC while escrow balances existed, at which
+point every `withdraw` would be attempted against the ckBTC ledger, where this canister holds
+nothing. No `BALANCES` entry changes, no invariant in the project measures the currency, and
+every player's money is unreachable until somebody flips it back. The reverse flip on a canister
+holding both assets is worse: sat-denominated balances become withdrawable as ICP e8s.
+
+It is the same family as FINDING 07 — an admin action that makes what the canister owes
+unpayable, without paying it — reached by a different mechanism, which is exactly why the audit
+had to be of the whole surface rather than of the one function the auditor named.
+
+A second, quieter half was fixed with it: `admin_update_config` wrote `state.config` but not
+`TABLE_CONFIG`, and `get_table_currency()` — which `withdraw` and `transfer_tokens` read — reads
+`TABLE_CONFIG`. A config change therefore left the table charging blinds by one record and
+paying withdrawals by another. Both are now written together.
+
+**The fix:** `refuse_currency_change_while_funded` on all three doors. A currency change is
+allowed only when escrow + chips + pot is exactly zero.
+
+**THE FIX IS INCOMPLETE.** "Escrow + chips + pot" is not everything the canister holds. See
+FINDING 21, which walks the surviving hole and demonstrates it.
+
+<a id="finding-21"></a>
+## FINDING 21 (high) -- the FINDING 20 guard measures the wrong total, so a funded table can still be re-denominated -- **OPEN**
+
+**Severity:** HIGH. Controller-only, fund LOCK. Recoverable only while the table stays empty.
+**Status:** OPEN. Found by the wave-7 critic while attacking the FINDING 20 fix. Demonstrated
+on PocketIC against the REAL ICP ledger wasm on the fixed module
+(`sha256=50a3c2e1d925e84622b90bc224f13a2255f59bba67a020e8f605eb6cf8cb8b46`).
+**Where:** `total_liability()` and `refuse_currency_change_while_funded()` in
+`src/table_canister/src/lib.rs`; `check_no_orphaned_custody` in
+`tests/money_safety/src/invariants/reachability.rs`.
+
+The canister holds money in **two** kinds of ledger account, not one:
+
+  * its main account, `icrc1_balance_of(table, None)`, and
+  * one deposit subaccount per player, `sha256("cleardeck-deposit:" || principal)`, which is
+    the address `get_deposit_address()` tells external-wallet users to send to.
+
+`total_liability()` is `escrow + chips + pot`. Money that has ARRIVED in a deposit subaccount
+and has not yet been swept in by `claim_external_deposit()` is in neither term. The FINDING 20
+guard therefore reads a liability of **zero** on a table that is holding a player's deposit,
+and permits the currency change it exists to refuse.
+
+Measured, on the fixed module:
+
+```text
+  victim sends 5 ICP to their own deposit subaccount (the documented flow)
+    ledger_main=0   deposit_subaccounts=500000000   claims=0
+    invariant violations: 0
+  admin_update_config(currency = BTC)      -> Ok            <-- the guard sees liability 0
+  victim claim_external_deposit()          -> Err("Failed to query balance: ... mxzaz-hqaaa-aaaar-qaada-cai")
+  victim get_balance()                     -> 0
+    ledger_main=0   deposit_subaccounts=500000000   claims=0
+    invariant violations: 0
+```
+
+`claim_external_deposit` reads `get_table_currency()` to pick the ledger it queries and sweeps
+from, so after the flip it looks for the player's 5 ICP on the **ckBTC** ledger. The ICP is
+still sitting in an account only this canister can move, and the canister no longer has any code
+path that looks at it. It is recoverable by flipping the currency back -- but only while the
+table's escrow, chips and pot are all still zero; once one ckBTC player funds the re-denominated
+table, `refuse_currency_change_while_funded` blocks the flip back and the ICP is permanent.
+
+**The new orphan invariant cannot see it either, and that is the second half of the finding.**
+`check_no_orphaned_custody` computes `ledger_main - claims - uncredited_raw`. Deposit
+subaccounts appear in neither side of that subtraction, so a canister holding 7 ICP in its own
+subaccounts and owing nobody anything reports **zero** orphaned e8s:
+
+```text
+  canister holds 700000000 e8s in deposit subaccounts, 0 in main, and owes 0
+  money_belongs_to_nobody hits: 0
+```
+
+The check is a re-severity of M1's positive direction and inherits M1's anchor exactly. It is a
+real check -- it fires on an uncredited transfer into the main account, verified -- but "the
+canister may never hold money it owes to nobody" is not what it measures. It measures "the
+canister's MAIN ACCOUNT may never hold money it owes to nobody."
+
+**What the fix has to be:** the liability guard and the orphan check must both be anchored to
+every account the canister owns, main plus every deposit subaccount, not to `ledger_main` alone.
+Until then FINDING 20 is half-closed and the wave-7 orphan invariant has a blind spot of exactly
+the shape FINDING 07 had.
+
+<a id="finding-22"></a>
+## FINDING 22 (medium/high) -- the FINDING 07 fix gives a controller a new power: void any live hand after reading every hole card -- **OPEN**
+
+**Severity:** MEDIUM-HIGH. Controller-only. Conserves money to the e8, so **no conservation
+invariant in this project can see it.** It is not a loss of principal; it is a loss of the
+equity a player has already bought.
+**Status:** OPEN, introduced by the FINDING 07 fix.
+**Where:** `admin_return_all_chips_to_escrow` and `admin_reinit_table` in
+`src/table_canister/src/lib.rs`.
+
+Before the fix, a controller who wanted to end a live hand could only do it by destroying
+everybody's money (FINDING 07) -- an action with no beneficiary. After the fix, both doors work
+mid-hand and hand every wager back to the player who made it:
+
+```text
+  live hand, phase = Turn, pot = 1004000000 e8s
+    seat 0  A(d) 8(d)   committed 502000000
+    seat 1  Q(h) 9(d)   FOLDED
+    seat 2  6(c) 4(h)   committed 502000000
+  get_table_state (controller-only) returns every hole card above.
+  admin_return_all_chips_to_escrow -> Ok(3000000000)
+  after: phase = Turn, pot = 0, every stack 0, escrow +10 ICP each
+  invariant violations: 0
+```
+
+A controller can read the cards and then decide whether the hand happens. A confederate who is
+drawing dead is made whole; the player who was going to win the pot loses the equity they paid
+for. `admin_reinit_table` does the same thing on a live pre-flop hand and logs a line that says
+"No chip was destroyed", which is true and beside the point.
+
+`table_custody` does not filter on `Stake::relinquished`, so a stake **a player has already
+folded** is returned to them as well.
+
+This is the wave-6 lesson repeating: a trap was fixed and a silent refund-everyone path was
+created in its place, it conserves perfectly, and nothing noticed. Any guard for it has to be a
+rule about WHEN the recovery door may be used (a live hand is not a recovery situation until it
+is provably stuck -- `hand_is_stuck` already exists and `abandon_stuck_hand` already uses it),
+not a rule about arithmetic.
+
+**Related, same function:** `admin_return_all_chips_to_escrow`'s documentation says it
+"abandon[s] the hand in progress". It does not. It zeroes stacks, pot, side pots and departed
+stakes and leaves `phase`, `action_on` and every hole card exactly as they were. The table is
+left mid-hand with cards on the board and every stack at zero; `reload` refuses ("Cannot reload
+during a hand") until the zombie hand finishes.
+
+<a id="finding-23"></a>
+## FINDING 23 (critical, unguarded by design) -- `uninstall_code` and `install_code --mode reinstall` are FINDING 07 at full scale, and the wave-7 audit does not cover them -- **OPEN**
+
+**Severity:** CRITICAL. Controller-only, irreversible, 100% of the canister's funds.
+**Status:** OPEN. The reinstall half is acknowledged in the wave-7 handover; the `uninstall_code`
+half is not, and neither appears in
+`admin_custody::census_every_controller_gated_method_is_classified_here`, whose subject is
+methods that call `require_controller()` inside the canister.
+
+Measured on the fixed module:
+
+```text
+  seated, funded:              ledger=4000000000  escrow=3600000000  chips=400000000  claims=4000000000
+  install_code --mode reinstall -> Ok
+                               ledger=4000000000  escrow=0  chips=0  claims=0
+    [M1_CONSERVATION]      ledger_equals_owed FundDestruction delta=4000000000
+    [M9_FUND_REACHABILITY] money_belongs_to_nobody OrphanedCustody delta=4000000000
+
+  uninstall_code                -> Ok
+    canister has no code, no balances, and still holds 4000000000 e8s on the ledger.
+```
+
+`init_table_state`'s new trap cannot see either: on a reinstall the heap is fresh, so `TABLE` is
+`None` and there is no custody to refuse; on an uninstall no canister code runs at all.
+`post_upgrade`'s FINDING 14 digest guard only covers `--mode upgrade`. These are the two calls
+that actually destroy a mainnet table, and the in-canister audit surface cannot reach them --
+which means the control has to be operational (a deploy script that refuses a non-`upgrade`
+mode against a canister whose books are non-zero) and has to be tested as such.
 
 ## FINDING 08 (NEW) -- `cash_out` is a second door into FINDING 05's orphaned-stake state
 
@@ -1012,7 +1298,13 @@ Two things about this door are worth recording even though they are not double-c
   actually moved (`dr05` asserts `escrow <= moved`), so it is not creation. But the accounting is
   approximate in a place where it does not need to be.
 
+<a id="finding-11"></a>
 ## FINDING 11 (NEW, low) -- dust at or below the transfer fee in a deposit subaccount can never be swept
+
+> **SUPERSEDED IN SCOPE BY [FINDING 28](#finding-28) (2026-08-06).** This finding records the dust
+> half only. The third independent auditor showed that money in a deposit subaccount is invisible to
+> **every** balance surface at any size, not only below the fee, and that the error text tells the
+> player to send more money to the address already holding theirs. Read FINDING 28 first.
 
 **Severity:** LOW. Bounded by the fee (10,000 e8s per player per stuck deposit).
 **Status:** CONFIRMED incidentally by the harness: a transfer of exactly the fee into a
@@ -1197,6 +1489,7 @@ Two further boundaries:
 
 ---
 
+<a id="finding-13"></a>
 ## FINDING 13 (high) -- the E-05 fix pays a departed player's stake to whoever takes their chair -- **DEMONSTRATED, THEN FIXED**
 
 > ### STATUS 2026-08-04, wave 3: escalated from "reachable" to **DEMONSTRATED**, then closed.
@@ -1391,6 +1684,7 @@ PRINCIPALS, not on seats.
 
 ---
 
+<a id="finding-14"></a>
 ## FINDING 14 (high) -- two agents each added a persisted field that is not a Candid-compatible addition, and one of them destroys every chip at the table SILENTLY -- **FIXED**
 
 > ### STATUS 2026-08-04, wave 3: both fields are `opt`, and a real cross-version upgrade test is the gate.
@@ -1637,6 +1931,7 @@ version boundary, so nothing about persistence is known to work.
 
 ---
 
+<a id="finding-15"></a>
 ## FINDING 15 (critical), one unguarded evaluator call locks a funded table: every path to a player's own money closes at once
 
 > ### STATUS 2026-08-05: REPRODUCED ON THE RUNNING REPLICA, ROOT CAUSE FOUND, FIXED, AND NOW GATED BY A NEW INVARIANT
@@ -1968,6 +2263,7 @@ player very little.
 
 ---
 
+<a id="finding-16"></a>
 ## FINDING 16 -- a player who stops answering keeps a claim on the pot without paying for it (PLAYER-TO-PLAYER FUND THEFT, DEMONSTRATED, FIXED)
 
 **Status: FIXED in wave 5.** Recorded here rather than only in
@@ -2110,10 +2406,82 @@ ordinary disconnection. And what is lost more broadly is the property this wave 
 to establish — that the table can no longer be wedged into a state the rules of poker cannot
 describe.
 **Status:** DEMONSTRATED by execution on the wave-6 module `5e07edf6…`, twice, by two different
-sequences. **NOT FIXED.**
+sequences. **RE-REPRODUCED on `306caef4…` and FIXED 2026-08-05.**
 **Where:** `is_in_hand` + `count_active_players` -> `end_hand_single_winner` -> `plan_payouts`'s
 "nobody can win ANY of this money" branch, `src/table_canister/src/lib.rs`.
-**Related:** docs/DEFECTS.md [E-36](DEFECTS.md#e-36), raised from medium to high by this finding.
+**Related:** docs/DEFECTS.md [E-36](DEFECTS.md#e-36), raised from medium to high by this finding
+and closed with it.
+
+> ## FIXED 2026-08-05 — AND THE FIX IS THAT THERE IS NOW ONE PREDICATE, NOT TWO THAT AGREE
+>
+> **Reproduced first**, on the module wave 6 shipped (`306caef4…`), by `probe4`:
+>
+> ```text
+> PROBE4 pot=52000000 buy_in=200000000
+> PROBE4 FINAL phase=HandComplete pot=0
+>     seat0 chips=200000000 bet=2000000 folded=true  cards=true
+>     seat1 chips=200000000 bet=2000000 folded=true  cards=true   <- WON, paid nothing
+>     seat2 chips=200000000 bet=0       folded=false cards=false
+> ```
+>
+> **The fix**, in `src/table_canister/src/lib.rs`:
+>
+> ```rust
+> pub fn is_in_hand(p: &Player) -> bool {
+>     !p.has_folded && p.hole_cards.is_some()
+> }
+> ```
+>
+> and — this matters more than the deleted disjunct — **`live_claims` now CALLS `is_in_hand`
+> instead of restating it.** The two cannot drift apart by an edit to one of them, because there
+> is only one of them. `count_active_players` is `live_claims(...).len()` computed without
+> building the vector, and `src/table_canister/tests/hand_membership.rs` asserts that equality
+> over every reachable `Player` shape.
+>
+> The same sequence on `34f9d194…` after the fix:
+>
+> ```text
+> PROBE4 FINAL phase=HandComplete pot=0
+>     seat0 chips=198000000 bet=2000000 folded=true  cards=true   <- folded, and paid for it
+>     seat1 chips=202000000 bet=2000000 folded=false cards=true   <- WON, and was PAID
+>     seat2 chips=200000000 bet=0       folded=false cards=false  <- staked nothing, won nothing
+> ```
+>
+> Note seat 1: the hand now settles the instant `alice` folds, so `bob`'s clock never runs at
+> all. The defect was never about the clock; the clock was only how a decided hand was allowed
+> to keep going.
+>
+> **What else the disjunct was doing.** `can_still_act` is `is_in_hand && !is_all_in`, so
+> `find_next_active_seat` no longer offers the action to a cardless seat and
+> `apply_player_action`'s whose-turn check refuses it. That closes E-36's first half: a mid-hand
+> arrival can no longer bet into a hand it was never dealt into, so one chair can no longer
+> carry two owners' live stakes, so the `WARNING:` line `hand_stakes` writes for that state can
+> no longer fire. **Its `TOLERATED_SELF_REPORTS` entry and the `E-36` entry in
+> `documented::REGISTER` were both DELETED in the same change, which empties the register.**
+> The engine still contains the log line, deliberately, as an untolerated tripwire: emitting it
+> now STOPS a money-safety run instead of being counted.
+>
+> ### The gates, and what each convicts
+>
+> | gate | where | goes red when |
+> |---|---|---|
+> | `predicate_table` | `src/table_canister/tests/hand_membership.rs` | any seat shape where `is_in_hand` and `live_claims` disagree, or where `count_active_players != live_claims(...).len()` |
+> | `is_in_hand_and_live_claims_are_one_predicate` | same | the same disagreement with a cardless seat sitting BESIDE a card-holder, which one seat at a time cannot see |
+> | `a_cardless_seat_is_never_offered_the_action` | same | E-36's first half returns |
+> | `probe4` | `tests/money_safety/tests/wave6_coherence.rs` | on the real module: the fold-out winner must end AHEAD of its buy-in and the folder BEHIND |
+> | **M11 OUTCOME** | `tests/money_safety/src/invariants/outcome.rs`, every fuzz step | a live hand is observed with one claimant or none; a hand is won by somebody who was not holding a claim; a refund-everyone settlement happens on a hand that had one |
+>
+> Reverting the one-line predicate turns 5 of the 6 `hand_membership` tests red, `probe4` red
+> with *"FINDING 17 HAS RETURNED: seat 1 won a 52000000 e8 pot by fold-out and came out of the
+> hand on 200000000"*, and M11 red against the real canister with *"the hand is STILL LIVE with
+> 52000000 e8s in it and exactly ONE seat holding a claim"*.
+>
+> **Why the sixth stays green, and why that is the whole lesson.**
+> `the_decided_hand_pays_the_seat_that_holds_the_claim` — the one that drives `plan_payouts`
+> directly — PASSES with the defect restored. `plan_payouts` was never wrong. Every instrument
+> aimed at the payout function was aimed at the wrong function: the defect was upstream, in what
+> the engine believed the state to be when it decided to settle. That is why M11's sharpest leg
+> is STRUCTURAL and per-step rather than a payout assertion.
 
 ### The disagreement that is supposed to be closed
 
@@ -2186,26 +2554,32 @@ repo that could convict it is the independent settlement oracle in `tests/settle
 asks what each seat is OWED by the rules of poker rather than whether the totals balance — and
 it still does not run inside the fuzz loop and still has no CI job (docs/DEFECTS.md H-23).**
 
-### Fix
+### What the fix cost elsewhere, and what that revealed
 
-One line, in the seating path:
+**Eighteen betting-rules tests went red, and they were right to.** `flop_table` in
+`src/table_canister/tests/betting_rules.rs` built every seat with `hole_cards: None` while
+`deck_index` was already advanced past `2 * n` hole cards -- the fixture's own accounting said
+those players had been dealt in and the seats said they had not. It compiled, and it passed,
+*because* `is_in_hand` accepted a cardless `Active` seat. So the file that contains
+`every_seat_the_engine_waits_for_is_a_seat_that_can_win_the_pot` was asserting the rules of
+poker against a table of seats that could not win anything. The same fixture defect was in
+`coherence_regressions.rs`. Both now deal from the deck the index is counted against.
 
-```rust
-pub fn is_in_hand(p: &Player) -> bool {
-    !p.has_folded && p.hole_cards.is_some()
-}
-```
+**Two money-safety tests were PINNING the defect and had to be inverted**, which is exactly the
+hazard docs/WAVE-06.md names:
 
-That makes the file's own stated rule true, and closes E-36's first half (betting into a hand
-you hold no cards in) at the same time, because `find_next_active_seat` would stop offering the
-action to a cardless seat.
-
-**It was deliberately NOT taken in this pass.** It is a behaviour change to another agent's file
-during a wave with three concurrent editors, and docs/DEFECTS.md E-36 documents that landing it
-requires deleting the `E-36` register entry in `tests/money_safety/src/documented.rs` and the
-`"carries both a live stake and a departed stake"` tolerated substring in the SAME change, or
-`register_entries_are_all_still_needed` fails on purpose. It is one change by one owner, and it
-is the shortest item on docs/WAVE-06.md's path to yes.
+* `m8_a_departed_stake_is_paid_to_its_owner_and_not_to_whoever_took_the_chair` asserted that
+  every principal ended the hand LEVEL -- the refund-everyone outcome. It now asserts the
+  poker-correct one: the two players who left forfeit their stakes to the seat that still held a
+  claim, and `dave` -- who took a chair and staked nothing -- gets nothing. The FINDING 13
+  property is now asserted while real money is moving instead of while everything is flat.
+* `m8_a_chair_with_two_owners_credits_each_of_them_under_their_own_name` BUILT the two-owner
+  chair on purpose, by making `dave` bet into a hand he held no cards in. That is now
+  impossible, so the hand is rewritten as
+  `a_mid_hand_arrival_is_never_dealt_the_action_and_can_never_stake_the_hand`: it drives the
+  identical sequence and asserts `dave` is never on the clock, is refused every action he sends,
+  never acquires a stake, and that the engine never emits the dual-stake `WARNING:`.
+  `push_winner`'s aggregation by `(seat, principal)` is kept as defence in depth.
 
 ---
 
@@ -2214,10 +2588,10 @@ is the shortest item on docs/WAVE-06.md's path to yes.
 
 **Severity:** HIGH. Recoverable in principle, permanently lost in combination with
 [FINDING 07](#finding-07), and invisible on every endpoint a leaving player would look at.
-**Status:** DEMONSTRATED by an independent auditor on the running local canisters, then
-REPRODUCED by the wave-6 coherence pass
-(`$SCRATCH/cd6/tests/money_safety/tests/wave6_coherence.rs::probe3`, kept in the scratch copy:
-it records behaviour rather than pinning it). **NOT FIXED.**
+**Status:** DEMONSTRATED by an independent auditor on the running local canisters, REPRODUCED by
+the wave-6 coherence pass, re-reproduced from scratch on the shipped module `306caef4…` at the
+start of wave 7, and **FIXED 2026-08-05**. The fix, the measurements on both modules and the
+gate are at the end of this section; everything above it is the original write-up, unchanged.
 **Where:** `cash_out` (and the identical guard in `withdraw`), via `hand_is_stuck`,
 `src/table_canister/src/lib.rs`.
 
@@ -2260,44 +2634,750 @@ None of these touches the money path. All three are strings.
 
 ---
 
-<a id="finding-19"></a>
-## FINDING 19 (high) -- nothing on chain moves the game, so liveness is outsourced to whoever has a browser tab open
+### THE FIX AS LANDED (wave 7, 2026-08-05)
 
-**Severity:** HIGH for a fund-holding canister. Not a loss path on its own; it is the enabling
-condition for [FINDING 18](#finding-18) and it is why "can I always get my money out promptly"
-is honestly answered *no*.
-**Status:** CONFIRMED by an independent auditor and re-verified in the wave-6 coherence pass by
-inspection of the source at `5e07edf6…`. **NOT FIXED.**
-**Where:** `src/table_canister/` — `ic-cdk-timers = "1"` is declared at `Cargo.toml:22` and
-`set_timer` appears **nowhere** in `src/`:
+**Re-reproduced first, on the module wave 6 shipped** (`306caef4…`, built from `4af6dc6`), with
+the auditor's own numbers, by `tests/money_safety/tests/invariants/custody.rs`:
+
+```text
+AUDITOR/before: phase=PreFlop pot=300000000 stuck=true bob_stake=298000000
+    seat0 chips=296000000 bet=2000000    seat1 chips=0 bet=298000000
+AUDITOR/cash_out(bob) -> Ok(0)   get_balance -> 0
+    get_balance() -> 0 (escrow only)
+    get_custody_status() is not answerable on this build: CanisterMethodNotFound
+    get_table_view() carries no custody figure on this build
+
+ORPHAN/after: cash_out alice -> 198000000, bob -> 199000000;
+              phase=PreFlop pot=3000000 seats: (none)
+
+DEPARTED: leave_table(alice) -> Ok(198000000); her stake still in hand 1 = 2000000
+    every surface she can read: zero
+```
+
+**Not the change the auditor asked for, and deliberately so.** Item 1 above cannot be done:
+`cash_out` returns `variant { Ok : nat64; Err : text }` and a `nat64` carries no sentence.
+Widening it to a record breaks every checked-in client IDL, including the one `+page.svelte`
+decodes `Number(result.Ok)` from. So **the state was removed rather than annotated**:
+
+* **`cash_out` and `leave_table` SETTLE an unmovable hand before they vacate the seat**
+  (`settle_unmovable_hand`). A stuck hand cannot be won by anybody, so the only lawful outcome
+  is the one `abandon_stuck_hand` already produces, and the leaver's stake comes back into their
+  stack and goes with them. `Ok = 0` becomes `Ok = 298_000_000`, which is the whole truth rather
+  than a number with a caveat attached. **No new power**: any principal can already call
+  `abandon_stuck_hand` on a stuck hand, so this is one call folded into another.
+* **The last player out turns the lights off.** A departure that empties the table settles a
+  live hand the same way. Nobody holds cards; nobody can win it.
+* **`get_custody_status()`** (new caller-scoped query) reports `escrow`, `chips_at_table`,
+  `committed_in_pot`, `committed_is_stuck`, `abandonable_in_ns`, `total`, and an `advice` string
+  that names `abandon_stuck_hand`.
+* **`TableView.my_committed_in_pot` / `hand_is_unmovable`**, so the call every client already
+  polls carries it. Non-zero with `my_seat = null` IS this finding.
+* **`withdraw`'s refusals**, both of them, carry the same sentence from the same function, with
+  the exact e8 figure.
+
+The same sequence on the fixed module:
+
+```text
+CRITICAL: hand 1 was ABANDONED as unmovable at phase preflop BY AN EXIT DOOR ...
+          300000000 e8s across 2 stakes returned to the players who put them in,
+          including the leaver's
+AUDITOR/cash_out(bob) -> Ok(298000000)   get_balance -> 298000000
+AUDITOR/withdraw(298000000) -> wallet 999701980000 -> 999999970000
+AUDITOR/after: phase=HandComplete pot=0
+ORPHAN/after: phase=HandComplete pot=0 seats: (none)
+
+DEPARTED/withdraw refusal: Insufficient balance. Have: 19.9800 ICP, requested: 20.0000 ICP.
+  0.0200 ICP (2000000 e8s) of yours is still committed to hand 1, and that hand can no longer
+  be moved by any message, so nobody can win it. Call abandon_stuck_hand() -- any principal
+  may -- and every stake goes back to whoever put it in, including yours, into your
+  withdrawable balance.
+```
+
+**The way this fix could have re-created [FINDING 15](#finding-15), and the guard against it.**
+`settle_unmovable_hand` runs INSIDE the two exit doors, and `apply_payouts` traps on a plan that
+does not conserve. A trap rolls the message back, so a bad plan would have taken the player's
+exit with it and shut the door they were walking through: the exact shape of the fund lock this
+project spent a wave removing. The plan is therefore checked before it is acted on, and a
+non-conserving one is declined and logged rather than settled. The player still leaves.
+
+**The gate: M10 CUSTODY VISIBILITY** (`tests/money_safety/src/invariants/custody.rs`), evaluated
+on every fuzz step and by four tests in the `invariants` target:
+
+> If a principal has a positive stake in a pot, at least one surface **that principal can read**
+> must say so.
+
+Every other reader in the money-safety harness is a controller, which is exactly how this stayed
+invisible: M1 balanced, M9's drain reported `fully_drained` (correctly, because the money WAS
+reachable), and the only endpoint that knew was one no client would think to call. M10 reads the
+canister as the player and counts a missing method, a rejected call and an undecodable reply all
+as "reports nothing", so it convicts the pre-fix module instead of failing to build against it.
+
+**What the gate does not prove.** This tree also carries the on-chain clock from
+[FINDING 19](#finding-19), which refunds a stuck hand within 30 s by itself. A fixture that
+merely advances time can therefore be satisfied by the clock rather than by the exit door, so
+the custody tests advance time WITHOUT executing a round and assert on the canister's own log
+line, `BY AN EXIT DOOR`. The gate fails if the exit-door code is removed even while the clock
+remains.
+
+**Still not closed by this fix:** the composition with [FINDING 07](#finding-07). A stake that is
+now visible and recoverable is still destroyed by `reset_table`, and that is that finding's to
+answer.
+
+---
+
+<a id="finding-19"></a>
+## FINDING 19 (high) -- nothing on chain moves the game, so liveness is outsourced to whoever has a browser tab open -- **THE CLOCK IS FIXED 2026-08-05. THE CYCLES HALF IS OPEN AND THIS FIX MADE IT WORSE.**
+
+**Severity:** HIGH for a fund-holding canister.
+**Status:** the timer half is **CLOSED**, measured before and after with every client closed.
+The cycles half is **OPEN** and is now the more urgent of the two, because the fix burns cycles
+continuously. Reproducer and gates: `tests/money_safety/tests/timers.rs`. Register entries:
+[E-54](DEFECTS.md#e-54), [E-55](DEFECTS.md#e-55), [E-56](DEFECTS.md#e-56).
+
+### What it was
+
+`ic-cdk-timers = "1"` was declared at `Cargo.toml:22` and `set_timer` appeared **nowhere** in
+`src/`:
 
 ```
 $ grep -rn "set_timer" src/          # no output
-$ grep -n "timers" src/*/Cargo.toml
-src/table_canister/Cargo.toml:22:ic-cdk-timers = "1"
 ```
 
-Every clock in this engine — the action timer, the disconnect threshold, the sitting-out
-auto-kick, the stuck-hand grace — is only ever evaluated inside a message somebody else sends.
-`check_timeouts` is an ordinary update call. If every client at a table closes its tab, the hand
-freezes and stays frozen indefinitely: the auditor measured `abandonable_in_ns =
-169_194_575_000` at t+160 s, i.e. a **5.5-minute minimum dead window** before any principal can
-even begin to unstick it, and the canister will sit in that state forever if nobody calls.
+Every clock in this engine -- the action timer, the disconnect threshold, the sitting-out
+auto-kick, the reload timer, the stuck-hand grace -- was evaluated only inside a message
+somebody else sent. `check_timeouts` is an ordinary update call.
 
-The wave-6 escape hatch (`abandon_stuck_hand`, deliberately callable by anyone) is the right
-mitigation for a table with at least one interested party still awake. It is not a substitute
-for a clock: it needs a caller too.
+### The dead window was worse than the auditor measured
 
-**Fix:** a canister timer that calls the same `check_timeouts` logic on the table's own action
-clock. It is a well-trodden IC pattern and the dependency is already in the manifest.
+The auditor reported `abandonable_in_ns = 169_194_575_000` at t+160 s and called it a
+**5.5-minute minimum dead window**. That is the time until `abandon_stuck_hand` would be
+*accepted*, and that method needs a caller too. Driven to the end on the pre-fix module, with
+nothing but subnet ticks and queries after the clients close:
 
-### The unexplored area the auditor named next, and this pass did not reach either
+```
+  t+  60s  phase=PreFlop pot=3000000 stuck=false abandonable_in=Some(269)s seated=2
+  t+ 360s  phase=PreFlop pot=3000000 stuck=true  abandonable_in=None       seated=2
+  t+1200s  phase=PreFlop pot=3000000 stuck=true  abandonable_in=None       seated=2
+  RESULT: hand resolved at None, seats released at None
+```
 
-**Cycles.** These canisters custody real funds and there is no cycles monitoring and no top-up
-mechanism anywhere in the tree. An IC canister below its freezing threshold rejects every update
-call, which means `deposit`, `withdraw`, `cash_out` and `abandon_stuck_hand` all stop at once.
-That is the one remaining way for every player at a table to be unable to withdraw
-simultaneously with no in-application remedy, and it composes with the absence of a timer: there
-is nothing on chain that would notice. See
-[reference: IC freezing threshold and runway](DEFECTS.md) — canisters freeze below 30 days of
-idle burn, and frozen is recoverable while true zero uninstalls.
+**Twenty simulated minutes, a live pot, and the dead window is unbounded, not 5.5 minutes.**
+Both seats were also still marked `Active` after twenty minutes of total silence: the
+disconnect threshold had never been evaluated either, because nothing evaluated anything.
+
+### After the fix, same setup, same silence
+
+```
+  t+  30s  HAND RESOLVED ITSELF, phase=HandComplete
+      seat0 chips=201000000 folded=false   <- won the pot on the fold-out
+      seat1 chips=199000000 folded=true    <- folded by its own clock
+  t+ 210s  every seat released, chips back in escrow
+  internal total unchanged at 4000000000 e8s
+```
+
+* **30 s** to resolve the hand: exactly the table's action clock.
+* **210 s** to release every seat: exactly `DISCONNECT_TIMEOUT_SECS` (90) +
+  `SITTING_OUT_KICK_SECS` (120). The chips are then in escrow, reachable by an ordinary
+  `withdraw`.
+* No e8 created or destroyed anywhere along the way.
+
+**Mid-hand upgrade, gated separately.** Timers do not survive upgrades: the CDK task queue is
+heap and the system global-timer field is cleared. `post_upgrade` re-arms last, against the
+state it actually restored; after an upgrade taken with a live hand the canister reports
+`clock_watchdog_armed = true` and `next_wake_at` 29 s out, aimed at the *restored* action clock,
+and the hand still resolves itself in 30 s with no client attached.
+
+**`check_timeouts` is still callable** so the system works if a timer is ever lost, and both
+paths call one function, `advance_table_clock`. That is gated behaviourally, not by inspection:
+`the_clock_and_check_timeouts_cannot_drift` drives two identical tables on a real replica, one
+by clock alone with zero ingress and one by `check_timeouts` alone, and requires the same
+money-carrying end state.
+
+### The fact that decided the design
+
+`ic-cdk-timers` 1.0 runs every callback behind a bounded-wait self-call, explicitly to catch
+traps at the call boundary, and `global_timer.rs::do_timer` step 7 reads:
+
+> If a repeated timer is successfully **dispatched** (irrespective of the timer's own success),
+> reschedule it.
+
+So a **repeating** timer is rescheduled before its callback runs and survives a trapping
+callback. A **self-rescheduling one-shot** does not: the re-arm is in the same message as the
+work, so one trap ends the clock permanently with nothing on chain to notice. On a canister
+whose settlement path has trapped before ([FINDING 15](#finding-15)) that is decisive, so the
+shape is a repeating 30 s watchdog (the part that cannot die) plus a one-shot aimed at the exact
+next deadline (the part that is precise, and free to arm because only a *fire* costs a message).
+
+This was not theoretical. The first build of the tick trapped on **every** tick on a `RefCell`
+double-borrow, and only the watchdog's dispatch-time rescheduling kept the clock alive to be
+noticed. Full write-up: [E-56](DEFECTS.md#e-56).
+
+### The defect this fix introduced, and why it belongs in a security file
+
+The clock's first build **refunded every stake in a playable hand**. It treated "the action
+clock expired more than five minutes ago" as "nothing can move this hand" and voided the hand
+before ever trying the ordinary timeout path. The money-safety fuzzer convicted it on its second
+seed.
+
+Those two are the same claim only while the clock is running. They come apart after any stall in
+which the canister does not execute -- and the sharpest way to get one is **to run out of
+cycles**. So as first written, this fix and the open cycles finding below composed: a table that
+froze for want of cycles and was then topped up would have voided its hand on the way back up,
+with a `CRITICAL:` line saying it was unmovable when it was merely stale.
+
+The grace is now measured from **when the canister first saw the clock overdue**, so a stall
+buys no credit toward abandonment. Trap-safety is preserved by putting the sighting and the work
+in separate messages: the sighting commits, the work may trap and roll back alone, and the grace
+keeps running. Gated by `a_hand_stalled_past_its_grace_is_played_out_not_voided`, which is
+verified red against the reverted fix -- the fuzzer alone is **not** enough, it stays green.
+Full write-up: [E-56](DEFECTS.md#e-56).
+
+### The unexplored area the auditor named next: CYCLES. STILL OPEN, AND NOW MORE URGENT.
+
+A canister below its freezing threshold **rejects every update call**: `deposit`, `withdraw`,
+`cash_out`, `player_action`, `reload` and `abandon_stuck_hand` all stop at once. That is a total
+custody failure with no attacker and no in-application remedy, and queries keep answering, so
+the UI would go on showing balances the canister can no longer pay out.
+
+**The fix above makes it arrive sooner, by a factor of ~630.** Measured, empty table, one
+simulated hour on a PocketIC 13-node application subnet:
+
+| | idle burn | runway at 1 T | at 10 T | at 50 T |
+|---|---|---|---|---|
+| before the clock | 0.00007 T/day | ~39 years | ~390 years | ~1,950 years |
+| after the clock | **0.0442 T/day** | **22 days** | **226 days** | **1,130 days** |
+
+Per tick: **15,361,360 cycles** at a 30 s watchdog, 15,386,002 at 60 s -- exactly linear, so
+`CLOCK_WATCHDOG_SECS` prices the whole design: `86400 / period * 15.4M` cycles per day. For
+comparison, the bare repeating interval this finding originally suggested costs 485 T/year per
+idle table at 1 s.
+
+The freezing *reserve* is unaffected -- measured at 2,128,884,000 cycles, i.e. 30 days of
+storage-only burn -- because the reserve is computed from idle resource consumption, not from
+message execution. The clock does not raise the threshold; it drains the balance toward it.
+
+**What was added:** `get_cycle_status()`, a query open to anybody including anonymous callers,
+because the number that predicts a total custody failure must not be privileged. It reports
+`liquid_balance` (the figure that actually reaches zero), a burn rate **measured on the running
+instance** rather than taken from a price list, `runway_days`, and `clock_ticks` -- the only
+externally visible evidence that the clock is alive. A canister up for minutes with
+`clock_ticks == 0` has lost its clock.
+
+**What was deliberately NOT built, and what it would need.** No top-up mechanism exists
+anywhere in this tree, and `get_cycle_status` must not be read as one:
+
+1. **A funding path.** A `deposit_cycles` endpoint is trivial; deciding *who pays* is not.
+   These are per-table canisters, so the bill scales with the lobby.
+2. **A wallet or minting arrangement** the tables can pull from, plus an actor authorised to
+   move value into them -- an additional privileged actor on a canister where
+   [FINDING 07](#finding-07) is still open, which is exactly why not to bolt one on in a hurry.
+3. **An off-chain watcher** polling `get_cycle_status` across every table, alerting well above
+   zero (`runway_days` under ~60), because once a canister is frozen the remedy needs someone
+   awake.
+4. **A decision about degraded operation.** Refusing new buy-ins while still honouring
+   withdrawals is a better failure mode than serving both until everything stops at once.
+   Nothing in the engine expresses that today.
+
+Until at least 1 and 3 exist, the honest answer to *"can I always get my money out"* is still
+**no**, and the reason still has nothing to do with poker.
+
+---
+
+<a id="finding-24"></a>
+## FINDING 24 (high) -- a frozen table answers NOTHING, not "queries only": the mitigation this project has documented in four places does not exist
+
+> **RENUMBERED IN WAVE 7.** This finding and the two below were written as 21, 22 and 23 by the
+> critic of the timers work, in the same wave that the critic of the admin/custody work wrote its
+> own 21, 22 and 23. Six findings shared three numbers and three `<a id>` anchors, so every
+> internal link resolved to whichever duplicate the reader reached first. The cycles/timers set was
+> moved to 24-26; the admin/custody set kept 21-23 because it appears first in this file. See
+> docs/WAVE-07.md §7.
+
+**Severity:** HIGH. No funds are destroyed and none can be stolen. What is destroyed is the
+*only* remedy [FINDING 19 §cycles](#finding-19) / [E-55](DEFECTS.md#e-55) offers, at the exact
+moment it is needed.
+
+**Status:** EXECUTED on the running system by an adversarial reviewer of the wave-6 clock work,
+2026-08-05. Module under test `cb26fb9495fbe2084590ff087245968f33bb78460b3c2c977d06c002e632c105`
+(the wave's final build), PocketIC 13-node application subnet, which runs the **real** IC
+execution environment.
+
+### The claim that is false
+
+Four places in this project say the same thing, and it is the load-bearing sentence of the
+cycles remediation plan:
+
+| where | what it says |
+|---|---|
+| `docs/DEFECTS.md` E-55 | *"Queries keep answering, so the UI would continue to show balances it can no longer pay out."* |
+| `src/table_canister/src/lib.rs`, `get_cycle_status` | *"A query, so it costs the caller nothing and **keeps working when the update path does not**."* |
+| `src/table_canister/src/lib.rs`, `CustodyStatus` | *"It is a QUERY, so it is free and it **still answers when the update path is refusing everything**."* |
+| [FINDING 19](#finding-19) §cycles item 3 | an off-chain watcher **polling `get_cycle_status`** is the proposed alarm |
+
+A frozen canister on the Internet Computer rejects **query calls too**. Not degraded, not
+stale: rejected at the boundary, by the replica, before any canister code runs.
+
+### Reproduced
+
+A funded table, one player with 10.00000000 ICP in escrow, driven below its freezing threshold
+(by raising `freezing_threshold`, which is the same state a table reaches by burning its
+balance down, and is reversible so the same instance also proves recovery):
+
+```
+  BEFORE freezing: get_table_state=ANSWERED get_cycle_status=ANSWERED
+  --- FROZEN ---
+  QUERY  get_cycle_status       -> REJECTED: Canister ... is unable to process query calls
+                                   because it's frozen. Please top up the canister with
+                                   cycles and try again.
+  QUERY  get_table_state        -> REJECTED: (same)
+  QUERY  get_stuck_hand_status  -> REJECTED: (same)
+  UPDATE withdraw               -> REJECTED: Canister ... is out of cycles
+  UPDATE check_timeouts         -> REJECTED: Canister ... is out of cycles
+  UPDATE abandon_stuck_hand     -> REJECTED: Canister ... is out of cycles
+  after 300s frozen: balance 99987160901499 -> 99987160655019 (delta 246,480 -- storage only,
+                                   the clock does not run while frozen)
+  --- AFTER TOP-UP ---
+  get_balance=1000000000   withdraw -> Ok
+  internal_total=0  ledger_main=0
+```
+
+The update rejections carry `CanisterOutOfCycles` and happen at ingress submission, so the
+message is never even accepted into the pool.
+
+### Why this is worse than what E-55 describes, not better
+
+E-55's picture is a canister that lies: it shows balances it cannot pay. The reality is a
+canister that **disappears**. Every consequence gets worse:
+
+* **The alarm cannot fire from the endpoint built to raise it.** `get_cycle_status` returns
+  `runway_days` right up until the moment it stops returning anything. An off-chain watcher
+  built the obvious way -- poll, read `runway_days`, alert if low -- gets a transport-level
+  reject and, unless it was written to treat *unreachability itself* as the alarm, reports
+  nothing at all. The endpoint added this wave cannot report the state it exists for.
+* **A player cannot even see what they are owed.** `get_balance`, `get_custody_status` and
+  `get_stuck_hand_status` all go dark, so the surface added for
+  [FINDING 18](#finding-18) -- "what is this canister holding for *me*" -- is unavailable in
+  precisely the incident where somebody would ask.
+* **The failure is indistinguishable from a subnet problem** to anybody outside, which is how
+  an operator loses hours before looking at cycles at all.
+
+### The freezing reserve is not 30 days any more, it is about one hour
+
+Measured on the same build, from outside the canister:
+
+| | value |
+|---|---|
+| `reserved_for_freezing` | 2,129,748,540 cycles |
+| observed burn (external, one simulated hour) | 1,843,363,680 cycles/hour = 44,240,728,320/day |
+| **what the reserve is worth at that burn** | **1.16 hours** |
+
+The freezing threshold is `freezing_threshold_seconds x idle resource consumption`, and idle
+resource consumption counts memory and compute allocation only -- it knows nothing about a
+timer that sends messages. E-55 already records that the reserve is unchanged by the clock.
+The consequence it does not draw is that the reserve's *protective value* fell by the same
+~630x as everything else: the buffer between "running" and "gone" is now about an hour of
+burn, so `runway_days` from `get_cycle_status` is the **only** usable warning, and per the
+section above it stops being readable at zero.
+
+### What this changes about the remediation
+
+Item 3 of [FINDING 19](#finding-19)'s list is still right but is not sufficient as written. The
+watcher must alarm on **failure to reach the canister**, not only on a low `runway_days` it
+manages to read, and the alarm threshold has to be far enough above zero to leave a human time
+to act, because the reserve buys about an hour and not 30 days.
+
+### Reproducer
+
+`tests/money_safety/tests/timers.rs` has no test for this. The probe used was written outside
+the tree (adversarial review, scratch copy) and is straightforward to port: raise
+`freezing_threshold` on the table canister via `pic.update_canister_settings`, then attempt one
+query and one update and assert on the rejections. It belongs in the tree, because the sentence
+it falsifies is repeated in four places and is the basis of the cycles plan.
+
+---
+
+<a id="finding-25"></a>
+## FINDING 25 (HIGH -- raised from medium in wave 7) -- after a stall, one permissionless call VOIDS the hand the clock would have played out; the player who was losing is the one with the incentive, and the canister TELLS them to do it
+
+**Severity:** **HIGH**, raised from MEDIUM by the wave-7 coherence pass. Total money is conserved
+exactly. What moves is the *outcome*: a pot that one player had won on a fold-out is handed back,
+and the player who chooses that is the player who was about to lose it. This is the same shape as
+[FINDING 17](#finding-17) -- a hand settled with the stakes returned rather than the winner paid --
+reached by a different door.
+
+Three facts found after the original write-up move this out of MEDIUM, and all three are measured
+in the amendment at the end of this section:
+
+  1. `get_custody_status()` **instructs the losing player to press the button**, in the canister's
+     own words, at exactly the moment the canister's own clock is about to fold them;
+  2. `cash_out()` and `leave_table()` -- both wired to this predicate **in the same wave** by a
+     different agent -- are strictly better for the attacker than `abandon_stuck_hand()`: they
+     recover the stake **and** take the whole stack out of a live hand in one call;
+  3. a principal who has **never sat at the table** can settle the hand and receives an error reply
+     saying it did nothing.
+
+**Status:** EXECUTED, 2026-08-05, adversarial review of the wave-6 clock work. **Re-reproduced and
+extended 2026-08-06 by the wave-7 coherence pass**, independently, from the other end (looking for
+a seam between agents rather than attacking the timer work). Same module,
+`cb26fb9495fbe2084590ff087245968f33bb78460b3c2c977d06c002e632c105`.
+
+**RENUMBERED IN WAVE 7** from FINDING 22; see docs/WAVE-07.md §7.
+
+### The residual half of E-56
+
+[E-56](DEFECTS.md#e-56) defect 2 is the correct observation that *"past its grace"* is a claim
+about the wall clock while *"nothing can move this hand"* is a claim about attempts, and that
+they come apart after any stall in which the canister does not execute -- a subnet halt, a
+canister frozen for want of cycles and then topped up, or simply a controller stopping the
+canister for longer than five minutes to upgrade it. The fix measures the grace from when the
+canister **first saw** the clock overdue.
+
+That fix was applied to `clock_should_abandon`, the door the timer uses. It was **not** applied
+to `hand_is_stuck`, the door `abandon_stuck_hand` uses, which still reads
+
+```rust
+Some(ref t) => now > t.expires_at.saturating_add(STUCK_HAND_GRACE_NS),
+```
+
+`abandon_stuck_hand` is permissionless by design, and that design is right. The consequence is
+that after any stall longer than the five-minute grace, the manual door is open **instantly**,
+before the clock has had a single opportunity, and it stays open until somebody's message wins
+the race with the timer.
+
+### Reproduced: the same stall, two money outcomes
+
+Two identical tables, heads-up, 200.00000000 ICP each, a live pre-flop hand with a 3,000,000 e8
+pot. Both are stalled for 3,600 s with **no execution at all** -- the exact construction
+`timers.rs::a_hand_stalled_past_its_grace_is_played_out_not_voided` uses. Then:
+
+```
+  ARM A (no caller at all -- the clock alone, i.e. the builder's own gate):
+      abandon lines = 0     stacks = [201000000, 199000000]
+      -> seat 1's clock ran out, seat 1 was folded, seat 0 WON the pot.
+
+  ARM B (identical, except seat 1 calls abandon_stuck_hand while the canister comes back up):
+      abandon lines = 1     refunded = 3000000     stacks = [200000000, 200000000]
+      -> "CRITICAL: hand 1 was ABANDONED as unmovable at phase preflop: no message could
+          advance it. 3000000 e8s across 2 stakes returned to the players who put them in;
+          nobody won the hand."
+```
+
+Nothing was unmovable in arm B either. It is the same hand, in the same state, that arm A plays
+out. Seat 1 -- the seat that loses 1,000,000 e8s in arm A -- recovers it in arm B by sending one
+message that anybody is allowed to send, and the log records the hand as unmovable when it was
+merely stale.
+
+Eight concurrent `abandon_stuck_hand` calls during the same recovery were also tried: exactly
+one is accepted, the refund happens once, and `internal_total` is unchanged. **There is no
+double-refund and no arithmetic defect here.** The defect is that the door opens at all.
+
+### Why the gate does not see it
+
+`a_hand_stalled_past_its_grace_is_played_out_not_voided` sends no ingress after setup, so it
+only ever exercises arm A. Its assertion message states a property of the *system* -- *"A stall
+is not a stuck hand: the seat whose clock expired should have been folded and the hand played
+out"* -- which the system does not have. Adding one `abandon_stuck_hand` call to that test turns
+it red.
+
+### The fix, and the reason it is not obviously free
+
+Making `hand_is_stuck` agree with `clock_should_abandon` means the manual door also has to be
+told when the canister first saw the clock overdue, i.e. it has to read `CLOCK_STUCK_SINCE`.
+That couples the permissionless escape hatch to timer state, and the escape hatch exists
+precisely because the timer might be dead -- a canister whose clock never re-armed after an
+upgrade would then have a *permanently closed* escape hatch, which is
+[FINDING 15](#finding-15)'s fund lock rebuilt. The safe shape is probably a floor rather than a
+substitution: refuse until the clock has been overdue for the grace period **and** the canister
+has been executing for at least one grace period, using a first-sighting timestamp that
+`post_upgrade` re-seeds. That is a design decision, not a patch, which is why it is recorded
+here rather than changed.
+
+---
+
+### WAVE-7 AMENDMENT — three doors, not one, and a signpost pointing at them
+
+Reproduced independently by the coherence pass, which was not attacking the timer work but looking
+for a state on which the wave's four agents disagree. It found exactly one, and this is it. Probes:
+`$SCRATCH/w7_coherence.rs`, run against the same module.
+
+**1. The canister instructs the losing player to void the hand.** `get_custody_status()` is a
+surface the custody-visibility agent added **this wave**, and it derives `committed_is_stuck` from
+`hand_is_stuck` -- the raw predicate -- not from the rule the timer agent established. Measured at
+the moment of the stall, before anything has executed:
+
+```text
+get_stuck_hand_status: is_stuck=true hand_in_progress=true refundable_pot=3000000
+
+LOSER (the seat on the clock): committed=1000000 stuck=true
+    advice: 0.0100 ICP (1000000 e8s) of yours is still committed to hand 1, and that hand can
+    no longer be moved by any message, so nobody can win it. Call abandon_stuck_hand() -- any
+    principal may -- and every stake goes back to whoever put it in, including yours, into your
+    withdrawable balance.
+```
+
+Every clause after "committed to hand 1" is false. Driven by the clock alone, with **zero ingress
+messages**, the same hand resolves in **2 rounds**: the seat on the clock is folded and the other
+player wins the pot. The sentence the player is shown is contradicted by the canister's own timer a
+few seconds later.
+
+`abandon_stuck_hand`'s own doc comment says *"There is nothing to win by calling it, whatever cards
+you were holding."* Measured: 2,000,000 e8s.
+
+**2. `cash_out` and `leave_table` are on the same predicate, and they are the better weapon.**
+Both were given a `settle_unmovable_hand` call at the top **in this wave**, as the fix for
+[FINDING 18](#finding-18), and both ask `hand_is_stuck`. `abandon_stuck_hand` only recovers the
+stake; `cash_out` recovers the stake and removes the stack from a live hand:
+
+```text
+cash_out(the seat on the clock) -> Ok(200000000)
+  phase=HandComplete pot=0 (was 3000000)
+  escrow: loser=2000000000  winner=1800000000
+```
+
+The player who was about to be folded out leaves with every e8 they arrived with, and the opponent
+who had won the hand is level. No "recovery method" needs to be called.
+
+**3. An `Err` reply that commits a settlement.** The settle runs *before* the seat lookup, and
+returning `Err` from an ic-cdk update is a normal reply, not a rollback:
+
+```text
+mallory (never at the table) cash_out -> Err("Not at table")
+  phase PreFlop -> HandComplete    pot 3000000 -> 0
+```
+
+Any principal at all can void any stalled hand and be told the call failed.
+
+**4. The two arms, side by side, with a real pot.** One state, two doors:
+
+```text
+=== ARM: the clock alone, ZERO ingress
+  pot=4000000  phase=PreFlop  on_clock=alice  stakes=[2000000, 2000000]
+  clock resolved it after 2 rounds
+  RESULT phase=HandComplete   alice=+0        bob=+4000000    sum=4000000
+
+=== ARM: abandon_stuck_hand, called by alice
+  abandon_stuck_hand(alice) -> Ok(4000000)
+  RESULT phase=HandComplete   alice=+2000000  bob=+2000000    sum=4000000
+```
+
+Correct totals. Wrong recipients. Every conservation invariant silent.
+
+**5. Why no gate in this project can reach it.** `World::advance()` is
+`pic.advance_time(d); pic.tick();` -- it **always lets a round run**, so the on-chain clock always
+wins the race and the window never opens. `World::advance_time_only` is the only thing that opens
+it, it appears in exactly three places in the tree (all in
+`tests/money_safety/tests/invariants/custody.rs`), and **all three use it for QUERIES only**. No
+test in this repository has ever sent an UPDATE through the window. That is the gate this fix owes:
+`advance_time_only`, then an update, on all three doors. See [E-59](DEFECTS.md#e-59).
+
+**What the fix must also cover.** The floor described above has to be applied to `hand_is_stuck`
+itself, not only to `abandon_stuck_hand`, because `cash_out`, `leave_table`, `get_custody_status`,
+`get_stuck_hand_status` and `TableView.hand_is_unmovable` all read it. Fixing the one method named
+in the original write-up would leave two money doors and three player-facing surfaces on the old
+rule.
+
+---
+
+<a id="finding-26"></a>
+## FINDING 26 (high) -- the 226-day runway assumes nobody is hostile: a free, permissionless ingress flood burns a table 65x faster, collapsing it to about three days
+
+**Severity:** HIGH, and it is **not** caused by the wave-6 clock. It is the number E-55's
+runway table is missing, and it changes the cycles finding from "a predictable date" to "a date
+an attacker picks".
+
+**Status:** EXECUTED, 2026-08-05, adversarial review. Same module, `cb26fb94...`.
+
+### What was run
+
+Two tables, identical configuration, identical number of replica rounds, 600 simulated seconds
+each. One is left alone. On the other, one seated player calls `check_timeouts` -- a
+permissionless update with no rate limit and no argument -- five times per simulated second.
+
+```
+  idle   600s:            307,227,280 cycles,  20 clock ticks
+  attack 600s:         20,038,661,478 cycles,  20 clock ticks, 3,000 ingress calls
+  amplification: x65.2                          attacker cost: 0
+```
+
+The clock is not the mechanism: both arms ran the same 20 ticks, so the timer accounts for
+~1.5% of the attacked burn. The cost is **ingress induction plus execution, which the IC
+charges to the canister, not to the caller**. Extrapolated, that is 2.886 T/day, so a table
+holding 10 T cycles has **3.5 days** of runway rather than 226, and the attacker pays nothing
+and needs no funds, no seat and no privilege. All 3,000 calls were accepted; none was rate
+limited.
+
+### Why it matters here specifically
+
+Combined with [FINDING 24](#finding-24) above, the end state is a table that stops answering
+queries and updates at a time of an attacker's choosing, with every player's escrow intact but
+unreachable until somebody tops it up. Nothing in this tree tops anything up, and the
+observability added this wave goes dark at the same instant.
+
+`CLAUDE.md` in this repo already states the intended policy -- *"All user-facing update calls
+should be rate-limited to prevent DoS"*, with named budgets for player actions, deposits,
+heartbeats and withdrawals. `check_timeouts`, `abandon_stuck_hand`, `get_*` updates and the
+other permissionless entry points are outside it. Rate limiting is not by itself a fix (a
+rejected ingress message is still charged to the canister, only more cheaply), but the gap
+between the stated policy and the code is worth closing before the cycles work is designed,
+because whatever budget a top-up mechanism is sized against has to survive this.
+
+---
+
+<a id="finding-27"></a>
+## FINDING 27 (high) -- the ICP deposit floor is BELOW the withdrawal floor, so money that arrives at the product's own documented minimum can never leave -- **OPEN**
+
+**Severity:** HIGH. Fund LOCK, no malice at any step, reachable by following the application's own
+instructions. Bounded at 99,999 e8s per player per table, but unrecoverable and silent.
+**Status:** OPEN. Found by the THIRD independent auditor, 2026-08-05, reproduced live on the
+running replica. Recorded here by the wave-7 coherence pass; it appeared in no document before.
+**Where:** `src/table_canister/src/lib.rs:1889` (`min_deposit`) against `:66`
+(`ICP_MIN_WITHDRAWAL_AMOUNT`); mirrored into
+`src/cleardeck_frontend/src/lib/components/DepositModal.svelte` and `WithdrawModal.svelte`.
+
+```rust
+// deposit(), line 1889
+let min_deposit = if currency == Currency::BTC { 1_000 } else { 20_000 };
+// line 66
+const ICP_MIN_WITHDRAWAL_AMOUNT: u64 = 100_000;
+```
+
+Any ICP escrow balance in **[20,000, 100,000)** e8s is unreachable by every door:
+
+```text
+cd-carol deposits exactly the advertised minimum, 20,000 e8s
+  withdraw(20_000)      -> Err "Minimum withdrawal is 0.0010 ICP"
+  withdraw(100_000)     -> Err insufficient balance
+  buy_in(0, 20_000)     -> Err "Minimum buy-in is 2.0000 ICP"
+  get_custody_status    -> total = 20_000, escrow = 20_000, advice = ""
+```
+
+`table_1` on the auditor's instance ended holding **80,000 e8s belonging to two real players**,
+with no method any player or controller can call that will move it.
+
+**It is not only the documented minimum.** The band is reachable by ordinary play: any player who
+loses down to a balance under 0.001 ICP is in it. The deposit minimum merely makes it reachable on
+the first action a new player takes.
+
+**BTC is the other way round** (deposit floor 1,000 sats, withdrawal floor 11 sats) and has no
+trap, which is why nobody noticed. `WithdrawModal.svelte` reasons through this exact trap *for BTC*
+-- *"Enforcing 1,000 client-side would TRAP DUST... Choosing the higher number costs a player their
+remaining balance"* -- without noticing the canister does it for ICP.
+
+**The fix is one number and a gate.** The deposit floor must be at least the withdrawal floor, and
+`ui_limits.rs` must assert the relation `min_deposit >= min_withdrawal` per currency rather than
+only mirroring each into the modals.
+
+<a id="finding-28"></a>
+## FINDING 28 (high) -- money at the canister's OWN published deposit address is reported as zero by every balance surface, and the error text tells the player to send more -- **OPEN**
+
+**Severity:** HIGH. Fund LOCK below the transfer fee, total invisibility above it.
+**Status:** OPEN. Found by the third independent auditor, 2026-08-05, reproduced live. This is the
+same account the wave-7 critic reached from the opposite direction in
+[FINDING 21](#finding-21); [FINDING 11](#finding-11) records the dust half only.
+**Where:** `claim_external_deposit` (`src/table_canister/src/lib.rs:2008`), `get_balance`,
+`get_custody_status`, `admin_get_balance`, `admin_get_all_balances`.
+
+```text
+cd-bob transfers 10,000 e8s to the address get_deposit_subaccount() gave him
+  icrc1_balance_of(that account)  -> 10_000
+  claim_external_deposit()        -> Err "No claimable balance. Send ICP to your deposit
+                                     address first. Use get_deposit_subaccount() to get
+                                     your address."
+  get_custody_status()            -> total = 0, escrow = 0, advice = ""
+  get_balance()                   -> 0
+```
+
+**This is [FINDING 18](#finding-18) in a second account.** FINDING 18 was written because a player
+was told they had nothing while money of theirs sat in the pot; the fix built
+`get_custody_status()` to answer "what is this canister holding for *me*". It answers **zero** for
+money sitting at the address the canister itself published to the player, and the reply the player
+does get instructs them to send **more** money to the address already holding theirs.
+
+**Why every instrument agrees with the lie.** The canister owns two kinds of ledger account and
+every measurement in this project is anchored to one of them:
+
+| instrument | anchor | sees the subaccounts? |
+|---|---|---|
+| M1 `ledger_equals_owed` | `icrc1_balance_of(table, None)` | no |
+| M9 `check_no_orphaned_custody` | `ledger_main - claims - uncredited_raw` | no |
+| `total_liability()` (the FINDING 20 guard) | `escrow + chips + pot` | no |
+| `DrainReport::table_is_really_empty` | `ledger_main` | no |
+| all four balance surfaces | `BALANCES` | no |
+
+`World::snapshot()` already computes `ledger_deposit_subaccounts` and **nothing compares it to
+anything**. See docs/WAVE-07.md §5: re-anchoring to every account the canister owns is the single
+highest-leverage fix in the project, because it closes this, half of FINDING 21, and the M9 hole at
+once.
+
+<a id="finding-29"></a>
+## FINDING 29 (high) -- both deposit paths move real money on the ledger before writing any record of intent, with no journal and no recovery -- **OPEN, NEVER EXERCISED**
+
+**Severity:** HIGH, **unbounded**. The only finding in the wave-7 audit that can cost an arbitrary
+amount, and the only one no reviewer has been able to drive.
+**Status:** OPEN. Read from the code by the third independent auditor, who states plainly that they
+could not force the trap on the local replica. **NOT REPRODUCED BY ANYBODY.** Recorded at full
+severity anyway, because the shape is the textbook one and the recovery paths were deliberately
+deleted.
+**Where:** `deposit()` (`src/table_canister/src/lib.rs:1876`) and `claim_external_deposit()`
+(`:2008`).
+
+Both perform an irreversible ledger movement and credit `BALANCES` in the **post-await
+continuation**. If that continuation traps -- instruction limit, memory, any panic in the tail --
+the ledger movement stands and the credit is rolled back with the message. There is no journal
+written before the call and no resume path afterwards.
+
+There is also no manual repair:
+
+* `notify_deposit` categorically refuses any block whose spender is the canister, with *"This block
+  is an ICRC-2 pull performed by this canister on your behalf (the deposit() flow). It was credited
+  to your balance when the pull happened and cannot be credited again"* -- a sentence that would be
+  **false** in exactly this state;
+* `admin_restore_balance` was deliberately removed (*"If balance recovery is needed, redeploy with a
+  migration in post_upgrade"*), and removing it was right for its own reason (it could mint escrow
+  from nothing) but it means the last in-band repair is gone.
+
+**What settling it needs**, in the auditor's own words and repeated here because it is the next
+thing somebody should build: a PocketIC harness that forces a trap in the post-await continuation
+(instruction-limit exhaustion, or a fault-injecting ledger stub that returns `Ok` and then makes the
+tail panic), and then asks whether ANY player- or controller-callable method can recover the funds.
+Everything that needs is local; nothing about it needs mainnet.
+
+The fix is the standard one and does not depend on the answer: write intent to stable state
+**before** the ledger call, make the continuation idempotent against that record, and give the
+record a resume path any principal can drive for their own entry.
+
+<a id="finding-30"></a>
+## FINDING 30 (high) -- the permanent hand archive is built from the seats as they stand at settlement, so it omits anyone who left mid-hand and invents anyone who sat down -- **OPEN**
+
+**Severity:** HIGH. Not a fund loss. It falsifies the one durable artifact behind the product's
+central claim.
+**Status:** OPEN. Found by the third independent auditor, 2026-08-05, on four archived hands read
+by hand from the running instance.
+**Where:** `record_hand_to_history` (`src/table_canister/src/lib.rs:1157`).
+
+The player list comes from `state.players`, not from `hand_stakes` -- the payout basis that
+[FINDING 13](#finding-13) exists because of. The payout path was taught that a seat is not a person;
+the archive path was not.
+
+```text
+archived hand_id 4 (table_2)
+  players: cd-attacker at seat 0, position "SB", starting_chips 5_000_000_000,
+           ending_chips 5_000_000_000
+           -- he bought into that chair AFTER THE FLOP and was never dealt in
+  alice, who was dealt in and lost 300_000_000 e8s: absent, and none of her actions recorded
+  total_pot 900_000_000 against listed player deltas of +300_000_000 -- the record does not balance
+```
+
+**It breaks the shuffle specification's own instruction.** SHUFFLE-SPEC §4 says to derive the
+player count from the hand's own record: *"Count it from the hand's own record -- every seat the
+history shows with cards, plus any that folded."* Do that for archived hand 10 and you get P = 2
+instead of 3, and you reproduce the board `9c Kc Qh / 6c / 4h` instead of the real
+`Qh Ts 6c / 4h / 3s`. **For any hand somebody left, the published record is not sufficient to
+verify that hand** -- which is the whole of "Provably Fair".
+
+`get_hand_history` on the table canister has the identical omission, so the client shows the same
+thing.
+
+**The gate this owes**, and it is a property rather than an example: for every archived hand,
+`sum(ending_chips - starting_chips)` reconciles against `total_pot`, and the recorded seat set
+equals the dealt-in set the shuffle actually consumed.

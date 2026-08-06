@@ -14,6 +14,7 @@ import deposit from './deposit.mjs';
 import handhistory from './handhistory.mjs';
 import handreplay from './handreplay.mjs';
 import shuffleproof from './shuffleproof.mjs';
+import toastNotices from './toast-notices.mjs';
 
 export const SCENES = [
   lobby,
@@ -27,6 +28,7 @@ export const SCENES = [
   handhistory,
   handreplay,
   shuffleproof,
+  toastNotices,
 ];
 
 export function scenesByName(names) {

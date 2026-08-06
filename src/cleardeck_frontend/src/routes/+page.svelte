@@ -55,6 +55,29 @@
   // block renders in the flow exactly as before and this flag does nothing.
   let noticesExpanded = $state(false);
 
+  // HOW TALL THE PROTECTED-NOTICE BANNER IS, RIGHT NOW, IN CSS PIXELS.
+  //
+  // docs/DEFECTS.md E-52. `.toast` is `position: fixed` and used to be pinned at
+  // `top: 80px`, which at 390x844 put a 534 px tall error panel straight over
+  // `.alpha-warning-banner`: the no-rake property was covered at 9 of 9 sample
+  // points and the other four protected phrases at 3 of 9. HARD RULE 2 says all
+  // four must be ON SCREEN AND LEGIBLE at any viewport on any view, so a toast
+  // that can paint over them is a hard-rule violation, not a cosmetic one.
+  //
+  // The toast is now anchored BELOW this banner instead of at a constant offset:
+  // `.app` publishes the measured height as `--notice-safe-top` and `.toast`
+  // starts there. That is enough on its own, at every scroll position: the banner
+  // is the first thing in the flow, so it occupies viewport rows
+  // [-scrollY, height - scrollY] and the toast starts at `height + gap`, which is
+  // strictly below the banner's bottom edge for every scrollY >= 0. Scrolling can
+  // only widen the gap, so no scroll listener is needed and there is no frame in
+  // which a stale measurement overlaps.
+  //
+  // A second, independent lock is in the stylesheet: `.toast` paints BENEATH the
+  // banner (z-index 90 vs 100). If this measurement were ever wrong, the notices
+  // would still win the hit test that tools/shots/lib/protected-notices.mjs runs.
+  let noticeBannerHeight = $state(0);
+
   // The `icp canister status` command for the network THIS bundle talks to.
   // On a mainnet build that is the live btc_table_1 with `-e ic`; on a local dev
   // build it is the local lobby with `-e local`. docs/DEFECTS.md T-02.
@@ -698,7 +721,10 @@
   });
 </script>
 
-<div class="app">
+<!-- `--notice-safe-top` is the measured height of the protected-notice banner.
+     Everything that floats over the page reads it so that nothing can be
+     positioned on top of the notices (docs/DEFECTS.md E-52). -->
+<div class="app" style="--notice-safe-top: {noticeBannerHeight}px">
   <!-- Ambient background effects -->
   <div class="bg-effects">
     <div class="glow glow-1"></div>
@@ -767,6 +793,7 @@
     class="alpha-warning-banner"
     class:on-table={view === 'table'}
     class:expanded={noticesExpanded}
+    bind:clientHeight={noticeBannerHeight}
   >
     <!-- Collapsed presentation, portrait + table view only. Every protected
          phrase is literal, so the on-screen test and `make hygiene` ask about
@@ -1437,13 +1464,52 @@
     border-color: rgba(255, 255, 255, 0.2);
   }
 
-  /* Toast notifications */
+  /* --------------------------------------------------------------------------
+     TOAST NOTIFICATIONS -- AND WHY THEY CANNOT COVER A PROTECTED NOTICE
+     --------------------------------------------------------------------------
+     docs/DEFECTS.md E-52. This block used to read `top: 80px; z-index: 100` with
+     no width or height bound at all. Measured on the rendered page at 390x844,
+     that produced a panel `rect=[-117, 80, 624, 534]`: 624 px wide on a 390 px
+     screen, so it overflowed BOTH edges and left no clear column, 534 px tall,
+     and painted over `.alpha-warning-banner` -- the no-rake property covered at
+     9 of 9 sample points, the other four protected phrases at 3 of 9. HARD RULE
+     2 is that all four notices are ON SCREEN AND LEGIBLE at any viewport on any
+     view, so that was a hard-rule violation reachable from the app's own error
+     path, not a cosmetic overlap.
+
+     THREE INDEPENDENT LOCKS, because one is a thing that can be edited away:
+
+       1. POSITION. The toast starts below the notice banner, at
+          `--notice-safe-top` (its measured height, published by `.app`). The
+          banner is the first element in the flow, so at scroll offset s it
+          occupies viewport rows [-s, H-s] while the toast starts at H+12.
+          H + 12 > H - s for every s >= 0, so they cannot overlap at any scroll
+          position, and scrolling only widens the gap.
+       2. PAINT ORDER. z-index 90 puts the toast BENEATH the banner (100) and
+          beneath `footer` (95), the two carriers of the protected phrases, so
+          even a wrong measurement cannot win the `elementFromPoint` hit test
+          that tools/shots/lib/protected-notices.mjs runs on each phrase's own
+          pixels. It is still above `header` (50) and the page content.
+       3. SIZE. Clamped to the viewport horizontally and to 40vh (320 px max)
+          vertically, so a long error message cannot grow into a full-screen
+          sheet the way the 534 px one did. Overflowing text scrolls INSIDE the
+          toast.
+
+     GATED IN TWO PLACES, and it is worth knowing which does what.
+     `tools/shots/lib/toast-notices.mjs` runs from run.mjs for EVERY scene at
+     EVERY viewport: it raises a toast and re-runs the protected-notice probe
+     with it up, asserting all three locks separately so they cannot collapse
+     into one. The `toast-notices` SCENARIO raises a real toast through the app's
+     own error path and compares it against that injected one property by
+     property, which is what makes the central gate's node the same node a player
+     sees rather than a lookalike.
+     -------------------------------------------------------------------------- */
   .toast {
     position: fixed;
-    top: 80px;
+    top: calc(var(--notice-safe-top, 80px) + 12px);
     left: 50%;
     transform: translateX(-50%);
-    z-index: 100;
+    z-index: 90;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -1451,6 +1517,19 @@
     border-radius: 12px;
     backdrop-filter: blur(20px);
     animation: slideDown 0.3s ease-out;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: min(560px, calc(100vw - 24px));
+    max-height: min(40vh, 320px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* A long message wraps and, if it still does not fit, scrolls inside the
+     toast. Before this it simply made the box wider than the screen. */
+  .toast span {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .toast.error {
@@ -1654,7 +1733,13 @@
   /* Footer */
   footer {
     position: relative;
-    z-index: 10;
+    /* Above `.toast` (90). `.footer-disclaimer` is the copy of the four notices
+       that a DESKTOP player reads once the banner has scrolled away, so it has
+       to win the same hit test the banner does (docs/DEFECTS.md E-52). It was
+       z-index 10, i.e. under every floating panel in the app. It overlaps
+       nothing else: it is the last thing in the flow, and both money dialogs
+       still cover it from z-index 200. */
+    z-index: 95;
     display: flex;
     flex-direction: column;
     background: rgba(10, 10, 15, 0.8);
@@ -1819,7 +1904,12 @@
       position: fixed;
       inset: 0;
       width: 100%;
-      z-index: 50;
+      /* Above `footer`, which E-52 raised from 10 to 95 so that the copy of the
+         notices a desktop player reads after scrolling wins its own hit test.
+         This panel is `inset: 0` in portrait, so without this it would be the
+         one full-screen overlay in the app that the footer bar paints through.
+         Still below `.alpha-warning-banner` (100), exactly as it was at 50. */
+      z-index: 96;
     }
 
     .footer-disclaimer {

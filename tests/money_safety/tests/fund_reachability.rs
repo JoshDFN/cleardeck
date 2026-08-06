@@ -1,4 +1,4 @@
-//! M9 FUND REACHABILITY — the auditor's lock, and the property that outranks it.
+//! M9 FUND REACHABILITY -- the auditor's lock, and the property that outranks it.
 //!
 //! > **M9.** For any state a sequence of legal calls can reach, there exists a
 //! > sequence of legal calls by each funded player that returns that player's
@@ -296,9 +296,36 @@ fn m9_a_hand_nobody_can_move_is_abandonable_by_anybody() {
 /// The two guards that were the second half of the lock. "Cannot withdraw while in
 /// a hand" is a fair rule for a hand in play and no rule at all for a hand that has
 /// stopped moving.
+///
+/// # WHAT THIS TEST STOPPED COVERING WHEN THE ON-CHAIN CLOCK LANDED, STATED PLAINLY
+///
+/// The second half used to construct a stuck hand by advancing 30 + 300 + 5
+/// seconds and then requiring `withdraw` and `cash_out` to succeed *while the hand
+/// was still live*. That construction no longer produces a stuck hand:
+/// docs/DEFECTS.md E-54 put a clock on chain, and a hand that is merely stale is
+/// exactly what that clock is for. It folds the seat whose timer expired and plays
+/// the hand out, so by the time `cash_out` is called the hand is over and the
+/// refusal is gone because there is no hand -- not because the guard lifted.
+///
+/// It failed here as `Err("Cannot cash out while in a hand")`, in the window
+/// during which `withdraw`'s own ledger await let the clock advance the hand.
+///
+/// **So this test no longer exercises the `hand_is_stuck` branch inside `withdraw`
+/// and `cash_out`.** That is a real coverage loss and it is recorded rather than
+/// hidden. What still covers that branch:
+///
+/// * `src/table_canister/src/lib.rs::stuck_hand_tests` pins `hand_is_stuck` itself,
+///   including the live-hand-with-no-clock arm that the clock deliberately will
+///   NOT resolve (`clock_schedule_tests` pins that asymmetry);
+/// * `m9_a_stuck_hand_can_be_abandoned_by_anybody` above still drives the real
+///   `abandon_stuck_hand` door end to end.
+///
+/// What this test asserts now is the property a player actually cares about, which
+/// is strictly what M9 is for: **after the table goes quiet, their money comes
+/// back** -- whether the clock played the hand out or the guard lifted.
 #[test]
 fn m9_the_in_a_hand_refusal_lifts_once_the_hand_cannot_progress() {
-    let world = seated_hand(TableConfig::six_max_icp(), &["alice", "bob", "carol"]);
+    let mut world = seated_hand(TableConfig::six_max_icp(), &["alice", "bob", "carol"]);
     let alice = world.actor("alice");
 
     // While the hand is live and moving, the refusal stands. That is deliberate,
@@ -313,10 +340,9 @@ fn m9_the_in_a_hand_refusal_lifts_once_the_hand_cannot_progress() {
     );
 
     world.advance(Duration::from_secs(30 + 300 + 5));
-    assert!(world.stuck_hand_status().is_stuck);
 
-    // Now it lifts. Escrow is not in the hand at all -- a withdrawal cannot touch
-    // the pot -- and cashing out leaves the stake behind in the payout basis.
+    // Escrow is not in the hand at all -- a withdrawal cannot touch the pot -- so
+    // this must work whichever way the hand went.
     let before = world.snapshot().internal_total();
     world
         .withdraw(alice, 1 * ICP)
@@ -325,9 +351,19 @@ fn m9_the_in_a_hand_refusal_lifts_once_the_hand_cannot_progress() {
         world.snapshot().internal_total() < before,
         "the withdrawal must actually have left the canister"
     );
-    world
-        .cash_out(alice)
-        .expect("a stack must be recoverable once the hand cannot progress");
+
+    // And every player's whole stack must come back. This is the assertion that
+    // matters: no route left open, no e8 stranded, nobody depending on a support
+    // ticket. It holds whether the clock played the hand out or the guard lifted.
+    let report = reachability::drain(&mut world);
+    assert!(
+        report.fully_drained(),
+        "M9 VIOLATED: {} e8s were still unreachable after the table went quiet for \
+         30 + 300 + 5 seconds. Neither the on-chain clock nor the stuck-hand guard \
+         got the money back.\n  {}",
+        report.owed_after,
+        report.log.join("\n  ")
+    );
 }
 
 // ---------------------------------------------------------------------------

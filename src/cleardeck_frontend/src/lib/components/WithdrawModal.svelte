@@ -242,6 +242,77 @@
     withdrawAmount = formatPlain(capped);
   }
 
+  // =========================================================================
+  // MONEY OF YOURS THAT IS NOT IN THIS BALANCE (docs/SECURITY-FINDINGS.md
+  // FINDING 18)
+  // =========================================================================
+  //
+  // "Available Balance" above is `get_balance()`, and `get_balance()` answers
+  // exactly one question: what can I withdraw right now. An auditor read it as
+  // zero, withdrew "everything", and left -- while 2.98 ICP of theirs sat in a
+  // pot on a table they had already cashed out of. The number was right. It was
+  // never the whole answer, and this screen is the last one a leaving player
+  // looks at.
+  //
+  // `get_custody_status()` is the whole answer. It is a query, so it costs
+  // nothing and still answers when every update is failing, and it is
+  // caller-scoped, so this cannot show the wrong person's money.
+  let custody = $state(null);
+  let custodyError = $state(null);
+  let recovering = $state(false);
+
+  async function loadCustody() {
+    if (!tableActor?.get_custody_status) {
+      // An older canister build: say so rather than silently show nothing. A
+      // missing surface and a zero stake must never look the same.
+      custodyError = 'This table cannot report money committed to a pot (older canister build).';
+      return;
+    }
+    try {
+      const s = await tableActor.get_custody_status();
+      custody = {
+        committed: BigInt(s.committed_in_pot ?? 0n),
+        stuck: !!s.committed_is_stuck,
+        total: BigInt(s.total ?? 0n),
+        chips: BigInt(s.chips_at_table ?? 0n),
+        advice: s.advice || '',
+        abandonableInSecs:
+          Array.isArray(s.abandonable_in_ns) && s.abandonable_in_ns.length
+            ? Number(s.abandonable_in_ns[0] / 1_000_000_000n)
+            : null
+      };
+      custodyError = null;
+    } catch (e) {
+      custodyError = e.message || 'Could not read what this table is holding for you.';
+    }
+  }
+
+  // Follow the canister's own advice, from the withdrawal screen, with one press.
+  async function recoverStuckPot() {
+    if (!tableActor?.abandon_stuck_hand) return;
+    recovering = true;
+    error = null;
+    try {
+      const result = await tableActor.abandon_stuck_hand();
+      if ('Err' in result) {
+        error = result.Err;
+      } else {
+        success = `Recovered ${formatWithUnit(custody?.committed ?? 0n)} from the stuck hand. `
+          + `It is in your withdrawable balance now.`;
+        // The pot is gone and the balance has moved: re-read both.
+        await loadCustody();
+        onWithdrawSuccess?.();
+      }
+    } catch (e) {
+      error = e.message || 'Recovery failed';
+    }
+    recovering = false;
+  }
+
+  $effect(() => {
+    loadCustody();
+  });
+
   // ONE dismissal contract for every dialog in this app (docs/DEFECTS.md T-13).
   function onWindowKeydown(e) {
     if (e.key === 'Escape') onClose();
@@ -294,6 +365,34 @@
       <span class="label">Available Balance</span>
       <span class="amount" class:btc={isBTC}>{formatWithUnit(currentBalance)}</span>
     </div>
+
+    <!-- MONEY OF YOURS THAT IS NOT IN THE FIGURE ABOVE.
+         docs/SECURITY-FINDINGS.md FINDING 18. Rendered IN FLOW, directly under the
+         balance it corrects, and never as an overlay: nothing in this app may
+         cover the four notices above (HARD RULE 2). -->
+    {#if custody && custody.committed > 0n}
+      <div class="committed-stake" class:stuck={custody.stuck}>
+        <div class="committed-headline">
+          <span class="committed-label">
+            {custody.stuck ? 'In a pot nobody can win' : 'In a pot right now'}
+          </span>
+          <span class="committed-amount">{formatWithUnit(custody.committed)}</span>
+        </div>
+        <p class="committed-advice">{custody.advice}</p>
+        {#if custody.stuck}
+          <button class="recover-btn" onclick={recoverStuckPot} disabled={recovering || processing}>
+            {recovering ? 'Recovering…' : `Recover ${formatWithUnit(custody.committed)} now`}
+          </button>
+        {:else if custody.abandonableInSecs !== null}
+          <p class="committed-countdown">
+            If the table stops moving, this becomes recoverable in about
+            {Math.max(0, Math.ceil(custody.abandonableInSecs / 60))} min.
+          </p>
+        {/if}
+      </div>
+    {:else if custodyError}
+      <p class="committed-unknown">{custodyError}</p>
+    {/if}
 
     <div class="form-section">
       <div class="label-row">
@@ -514,6 +613,85 @@
 
   .balance-info .amount.btc {
     color: #f7931a;
+  }
+
+  /* MONEY OF YOURS THAT IS NOT IN THE BALANCE ABOVE.
+     docs/SECURITY-FINDINGS.md FINDING 18. Deliberately in the document flow, with
+     no `position: fixed/absolute` and no z-index, so it can never cover the four
+     notices at the top of this dialog (HARD RULE 2). */
+  .committed-stake {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px 16px;
+    background: rgba(255, 184, 0, 0.08);
+    border: 1px solid rgba(255, 184, 0, 0.45);
+    border-radius: 12px;
+  }
+
+  .committed-stake.stuck {
+    background: rgba(255, 92, 92, 0.1);
+    border-color: rgba(255, 92, 92, 0.6);
+  }
+
+  .committed-headline {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+  }
+
+  .committed-label {
+    color: #ffb800;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .committed-stake.stuck .committed-label {
+    color: #ff7676;
+  }
+
+  .committed-amount {
+    color: #fff;
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .committed-advice {
+    margin: 0;
+    color: #ddd;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .committed-countdown {
+    margin: 0;
+    color: #999;
+    font-size: 12px;
+  }
+
+  .recover-btn {
+    padding: 10px 14px;
+    border: 1px solid rgba(255, 92, 92, 0.8);
+    border-radius: 8px;
+    background: rgba(255, 92, 92, 0.18);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .recover-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .committed-unknown {
+    margin: 0;
+    color: #ffb800;
+    font-size: 12px;
   }
 
   .form-section {

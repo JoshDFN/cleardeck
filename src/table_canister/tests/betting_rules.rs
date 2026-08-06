@@ -61,6 +61,9 @@ fn config() -> TableConfig {
     }
 }
 
+/// A seat with no cards yet. Every caller is [`flop_table`], which deals them:
+/// a seat in a live betting round that holds no cards is not in the hand at all
+/// (see the note there and docs/SECURITY-FINDINGS.md FINDING 17).
 fn player(seat: u8, chips: u64) -> Player {
     Player {
         principal: seat_principal(seat),
@@ -89,9 +92,27 @@ fn player(seat: u8, chips: u64) -> Player {
 ///
 /// `stacks[i]` is seat `i`'s stack. Action starts on seat 0.
 fn flop_table(stacks: &[u64], now: u64) -> TableState {
+    // EVERY SEAT IN A LIVE BETTING ROUND HOLDS CARDS, and this fixture has to
+    // reflect that or it is not describing a state the engine can reach.
+    //
+    // These players used to be built with `hole_cards: None` while `deck_index`
+    // was already advanced past `2 * stacks.len()` hole cards -- the accounting
+    // said they had been dealt in and the seats said they had not. It compiled and
+    // it passed, because `is_in_hand` accepted a seat that was `Active` and held no
+    // cards, which is exactly docs/SECURITY-FINDINGS.md FINDING 17. So eighteen
+    // betting-rules tests, including `every_seat_the_engine_waits_for_is_a_seat_
+    // that_can_win_the_pot`, were asserting the rules of poker against a table of
+    // seats that could not win anything.
+    //
+    // The cards come off the same deck `deck_index` is counted against, so the
+    // fixture is now internally consistent: seat `i` holds `deck[2i]` and
+    // `deck[2i+1]`, and the index starts after them.
+    let deck = poker_core::create_deck();
     let mut players: Vec<Option<Player>> = Vec::new();
     for (i, chips) in stacks.iter().enumerate() {
-        players.push(Some(player(i as u8, *chips)));
+        let mut p = player(i as u8, *chips);
+        p.hole_cards = Some((deck[2 * i], deck[2 * i + 1]));
+        players.push(Some(p));
     }
     while players.len() < 6 {
         players.push(None);

@@ -102,6 +102,20 @@ fn hostile_sequences_never_create_chips_double_pay_or_lose_state_across_an_upgra
                 )
             }
         );
+        eprintln!(
+            "money-fuzz: seed {seed:#x} M11 OUTCOME: {} hand(s) had their OUTCOME checked (of {} \
+             the watch saw); {} of those reached a decided-by-fold-out moment and had the sharp \
+             leg run; the structural leg ran on {} step(s){}",
+            report.outcome.hands_outcome_checked,
+            report.outcome.hands_seen,
+            report.outcome.hands_foldout_checked,
+            report.outcome.steps_structurally_checked,
+            if report.outcome.declined.is_empty() {
+                String::new()
+            } else {
+                format!("; declined: {:?}", report.outcome.declined)
+            }
+        );
         for f in &report.documented_findings {
             documented_sigs.push(f.signature.clone());
             eprintln!(
@@ -195,6 +209,40 @@ fn hostile_sequences_never_create_chips_double_pay_or_lose_state_across_an_upgra
         "{hands_seen} hands completed and NOT ONE was checked against the independent settlement \
          oracle. The three oracle-free legs compare the canister against its own record, which a \
          self-consistent misdirection -- a plan that names the wrong live player -- passes."
+    );
+
+    // M11 OUTCOME MUST HAVE SPOKEN TOO.
+    //
+    // Its structural leg is per STEP and needs no reconstruction at all, so it
+    // cannot decline: if it ran on no steps, either no hand was ever live or the
+    // watch has stopped observing. Either way the instrument is not measuring and
+    // saying so is the whole lesson of docs/DEFECTS.md H-03.
+    let outcome_steps: u64 = report
+        .runs
+        .iter()
+        .map(|r| r.outcome.steps_structurally_checked)
+        .sum();
+    let outcome_hands: u64 = report
+        .runs
+        .iter()
+        .map(|r| r.outcome.hands_outcome_checked)
+        .sum();
+    let foldout_hands: u64 = report
+        .runs
+        .iter()
+        .map(|r| r.outcome.hands_foldout_checked)
+        .sum();
+    eprintln!(
+        "money-fuzz: M11 OUTCOME ran its structural leg on {outcome_steps} step(s) and settled \
+         the OUTCOME of {outcome_hands} hand(s); {foldout_hands} of those were decided by \
+         fold-out and had the sharp leg run"
+    );
+    assert!(
+        hands_seen == 0 || outcome_steps > 0,
+        "{hands_seen} hands completed and M11 OUTCOME's structural leg ran on NOT ONE step. It \
+         reads the snapshot the loop already takes and declines only for a hand somebody walked \
+         out of, so zero means it has stopped observing. See the per-run `outcome` block in {}.",
+        path.display()
     );
 
     assert!(

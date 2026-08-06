@@ -14,6 +14,15 @@ use money_safety::{assert_holds, assert_violated};
 use std::time::Duration;
 
 mod classifier;
+// M10 CUSTODY VISIBILITY. In THIS target, not a file of its own, because
+// `scripts/dev.sh cmd_test` names its money-safety targets explicitly and a
+// cargo-auto-discovered target is a target nobody runs (docs/DEFECTS.md: the only
+// proven fund-theft reproducer in the project sat outside every make target for a
+// whole wave). `cargo test --test invariants` is in the fast gate.
+mod custody;
+// M11 OUTCOME. Same reasoning as `custody` above: named by `cargo test --test
+// invariants`, which the fast gate runs explicitly.
+mod outcome;
 mod principals;
 mod seam;
 mod upgrade_across_versions;

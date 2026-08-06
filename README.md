@@ -155,11 +155,97 @@ fixed below, and CI now fails if any of them regresses.
 > (`--two-paths`), and the metadata mechanism has been demonstrated end to end on a local
 > replica, including a non-controller identity reading `git:revision` off a running canister.
 
+### What a verifier can and cannot check today
+
+This is the whole answer in one table, because the previous version of this section left a
+reader to work it out and one of them worked out something false.
+
+| Question | Can you check it today? | With what |
+|---|---|---|
+| Is the build reproducible — same source, same bytes, from any directory? | **Yes** | `./scripts/verify-build.sh --two-paths` |
+| Does a local replica run a build of this source tree? | **Yes** | `./scripts/dev.sh local-up` then `./scripts/verify-build.sh --local` |
+| Does a local replica run the *container* build, byte for byte — the same check mainnet needs? | **Yes** | `./scripts/dev.sh local-up --docker` then `./scripts/verify-build.sh --local` |
+| Which commit does a canister claim to be? | **Yes**, for any canister deployed by this pipeline, without a key | `icp canister metadata <id> git:revision -e ic` |
+| Does the **mainnet** fleet run a build of this source? | **No, not yet** | the deployed modules predate this pipeline — see the box below |
+| Is the deployed code *correct*, or safe, or audited? | **No.** Nothing here is an audit | — |
+
+The last row is not a formality. Verification answers "is this the code in the repository?"
+and nothing else. This code is unaudited alpha software with known bugs, listed in
+[docs/DEFECTS.md](docs/DEFECTS.md) and [docs/SECURITY-FINDINGS.md](docs/SECURITY-FINDINGS.md).
+A perfect `VERIFIED` on a canister full of defects verifies the defects.
+
 ### What you need
 
-- **Docker**, running. Nothing else. You do not need Rust, Node or a controller key.
+- **Docker**, running, for the mainnet and `--two-paths` checks. Nothing else: you do not need
+  Rust, Node or a controller key.
 - About 15 minutes for the first build. On Apple Silicon it is slower, because the image is
   pinned to `linux/amd64` and runs under emulation. See *Why the platform is pinned*, below.
+- For `--local` only, the toolchain you brought the stack up with. No Docker needed unless you
+  brought it up with `--docker`.
+
+### Rehearse it on a local replica first
+
+Two commands, in this order, and the second one must end in `VERIFIED`:
+
+```bash
+./scripts/dev.sh local-up            # builds and deploys with YOUR toolchain
+./scripts/verify-build.sh --local    # rebuilds the same way and diffs every module
+```
+
+```
+==> builder        host (local deployment provenance: host)
+==> reading the local canisters
+  lobby          <local id>   claims <sha> (dirty)
+  ...
+==> module hashes reported by the local network
+  CANISTER       RESULT   DETAIL
+  lobby          MATCH    <64 hex characters>
+  history        MATCH    <64 hex characters>
+  table_1        MATCH    <64 hex characters>
+  ...
+VERIFIED every deployed module is byte-identical to a build of this source.
+```
+
+**Read the builder line, because it is the scope of the claim.** `local-up` builds with your
+own toolchain — making every local bring-up wait on an emulated container build would be
+absurd — so `--local` rebuilds the same way and proves the local replica is running a build of
+*this tree*, that the recipe works, and that the metadata pipeline works end to end. It does
+**not** prove cross-machine reproducibility: a macOS `cargo build` and a `linux/amd64`
+container build of identical source are not byte-identical, by design, and that is a property
+of rustc rather than of this project.
+
+For the full rehearsal — the same check a stranger runs against mainnet, on a stack you
+control — bring the stack up on container-built modules:
+
+```bash
+./scripts/dev.sh local-up --docker   # slower: an emulated linux/amd64 build
+./scripts/verify-build.sh --local    # now reports builder: docker
+```
+
+`local-up` records which builder it used in `.icp/cache/cleardeck-build-provenance.txt`, and
+`--local` reads it, so the verifier rebuilds the way the thing it is verifying was built.
+Before this existed the two commands disagreed and printed `6 of 6 MISMATCH` on a stack that
+was perfectly consistent, which is exactly the wrong signal from a verification tool
+([docs/DEFECTS.md E-58](docs/DEFECTS.md#e-58)). Pass `--host` or `--docker` to override.
+
+### A stale label is not a mismatch, and the script no longer pretends otherwise
+
+Every module carries `git:revision` and `git:dirty` as public metadata, and **those strings
+are part of the bytes being hashed**. So verifying a deployment made one commit ago used to
+print `MISMATCH` for a reason that had nothing to do with the code.
+
+The script now reads those labels off each canister and builds with exactly those labels, then
+reports two separate facts: whether the CODE matches, and whether the LABEL is the revision
+you have checked out. A stale or dishonest label cannot turn a code mismatch into a match — it
+can only tell you which source to compare. A canister can claim any revision it likes; what it
+cannot do is claim a revision whose build produces its hash.
+
+If a canister reports `git:dirty = dirty`, the script says so under "label findings": that
+module was built from an uncommitted working tree, so **no commit in this repository
+reproduces it** and nobody outside the machine that built it can verify it. On a local replica
+that is normal and the run can still say VERIFIED, because "a build of the tree in front of
+you" is exactly the local claim. On mainnet it means the deployment is unverifiable, whatever
+revision it names.
 
 ### Step 1. Pick the commit and build it
 

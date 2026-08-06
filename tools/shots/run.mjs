@@ -36,6 +36,7 @@ import { DRIFT_TARGETS, injectDrift, requestedDrift } from './lib/drift.mjs';
 import { assertEveryTokenAccountedFor } from './lib/token-census.mjs';
 import { assertNothingCoversAFigure } from './lib/occlusion.mjs';
 import { foldProtectedNotices, probeProtectedNotices } from './lib/protected-notices.mjs';
+import { assertNoticesSurviveAToast } from './lib/toast-notices.mjs';
 import { foldFeltArea, measureFelt } from './lib/felt-area.mjs';
 
 const log = (msg) => console.log(msg);
@@ -151,7 +152,7 @@ function figuresFrom(checks) {
   return out;
 }
 
-async function runScene(scene, viewportName, ctx, browser, dirs) {
+async function runScene(scene, viewportName, ctx, browser, dirs, claimLatestDir = () => {}) {
   const vp = VIEWPORTS[viewportName];
   const wantsVideo = Boolean(scene.video) && viewportName === 'desktop';
   const videoDir = wantsVideo ? path.join(dirs.shaDir, 'motion', scene.name) : undefined;
@@ -160,11 +161,14 @@ async function runScene(scene, viewportName, ctx, browser, dirs) {
   log(`\n▸ ${scene.name} [${viewportName}]  ${scene.title}`);
 
   // Retire every filename this (scene, viewport) could previously have claimed in
-  // the stable mirror, BEFORE anything is written. A full run also wipes latest/
-  // up front, but a partial run does not, and a verified PNG left over from an
-  // earlier commit is exactly the artifact a reader would trust.
-  clearLatestVariants(dirs.latestDir, scene.name, viewportName);
-
+  // the stable mirror. A verified PNG left over from an earlier commit is exactly
+  // the artifact a reader would trust, so the old name must not survive a run
+  // that produces a different one.
+  //
+  // docs/DEFECTS.md E-53: this used to run HERE, before `scene.setup`, so a scene
+  // that failed to stage deleted the previous run's PNG for that scene and put
+  // nothing in its place. It now runs from `writeShot` below, one statement
+  // before the replacement is written.
   const setup = await scene.setup(ctx);
   log(`  on-chain: ${setup.notes}`);
 
@@ -330,6 +334,34 @@ async function runScene(scene, viewportName, ctx, browser, dirs) {
     };
     for (const p of notices.problems) log(`  ⚠ NOTICE OFF SCREEN: ${p}`);
 
+    // THE SAME RULE, IN THE STATE THE HARNESS NEVER USED TO PRODUCE.
+    //
+    // docs/DEFECTS.md E-52. The probe above measures the view as the scene left
+    // it, and every scene leaves it in a state with no error on screen. The app
+    // has one more: `.toast`, `position: fixed`, raised by its own error path
+    // from anywhere. At 390x844 that panel covered the whole notice banner -- the
+    // no-rake property at 9 of 9 sample points -- and every gate in this repo was
+    // green while it did, because none of them had ever seen the app show an
+    // error.
+    //
+    // So the toast is now part of the rule, not a scene: it is raised on EVERY
+    // scene at EVERY viewport, which is the only way "on any view" is a
+    // measurement rather than a hope. It costs two page.evaluate round trips and
+    // leaves nothing behind -- the injected node is removed before the felt is
+    // measured and long before the screenshot is taken, so no other gate and no
+    // artifact sees it.
+    const toastNotices = await assertNoticesSurviveAToast(page, {
+      scene: scene.name, viewport: viewportName,
+    });
+    verification = {
+      verified: verification.verified && toastNotices.ok,
+      checks: { ...verification.checks, protectedNoticesUnderToast: toastNotices },
+      notes: toastNotices.ok
+        ? `${verification.notes}; notices survive an error toast`
+        : `${toastNotices.problems.join(' | ')} || ${verification.notes}`,
+    };
+    for (const p of toastNotices.problems) log(`  ⚠ NOTICE UNDER TOAST: ${p}`);
+
     // THE OTHER HALF OF THE SAME RULE. Hiding a notice makes the felt bigger, so
     // a notice gate on its own is an incentive to shrink the felt instead. This
     // asserts a floor under the playing surface and RECORDS the exact geometry,
@@ -354,16 +386,24 @@ async function runScene(scene, viewportName, ctx, browser, dirs) {
     // therefore never claim that name. Only a verified scene gets it; anything
     // else is written as UNVERIFIED-* so the filename carries the caveat even
     // when nobody opens INDEX.md.
-    if (verification.verified) {
-      files = await shoot(page, {
-        scene: scene.name, viewport: viewportName, shaDir: dirs.shaDir, latestDir: dirs.latestDir,
+    // The only place in the harness that writes into `latest/`. Both destructive
+    // steps -- claiming (wiping) the directory for this run, and retiring this
+    // scene's previous filenames -- happen here, immediately before the
+    // replacement lands, so no failure path can delete evidence it cannot
+    // replace (docs/DEFECTS.md E-53).
+    const writeShot = async (sceneName) => {
+      claimLatestDir();
+      clearLatestVariants(dirs.latestDir, scene.name, viewportName);
+      return shoot(page, {
+        scene: sceneName, viewport: viewportName, shaDir: dirs.shaDir, latestDir: dirs.latestDir,
       });
+    };
+
+    if (verification.verified) {
+      files = await writeShot(scene.name);
       log(`  ✓ state verified: ${verification.notes}`);
     } else {
-      files = await shoot(page, {
-        scene: `UNVERIFIED-${scene.name}`, viewport: viewportName,
-        shaDir: dirs.shaDir, latestDir: dirs.latestDir,
-      });
+      files = await writeShot(`UNVERIFIED-${scene.name}`);
       log(`  ✗ STATE NOT VERIFIED: ${verification.notes}`);
       log('    written as UNVERIFIED-* (the canonical filename is reserved for verified state)');
     }
@@ -457,11 +497,32 @@ async function main() {
   const dirs = runDirs(sha);
 
   // A full run owns `latest/`; a partial run only updates the files it produces.
-  if (args.scenes.length === 0 && args.viewports.length === Object.keys(VIEWPORTS).length) {
+  //
+  // docs/DEFECTS.md E-53, second half. THE WIPE IS LAZY, AND THAT IS THE WHOLE
+  // POINT. It used to run here, in the preamble of step [6/6], before the first
+  // scene had done anything. The controller-identity check that killed the wave-6
+  // sweep fires INSIDE the scenes, so a run that captured nothing still deleted
+  // INDEX.md, manifest.json and every PNG of the previous run, and the reconciler
+  // had to rebuild `latest/` by hand from two older run directories. A harness
+  // that destroys the previous evidence when it fails to produce new evidence is
+  // a hazard on its own.
+  //
+  // So `claimLatestDir` is handed to the scene runner and called at the LAST
+  // possible moment: immediately before the first PNG is written, by which point
+  // the replica, the identities, the deploy, the staging and the verification of
+  // one whole scene have all worked. Anything that fails earlier leaves the
+  // previous run's evidence exactly where it was.
+  const fullRun = args.scenes.length === 0
+    && args.viewports.length === Object.keys(VIEWPORTS).length;
+  let latestClaimed = !fullRun;
+  const claimLatestDir = () => {
+    if (latestClaimed) return;
+    latestClaimed = true;
     for (const f of fs.readdirSync(dirs.latestDir)) {
       fs.rmSync(path.join(dirs.latestDir, f), { recursive: true, force: true });
     }
-  }
+    log(`  (cleared artifacts/screens/latest/ — this run owns it)`);
+  };
 
   const ctx = {
     ids,
@@ -484,7 +545,7 @@ async function main() {
       let sceneError = null;
       let verified = true;
       for (const viewportName of args.viewports) {
-        const result = await runScene(scene, viewportName, ctx, browser, dirs);
+        const result = await runScene(scene, viewportName, ctx, browser, dirs, claimLatestDir);
         if (result.error) { sceneError = result.error; verified = false; }
         if (!result.verification.verified) verified = false;
         shots.push({

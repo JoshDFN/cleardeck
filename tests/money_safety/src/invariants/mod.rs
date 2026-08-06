@@ -21,9 +21,13 @@
 use serde::Serialize;
 
 pub mod attribution;
+pub mod custody;
+pub mod outcome;
 pub mod reachability;
 pub mod relational;
 pub use attribution::*;
+pub use custody::*;
+pub use outcome::*;
 pub use reachability::*;
 pub use relational::*;
 
@@ -99,7 +103,63 @@ pub enum Invariant {
     ///   player's money out to the ledger and check it arrives. A structural check
     ///   can only fail on the failure modes somebody imagined; the drain fails on
     ///   any of them.
+    /// * [`reachability::check_no_orphaned_custody`], on every snapshot, and again
+    ///   on the drain's own result: **the LEDGER, not the canister's books, decides
+    ///   whether the table is empty.**
+    ///
+    /// # The third leg was added because the first two could both be fooled at once
+    ///
+    /// docs/SECURITY-FINDINGS.md FINDING 07. Both checks above measure against
+    /// `internal_total()` -- what the canister SAYS it owes. One controller call
+    /// (`reset_table`) rebuilt `TableState`, so the canister stopped saying it owed
+    /// the seated chips, and:
+    ///
+    /// * no settlement call had trapped, so leg one was silent;
+    /// * `owed_after == 0`, so leg two reported `fully_drained`;
+    /// * and 4.00000000 ICP sat on the ledger inside a canister that owed it to
+    ///   nobody.
+    ///
+    /// An attack that changes what is owed cannot be caught by an instrument
+    /// anchored to what is owed. The third leg is anchored to `icrc1_balance_of`.
     M9FundReachability,
+
+    /// M10 CUSTODY VISIBILITY. If a principal has a positive stake in a pot, at
+    /// least one surface that principal can read must say so.
+    ///
+    /// # Why this had to exist (docs/SECURITY-FINDINGS.md FINDING 18)
+    ///
+    /// M9 asks whether the money can be got out. **It does not ask whether the
+    /// owner has any way of knowing it is still in there.** An auditor cashed out
+    /// of a stuck hand, was told `Ok = 0` while 298,000,000 e8s of theirs sat in
+    /// the pot, read `get_balance() -> 0`, withdrew "everything", and left. The
+    /// money was recoverable the whole time -- by `abandon_stuck_hand`, which
+    /// nothing on the withdrawal path names -- so M9's drain was GREEN, M1
+    /// balanced, and every instrument in this harness agreed the table was fine.
+    /// The only reader that could see the stake was a controller.
+    ///
+    /// A door nobody is told about is not a door. This invariant reads the
+    /// canister **as the player** and fails when their own money is invisible to
+    /// them (see [`custody::check_custody_is_visible`]).
+    M10CustodyVisibility,
+
+    /// M11 OUTCOME. The hand ended when the rules of poker say it ended, and the
+    /// seat that held the last live claim is the seat that was paid.
+    ///
+    /// # Why this had to exist (docs/SECURITY-FINDINGS.md FINDING 17)
+    ///
+    /// Every other invariant here asks about MONEY: is it conserved, is it
+    /// reachable, did it reach the person the record names, did it reach the person
+    /// the rules name AT THE MOMENT THE HAND ENDED. None of them asks whether the
+    /// hand ended at the right moment. FINDING 17 is a hand allowed to run on past
+    /// the point where it was decided: by the time it settled the last card-holder
+    /// had been folded by his own clock, so an oracle shown the final state agreed
+    /// with the canister that nobody held a claim and every stake should go back.
+    /// The oracle was right about the state it was shown. **The state should not
+    /// have existed.** Measured: a 52,000,000 e8 pot, three seats, all three ending
+    /// on exactly their buy-in, and M1 through M9 silent.
+    ///
+    /// See [`outcome`] for the three legs.
+    M11Outcome,
 
     /// M8 PRINCIPAL ATTRIBUTION. The money reached the right PERSON, not merely
     /// the right seat and the right total. See [`attribution`] and
@@ -122,6 +182,8 @@ impl Invariant {
             Invariant::M6NoDoublePay => "M6_NO_DOUBLE_PAY",
             Invariant::M8PrincipalAttribution => "M8_PRINCIPAL_ATTRIBUTION",
             Invariant::M9FundReachability => "M9_FUND_REACHABILITY",
+            Invariant::M10CustodyVisibility => "M10_CUSTODY_VISIBILITY",
+            Invariant::M11Outcome => "M11_OUTCOME",
         }
     }
 }
@@ -171,6 +233,44 @@ pub enum Severity {
     /// which is exactly why every other invariant is silent about it.
     /// docs/SECURITY-FINDINGS.md FINDING 15.
     FundsUnreachable,
+    /// **Money inside the canister that belongs to NOBODY.** The ledger says the
+    /// canister holds it; the canister's own books say it owes it to no one; so no
+    /// call by any player and no call by a controller can move it out. Never
+    /// excusable, and deliberately its own severity rather than a
+    /// [`Severity::FundDestruction`], which the register is allowed to excuse.
+    ///
+    /// # Why this exists (docs/SECURITY-FINDINGS.md FINDING 07)
+    ///
+    /// `reset_table` replaced `TableState`, so every seated chip stopped being
+    /// owed to anybody while the ICP stayed on the ledger. M2 was silent because
+    /// holding MORE than you owe is not insolvency. M9's drain reported
+    /// `fully_drained` because `internal_total` counts what the canister SAYS it
+    /// owes, and after the reset it said it owed nothing -- so the attack passed
+    /// by changing the very quantity the instrument measured against. The rule
+    /// that binds does not ask the canister what it owes: it asks the LEDGER what
+    /// the canister holds, and calls every unowned e8 of it a defect.
+    OrphanedCustody,
+    /// **The player's own money, invisible to the player.** A principal has a
+    /// positive stake in a pot and every surface they can read reports zero, so
+    /// the recovery path exists and nobody can be expected to find it. Never
+    /// excusable: a door nobody is told about is not a door.
+    ///
+    /// Zero `delta_e8s`, like [`Severity::FundsUnreachable`], and for the same
+    /// reason -- nothing has gone missing, which is precisely why every
+    /// conservation invariant is quiet. docs/SECURITY-FINDINGS.md FINDING 18.
+    CustodyInvisible,
+    /// **The right totals, and the wrong result.** The hand did not end when the
+    /// rules of poker say it ended, or the seat that held the last live claim was
+    /// not the seat that was paid. Never excusable.
+    ///
+    /// Its own severity, and not a [`Severity::Misattribution`], because the two
+    /// convict different things: misattribution is one person holding another
+    /// person's money, and this is nobody holding money that somebody WON. In the
+    /// FINDING 17 measurement every e8 went back to the principal who put it in,
+    /// which is the most defensible-looking wrong answer this engine can give: the
+    /// arithmetic is exact and the outcome is a hand that was never played.
+    /// docs/SECURITY-FINDINGS.md FINDING 17.
+    WrongOutcome,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -509,6 +609,14 @@ pub fn check_point_in_time(snap: &Snapshot, uncredited_raw_deposits: u64) -> Vec
     let mut out = check_conservation(snap, uncredited_raw_deposits);
     out.extend(check_pot_breakdown(snap));
     out.extend(check_arithmetic(snap));
+    // M9's standing half. Fires on exactly the same arithmetic condition as M1's
+    // positive direction, on purpose and by construction -- so it adds no NEW red
+    // anywhere -- but it says the thing M1 does not: a surplus is not a surplus,
+    // it is money that belongs to nobody, and the register may never excuse it.
+    out.extend(reachability::check_no_orphaned_custody(
+        snap,
+        uncredited_raw_deposits,
+    ));
     out
 }
 

@@ -483,6 +483,24 @@ pub struct TableView {
     pub can_raise: bool, // Whether raise is valid
     pub min_bet: u64, // Minimum bet amount
     pub last_action: Option<LastActionInfo>, // Last action taken - for UI notification
+
+    // ------------------------------------------------------------------
+    // CUSTODY, from the caller's point of view (FINDING 18)
+    // ------------------------------------------------------------------
+    /// The CALLER's own money in this pot: their seat's stake plus any stake
+    /// recorded for a seat of theirs already vacated in this hand.
+    ///
+    /// Carried on the view, and not only on [`get_custody_status`], because the
+    /// view is the one call every client already makes on a loop. A figure that
+    /// has to be fetched separately is a figure a client can forget, and
+    /// "the client forgot" is indistinguishable from FINDING 18 to the player.
+    ///
+    /// **Non-zero with `my_seat = null` is the whole finding**: money of yours in
+    /// a hand you are no longer sitting in.
+    pub my_committed_in_pot: u64,
+    /// True when this hand can no longer be moved by any message, so nobody can
+    /// win the pot and `abandon_stuck_hand()` refunds every stake on request.
+    pub hand_is_unmovable: bool,
 }
 
 // ============================================================================
@@ -589,7 +607,8 @@ fn check_rate_limit() -> Result<(), String> {
 }
 
 /// Periodic cleanup of unbounded maps to prevent memory exhaustion.
-/// Called from check_timeouts to run at most once per CLEANUP_INTERVAL_NS.
+/// Called from [`advance_table_clock`] -- so from the `check_timeouts` update AND
+/// from the on-chain clock -- to run at most once per CLEANUP_INTERVAL_NS.
 fn periodic_cleanup() {
     let now = ic_cdk::api::time();
 
@@ -2296,16 +2315,44 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
                 return false;
             }
             if state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete {
-                // Check if this player is in the current hand
+                // IN THE CURRENT HAND, asked of the one predicate. `!has_folded`
+                // alone also refused a seat that holds NO CARDS -- a mid-hand
+                // arrival -- which is not in the hand and has nothing committed to
+                // it. See the "WHO IS IN THE HAND" section.
                 return state.players.iter().flatten()
-                    .any(|p| p.principal == caller && !p.has_folded);
+                    .any(|p| p.principal == caller && is_in_hand(p));
             }
         }
         false
     });
 
+    // WHAT THIS CALLER STILL HAS IN THE MIDDLE, and whether anybody can win it.
+    //
+    // docs/SECURITY-FINDINGS.md FINDING 18. Every refusal below used to describe
+    // the escrow balance and nothing else, so the one player in the world who
+    // needed to hear about a stake in a stuck pot -- the one asking for money that
+    // is not in their escrow because it is in that pot -- was told "Insufficient
+    // balance. Have: 0.0000 ICP" and left. Read once, here, so both refusals speak
+    // with one voice.
+    let (committed, committed_is_stuck, committed_hand) = TABLE.with(|t| {
+        let table = t.borrow();
+        match table.as_ref() {
+            Some(state) => (
+                committed_stake_of(state, caller),
+                hand_is_stuck(state, now),
+                state.hand_number,
+            ),
+            None => (0, false, 0),
+        }
+    });
+    let committed_note = committed_stake_sentence(committed, committed_is_stuck, committed_hand);
+
     if in_hand {
-        return Err("Cannot withdraw while in a hand".to_string());
+        return Err(if committed_note.is_empty() {
+            "Cannot withdraw while in a hand".to_string()
+        } else {
+            format!("Cannot withdraw while in a hand. {committed_note}")
+        });
     }
 
     // ATOMIC: Check balance, deduct, AND mark pending in single critical section
@@ -2315,9 +2362,19 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
 
         if amount > current_balance {
             let currency = get_table_currency();
-            return Err(format!("Insufficient balance. Have: {}, requested: {}",
+            let base = format!(
+                "Insufficient balance. Have: {}, requested: {}",
                 currency.format_amount(current_balance),
-                currency.format_amount(amount)));
+                currency.format_amount(amount)
+            );
+            // THE REFUSAL THAT HAS TO NAME THE RECOVERY. This is the exact reply
+            // the auditor got while 2.98 ICP of theirs sat in a pot nobody could
+            // win, and it is the last thing the canister ever said to them.
+            return Err(if committed_note.is_empty() {
+                base
+            } else {
+                format!("{base}. {committed_note}")
+            });
         }
 
         // Deduct immediately while holding the lock
@@ -2359,7 +2416,23 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
     }
 }
 
-/// Get your current escrow balance
+/// Your WITHDRAWABLE escrow balance, and nothing else.
+///
+/// # This number is not everything the canister is holding for you
+///
+/// It excludes the chips in front of you at the table, and it excludes any stake
+/// of yours still sitting in a live pot -- including a pot you have already left,
+/// which is the case that cost an auditor 2.98 ICP of confidence
+/// (docs/SECURITY-FINDINGS.md FINDING 18: `cash_out -> Ok = 0`,
+/// `get_balance() -> 0`, and 298,000,000 e8s of theirs in a hand nobody could
+/// move). The number was right. It was not the answer to the question being
+/// asked.
+///
+/// Widening this reply is not possible without breaking every client that
+/// decodes a `nat64`, so the whole answer lives at [`get_custody_status`], which
+/// returns this figure plus the two it omits, and `withdraw`'s refusals now carry
+/// the same sentence. **A client showing a balance should call
+/// `get_custody_status`.**
 #[ic_cdk::query]
 fn get_balance() -> u64 {
     let caller = ic_cdk::api::msg_caller();
@@ -2490,7 +2563,7 @@ fn buy_in(seat: u8, amount: u64) -> Result<(), String> {
         // Auto-start if we now have enough players and waiting for players
         if state.phase == GamePhase::WaitingForPlayers {
             let active_count = state.players.iter()
-                .filter(|p| p.as_ref().map(|p| p.status == PlayerStatus::Active && p.chips > 0).unwrap_or(false))
+                .filter(|p| p.as_ref().map(will_be_dealt_in).unwrap_or(false))
                 .count();
 
             if active_count >= 2 && state.auto_deal_at.is_none() {
@@ -2572,19 +2645,52 @@ fn reload(amount: u64) -> Result<u64, String> {
     result
 }
 
-/// Cash out and leave the table
+/// Cash out and leave the table.
+///
+/// # The number this returns is the WHOLE of what you are leaving with
+///
+/// docs/SECURITY-FINDINGS.md FINDING 18. It was not, once: cashing out of a hand
+/// that no message could move returned `Ok = 0` while 2.98 ICP of the caller's was
+/// in the pot, and no surface anywhere said so. Rather than annotate the reply --
+/// which a `nat64` cannot carry, and which would still leave the money in a pot
+/// nobody could win -- this now SETTLES the unmovable hand before it vacates the
+/// seat, so the stake comes back into the stack and leaves with its owner. See
+/// [`settle_unmovable_hand`] for why that is not a new power and cannot shut this
+/// door.
 #[ic_cdk::update]
 fn cash_out() -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
     let now = ic_cdk::api::time();
 
+    // A hand nobody can move is a hand nobody can win. Settle it FIRST, so what
+    // follows is an ordinary cash-out from a finished hand and the stake this
+    // caller has in the middle goes home with them instead of staying behind
+    // as an invisible claim on an empty table.
+    TABLE.with(|t| {
+        let mut table = t.borrow_mut();
+        if let Some(state) = table.as_mut() {
+            if hand_is_stuck(state, now) {
+                settle_unmovable_hand(state, now, UnmovableReason::AnExitDoorFoundItUnmovable);
+            }
+        }
+    });
+
     // Check if player is in a hand
     //
     // ONLY WHILE THE HAND CAN ACTUALLY PROGRESS -- see the note on the same guard
-    // in `withdraw`, and docs/SECURITY-FINDINGS.md FINDING 15. Cashing out of a
-    // stuck hand does not take the stake with it: `record_departed_stake` below
-    // keeps every chip this player has already put in inside the payout basis, so
-    // the only thing that leaves is the stack behind, which was never contested.
+    // in `withdraw`, and docs/SECURITY-FINDINGS.md FINDING 15.
+    //
+    // This comment used to end: "Cashing out of a stuck hand does not take the
+    // stake with it: `record_departed_stake` below keeps every chip this player
+    // has already put in inside the payout basis, so the only thing that leaves is
+    // the stack behind, which was never contested." Every clause of that was true
+    // and the conclusion a reader drew from it -- that the player was therefore
+    // fine -- was not: the stake stayed in a pot NOBODY COULD WIN, on a table they
+    // had just left, and no surface said so. That is FINDING 18, and the settle
+    // above is the answer. **The stake now leaves with its owner.** The
+    // `hand_is_stuck` arm below is reached only when the settle declined a plan
+    // that does not conserve, and then the departed-stake record is what keeps the
+    // money in the basis.
     let in_hand = TABLE.with(|t| {
         let table = t.borrow();
         if let Some(state) = table.as_ref() {
@@ -2592,8 +2698,10 @@ fn cash_out() -> Result<u64, String> {
                 return false;
             }
             if state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete {
+                // The same predicate `withdraw` uses, and the same one the rest
+                // of the engine uses: see the "WHO IS IN THE HAND" section.
                 return state.players.iter().flatten()
-                    .any(|p| p.principal == caller && !p.has_folded);
+                    .any(|p| p.principal == caller && is_in_hand(p));
             }
         }
         false
@@ -2604,7 +2712,7 @@ fn cash_out() -> Result<u64, String> {
     }
 
     // Find player and get their chips
-    let chips = TABLE.with(|t| {
+    let result = TABLE.with(|t| {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
 
@@ -2627,8 +2735,33 @@ fn cash_out() -> Result<u64, String> {
 
         let chips = state.players[seat].as_ref().map(|p| p.chips).unwrap_or(0);
         state.players[seat] = None; // Remove from table
+
+        // THE LAST PLAYER OUT TURNS THE LIGHTS OFF (docs/SECURITY-FINDINGS.md
+        // FINDING 18, the second shape). Wave 6 measured the alternative: both
+        // players cashed out of a stuck hand and the canister was left holding a
+        // live pre-flop hand with a 3,000,000 e8 pot and ZERO seated players,
+        // telling nobody. Nobody holds cards, so nobody can win it -- there is
+        // exactly one lawful ending and it costs one call to reach.
+        if table_is_empty(state) {
+            settle_unmovable_hand(state, now, UnmovableReason::NobodyLeftToWinIt);
+        }
+
         Ok::<u64, String>(chips)
-    })?;
+    });
+
+    // RE-AIM THE ON-CHAIN CLOCK, in the convention `player_action` and
+    // `use_time_bank` set: an entry point that changes the next deadline says so,
+    // or the one-shot wake stays pointed at a clock that no longer exists. Both
+    // things this function can now do change it -- settling an unmovable hand
+    // retires its action clock and starts the auto-deal clock, and vacating the
+    // last seat ends the hand outright.
+    //
+    // UNCONDITIONALLY, not `if result.is_ok()`: the settle at the top of this
+    // function runs before the seat is looked up, so the deadline can move even on
+    // the call that goes on to return "Not at table". Costs one comparison when
+    // nothing moved (`schedule_next_wake` re-arms only on a changed deadline).
+    schedule_next_wake();
+    let chips = result?;
 
     // Return chips to escrow balance (with overflow protection)
     BALANCES.with(|b| {
@@ -2647,13 +2780,41 @@ fn cash_out() -> Result<u64, String> {
 #[ic_cdk::init]
 fn init(config: TableConfig) {
     init_table_state(config);
+    // Nothing else in this canister evaluates a deadline on its own. See
+    // "THE ON-CHAIN CLOCK" and docs/SECURITY-FINDINGS.md FINDING 19.
+    start_clock();
 }
 
-/// Reset the table (controller only) - CAUTION: destroys all state
+/// Reset the table CONFIGURATION (controller only).
+///
+/// # This used to destroy every seated player's money (FINDING 07)
+///
+/// It was byte-identical to [`admin_reinit_table`] -- `require_controller`,
+/// `validate_config`, `init_table_state` -- and `init_table_state` builds a brand
+/// new [`TableState`] with empty seats. One call therefore erased every chip stack
+/// and the whole pot: not returned to escrow, not withdrawable, not recoverable by
+/// anybody including a controller, while the canister went on holding the ICP on
+/// the ledger. Measured on the running local replica on 2026-08-05: two seats
+/// holding 20 ICP each, `reset_table` -> `Ok`, chips 4_000_000_000 -> 0, ledger
+/// balance unchanged, both players reading `get_balance = 0`, no restore path.
+///
+/// **There is no legitimate reason a CONFIG reset touches custody**, so this
+/// function now refuses while the table holds any. The recovery door is
+/// [`admin_return_all_chips_to_escrow`], which pays the money back to the people
+/// who own it and is what the error message points at.
+///
+/// It does NOT require escrow to be empty: `BALANCES` is a separate map that this
+/// path provably never writes (`money_safety::admin_custody::
+/// reset_table_never_touches_escrow`), so an escrow balance is not at risk from a
+/// config reset -- except through `currency`, which selects the LEDGER a
+/// withdrawal is paid from. That one is guarded separately by
+/// [`refuse_currency_change_while_funded`].
 #[ic_cdk::update]
 fn reset_table(config: TableConfig) -> Result<(), String> {
     require_controller()?;
     validate_config(&config)?;
+    refuse_currency_change_while_funded(&config)?;
+    refuse_while_table_holds_custody("reset_table")?;
     init_table_state(config);
     Ok(())
 }
@@ -2701,13 +2862,25 @@ fn get_controllers() -> Vec<Principal> {
 }
 
 /// Admin: Update table configuration (stakes, buy-ins, etc.)
-/// Controller only - can only be done when no hand is in progress
+/// Controller only - can only be done when no hand is in progress.
+///
+/// This one never replaced [`TableState`], so it never had FINDING 07's shape --
+/// but `TableConfig::currency` is not a display setting, it is the LEDGER every
+/// withdrawal is paid from, so this door could strand every balance without ever
+/// writing to `BALANCES`. Guarded by [`refuse_currency_change_while_funded`],
+/// exactly as the two reset doors are. See docs/SECURITY-FINDINGS.md FINDING 20.
+///
+/// `TABLE_CONFIG` is written alongside `state.config` because
+/// [`get_table_currency`] reads the former and everything the player sees reads
+/// the latter; leaving them to drift would mean the table charged blinds in one
+/// currency and paid withdrawals out of another.
 #[ic_cdk::update]
 fn admin_update_config(new_config: TableConfig) -> Result<TableConfig, String> {
     require_controller()?;
 
     // Validate the new config
     validate_config(&new_config)?;
+    refuse_currency_change_while_funded(&new_config)?;
 
     TABLE.with(|table| {
         let mut table = table.borrow_mut();
@@ -2718,6 +2891,9 @@ fn admin_update_config(new_config: TableConfig) -> Result<TableConfig, String> {
             GamePhase::WaitingForPlayers | GamePhase::HandComplete => {
                 // Safe to update
                 state.config = new_config.clone();
+                TABLE_CONFIG.with(|c| {
+                    *c.borrow_mut() = Some(new_config.clone());
+                });
                 Ok(new_config)
             }
             _ => {
@@ -2780,19 +2956,337 @@ fn admin_get_table_chips() -> Result<u64, String> {
     })
 }
 
-/// Admin: Re-initialize the table (for recovery after upgrade issues)
-/// Controller only
+/// Admin: return every chip at the table to the escrow of the player who owns it,
+/// and abandon the hand in progress. Controller only. **Conserving: it can move
+/// money, it can never destroy or create it.**
+///
+/// This is the recovery primitive [`reset_table`] and [`admin_reinit_table`] point
+/// at, and the thing FINDING 07 needed and did not have. Every seated stack goes
+/// to that seat's own player, and every stake in the live hand goes to the player
+/// who put it in -- `hand_stakes`, the same payout basis settlement uses, so a
+/// stake left behind by a player who already walked away reaches THEM and not
+/// whoever took their chair (FINDING 13). Escrow only ever goes UP.
+///
+/// It refuses -- changing nothing -- unless `state.pot` and the attributed stakes
+/// agree to the e8. If they disagree there is money in the pot that no owner is
+/// credited with, and paying out only the attributed part would destroy the
+/// remainder, which is the defect this function exists to prevent. The escape from
+/// that state is `abandon_stuck_hand`, which settles the hand from the
+/// contributions themselves and is callable by anybody.
+///
+/// # Why this is not the `admin_restore_balance` mistake
+///
+/// `admin_restore_balance` was removed because it could MINT escrow from nothing:
+/// a stolen controller key could invent a balance and withdraw real ICP. This
+/// method cannot invent an e8. It reads what the table already holds, credits
+/// exactly that to exactly those owners, and then zeroes what it credited; the
+/// canister's total liability is unchanged to the e8 and its ledger balance is not
+/// touched at all. The worst a stolen key does with it is end a hand early, which
+/// that key can already do by upgrading the canister.
+#[ic_cdk::update]
+fn admin_return_all_chips_to_escrow() -> Result<u64, String> {
+    require_controller()?;
+    return_all_table_custody_to_escrow()
+}
+
+/// Admin: return every chip to its owner's escrow and THEN rebuild the table with
+/// a fresh configuration. Controller only.
+///
+/// # This is the door the interface pointed at, and it was the destructive one
+///
+/// The Candid comment used to read *"for recovery after upgrade issues"*, which is
+/// exactly the situation an honest operator reaches for it in, and the body was
+/// byte-identical to [`reset_table`]: it replaced [`TableState`] wholesale and
+/// every seated chip ceased to exist (FINDING 07). It now does what its name and
+/// its documentation say: [`admin_return_all_chips_to_escrow`] FIRST, so every
+/// player keeps a withdrawable claim on their own money, and only then a new table.
+///
+/// The difference from [`reset_table`] is deliberate and is the whole point of
+/// there being two functions:
+///
+/// * `reset_table` is a CONFIG operation. It refuses while money is at the table.
+/// * `admin_reinit_table` is a RECOVERY operation. It moves the money somewhere the
+///   players can still reach it, and then resets.
+///
+/// Neither can destroy a chip, and `init_table_state` traps if a third door is ever
+/// added that tries.
 #[ic_cdk::update]
 fn admin_reinit_table(config: TableConfig) -> Result<(), String> {
     require_controller()?;
 
-    // Validate config
+    // Validate config BEFORE anything moves: a rejected config must leave the
+    // table exactly as it was, hand included.
     validate_config(&config)?;
+    refuse_currency_change_while_funded(&config)?;
 
-    // Initialize the table
+    // Custody first, structure second. If this returns Err nothing has moved and
+    // the table is untouched.
+    let returned = return_all_table_custody_to_escrow()?;
+    if returned > 0 {
+        ic_cdk::println!(
+            "ADMIN REINIT: {} e8s returned to the escrow of the players who owned it before the \
+             table was re-initialised. No chip was destroyed. See docs/SECURITY-FINDINGS.md \
+             FINDING 07.",
+            returned
+        );
+    }
+
+    // Initialize the table. `init_table_state` traps if any custody is still here.
     init_table_state(config);
 
     Ok(())
+}
+
+// ============================================================================
+// ADMIN CUSTODY SAFETY  (docs/SECURITY-FINDINGS.md FINDING 07)
+// ============================================================================
+//
+// THE RULE THIS SECTION ENFORCES, IN WORDS
+//   No controller-callable method may reduce what this canister owes players
+//   without paying those players. Config is config; custody is custody; an admin
+//   method may touch both only by moving money to an account its owner can still
+//   withdraw from.
+//
+// The reason it is a section rather than two `if`s is that FINDING 07 survived
+// four waves BECAUSE the destructive step was a shared helper (`init_table_state`)
+// that two differently-named public methods called without either of them looking
+// at what the table was holding. The guard therefore lives at the helper as well
+// as at each door, so a third door added later cannot re-open it silently.
+
+/// What the TABLE STRUCTURE holds in custody, and whose it is.
+///
+/// Deliberately NOT escrow. `BALANCES` is a separate map that survives everything
+/// in this section; what is measured here is the money that lives inside
+/// [`TableState`] -- seated stacks and the stakes in the live hand -- and would
+/// cease to exist if that struct were replaced.
+#[derive(Clone, Debug, Default)]
+pub struct TableCustody {
+    /// Sum of every seated `Player::chips`.
+    pub chips: u64,
+    /// Sum of every stake in the live hand, as `hand_stakes` attributes them.
+    pub staked: u64,
+    /// The redundant `state.pot` accumulator, for cross-checking `staked`.
+    pub pot: u64,
+    /// `(owner, amount)`, one entry per stack and one per stake. Sums to
+    /// `chips + staked`. An owner can appear more than once.
+    pub owed: Vec<(Principal, u64)>,
+}
+
+impl TableCustody {
+    /// Everything a player would lose if `TableState` were replaced right now.
+    pub fn total(&self) -> u64 {
+        self.chips.saturating_add(self.staked)
+    }
+
+    /// Nothing at the table belongs to anybody: safe to rebuild.
+    pub fn is_empty(&self) -> bool {
+        self.total() == 0 && self.pot == 0
+    }
+
+    /// Every e8 the pot accumulator claims is attributed to a named owner. When
+    /// this is false, returning the attributed part would destroy the difference.
+    pub fn pot_is_fully_attributed(&self) -> bool {
+        self.staked == self.pot
+    }
+}
+
+/// Read [`TableCustody`] off a table.
+///
+/// # `total_bet_this_hand` IS STALE BETWEEN HANDS, and that nearly cost this fix
+///
+/// `start_new_hand` is the only place that clears `Player::total_bet_this_hand`,
+/// so from the moment a hand settles until the next one is dealt every seat still
+/// reports the bets it made in the hand that is already OVER, while `state.pot` is
+/// back to zero because `finish_hand` emptied it. Reading `hand_stakes` there
+/// counts the same money twice: once in the winner's restored stack, once as a
+/// "stake" that no longer exists.
+///
+/// The first version of this function did exactly that. It was green against every
+/// PocketIC test written for it -- because none of those tests had played a hand
+/// before calling the admin path -- and it refused on the very first live table it
+/// met, with `state.pot says 0 but the stakes ... sum to 2000000000`. The
+/// conservation guard caught it, which is the guard doing its job; the counting
+/// was still wrong.
+///
+/// So the stakes are read ONLY while a hand is actually live. When it is not,
+/// custody is the stacks and nothing else, and a non-zero `pot` outside a hand is
+/// an anomaly the callers refuse on rather than try to attribute.
+pub fn table_custody(state: &TableState) -> TableCustody {
+    let mut owed: Vec<(Principal, u64)> = Vec::new();
+    let mut chips: u64 = 0;
+    for p in state.players.iter().flatten() {
+        if p.chips > 0 {
+            chips = chips.saturating_add(p.chips);
+            owed.push((p.principal, p.chips));
+        }
+    }
+
+    let hand_is_live =
+        state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete;
+    let mut staked: u64 = 0;
+    if hand_is_live {
+        // THE PAYOUT BASIS, not the seat vector: a stake belongs to the player who
+        // put it in, even if that player has left and somebody else is in the chair.
+        for stake in hand_stakes(state) {
+            if stake.amount > 0 {
+                staked = staked.saturating_add(stake.amount);
+                owed.push((stake.owner, stake.amount));
+            }
+        }
+    }
+
+    TableCustody {
+        chips,
+        staked,
+        pot: state.pot,
+        owed,
+    }
+}
+
+/// Total escrow across every player. Used only to decide whether a config change
+/// is safe, never to move money.
+fn escrow_total() -> u64 {
+    BALANCES.with(|b| {
+        b.borrow()
+            .values()
+            .fold(0u64, |acc, v| acc.saturating_add(*v))
+    })
+}
+
+/// Everything this canister owes anybody: escrow + seated chips + the pot.
+fn total_liability() -> u64 {
+    let table = TABLE.with(|t| {
+        t.borrow()
+            .as_ref()
+            .map(|s| {
+                let c = table_custody(s);
+                c.chips.saturating_add(c.pot.max(c.staked))
+            })
+            .unwrap_or(0)
+    });
+    escrow_total().saturating_add(table)
+}
+
+/// Refuse a config whose `currency` differs from the live one while the canister
+/// still owes anybody anything.
+///
+/// `currency` is not cosmetic: `Currency::ledger_canister()` is what `withdraw`
+/// and `transfer_tokens` pay out of, and `min_withdrawal` / `transfer_fee` /
+/// `format_amount` all follow it. Flipping an ICP table to BTC while balances
+/// exist points every withdrawal at the ckBTC ledger, where this canister holds
+/// nothing, so every player's money becomes unreachable until somebody flips it
+/// back -- and flipping a BTC table to ICP would let sat-denominated balances be
+/// withdrawn as ICP e8s. Neither is a config change; both are custody changes
+/// wearing a config change's clothes.
+fn refuse_currency_change_while_funded(new_config: &TableConfig) -> Result<(), String> {
+    let current = TABLE_CONFIG.with(|c| c.borrow().as_ref().map(|c| c.currency));
+    let Some(current) = current else {
+        return Ok(()); // First initialisation: there is nothing to strand.
+    };
+    if current == new_config.currency {
+        return Ok(());
+    }
+    let owed = total_liability();
+    if owed == 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "Refusing to change this table's currency from {} to {} while it still owes players {}. \
+         The currency selects the LEDGER every withdrawal is paid from, so changing it now would \
+         point every player's withdrawal at a ledger this canister holds nothing on -- every \
+         balance would become unpayable without a single one of them changing. Drain the table to \
+         zero first (every player withdraws), then change the currency. \
+         See docs/SECURITY-FINDINGS.md FINDING 20.",
+        current.symbol(),
+        new_config.currency.symbol(),
+        current.format_amount(owed),
+    ))
+}
+
+/// Refuse an operation that would replace [`TableState`] while it holds custody.
+fn refuse_while_table_holds_custody(method: &str) -> Result<(), String> {
+    let custody = TABLE.with(|t| t.borrow().as_ref().map(table_custody));
+    let Some(custody) = custody else {
+        return Ok(());
+    };
+    if custody.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "Refusing: {method} rebuilds the table, and this table is holding {} in seated chips and \
+         {} in the pot for real players. Rebuilding would delete that money -- it is not returned \
+         to escrow, not withdrawable and not recoverable by anybody, including you. Call \
+         admin_return_all_chips_to_escrow first (it pays every chip back to the player who owns \
+         it, and it cannot create or destroy one), or use admin_reinit_table, which does that for \
+         you and then resets. See docs/SECURITY-FINDINGS.md FINDING 07.",
+        custody.chips, custody.pot
+    ))
+}
+
+/// Move every chip at the table into the escrow of the player who owns it, then
+/// empty the table of money. Returns the total moved.
+///
+/// Conservation is the post-condition, checked before anything is written: the
+/// credits must sum to exactly what the table held. Nothing here can change the
+/// canister's total liability, and nothing here touches the ledger.
+fn return_all_table_custody_to_escrow() -> Result<u64, String> {
+    TABLE.with(|t| {
+        let mut table = t.borrow_mut();
+        let Some(state) = table.as_mut() else {
+            return Ok(0); // No table, no custody.
+        };
+        let custody = table_custody(state);
+        if custody.is_empty() {
+            return Ok(0);
+        }
+        if !custody.pot_is_fully_attributed() {
+            return Err(format!(
+                "Refusing to touch this table: at phase {} state.pot says {} but the stakes that \
+                 can be attributed to an owner sum to {} (delta {}). Returning only the \
+                 attributed part would DESTROY the difference, and crediting more than was \
+                 collected would invent chips. Nothing has been moved. Call abandon_stuck_hand -- \
+                 it is public, it needs no privilege, and it settles the hand from the \
+                 contributions themselves -- then try again. \
+                 See docs/SECURITY-FINDINGS.md FINDING 07.",
+                phase_to_string(&state.phase),
+                custody.pot,
+                custody.staked,
+                custody.pot as i128 - custody.staked as i128
+            ));
+        }
+
+        // Sum with CHECKED arithmetic. `saturating_add` here would clamp a
+        // wrapped stack and silently under-pay, which is the failure mode this
+        // whole section exists to make impossible.
+        let mut credited: u64 = 0;
+        for (_, amount) in &custody.owed {
+            credited = credited.checked_add(*amount).ok_or_else(|| {
+                "Refusing: the amounts owed at this table cannot be added without overflowing \
+                 u64, so at least one stack or stake has wrapped. Nothing has been moved."
+                    .to_string()
+            })?;
+        }
+        if credited != custody.total() {
+            return Err(format!(
+                "Refusing: the per-owner amounts sum to {credited} but the table holds {}. \
+                 Nothing has been moved.",
+                custody.total()
+            ));
+        }
+
+        // Past this line nothing can fail, so the write is all-or-nothing.
+        for (owner, amount) in &custody.owed {
+            credit_escrow(*owner, *amount);
+        }
+        for player in state.players.iter_mut().flatten() {
+            player.chips = 0;
+            player.total_bet_this_hand = 0;
+        }
+        state.pot = 0;
+        state.side_pots.clear();
+        state.clear_departed_stakes();
+        Ok(credited)
+    })
 }
 
 /// Validate table configuration parameters
@@ -2852,7 +3346,39 @@ fn validate_config(config: &TableConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// Build a brand-new [`TableState`] over whatever is there.
+///
+/// # THE LAST LINE OF DEFENCE (docs/SECURITY-FINDINGS.md FINDING 07)
+///
+/// This function is where the money went. It is called by `init`, by
+/// [`reset_table`] and by [`admin_reinit_table`], and for four waves it replaced
+/// the table without any of its callers looking at what the table was holding, so
+/// two separate public methods each destroyed 100% of a funded table's chips.
+///
+/// Guarding only the callers would leave the same trap set for the next door
+/// somebody adds, which is precisely how this survived: `reset_table` and
+/// `admin_reinit_table` were byte-identical because writing a second door was one
+/// copy-paste. So the guard is HERE, where the destruction happens, and it TRAPS
+/// rather than returns: a caller that reaches this point with money still at the
+/// table has a bug, and a trap rolls the whole message back so not one e8 moves.
+/// `init` cannot trip it (there is no table yet), and both reset doors clear or
+/// refuse custody before they call it.
 fn init_table_state(config: TableConfig) {
+    // MUST be first: nothing below may run while the table owes anybody anything.
+    let held = TABLE.with(|t| t.borrow().as_ref().map(table_custody));
+    if let Some(custody) = held {
+        if !custody.is_empty() {
+            ic_cdk::trap(&format!(
+                "refusing to re-initialise a table that is holding {} in seated chips and {} in \
+                 the pot for real players: rebuilding TableState would delete that money with no \
+                 way for anybody, including a controller, to get it back. Nothing has been \
+                 changed. Return the chips first with admin_return_all_chips_to_escrow. \
+                 See docs/SECURITY-FINDINGS.md FINDING 07.",
+                custody.chips, custody.pot
+            ));
+        }
+    }
+
     // Validate config first
     if let Err(e) = validate_config(&config) {
         ic_cdk::println!("WARNING: Invalid table config: {}. Using defaults where needed.", e);
@@ -2984,7 +3510,7 @@ async fn start_new_hand() -> Result<ShuffleProof, String> {
 
         // Count active players BEFORE calling raw_rand to prevent cycle drain
         let active_count = state.players.iter()
-            .filter(|p| p.as_ref().map(|p| p.status == PlayerStatus::Active && p.chips > 0).unwrap_or(false))
+            .filter(|p| p.as_ref().map(will_be_dealt_in).unwrap_or(false))
             .count();
 
         if active_count < 2 {
@@ -3048,7 +3574,7 @@ async fn start_new_hand() -> Result<ShuffleProof, String> {
 
         // Count active players (not sitting out)
         let active_count = state.players.iter()
-            .filter(|p| p.as_ref().map(|p| p.status == PlayerStatus::Active && p.chips > 0).unwrap_or(false))
+            .filter(|p| p.as_ref().map(will_be_dealt_in).unwrap_or(false))
             .count();
 
         if active_count < 2 {
@@ -3112,7 +3638,7 @@ async fn start_new_hand() -> Result<ShuffleProof, String> {
         // Post antes if configured (with overflow protection)
         if state.config.ante > 0 {
             for player in state.players.iter_mut().flatten() {
-                if player.status == PlayerStatus::Active && player.chips > 0 {
+                if will_be_dealt_in(player) {
                     let ante_amount = state.config.ante.min(player.chips);
                     player.chips = player.chips.saturating_sub(ante_amount);
                     player.total_bet_this_hand = player.total_bet_this_hand.saturating_add(ante_amount);
@@ -3151,9 +3677,12 @@ async fn start_new_hand() -> Result<ShuffleProof, String> {
             }
         }
 
-        // Deal hole cards to active players with chips (with bounds checking)
+        // DEAL. This loop is the only writer of the fact `is_in_hand` reads, so it
+        // is the only thing that decides who is in this hand. See
+        // [`deals_in_this_hand`] for why it does NOT ask for chips: the blinds have
+        // already been posted above and can have left a seat all-in at zero.
         for player in state.players.iter_mut().flatten() {
-            if player.status == PlayerStatus::Active {
+            if deals_in_this_hand(player) {
                 // Check we have enough cards (need 2 cards, so index+2 must be <= len)
                 if state.deck_index + 2 <= state.deck.len() {
                     let card1 = state.deck[state.deck_index];
@@ -3199,6 +3728,11 @@ async fn start_new_hand() -> Result<ShuffleProof, String> {
             showdown_players: Vec::new(),
         });
     });
+
+    // A new hand means a brand-new action clock. Aim the on-chain wake at it, so a
+    // table that goes silent the instant the cards are dealt still resolves on its
+    // own clock and not on the watchdog's grid.
+    schedule_next_wake();
 
     Ok(result_proof)
 }
@@ -3271,10 +3805,55 @@ fn reveal_seed_on_hand_end(state: &mut TableState) {
 // precisely because it could be triggered on purpose. That is the exact shape of
 // what this engine was doing by accident.
 //
-// So participation is now asked of THE SAME PREDICATE as eligibility -- with ONE
-// remaining disagreement, which is docs/SECURITY-FINDINGS.md FINDING 17 and is
-// written up on `is_in_hand` below: a seat that is `Active` and holds NO CARDS is
-// in the participation set and not the eligibility set. Everything else here holds:
+// So participation is now asked of THE SAME PREDICATE as eligibility. Not "the
+// same rule written twice" -- literally the same function: [`live_claims`] on the
+// payout path calls [`is_in_hand`], so the two cannot drift apart by an edit to
+// one of them. That closes docs/SECURITY-FINDINGS.md FINDING 17 / docs/DEFECTS.md
+// E-36, which was the same mistake at a fifth site: `is_in_hand` used to accept a
+// seat that was `Active` and held NO CARDS, `live_claims` did not, and the gap paid
+// a fold-out winner nothing.
+//
+// # THE PREDICATE TABLE
+//
+// Five questions get asked about a seat in this file. THREE of them are the same
+// question and are now one function; the other two are genuinely different and are
+// named so a reader cannot mistake them for the first three. Nothing else in this
+// file may hand-roll any of these five -- see `predicate_table` in
+// `src/table_canister/tests/hand_membership.rs`, which fails if a call site
+// reintroduces one inline.
+//
+//   name                  rule                                asks
+//   --------------------  ----------------------------------  ------------------
+//   is_in_hand            !folded && hole_cards.is_some()      in THIS hand: may
+//                                                              win it, is counted
+//                                                              for the fold-out,
+//                                                              is owed a turn
+//   can_still_act         is_in_hand && !is_all_in             still owed an
+//                                                              ACTION this street
+//   live_claims           is_in_hand, per seat, with the       who may be PAID
+//                         cards attached
+//   deals_in_this_hand    status == Active                     who is DEALT when
+//                                                              a hand starts. The
+//                                                              only writer of the
+//                                                              fact is_in_hand
+//                                                              reads. NO chips
+//                                                              test: the blinds
+//                                                              are posted first
+//                                                              and can leave a
+//                                                              seat all-in at 0,
+//                                                              and that seat must
+//                                                              still be dealt in
+//   will_be_dealt_in      status == Active && chips > 0        BETWEEN hands: can
+//                                                              a hand start, who
+//                                                              gets the button and
+//                                                              the blinds, is
+//                                                              auto-deal due
+//
+// The last two say NOTHING about the hand in progress, and no call site may use
+// them to decide who is in one. `status` is a between-hands intention and a display
+// state; the hand in progress is decided by the cards that were dealt into it.
+//
+// Everything else here holds:
 //
 //   * a seat in the hand is never skipped. It is offered the action and its clock
 //     runs, so a real disconnection gets the full `action_timeout_secs` (plus its
@@ -3287,52 +3866,72 @@ fn reveal_seed_on_hand_end(state: &mut TableState) {
 //
 // Tests: `tests/betting_rules.rs` sections 4 and 5.
 
-/// Is this seat still IN the hand -- so still able to win money from it?
+/// Is this seat IN the hand -- so still able to win money from it?
 ///
-/// The same question [`live_claims`] asks on the payout path, and deliberately so:
-/// if these two ever disagree, some seat is either being asked to pay for a pot it
-/// cannot win or being handed one it never paid for.
+/// **THE** predicate. Participation and eligibility are one question and this is
+/// it: [`live_claims`], the payout path's eligibility list, is this function
+/// applied per seat with the cards attached. There is no second definition to
+/// drift from.
 ///
-/// `hole_cards.is_some()` is what "was dealt into THIS hand" means. The
-/// `status == Active` disjunct covers a seat that has been made Active during a
-/// live hand without being dealt in -- `join_table` mid-hand plus `sit_in()`,
-/// which is docs/DEFECTS.md E-36 and belongs to the seating path.
+/// `hole_cards.is_some()` is what "was dealt into THIS hand" means, and it is the
+/// whole rule. `status` says nothing here: a seat that stops heartbeating is marked
+/// `Disconnected` and is still in the hand (E-32), and a seat made `Active` during a
+/// live hand without being dealt in is NOT in it, whatever its status says.
 ///
-/// # THIS PREDICATE STILL DISAGREES WITH `live_claims`, AND IT COSTS SOMEBODY THE POT
+/// # WHY THERE IS NO `|| status == Active` DISJUNCT
 ///
-/// **docs/SECURITY-FINDINGS.md FINDING 17.** An earlier version of this comment
-/// said of the `status == Active` disjunct that *"including it changes nothing;
-/// it holds no cards, so `live_claims` still refuses to pay it."* That is true of
-/// the PAYOUT and false of everything upstream of it, and it is the sentence that
-/// stopped anyone looking. Corrected here for the same reason `apply_payouts`'s
-/// "recoverable" comment was corrected: a false claim in a comment is load-bearing.
+/// There used to be, and it cost a player the pot. docs/SECURITY-FINDINGS.md
+/// FINDING 17 / docs/DEFECTS.md E-36: a cardless `Active` seat was counted by
+/// [`count_active_players`], `count_active_players(state) == 1` is what calls
+/// `end_hand_single_winner`, and the one seat it counted could be the cardless one.
+/// `live_claims` was then EMPTY, [`plan_payouts`] took its no-claimant branch, and
+/// every stake went back to its funder -- including the players who had FOLDED.
+/// Measured: a 52,000,000 e8 pot, three seats, all three ending on exactly their
+/// buy-in, the fold-out winner paid nothing. No trap, no `CRITICAL:` line,
+/// conservation exact, M1 through M9 silent.
 ///
-/// A cardless `Active` seat is counted by [`count_active_players`], and
-/// `count_active_players(state) == 1` is what calls `end_hand_single_winner`. So
-/// when the last seat HOLDING CARDS folds -- including when it is folded by its own
-/// action clock, which is exactly what the E-32 fix above now does to a dropped
-/// client -- the engine settles a "fold-out" whose `live_claims` is EMPTY,
-/// [`plan_payouts`] takes its no-claimant branch, and every stake goes back to its
-/// funder. Measured on this module: a 52,000,000 e8 pot, three seats, all three
-/// ending on exactly their buy-in, the player who folded refunded and the player
-/// who WON the hand paid nothing. No trap, no `CRITICAL:` line, conservation exact,
-/// M1 through M9 silent.
+/// The comment that used to sit here said of the disjunct that *"including it
+/// changes nothing; it holds no cards, so `live_claims` still refuses to pay it."*
+/// That was true of the PAYOUT and false of everything upstream of it, and it is
+/// the sentence that stopped anyone looking. **Do not write another one. The
+/// statement that these two predicates agree is a TEST, not a comment:**
 ///
-/// It is not a regression -- before the wave-6 refund branch the same state
-/// DESTROYED the money -- but the rule this section claims to enforce is not yet
-/// true. The fix is to drop the disjunct:
-///
-/// ```ignore
-/// !p.has_folded && p.hole_cards.is_some()
-/// ```
-///
-/// which also closes E-36's first half, because `find_next_active_seat` would stop
-/// offering the action to a seat with no cards. It must land together with the
-/// `E-36` entry in `tests/money_safety/src/documented.rs` and the tolerated
-/// `"carries both a live stake and a departed stake"` substring, in ONE change, or
-/// `register_entries_are_all_still_needed` fails on purpose.
+/// * `predicate_table` and `is_in_hand_and_live_claims_are_one_predicate` in
+///   `src/table_canister/tests/hand_membership.rs` -- every reachable
+///   `Player` shape, both predicates, no exceptions;
+/// * `probe4_finding_17_the_foldout_winner_is_paid_the_pot` in
+///   `tests/money_safety/tests/wave6_coherence.rs` -- the measured sequence, now
+///   asserting that the winner IS paid;
+/// * M10 OUTCOME in `tests/money_safety/src/invariants/outcome.rs`, evaluated on
+///   every fuzz step: a live hand may never run on with one claimant or none, and a
+///   refund-everyone settlement is a violation unless the hand genuinely never had
+///   a claimant.
 pub fn is_in_hand(p: &Player) -> bool {
-    !p.has_folded && (p.hole_cards.is_some() || p.status == PlayerStatus::Active)
+    !p.has_folded && p.hole_cards.is_some()
+}
+
+/// Who gets cards when [`start_new_hand`] deals. The ONLY writer of the fact
+/// [`is_in_hand`] reads.
+///
+/// Deliberately WITHOUT the `chips > 0` test that [`will_be_dealt_in`] carries:
+/// `start_new_hand` sits out every broke seat, then posts antes and blinds, and
+/// posting a blind can take a seat to exactly zero and mark it all-in. That seat is
+/// in the hand and must be dealt into it. Asking `chips > 0` here would deal it out
+/// of a pot it had just been forced to pay into, which is the FINDING 17 shape
+/// again from the other end: money in, no claim.
+fn deals_in_this_hand(p: &Player) -> bool {
+    p.status == PlayerStatus::Active
+}
+
+/// Will this seat take part in the NEXT hand -- can a hand start, who gets the
+/// button and the blinds, is auto-deal due?
+///
+/// A question about the seat BETWEEN hands, and it must never be used to decide
+/// anything about a hand in progress; that is [`is_in_hand`]. It was written out
+/// inline at ten call sites, which is how an eleventh could have quietly grown a
+/// different rule.
+fn will_be_dealt_in(p: &Player) -> bool {
+    p.status == PlayerStatus::Active && p.chips > 0
 }
 
 /// Is this seat still owed an action -- in the hand, and with chips behind?
@@ -3372,7 +3971,7 @@ fn find_next_active_seat_with_chips(state: &TableState, from_seat: u8) -> u8 {
 
     for _ in 0..num_seats {
         if let Some(ref player) = state.players[seat] {
-            if player.status == PlayerStatus::Active && player.chips > 0 {
+            if will_be_dealt_in(player) {
                 return seat as u8;
             }
         }
@@ -3382,12 +3981,18 @@ fn find_next_active_seat_with_chips(state: &TableState, from_seat: u8) -> u8 {
     from_seat
 }
 
-/// How many seats still have a claim on this pot.
+/// How many seats still have a claim on this pot: the count [`live_claims`] will
+/// be able to pay, and nothing else.
 ///
-/// Drives "everybody else folded, pay the last player standing". It must count the
-/// SAME seats `live_claims` will pay, or the engine hands a pot to one player
-/// while another still holds cards in it.
-fn count_active_players(state: &TableState) -> usize {
+/// It is `live_claims(state).len()` computed without building the vector -- the
+/// same predicate over the same seats -- and `predicate_table` in
+/// `src/table_canister/tests/hand_membership.rs` asserts that equality on
+/// every state it builds. `count_active_players(state) == 1` is what calls
+/// `end_hand_single_winner`, so if this could ever count a seat `live_claims`
+/// cannot pay, the engine would settle a fold-out with no claimant and refund every
+/// stake, including the folders'. That is docs/SECURITY-FINDINGS.md FINDING 17 and
+/// it is the reason the two are one predicate.
+pub fn count_active_players(state: &TableState) -> usize {
     state.players.iter()
         .filter(|p| p.as_ref().map(is_in_hand).unwrap_or(false))
         .count()
@@ -3486,7 +4091,7 @@ fn join_table(seat: u8) -> Result<(), String> {
         // Auto-start if we now have enough players and waiting for players
         if state.phase == GamePhase::WaitingForPlayers {
             let active_count = state.players.iter()
-                .filter(|p| p.as_ref().map(|p| p.status == PlayerStatus::Active && p.chips > 0).unwrap_or(false))
+                .filter(|p| p.as_ref().map(will_be_dealt_in).unwrap_or(false))
                 .count();
 
             if active_count >= 2 && state.auto_deal_at.is_none() {
@@ -3507,10 +4112,20 @@ fn join_table(seat: u8) -> Result<(), String> {
 #[ic_cdk::update]
 fn leave_table() -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
+    let now = ic_cdk::api::time();
 
-    let chips = TABLE.with(|t| {
+    let result = TABLE.with(|t| {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
+
+        // The same first move as `cash_out`, for the same reason and with the same
+        // effect: a hand no message can move is settled before the seat is
+        // vacated, so this caller's stake leaves with them instead of becoming an
+        // invisible claim on a table they are no longer at.
+        // docs/SECURITY-FINDINGS.md FINDING 18.
+        if hand_is_stuck(state, now) {
+            settle_unmovable_hand(state, now, UnmovableReason::AnExitDoorFoundItUnmovable);
+        }
 
         // Find the player's seat
         let seat = state.players.iter()
@@ -3520,7 +4135,13 @@ fn leave_table() -> Result<u64, String> {
         let player = state.players[seat].as_ref().ok_or("Player not found")?;
         let hand_is_live = state.phase != GamePhase::WaitingForPlayers
             && state.phase != GamePhase::HandComplete;
-        let was_in_hand = !player.has_folded && hand_is_live;
+        // ASKED OF THE ONE PREDICATE. This used to be `!player.has_folded &&
+        // hand_is_live`, a third hand-rolled statement of "in the hand" that
+        // accepted a seat holding no cards -- so vacating such a seat marked it
+        // folded and re-ran the fold-out check on its behalf. Both are meaningless
+        // for a seat that was never dealt in, and a predicate nobody can enumerate
+        // is how FINDING 17 stayed invisible. See "WHO IS IN THE HAND".
+        let was_in_hand = hand_is_live && is_in_hand(player);
         let was_action_on = state.action_on as usize == seat;
 
         // If we're in a hand, mark as folded first (pot contributions stay in pot)
@@ -3575,8 +4196,17 @@ fn leave_table() -> Result<u64, String> {
             refresh_side_pots(state);
         }
 
-        // If player was in the hand, advance game state
-        if was_in_hand {
+        // Advance the game if this departure changed anything about it: the leaver
+        // held a live claim, or the clock was pointing at their chair.
+        //
+        // The second disjunct is new and it is a safety net rather than a live path.
+        // Narrowing `was_in_hand` to the one predicate means a cardless seat no
+        // longer takes this branch, and a cardless seat should never be `action_on`
+        // -- `find_next_active_seat` asks `can_still_act`, which now requires cards.
+        // If one ever is, leaving without advancing would point the clock at an
+        // empty chair, so the action is moved on anyway. Costs nothing when the
+        // condition never holds.
+        if was_in_hand || (hand_is_live && was_action_on) {
             let now = ic_cdk::api::time();
             // Check if only one player left - award pot
             if count_active_players(state) == 1 {
@@ -3594,8 +4224,25 @@ fn leave_table() -> Result<u64, String> {
             }
         }
 
+        // THE LAST PLAYER OUT TURNS THE LIGHTS OFF. Same rule as `cash_out`, same
+        // reason: a hand with nobody in it has one lawful ending and the canister
+        // must not sit on it. Runs after the advance above, so a departure that
+        // leaves exactly one player still settles as a fold-out win and only a
+        // departure that leaves NOBODY reaches this.
+        // docs/SECURITY-FINDINGS.md FINDING 18.
+        if table_is_empty(state) {
+            settle_unmovable_hand(state, now, UnmovableReason::NobodyLeftToWinIt);
+        }
+
         Ok::<u64, String>(chips)
-    })?;
+    });
+
+    // RE-AIM THE ON-CHAIN CLOCK. See the same call in `cash_out`: this function
+    // can retire a clock (settling an unmovable hand, ending the hand by fold-out,
+    // vacating the last seat) and can also set a new one when the action moves on
+    // from the chair it just emptied.
+    schedule_next_wake();
+    let chips = result?;
 
     // Return remaining chips to escrow balance (with overflow protection)
     BALANCES.with(|b| {
@@ -3613,11 +4260,18 @@ fn player_action(action: PlayerAction) -> Result<(), String> {
     let caller = ic_cdk::api::msg_caller();
     let now = ic_cdk::api::time();
 
-    TABLE.with(|t| {
+    let out = TABLE.with(|t| {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
         apply_player_action(state, caller, now, action)
-    })
+    });
+    // RE-AIM THE ON-CHAIN CLOCK. This is not only about precision: without it the
+    // one-shot wake stays pointed at the clock this action just REPLACED, so it
+    // fires early on every single betting action, finds nothing to do, and
+    // re-arms -- an extra timer message per action, at ~15M cycles each. See
+    // "THE ON-CHAIN CLOCK".
+    schedule_next_wake();
+    out
 }
 
 /// The betting rules of [`player_action`], with the platform pulled out.
@@ -3895,11 +4549,17 @@ pub fn apply_player_action(
 
     state.current_bet = new_current_bet;
 
-    // Reset acted flags after we're done with the player borrow
+    // Reset acted flags after we're done with the player borrow.
+    //
+    // Exactly the seats `is_betting_round_complete` will interrogate, which is
+    // `can_still_act` -- so this is asked of that predicate rather than of a
+    // hand-rolled `!has_folded && !is_all_in`. Same set for every seat that was
+    // dealt in; the difference is a cardless seat, which is not in the betting
+    // round and whose flag means nothing. See "WHO IS IN THE HAND".
     if should_reset_acted {
         for (i, p_opt) in state.players.iter_mut().enumerate() {
             if let Some(ref mut p) = p_opt {
-                if i != player_seat && !p.has_folded && !p.is_all_in {
+                if i != player_seat && can_still_act(p) {
                     p.has_acted_this_round = false;
                 }
             }
@@ -4040,8 +4700,15 @@ pub fn is_betting_round_complete(state: &TableState) -> bool {
         // Check if action is on BB
         if state.action_on == state.big_blind_seat {
             // BB still needs to act (check or raise)
+            // ASKED OF THE ONE PREDICATE. `!is_all_in && !has_folded` is
+            // `can_still_act` with the cards test missing, and the missing test
+            // matters here: `big_blind_seat` can be a chair whose original occupant
+            // LEFT and which a mid-hand arrival has taken. That newcomer holds no
+            // cards and has not acted, so the hand-rolled version held the street
+            // open for a seat that is not in the hand at all. See "WHO IS IN THE
+            // HAND" and docs/SECURITY-FINDINGS.md FINDING 17.
             if let Some(ref bb_player) = state.players[state.big_blind_seat as usize] {
-                if !bb_player.has_acted_this_round && !bb_player.is_all_in && !bb_player.has_folded {
+                if !bb_player.has_acted_this_round && can_still_act(bb_player) {
                     return false;
                 }
             }
@@ -4570,21 +5237,31 @@ impl PayoutPlan {
     }
 }
 
-/// Every seat that still has a claim on the pot: seated, not folded, holding cards.
+/// Every seat that still has a claim on the pot.
 ///
-/// A seat with no cards cannot win a pot, and it cannot have bet anything either,
-/// because `join_table` seats a mid-hand arrival as `SittingOut`, which never gets
-/// the action.
-fn live_claims(state: &TableState) -> Vec<(u8, Principal, (Card, Card))> {
+/// **This is [`is_in_hand`], per seat, with the cards attached** -- it calls it
+/// rather than restating it, and that is load-bearing. The two used to state the
+/// rule separately, the statements disagreed about one seat shape, and the
+/// disagreement paid a fold-out winner nothing (docs/SECURITY-FINDINGS.md
+/// FINDING 17). One function, one rule, no drift: whoever `count_active_players`
+/// counts is exactly whoever this can pay, so the engine can never hand a pot to
+/// one player while another still holds cards in it, and can never settle a
+/// fold-out on a seat that cannot be paid.
+/// `pub` only so `src/table_canister/tests/hand_membership.rs` can assert the
+/// equality this whole section rests on. Not an update/query method, so it is not
+/// part of the Candid surface.
+pub fn live_claims(state: &TableState) -> Vec<(u8, Principal, (Card, Card))> {
     state
         .players
         .iter()
         .enumerate()
         .filter_map(|(seat, player)| {
             let p = player.as_ref()?;
-            if p.has_folded {
+            if !is_in_hand(p) {
                 return None;
             }
+            // `is_in_hand` has already established this is `Some`; the `?` is how
+            // the cards are carried out, not a second, weaker test.
             Some((seat as u8, p.principal, p.hole_cards?))
         })
         .collect()
@@ -5334,6 +6011,38 @@ pub fn hand_is_stuck(state: &TableState, now: u64) -> bool {
     }
 }
 
+/// The one branch of [`hand_is_stuck`] the CLOCK is allowed to act on by itself.
+///
+/// # Why this is narrower, and why the difference is deliberate
+///
+/// `hand_is_stuck` has two arms. This has one.
+///
+/// * **expired clock + [`STUCK_HAND_GRACE_NS`]** -- kept. Five minutes after a
+///   clock that has already run out, with `advance_table_clock` having had every
+///   opportunity in between, there is no reading of this state in which the hand
+///   is merely slow. Refunding it is right whether a human asks or nobody does.
+/// * **a live hand with NO clock at all** -- NOT acted on automatically. It is a
+///   real stuck state and `abandon_stuck_hand` still refunds it on request, but it
+///   is a state the engine also *believes* impossible, and a belief this project
+///   has disproved repeatedly. A clock that fires every 30 s on a predicate whose
+///   truth conditions are not fully understood would convert one unknown
+///   legitimate no-clock moment into an automatic refund of a hand that should
+///   have been played, on every table, forever, with nobody in the loop.
+///   A human calling `abandon_stuck_hand` is a decision; a timer doing it is a
+///   policy, and this branch has not earned one.
+///
+/// So the automatic door is the arm whose meaning is unambiguous, and the manual
+/// door stays wider. If the no-clock arm is ever proven unreachable in legitimate
+/// play, this is the one predicate to widen.
+fn clock_should_abandon(state: &TableState, now: u64) -> bool {
+    let live =
+        state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete;
+    live && match state.action_timer {
+        Some(ref t) => now > t.expires_at.saturating_add(STUCK_HAND_GRACE_NS),
+        None => false,
+    }
+}
+
 /// What a client needs to tell a player why the table is not moving, and what
 /// they can do about it. A query, so it costs nothing and works when the update
 /// path does not.
@@ -5384,6 +6093,139 @@ fn get_stuck_hand_status() -> StuckHandStatus {
     })
 }
 
+// ============================================================================
+// WHAT THE CANISTER IS HOLDING FOR *YOU* (docs/SECURITY-FINDINGS.md FINDING 18)
+// ============================================================================
+
+/// Everything this canister is holding for ONE caller, including the part that is
+/// not in their escrow balance.
+///
+/// # Why `get_balance` was not enough
+///
+/// `get_balance()` returns a `nat64` and answers exactly one question: how much
+/// can I withdraw right now. An auditor cashed out of a stuck hand, read
+/// `get_balance() -> 0`, and left -- while 298,000,000 e8s of theirs was still in
+/// the pot. Nothing was wrong with the number. The number was never the whole
+/// answer, and there was no surface that gave the whole answer.
+///
+/// This is that surface. It is a QUERY, so it is free and it still answers when
+/// the update path is refusing everything, and it is CALLER-SCOPED, so a client
+/// cannot show it for the wrong person.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct CustodyStatus {
+    /// Withdrawable right now: the same figure `get_balance()` returns.
+    pub escrow: u64,
+    /// Chips in front of you at the table. Yours, but not withdrawable until you
+    /// leave the seat.
+    pub chips_at_table: u64,
+    /// **Your own money in the current hand's pot.** Counts the stake of a seat
+    /// you have already left, which is the case `get_balance` cannot see.
+    pub committed_in_pot: u64,
+    /// True when the hand holding `committed_in_pot` can no longer be moved by
+    /// any message, so nobody can win it and `abandon_stuck_hand()` would hand
+    /// every stake back right now.
+    pub committed_is_stuck: bool,
+    /// Nanoseconds until the hand becomes abandonable. `null` when it already is,
+    /// or when nothing of yours is committed.
+    pub abandonable_in_ns: Option<u64>,
+    /// `escrow + chips_at_table + committed_in_pot`: everything the canister is
+    /// holding that belongs to you.
+    pub total: u64,
+    /// What to do next, in words, NAMING the method when a method is needed. A
+    /// recovery path a player has to read the interface definition to find is not
+    /// a recovery path.
+    pub advice: String,
+}
+
+/// The one place the "you still have money in a pot" sentence is written.
+///
+/// Shared by [`get_custody_status`] and by `withdraw`'s refusals, so the two can
+/// never say different things about the same state. States the amount twice --
+/// formatted for a human, and in raw e8s -- because the formatted figure is
+/// rounded to four decimals and a player reconciling a balance needs the exact
+/// number.
+fn committed_stake_sentence(committed: u64, stuck: bool, hand_number: u64) -> String {
+    if committed == 0 {
+        return String::new();
+    }
+    let currency = get_table_currency();
+    let amount = format!("{} ({} e8s)", currency.format_amount(committed), committed);
+    if stuck {
+        format!(
+            "{amount} of yours is still committed to hand {hand_number}, and that hand can no \
+             longer be moved by any message, so nobody can win it. Call abandon_stuck_hand() -- \
+             any principal may -- and every stake goes back to whoever put it in, including \
+             yours, into your withdrawable balance."
+        )
+    } else {
+        format!(
+            "{amount} of yours is committed to hand {hand_number}, which is still in play: it is \
+             contested and will be paid out when the hand settles. If the table stops moving, \
+             abandon_stuck_hand() refunds every stake once the action clock has been expired for \
+             5 minutes."
+        )
+    }
+}
+
+/// Everything the canister holds for the caller, and what to do about the part
+/// that is not withdrawable.
+#[ic_cdk::query]
+fn get_custody_status() -> CustodyStatus {
+    let caller = ic_cdk::api::msg_caller();
+    let now = ic_cdk::api::time();
+    let escrow = BALANCES.with(|b| b.borrow().get(&caller).copied().unwrap_or(0));
+
+    TABLE.with(|t| {
+        let table = t.borrow();
+        let Some(state) = table.as_ref() else {
+            return CustodyStatus {
+                escrow,
+                chips_at_table: 0,
+                committed_in_pot: 0,
+                committed_is_stuck: false,
+                abandonable_in_ns: None,
+                total: escrow,
+                advice: String::new(),
+            };
+        };
+
+        let chips_at_table = state
+            .players
+            .iter()
+            .flatten()
+            .filter(|p| p.principal == caller)
+            .map(|p| p.chips)
+            .fold(0, u64::saturating_add);
+        let committed_in_pot = committed_stake_of(state, caller);
+        let committed_is_stuck = committed_in_pot > 0 && hand_is_stuck(state, now);
+        let abandonable_in_ns = match (committed_in_pot, committed_is_stuck, &state.action_timer) {
+            (c, false, Some(timer)) if c > 0 => Some(
+                timer
+                    .expires_at
+                    .saturating_add(STUCK_HAND_GRACE_NS)
+                    .saturating_sub(now),
+            ),
+            _ => None,
+        };
+
+        CustodyStatus {
+            escrow,
+            chips_at_table,
+            committed_in_pot,
+            committed_is_stuck,
+            abandonable_in_ns,
+            total: escrow
+                .saturating_add(chips_at_table)
+                .saturating_add(committed_in_pot),
+            advice: committed_stake_sentence(
+                committed_in_pot,
+                committed_is_stuck,
+                state.hand_number,
+            ),
+        }
+    })
+}
+
 /// Abandon a hand that no message can move, and give every stake back.
 ///
 /// **Anybody may call this. There is no privilege check, and that is deliberate:**
@@ -5402,7 +6244,26 @@ fn get_stuck_hand_status() -> StuckHandStatus {
 /// Returns the number of e8s handed back.
 #[ic_cdk::update]
 fn abandon_stuck_hand() -> Result<u64, String> {
-    let now = ic_cdk::api::time();
+    let out = try_abandon_stuck_hand(ic_cdk::api::time());
+    // A successful abandonment ends the hand, which retires its action clock and
+    // starts the auto-deal and idle clocks. Re-point the precise wake at whichever
+    // of those is next.
+    if out.is_ok() {
+        schedule_next_wake();
+    }
+    out
+}
+
+/// The body of [`abandon_stuck_hand`], with `now` supplied.
+///
+/// Split out so the ON-CHAIN CLOCK can perform the identical recovery without a
+/// caller. It is the same code, not a copy: an automatic refund that diverged from
+/// the manual one would be the worst possible outcome, because the manual one is
+/// what every document describes.
+///
+/// The clock reaches this through [`clock_should_abandon`], which is STRICTLY
+/// NARROWER than [`hand_is_stuck`] -- see that function for why.
+fn try_abandon_stuck_hand(now: u64) -> Result<u64, String> {
     TABLE.with(|t| {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
@@ -5419,11 +6280,106 @@ fn abandon_stuck_hand() -> Result<u64, String> {
             });
         }
 
-        let plan = refund_every_stake(state);
+        settle_unmovable_hand(state, now, UnmovableReason::NoMessageCanMoveIt).ok_or_else(|| {
+            // Only reachable if the refund plan itself does not conserve, which
+            // `settle_unmovable_hand` refuses to act on rather than trapping.
+            format!(
+                "This hand cannot be refunded automatically: its own payout basis does not add \
+                 up, so nothing has been moved. hand {} at phase {}. Please report it; the \
+                 canister has logged the detail.",
+                state.hand_number,
+                phase_to_string(&state.phase)
+            )
+        })
+    })
+}
+
+/// Why a hand is being closed with no winner and every stake handed back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnmovableReason {
+    /// [`hand_is_stuck`]: the action clock has been expired for
+    /// [`STUCK_HAND_GRACE_NS`], or a live hand has no clock at all. Nothing any
+    /// player sends can advance it.
+    NoMessageCanMoveIt,
+    /// The same condition, found by an EXIT DOOR: somebody called `cash_out` or
+    /// `leave_table` on a hand that could not be moved. Distinguished from
+    /// [`UnmovableReason::NoMessageCanMoveIt`] only in the log line, and only so
+    /// that a reader -- or a test -- can tell which of the three doors did the
+    /// work. The money moves identically.
+    AnExitDoorFoundItUnmovable,
+    /// The last seated player has just left. Nobody holds cards, so nobody can
+    /// win the pot -- not now and not ever, because the seats are empty and a
+    /// new occupant is not in this hand.
+    NobodyLeftToWinIt,
+}
+
+/// Hand every stake back and close a hand that can no longer produce a winner.
+///
+/// Returns the e8s refunded, or `None` when there was nothing to do.
+///
+/// # ONE routine, three callers, and why it must never trap
+///
+/// `abandon_stuck_hand` (a player asking), the on-chain clock (nobody asking) and
+/// now the two EXIT DOORS, `cash_out` and `leave_table`. The exit doors are the
+/// reason for the no-trap rule: a trap rolls the whole message back, so a
+/// settlement that traps inside `cash_out` would take the cash-out with it and
+/// shut the door the player was walking through -- which is
+/// docs/SECURITY-FINDINGS.md FINDING 15 exactly, re-created by the fix for
+/// FINDING 18. [`apply_payouts`] traps when a plan does not conserve, so the plan
+/// is checked FIRST and a non-conserving one is reported and declined. The
+/// player still leaves; the stake stays where it is; [`check_custody_is_visible`
+/// in the money-safety harness](../../../tests/money_safety/src/invariants/custody.rs)
+/// is what convicts the resulting state.
+///
+/// # Why the exit doors settle at all (docs/SECURITY-FINDINGS.md FINDING 18)
+///
+/// FINDING 15's fix lifted the "cannot cash out while in a hand" refusal once the
+/// hand is stuck, which was right -- that refusal was the second half of a fund
+/// lock. But it was also the ONLY thing that had ever told a player their money
+/// was committed, so lifting it produced `Ok = 0` while 2.98 ICP of the caller's
+/// was in the pot, `get_balance() -> 0`, and a canister left holding a live
+/// pre-flop hand with no players in it.
+///
+/// Annotating the reply was the auditor's minimum. This is the stronger answer:
+/// **remove the state instead of describing it.** A stuck hand cannot be won by
+/// anybody, and neither can a hand with nobody in it, so there is exactly one
+/// correct outcome in both cases and the player who is on their way out is
+/// entitled to have it happen before they go. It grants no new power -- a stuck
+/// hand is already refundable by ANY principal through `abandon_stuck_hand`, so
+/// the caller could produce this identical state in one extra call -- and it
+/// makes the number `cash_out` returns true again.
+fn settle_unmovable_hand(
+    state: &mut TableState,
+    now: u64,
+    reason: UnmovableReason,
+) -> Option<u64> {
+    let live =
+        state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete;
+    if !live {
+        return None;
+    }
+
+    let plan = refund_every_stake(state);
+    if !plan.conserves() {
+        // NOT a trap, and not a silent skip either. See the no-trap rule above.
+        ic_cdk::println!(
+            "CRITICAL: refusing to refund hand {} at phase {}: the refund plan hands back {} out \
+             of {} collected (delta {}). Nothing has been moved and the stakes are still in the \
+             pot. See docs/SECURITY-FINDINGS.md FINDING 18.",
+            state.hand_number,
+            phase_to_string(&state.phase),
+            plan.awarded,
+            plan.collected,
+            plan.awarded as i128 - plan.collected as i128
+        );
+        return None;
+    }
+
+    match reason {
         // Loud, and in the dialect the money-safety harness treats as the
         // canister's own testimony against itself. Reaching this line means the
         // settlement path failed to do its job, and that must never be quiet.
-        ic_cdk::println!(
+        UnmovableReason::NoMessageCanMoveIt => ic_cdk::println!(
             "CRITICAL: hand {} was ABANDONED as unmovable at phase {}: no message could advance \
              it. {} e8s across {} stakes returned to the players who put them in; nobody won the \
              hand. See docs/SECURITY-FINDINGS.md FINDING 15.",
@@ -5431,17 +6387,82 @@ fn abandon_stuck_hand() -> Result<u64, String> {
             phase_to_string(&state.phase),
             plan.collected,
             plan.payouts.len()
-        );
+        ),
+        // Same event, same money, different discoverer: the player walking out.
+        UnmovableReason::AnExitDoorFoundItUnmovable => ic_cdk::println!(
+            "CRITICAL: hand {} was ABANDONED as unmovable at phase {} BY AN EXIT DOOR: a player \
+             called cash_out or leave_table and no message could advance the hand they were \
+             leaving. {} e8s across {} stakes returned to the players who put them in, including \
+             the leaver's, so nobody walks away from a stake they were never told about. See \
+             docs/SECURITY-FINDINGS.md FINDING 18.",
+            state.hand_number,
+            phase_to_string(&state.phase),
+            plan.collected,
+            plan.payouts.len()
+        ),
+        // Deliberately NOT `CRITICAL:`. Nothing has gone wrong with the
+        // accounting and nothing failed: the last player exercised an ordinary
+        // right to leave, and a hand with no players in it has exactly one lawful
+        // ending, which the canister has just performed. `CRITICAL:` is reserved
+        // in this file for accounts that disagree, and the money-safety
+        // classifier stops a run on every one of them.
+        UnmovableReason::NobodyLeftToWinIt => ic_cdk::println!(
+            "hand {} ended at phase {} with NO players left at the table: {} e8s across {} \
+             stakes returned to the escrow balances of the principals who put them in. Nobody \
+             could have won it.",
+            state.hand_number,
+            phase_to_string(&state.phase),
+            plan.collected,
+            plan.payouts.len()
+        ),
+    }
 
-        reveal_seed_on_hand_end(state);
-        let refunded = plan.collected;
-        // Through `apply_payouts`, so the abandonment is held to the SAME
-        // conservation post-condition as a real settlement.
-        let winners = apply_payouts(state, &plan);
-        record_hand_to_history(state, &winners, false);
-        finish_hand(state, now);
-        Ok(refunded)
-    })
+    reveal_seed_on_hand_end(state);
+    let refunded = plan.collected;
+    // Through `apply_payouts`, so this is held to the SAME conservation
+    // post-condition as a real settlement -- and it cannot trap there, because
+    // the identical predicate was evaluated above.
+    let winners = apply_payouts(state, &plan);
+    record_hand_to_history(state, &winners, false);
+    finish_hand(state, now);
+    Some(refunded)
+}
+
+/// Is anybody still sitting at this table?
+fn table_is_empty(state: &TableState) -> bool {
+    state.players.iter().all(|p| p.is_none())
+}
+
+/// Everything of `who`'s that is in the CURRENT hand's pot.
+///
+/// Their live seat's `total_bet_this_hand`, plus every stake recorded for a seat
+/// of theirs that has already been vacated in this hand. Summed BY PRINCIPAL and
+/// never by seat: one chair can carry two people's money in a single hand
+/// (docs/DEFECTS.md E-36) and resolving an owner from a seat index is
+/// docs/SECURITY-FINDINGS.md FINDING 13.
+///
+/// Zero once the hand is over, which is correct rather than convenient: at that
+/// point the money has been paid out, and what is left is in a stack or an escrow
+/// balance that the ordinary surfaces already report.
+pub fn committed_stake_of(state: &TableState, who: Principal) -> u64 {
+    let live =
+        state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete;
+    if !live {
+        return 0;
+    }
+    let seated: u64 = state
+        .players
+        .iter()
+        .flatten()
+        .filter(|p| p.principal == who)
+        .map(|p| p.total_bet_this_hand)
+        .fold(0, u64::saturating_add);
+    state
+        .departed_stakes()
+        .iter()
+        .filter(|d| d.hand_number == state.hand_number && d.principal == who)
+        .map(|d| d.contributed)
+        .fold(seated, u64::saturating_add)
 }
 
 // ============================================================================
@@ -5465,12 +6486,67 @@ pub enum TimeoutCheckResult {
 /// above [`is_in_hand`]. A seat in a live hand leaves it by folding, by being
 /// folded when its ACTION clock expires ([`resolve_expired_action_timer`]), or by
 /// being all-in. Nothing in this function folds anybody except that one call.
+/// # THIS IS A BACKSTOP NOW, NOT THE ENGINE'S ONLY CLOCK
+///
+/// Until [FINDING 19](../../../docs/SECURITY-FINDINGS.md#finding-19) was closed
+/// this update call was the ONLY thing in the canister that evaluated any
+/// deadline, so a table whose clients all closed their tabs froze forever.
+/// [`advance_table_clock`] is now also driven by an on-chain timer (see
+/// "THE ON-CHAIN CLOCK" below). This entry point is kept, deliberately, for the
+/// case where a timer is ever lost -- and it runs THE SAME FUNCTION, so the two
+/// paths cannot drift.
 #[ic_cdk::update]
 fn check_timeouts() -> TimeoutCheckResult {
+    let result = advance_table_clock(ic_cdk::api::time());
+    // Whatever this call just changed may have moved the next deadline. Re-point
+    // the precise wake at it; without this the watchdog interval is the only
+    // thing that would notice, up to CLOCK_WATCHDOG_SECS late.
+    schedule_next_wake();
+    result
+}
+
+/// Everything the table's clock does, in one place, driven by a `now` the caller
+/// supplies.
+///
+/// **Both clock paths call exactly this**: the `check_timeouts` update above, and
+/// [`on_clock_tick`]. There is no second copy of the timeout rules to fall out of
+/// step with this one, which is the specific failure the timer work was told to
+/// avoid.
+///
+/// Order matters and is not arbitrary. The unmovable-hand refund runs FIRST and
+/// returns immediately when it fires, because the states it exists for are exactly
+/// the states in which the rest of this function TRAPS (docs/SECURITY-FINDINGS.md
+/// FINDING 15). Run last, a trap below would roll the refund back with it; run
+/// first and short-circuited, the refund either commits alone or does not happen
+/// at all.
+pub fn advance_table_clock(now: u64) -> TimeoutCheckResult {
     // Run periodic cleanup of unbounded maps
     periodic_cleanup();
 
-    let now = ic_cdk::api::time();
+    // THE REFUND IS NOT HERE, AND THAT IS A CORRECTION, NOT AN OMISSION.
+    //
+    // The first version of this function opened by refunding any hand whose clock
+    // had been expired for STUCK_HAND_GRACE_NS, so that a timeout path which
+    // TRAPPED could not take the refund down with it. The money-safety fuzzer
+    // convicted it on seed 0xc1ea2dec0002 within one run:
+    //
+    //   CRITICAL: hand 7 was ABANDONED as unmovable at phase flop ...
+    //   4000000 e8s across 2 stakes returned ... nobody won the hand.
+    //
+    // Nothing was unmovable. The fuzzer had jumped an hour of simulated time, so
+    // the clock was five minutes past its expiry the FIRST time anything looked at
+    // it -- and the hand was voided without the ordinary timeout path ever being
+    // tried on it. On mainnet the same shape arrives after any stall in which the
+    // canister does not execute: a subnet halt, or -- pointedly -- a canister that
+    // was frozen for want of cycles and then topped up. The right answer there is
+    // to fold the seat that did not act and play the hand out, not to void it.
+    //
+    // "Past its grace" is a statement about WALL CLOCK. "Nothing can move this
+    // hand" is a statement about ATTEMPTS. They are only the same while the clock
+    // is actually running, and the escalation that tells them apart lives in
+    // `on_clock_tick`, which can count attempts across separate messages. This
+    // function does the timeouts and nothing else, so `check_timeouts` and the
+    // clock still run exactly the same code.
     let disconnect_timeout_ns: u64 = DISCONNECT_TIMEOUT_SECS * 1_000_000_000;
 
     TABLE.with(|t| {
@@ -5537,7 +6613,7 @@ fn check_timeouts() -> TimeoutCheckResult {
         // If auto_deal_at is not set but we have 2+ active players in WaitingForPlayers/HandComplete, set it now
         if state.auto_deal_at.is_none() && (state.phase == GamePhase::WaitingForPlayers || state.phase == GamePhase::HandComplete) {
             let active_count = state.players.iter()
-                .filter(|p| p.as_ref().map(|p| p.status == PlayerStatus::Active && p.chips > 0).unwrap_or(false))
+                .filter(|p| p.as_ref().map(will_be_dealt_in).unwrap_or(false))
                 .count();
             if active_count >= 2 {
                 state.auto_deal_at = Some(now + AUTO_DEAL_DELAY_NS);
@@ -5548,7 +6624,7 @@ fn check_timeouts() -> TimeoutCheckResult {
             if now >= auto_deal_time && (state.phase == GamePhase::HandComplete || state.phase == GamePhase::WaitingForPlayers) {
                 // Only signal auto-deal if we have enough active players with chips
                 let active_count = state.players.iter()
-                    .filter(|p| p.as_ref().map(|p| p.status == PlayerStatus::Active && p.chips > 0).unwrap_or(false))
+                    .filter(|p| p.as_ref().map(will_be_dealt_in).unwrap_or(false))
                     .count();
 
                 if active_count >= 2 {
@@ -5577,13 +6653,21 @@ fn check_timeouts() -> TimeoutCheckResult {
 ///
 /// WHY THIS IS ONE FUNCTION. `player_action` used to *refuse* an action whose
 /// timer had expired and change nothing else, while only `check_timeouts` ever
-/// resolved the timeout. Nothing in the canister calls `check_timeouts` on its
-/// own -- there is no heartbeat timer driving it, the frontend does -- so if the
-/// frontend stopped polling, `state.action_on` stayed pointed at a seat that
-/// could no longer act and the hand could not progress at all. That was hit
-/// immediately in manual play: both seats ended up `Disconnected` and
-/// `start_new_hand` refused with "Need at least 2 active players with chips"
-/// until they were sat back in by hand. See docs/DEFECTS.md E-31.
+/// resolved the timeout. So if the frontend stopped polling, `state.action_on`
+/// stayed pointed at a seat that could no longer act and the hand could not
+/// progress at all. That was hit immediately in manual play: both seats ended up
+/// `Disconnected` and `start_new_hand` refused with "Need at least 2 active
+/// players with chips" until they were sat back in by hand. See
+/// docs/DEFECTS.md E-31.
+///
+/// This paragraph used to end *"Nothing in the canister calls `check_timeouts` on
+/// its own -- there is no heartbeat timer driving it, the frontend does."* That
+/// was TRUE and it was the whole of FINDING 19: a fund-holding canister whose
+/// liveness was outsourced to a browser tab. It is no longer true --
+/// `on_clock_tick` drives `advance_table_clock` on chain, see "THE ON-CHAIN
+/// CLOCK" -- and the sentence is rewritten here rather than deleted because a
+/// stale comment asserting no clock exists is exactly how the next reader stops
+/// looking. docs/DEFECTS.md E-54.
 ///
 /// A timed-out action must RESOLVE the hand state, because the alternative is a
 /// table that no message can move. The seat's action is forfeited, the game
@@ -5648,6 +6732,831 @@ pub fn resolve_expired_action_timer(state: &mut TableState, now: u64) -> Option<
     advance_game(state, now);
 
     Some(seat)
+}
+
+// ============================================================================
+// THE ON-CHAIN CLOCK  (docs/SECURITY-FINDINGS.md FINDING 19)
+// ============================================================================
+//
+// Before this section existed, `ic-cdk-timers` was a declared dependency that
+// nothing imported: `set_timer` appeared nowhere in `src/`, and every deadline in
+// this engine -- the action clock, the disconnect threshold, the sitting-out kick,
+// the reload timer, the stuck-hand grace -- was evaluated only inside a message
+// somebody else sent. A table whose clients all closed their tabs froze. Measured
+// on this harness before the change: a heads-up hand with a 3,000,000 e8 pot sat
+// in `PreFlop` for TWENTY SIMULATED MINUTES with both seats still marked `Active`,
+// and would have sat there forever.
+//
+// # The shape, and why it is this shape
+//
+// Two mechanisms, doing two different jobs.
+//
+// ## 1. A repeating WATCHDOG interval -- the part that cannot die
+//
+// `ic-cdk-timers` 1.0 does not run a timer callback inside `canister_global_timer`.
+// It makes a bounded-wait SELF-CALL and runs the callback in that message, for the
+// explicit purpose of catching traps at the call boundary (see the crate's own
+// comment: *"the closest thing to a catch_unwind that's available here"*). The
+// consequence that decides this design is in `do_timer` step 7:
+//
+//   > If a repeated timer is successfully DISPATCHED (irrespective of the timer's
+//   > own success), reschedule it.
+//
+// So a REPEATING timer is rescheduled before its callback runs, and survives a
+// callback that traps. A self-rescheduling ONE-SHOT does not: the re-arm lives in
+// the same message as the work, so one trap and the clock is gone for good, with
+// nothing on chain to notice. On a canister whose settlement path has trapped
+// before -- FINDING 15 is exactly that -- a clock that dies on the first trap is
+// not a clock.
+//
+// The watchdog is therefore the floor. A table whose timeout path traps on every
+// tick still gets its money back, because the escalation in `on_clock_tick` writes
+// its sighting in a message that cannot trap and runs the work in a message of its
+// own: the trap rolls back the work and leaves the sighting, so the stuck-hand
+// grace keeps running and the refund fires in the end. (This sentence used to say
+// the refund was handled FIRST inside `advance_table_clock`. It was, and that
+// version voided playable hands after any stall -- docs/DEFECTS.md E-56.)
+//
+// ## 2. A one-shot WAKE aimed at the exact next deadline -- the part that is precise
+//
+// Arming and cancelling a timer are free: they are heap operations plus
+// `ic0.global_timer_set` inside a message the canister is already executing. Only
+// a FIRE costs anything, because only a fire is a message. So the wake is pointed
+// at [`next_wake_deadline`] -- the earliest moment at which crossing a deadline
+// would actually CHANGE state -- and re-pointed every time the state moves. On a
+// table where players act inside their clocks it is re-armed further out on every
+// action and never fires at all.
+//
+// ## What a tick costs, MEASURED on this build
+//
+// `tests/money_safety/tests/timers.rs::idle_table_cycle_burn_and_runway`, empty
+// table, one simulated hour, PocketIC 13-node application subnet:
+//
+// | watchdog | ticks/hour | cycles burned | cycles per tick |
+// |----------|-----------|----------------|-----------------|
+// | 30 s     | 120       | 1,843,363,200  | **15,361,360**  |
+// | 60 s     | 60        |   923,160,120  | **15,386,002**  |
+//
+// Exactly linear in the number of ticks, so the per-tick figure prices every
+// alternative. A tick is NOT one message: the crate's trap-catching self-call
+// makes it a `canister_global_timer` execution, an inter-canister call, the
+// `timer_executor` update, and a reply callback. That is where 15.4M goes, and it
+// is the price of the trap resistance above.
+//
+// | shape                          | idle-table burn | idle-table burn/year | worst-case lateness |
+// |--------------------------------|-----------------|----------------------|---------------------|
+// | `set_timer_interval(1s)`       | 1.328 T/day     | **485 T**            | 1 s                 |
+// | `set_timer_interval(10s)`      | 0.133 T/day     | 48.5 T               | 10 s                |
+// | **watchdog 30 s + one-shot**   | **0.0442 T/day**| **16.2 T**           | ~0 while a hand runs |
+// | watchdog 60 s + one-shot       | 0.0222 T/day    | 8.1 T                | ~0 while a hand runs |
+//
+// The bare 1 s interval the finding suggests is 485 T/year for a table nobody is
+// sitting at, and it is LESS precise than the hybrid, not more: the one-shot is
+// aimed at the actual expiry rather than at a fixed 1 s grid.
+//
+// For comparison, this canister burned 0.00007 T/day before the clock existed
+// (storage only). The clock multiplies idle burn by ~630x. That is the honest cost
+// of this change and it is why `get_cycle_status` exists below.
+//
+// `CLOCK_WATCHDOG_SECS` is the single knob: burn is `86400 / period * 15.4M`
+// cycles per day. Doubling it halves the bill and doubles only the worst case for
+// deadlines that arrive with no arm site, of which there are currently none.
+//
+// ## The one thing a reader should be suspicious of
+//
+// The precise wake is only as good as [`next_wake_deadline`]. A deadline that
+// function forgets is a deadline the one-shot never aims at. That is a PRECISION
+// bug, never a LIVENESS bug, and only because the watchdog exists: a forgotten
+// deadline is still crossed within `CLOCK_WATCHDOG_SECS`. That is the whole reason
+// the watchdog is not tuned out once the one-shot works.
+
+/// How often the trap-proof watchdog runs, in seconds.
+///
+/// This is the answer to "how late can this table possibly be" for any deadline
+/// the one-shot wake misses, including every deadline created between ticks by a
+/// client that then disappeared. 30 s against a 30 s action clock and a 90 s
+/// disconnect threshold, at a measured cost given above.
+const CLOCK_WATCHDOG_SECS: u64 = 30;
+
+/// The one-shot wake is never armed closer than this.
+///
+/// A deadline whose crossing does not change the state would otherwise re-arm at
+/// zero delay forever, turning the clock into a cycle-burning spin loop. Every
+/// entry in [`next_wake_deadline`] is chosen so that crossing it DOES change the
+/// state, so this floor should be unreachable -- it is here because "should be" is
+/// how this project got most of its findings.
+const CLOCK_MIN_WAKE_NS: u64 = 1_000_000_000;
+
+thread_local! {
+    /// The repeating watchdog. Deliberately never cleared once started.
+    static CLOCK_WATCHDOG: RefCell<Option<ic_cdk_timers::TimerId>> = const { RefCell::new(None) };
+    /// The one-shot aimed at the next real deadline, and the deadline it is aimed
+    /// at. Replaced, not accumulated: a second wake left armed is a second message.
+    static CLOCK_WAKE: RefCell<Option<(ic_cdk_timers::TimerId, u64)>> = const { RefCell::new(None) };
+    /// Ticks the on-chain clock has run since this instance started. Observable
+    /// via `get_cycle_status`, because "the timer is armed" is a claim and a
+    /// counter that moves is evidence.
+    static CLOCK_TICKS: RefCell<u64> = const { RefCell::new(0) };
+    static CLOCK_LAST_TICK_AT: RefCell<u64> = const { RefCell::new(0) };
+    /// `(time, cycle balance)` at the FIRST tick of this instance, or at the last
+    /// tick that observed a top-up. The burn rate `get_cycle_status` reports is
+    /// MEASURED between this and [`CYCLES_LATEST`], not computed from a price list
+    /// that could be wrong or out of date.
+    static CYCLES_ORIGIN: RefCell<(u64, u128)> = const { RefCell::new((0, 0)) };
+    /// `(hand_number, when the CLOCK first saw this hand sitting on an expired
+    /// action timer)`.
+    ///
+    /// The stuck-hand grace is measured from HERE, not from the timer's own
+    /// `expires_at`, and the difference is the whole point. See [`on_clock_tick`].
+    static CLOCK_STUCK_SINCE: RefCell<Option<(u64, u64)>> = const { RefCell::new(None) };
+    /// `(time, cycle balance)` at the most recent tick.
+    ///
+    /// # Why both samples are taken in the SAME context, and why that is not fussy
+    ///
+    /// The first version of this sampled the origin in `start_clock` and compared
+    /// it against the balance read inside `get_cycle_status`. It reported a burn of
+    /// ZERO for an hour in which 1.84 BILLION cycles were demonstrably burned.
+    ///
+    /// The reason is that `ic-cdk-timers` runs every callback behind a self-call,
+    /// and a canister executing inside that callback has an outstanding PREPAYMENT
+    /// for the call and its reserved response. The balance visible from inside a
+    /// tick is therefore depressed, by more than an hour of burn, relative to the
+    /// balance visible from a query. Subtracting one from the other measured the
+    /// prepayment, not the burn, and produced a comfortable-looking answer.
+    ///
+    /// Both samples are now taken at the same point of the same kind of message, so
+    /// the offset is identical in both and cancels exactly. A cycles gauge that
+    /// reads high is the one failure mode that matters here: it is the gauge saying
+    /// "plenty of fuel" to a canister that is about to stop honouring withdrawals.
+    static CYCLES_LATEST: RefCell<(u64, u128)> = const { RefCell::new((0, 0)) };
+}
+
+/// Start (or restart) the on-chain clock.
+///
+/// Called from `init` and from `post_upgrade`. **`post_upgrade` is not optional:**
+/// timers live in the heap and in the system's global-timer field, and an upgrade
+/// wipes both. A canister upgraded without this call keeps its funds, its chips
+/// and its hand, and silently loses the only thing that moves them.
+fn start_clock() {
+    // Idempotent: a second call must not leave two watchdogs running.
+    CLOCK_WATCHDOG.with(|w| {
+        if let Some(old) = w.borrow_mut().take() {
+            ic_cdk_timers::clear_timer(old);
+        }
+    });
+    let id = ic_cdk_timers::set_timer_interval(
+        std::time::Duration::from_secs(CLOCK_WATCHDOG_SECS),
+        || async { on_clock_tick() },
+    );
+    CLOCK_WATCHDOG.with(|w| *w.borrow_mut() = Some(id));
+
+    // Deliberately NOT sampled here: see CYCLES_LATEST. The origin is taken by the
+    // first tick, in the same message context every later sample is taken in.
+    CYCLES_ORIGIN.with(|c| *c.borrow_mut() = (0, 0));
+    CYCLES_LATEST.with(|c| *c.borrow_mut() = (0, 0));
+
+    schedule_next_wake();
+}
+
+/// One tick of the on-chain clock.
+///
+/// Normally: run [`advance_table_clock`] -- the SAME function `check_timeouts`
+/// runs, so the two paths cannot drift -- and re-aim the one-shot wake. If it
+/// traps, this whole message rolls back and the re-aim is lost with it. That is
+/// survivable only because of the watchdog, which was rescheduled before this
+/// callback started. See the section header.
+///
+/// # The recovery escalation, and the defect it exists because of
+///
+/// A hand whose action clock expired more than [`STUCK_HAND_GRACE_NS`] ago is
+/// *abandonable* by the wall clock. It is not necessarily *unmovable*: it is only
+/// unmovable if the ordinary timeout path has actually been tried on it and
+/// failed. Those two are the same thing only while the clock has been running, and
+/// they come apart after any stall in which the canister does not execute -- a
+/// subnet halt, or a canister frozen for want of cycles and later topped up
+/// ([E-55](../../../docs/DEFECTS.md#e-55)), or a test harness advancing time in
+/// hour-long jumps.
+///
+/// Conflating them refunded a perfectly playable hand. The money-safety fuzzer
+/// convicted the first version of this on its second seed; see the comment in
+/// [`advance_table_clock`] and docs/DEFECTS.md E-56.
+///
+/// So the grace is measured from **when this canister first saw the clock overdue**
+/// ([`CLOCK_STUCK_SINCE`]), not from the timer's own `expires_at`. An hour-long
+/// stall therefore buys no credit toward abandonment: the first tick after it
+/// starts the grace and hands the hand to the ordinary timeout path, which folds
+/// the seat that did not act and plays on.
+///
+/// The sighting is written in THIS message, which does nothing that can trap, and
+/// the work runs in a message of its own. That is what makes the escalation
+/// survive a trapping timeout path: the rollback takes the attempt and leaves the
+/// sighting, so the grace keeps running and the refund eventually fires. It costs
+/// a second message only while a clock is actually overdue, so the idle-table burn
+/// measured in the section header is unaffected.
+fn on_clock_tick() {
+    let now = ic_cdk::api::time();
+    // `*c.borrow_mut() = c.borrow() + 1` PANICS: the assigned value is evaluated
+    // first and its `Ref` guard lives to the end of the statement, so the
+    // `borrow_mut` on the left hits an outstanding shared borrow. It was written
+    // that way here, it trapped on every tick, and the only reason it did not take
+    // the clock with it is the watchdog rescheduling before the callback runs.
+    // Left as a comment rather than deleted: it is the cheapest possible reminder
+    // of what the watchdog is actually for.
+    CLOCK_TICKS.with(|c| {
+        let mut ticks = c.borrow_mut();
+        *ticks = ticks.saturating_add(1);
+    });
+    CLOCK_LAST_TICK_AT.with(|c| *c.borrow_mut() = now);
+
+    // Both cycle samples are taken HERE, at the same point of the same kind of
+    // message, so the outstanding self-call prepayment is identical in both and
+    // cancels out of the difference. See CYCLES_LATEST.
+    let balance = ic_cdk::api::canister_cycle_balance();
+    CYCLES_ORIGIN.with(|c| {
+        let mut origin = c.borrow_mut();
+        // First tick of this instance, or a top-up: re-baseline. Keeping an origin
+        // from before a top-up would report a burn rate too low forever after.
+        if origin.0 == 0 || balance > origin.1 {
+            *origin = (now, balance);
+        }
+    });
+    CYCLES_LATEST.with(|c| *c.borrow_mut() = (now, balance));
+
+    // Read-only, and it must not trap: everything below depends on THIS message
+    // committing even when the work it schedules does not.
+    let overdue = TABLE
+        .try_with(|t| {
+            t.try_borrow().ok().and_then(|table| {
+                table.as_ref().map(|s| {
+                    let live = s.phase != GamePhase::WaitingForPlayers
+                        && s.phase != GamePhase::HandComplete;
+                    let expired = s
+                        .action_timer
+                        .as_ref()
+                        .map(|t| now > t.expires_at)
+                        .unwrap_or(false);
+                    (live && expired, s.hand_number)
+                })
+            })
+        })
+        .ok()
+        .flatten();
+
+    let Some((overdue, hand_number)) = overdue else {
+        CLOCK_STUCK_SINCE.with(|s| *s.borrow_mut() = None);
+        let _ = advance_table_clock(now);
+        schedule_next_wake();
+        return;
+    };
+
+    if !overdue {
+        // The hand is moving, or there is no hand. Forget any earlier observation
+        // so a later stall on the same hand starts its grace from scratch.
+        CLOCK_STUCK_SINCE.with(|s| *s.borrow_mut() = None);
+        let _ = advance_table_clock(now);
+        schedule_next_wake();
+        return;
+    }
+
+    // A clock has run out. Record WHEN THIS CANISTER FIRST SAW IT, if it has not
+    // already, and read back the first-sighting time.
+    let since = CLOCK_STUCK_SINCE.with(|s| {
+        let mut slot = s.borrow_mut();
+        match *slot {
+            Some((h, t)) if h == hand_number => t,
+            _ => {
+                *slot = Some((hand_number, now));
+                now
+            }
+        }
+    });
+
+    // This message does nothing that can trap, so the sighting above is COMMITTED
+    // whatever happens next. The work goes in a message of its own, which is the
+    // entire mechanism: a timeout path that traps rolls back alone and leaves the
+    // sighting standing, so the grace period keeps running and the refund below
+    // eventually fires. Two messages instead of one, and only while a clock is
+    // actually overdue -- an idle table never reaches this branch, so the burn
+    // measured in the section header is unaffected.
+    if now > since.saturating_add(STUCK_HAND_GRACE_NS) {
+        // The ordinary timeout path has had every tick of a full grace period, in
+        // messages of its own, and this hand has still not moved. It is not slow.
+        // Refund every stake, through the same body `abandon_stuck_hand` runs --
+        // which grants nobody any authority they did not already have, because that
+        // method is deliberately permissionless.
+        CLOCK_STUCK_SINCE.with(|s| *s.borrow_mut() = None);
+        ic_cdk_timers::set_timer(std::time::Duration::ZERO, async {
+            let now = ic_cdk::api::time();
+            // Re-checked at the MOMENT OF ACTION, in the message that acts. The
+            // decision above was made in an earlier message and the table may have
+            // moved since. This is also the guard that keeps the automatic door
+            // strictly narrower than the manual one: `clock_should_abandon` refuses
+            // the live-hand-with-no-clock branch that `hand_is_stuck` accepts.
+            let still_unmovable = TABLE.with(|t| {
+                t.borrow()
+                    .as_ref()
+                    .map(|s| clock_should_abandon(s, now))
+                    .unwrap_or(false)
+            });
+            if still_unmovable {
+                let _ = try_abandon_stuck_hand(now);
+            }
+            schedule_next_wake();
+        });
+    } else {
+        ic_cdk_timers::set_timer(std::time::Duration::ZERO, async {
+            let _ = advance_table_clock(ic_cdk::api::time());
+            schedule_next_wake();
+        });
+    }
+    schedule_next_wake();
+}
+
+/// Point the one-shot wake at [`next_wake_deadline`], replacing whatever it was
+/// aimed at before.
+///
+/// Cheap enough to call from anywhere that changes the state: no message is sent,
+/// nothing is charged, and if the deadline has not moved the existing wake is left
+/// exactly where it is.
+///
+/// # The arm sites, and why each one is there
+///
+/// | site | why |
+/// |------|-----|
+/// | `init`, `post_upgrade` (via [`start_clock`]) | nothing is armed at all without these |
+/// | [`on_clock_tick`] | every tick re-aims from the state it just left behind |
+/// | `check_timeouts` | the manual path must leave the clock in the same place the timer path would |
+/// | `start_new_hand` | creates the first action clock of a hand |
+/// | `player_action` | REPLACES the action clock the wake is aimed at |
+/// | `use_time_bank` | EXTENDS the action clock the wake is aimed at |
+///
+/// The last three are about cycles as much as precision. A wake left aimed at a
+/// clock that has already been replaced fires early, finds nothing, and re-arms --
+/// one wasted timer message per betting action, at ~15.4M cycles each. Firing
+/// early is never a correctness problem; being armed late is, and that is what the
+/// watchdog covers.
+fn schedule_next_wake() {
+    let now = ic_cdk::api::time();
+    // A borrow failure here must not trap -- this runs at the end of other
+    // people's update calls. Falling through to "no deadline" costs precision for
+    // one tick; the watchdog covers it.
+    let deadline = TABLE
+        .try_with(|t| {
+            t.try_borrow()
+                .ok()
+                .and_then(|table| table.as_ref().and_then(|s| next_wake_deadline(s, now)))
+        })
+        .ok()
+        .flatten();
+
+    let Some(deadline) = deadline else {
+        CLOCK_WAKE.with(|w| {
+            if let Some((old, _)) = w.borrow_mut().take() {
+                ic_cdk_timers::clear_timer(old);
+            }
+        });
+        return;
+    };
+
+    // Already aimed there. Re-arming would be harmless but pointless.
+    if CLOCK_WAKE.with(|w| w.borrow().map(|(_, at)| at == deadline).unwrap_or(false)) {
+        return;
+    }
+
+    let delay = deadline.saturating_sub(now).max(CLOCK_MIN_WAKE_NS);
+    // Nothing beyond the watchdog's own period is worth a second timer for.
+    if delay > CLOCK_WATCHDOG_SECS * 1_000_000_000 {
+        CLOCK_WAKE.with(|w| {
+            if let Some((old, _)) = w.borrow_mut().take() {
+                ic_cdk_timers::clear_timer(old);
+            }
+        });
+        return;
+    }
+
+    CLOCK_WAKE.with(|w| {
+        let mut slot = w.borrow_mut();
+        if let Some((old, _)) = slot.take() {
+            ic_cdk_timers::clear_timer(old);
+        }
+        let id = ic_cdk_timers::set_timer(std::time::Duration::from_nanos(delay), async {
+            on_clock_tick()
+        });
+        *slot = Some((id, deadline));
+    });
+}
+
+/// The earliest future moment at which crossing a deadline would CHANGE this
+/// table's state, or `None` if there is nothing pending.
+///
+/// Every entry must satisfy that condition. An entry whose crossing changes
+/// nothing is a spin loop -- `auto_deal_at` is the live example and is commented
+/// where it is handled.
+///
+/// # Deadlines already in the PAST are deliberately not returned
+///
+/// `consider` only accepts `at > now`. A deadline that is already past and has not
+/// been acted on means the last attempt to act on it did not commit -- on this
+/// canister, that it TRAPPED. Aiming the one-shot at it would retry once a second
+/// forever, at ~15.4M cycles a go, for as long as the trap persists. The watchdog
+/// retries it every `CLOCK_WATCHDOG_SECS` instead, which is the right pacing for a
+/// retry, and [`clock_should_abandon`] refunds the hand outright once the grace
+/// period is up. Pinned by
+/// `clock_schedule_tests::an_already_missed_deadline_is_left_to_the_watchdog_rather_than_spun_on`.
+///
+/// `now` is a parameter and this function is `pub` so the whole schedule is
+/// host-testable without a replica: see `tests/unit_tests.rs`.
+pub fn next_wake_deadline(state: &TableState, now: u64) -> Option<u64> {
+    let mut next: Option<u64> = None;
+    let mut consider = |at: u64| {
+        if at > now {
+            next = Some(next.map_or(at, |cur: u64| cur.min(at)));
+        }
+    };
+
+    let live =
+        state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete;
+
+    // The action clock. `resolve_expired_action_timer` fires on `now > expires_at`,
+    // so the first instant that does anything is one nanosecond after it.
+    if let Some(ref timer) = state.action_timer {
+        consider(timer.expires_at.saturating_add(1));
+        // And the moment the hand becomes unmovable, for the case where resolving
+        // that clock keeps trapping. Dominated by the line above while the timer
+        // exists, so it costs nothing; it is here so the schedule states the whole
+        // rule rather than the part that usually matters.
+        if live {
+            consider(
+                timer
+                    .expires_at
+                    .saturating_add(STUCK_HAND_GRACE_NS)
+                    .saturating_add(1),
+            );
+        }
+    }
+
+    let disconnect_ns = DISCONNECT_TIMEOUT_SECS * 1_000_000_000;
+    let reload_ns = RELOAD_TIMEOUT_SECS * 1_000_000_000;
+    let kick_ns = SITTING_OUT_KICK_SECS * 1_000_000_000;
+
+    for player in state.players.iter().flatten() {
+        // Crossing this marks the seat Disconnected, once.
+        if player.status == PlayerStatus::Active {
+            consider(player.last_seen.saturating_add(disconnect_ns).saturating_add(1));
+        }
+        // Crossing this sits a broke player out and clears `broke_at`, once.
+        if let Some(broke_at) = player.broke_at {
+            if player.chips == 0 {
+                consider(broke_at.saturating_add(reload_ns).saturating_add(1));
+            }
+        }
+        // Crossing this frees the seat and returns its chips to escrow, once.
+        // Only between hands, which is the same guard the kick itself uses.
+        if !live
+            && (player.status == PlayerStatus::SittingOut
+                || player.status == PlayerStatus::Disconnected)
+        {
+            let idle_since = player.sitting_out_since.unwrap_or(player.last_seen);
+            consider(idle_since.saturating_add(kick_ns).saturating_add(1));
+        }
+    }
+
+    // `auto_deal_at` is NOT scheduled when the table could actually deal.
+    //
+    // Crossing it then changes NOTHING: `advance_table_clock` returns
+    // `AutoDealReady` and leaves `auto_deal_at` set, so the same deadline would be
+    // due again immediately, and the wake would re-arm at the floor and spin
+    // forever burning cycles on a table that is merely waiting for a client to
+    // call `start_new_hand`. It IS scheduled in the other case, where crossing it
+    // clears the field -- a real, one-time state change.
+    //
+    // The clock deliberately does not deal hands by itself. Dealing to seats whose
+    // clients are gone would post their blinds, hand after hand, and that is a way
+    // to lose money to a timer rather than to a player.
+    if let Some(at) = state.auto_deal_at {
+        // The between-hands question, asked of the named predicate rather than
+        // written out again: see `will_be_dealt_in` in "WHO IS IN THE HAND".
+        let active_with_chips = state
+            .players
+            .iter()
+            .flatten()
+            .filter(|p| will_be_dealt_in(p))
+            .count();
+        if active_with_chips < 2 {
+            consider(at.max(now.saturating_add(1)));
+        }
+    }
+
+    next
+}
+
+// ----------------------------------------------------------------------------
+// CYCLES: the runway, visible to anybody
+// ----------------------------------------------------------------------------
+//
+// A canister below its freezing threshold rejects every update call. On this
+// canister that is `deposit`, `withdraw`, `cash_out`, `player_action` and
+// `abandon_stuck_hand` all failing at once -- every player unable to reach their
+// own money simultaneously, with no attacker and no in-application remedy. The
+// clock added here BURNS CYCLES CONTINUOUSLY, so it makes that failure arrive
+// sooner, and it would be indefensible to add it without making the runway
+// visible.
+//
+// This is observability only. There is deliberately no top-up mechanism here: see
+// docs/SECURITY-FINDINGS.md FINDING 19 for what one would need.
+
+/// What is left in the tank, measured rather than assumed.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct CycleStatus {
+    /// Total cycle balance.
+    pub balance: u128,
+    /// What can actually be SPENT: the balance minus the reserve the system holds
+    /// back for the freezing threshold. This, not `balance`, is the number that
+    /// reaches zero when update calls start being rejected.
+    pub liquid_balance: u128,
+    /// `balance - liquid_balance`: the freezing reserve, roughly this canister's
+    /// idle burn over its configured freezing threshold (30 days by default).
+    pub reserved_for_freezing: u128,
+    /// Cycles burned per day, MEASURED over `sample_window_secs` on this instance.
+    /// Zero until the window is long enough to say anything.
+    pub observed_burn_per_day: u128,
+    /// `liquid_balance / observed_burn_per_day`. `null` when the window is too
+    /// short to have measured a burn rate, which is not the same as "plenty".
+    pub runway_days: Option<u64>,
+    /// How long the measurement above has been running. An upgrade resets it.
+    pub sample_window_secs: u64,
+    /// True once the sample window is long enough for `runway_days` to mean
+    /// something. Reported separately so a reader is never left guessing whether
+    /// a small number is a measurement or an artefact.
+    pub measurement_is_meaningful: bool,
+    /// Ticks the on-chain clock has run since this instance started. **Zero on a
+    /// canister that has been up for minutes means the clock is not running** --
+    /// which is what a lost `post_upgrade` re-arm looks like from outside.
+    pub clock_ticks: u64,
+    /// When the clock last ran, in IC nanoseconds. 0 means never.
+    pub clock_last_tick_at: u64,
+    /// Whether the repeating watchdog is armed in this instance.
+    pub clock_watchdog_armed: bool,
+    /// The next moment the clock has a reason to run, if it has one.
+    pub next_wake_at: Option<u64>,
+}
+
+/// A window shorter than this cannot say anything useful about a burn rate: the
+/// install and the first few messages dominate it.
+const CYCLE_SAMPLE_MIN_SECS: u64 = 300;
+
+/// The runway, for anybody who asks. A query, so it costs the caller nothing and
+/// keeps working when the update path does not.
+#[ic_cdk::query]
+fn get_cycle_status() -> CycleStatus {
+    let now = ic_cdk::api::time();
+    let balance = ic_cdk::api::canister_cycle_balance();
+    let liquid = ic_cdk::api::canister_liquid_cycle_balance();
+
+    let (origin_time, origin_balance) = CYCLES_ORIGIN.with(|c| *c.borrow());
+    let (latest_time, latest_balance) = CYCLES_LATEST.with(|c| *c.borrow());
+    // Tick-to-tick, never tick-to-query: see CYCLES_LATEST for what the mixed
+    // comparison reported and why it was wrong in the dangerous direction.
+    let window_secs = latest_time.saturating_sub(origin_time) / 1_000_000_000;
+    let burned = origin_balance.saturating_sub(latest_balance);
+    let meaningful = origin_time > 0 && window_secs >= CYCLE_SAMPLE_MIN_SECS && burned > 0;
+
+    let per_day = if meaningful {
+        burned.saturating_mul(86_400) / (window_secs as u128).max(1)
+    } else {
+        0
+    };
+    let runway_days = if per_day > 0 {
+        Some((liquid / per_day) as u64)
+    } else {
+        None
+    };
+
+    let next_wake_at = TABLE.with(|t| {
+        t.borrow()
+            .as_ref()
+            .and_then(|s| next_wake_deadline(s, now))
+    });
+
+    CycleStatus {
+        balance,
+        liquid_balance: liquid,
+        reserved_for_freezing: balance.saturating_sub(liquid),
+        observed_burn_per_day: per_day,
+        runway_days,
+        sample_window_secs: window_secs,
+        measurement_is_meaningful: meaningful,
+        clock_ticks: CLOCK_TICKS.with(|c| *c.borrow()),
+        clock_last_tick_at: CLOCK_LAST_TICK_AT.with(|c| *c.borrow()),
+        clock_watchdog_armed: CLOCK_WATCHDOG.with(|w| w.borrow().is_some()),
+        next_wake_at,
+    }
+}
+
+#[cfg(test)]
+mod clock_schedule_tests {
+    use super::*;
+
+    const SEC: u64 = 1_000_000_000;
+    const NOW: u64 = 1_000 * SEC;
+
+    fn bare_table(phase: GamePhase) -> TableState {
+        TableState {
+            id: 0,
+            config: TableConfig {
+                small_blind: 1,
+                big_blind: 2,
+                min_buy_in: 10,
+                max_buy_in: 1000,
+                max_players: 6,
+                action_timeout_secs: 30,
+                ante: 0,
+                time_bank_secs: 30,
+                currency: Currency::ICP,
+            },
+            players: (0..6).map(|_| None).collect(),
+            community_cards: Vec::new(),
+            deck: Vec::new(),
+            deck_index: 0,
+            pot: 0,
+            side_pots: Vec::new(),
+            current_bet: 0,
+            min_raise: 2,
+            phase,
+            dealer_seat: 0,
+            small_blind_seat: 0,
+            big_blind_seat: 1,
+            action_on: 0,
+            action_timer: None,
+            shuffle_proof: None,
+            hand_number: 1,
+            last_aggressor: None,
+            bb_has_option: false,
+            first_hand: false,
+            auto_deal_at: None,
+            last_action: None,
+            departed_stakes: None,
+        }
+    }
+
+    fn seat(chips: u64, status: PlayerStatus, last_seen: u64) -> Player {
+        Player {
+            principal: Principal::anonymous(),
+            seat: 0,
+            chips,
+            hole_cards: None,
+            current_bet: 0,
+            total_bet_this_hand: 0,
+            has_folded: false,
+            has_acted_this_round: false,
+            is_all_in: false,
+            status,
+            last_seen,
+            timeout_count: 0,
+            time_bank_remaining: 0,
+            is_sitting_out_next_hand: false,
+            broke_at: None,
+            sitting_out_since: None,
+        }
+    }
+
+    #[test]
+    fn an_empty_table_has_nothing_to_wake_for() {
+        let st = bare_table(GamePhase::WaitingForPlayers);
+        assert_eq!(next_wake_deadline(&st, NOW), None);
+    }
+
+    #[test]
+    fn the_action_clock_is_scheduled_one_nanosecond_past_expiry() {
+        // `resolve_expired_action_timer` fires on `now > expires_at`, so waking AT
+        // the expiry would do nothing and re-arm, which is the spin loop.
+        let mut st = bare_table(GamePhase::PreFlop);
+        st.action_timer = Some(ActionTimer {
+            player_seat: 0,
+            started_at: NOW,
+            expires_at: NOW + 30 * SEC,
+            using_time_bank: false,
+        });
+        assert_eq!(next_wake_deadline(&st, NOW), Some(NOW + 30 * SEC + 1));
+    }
+
+    #[test]
+    fn the_earliest_deadline_wins() {
+        let mut st = bare_table(GamePhase::PreFlop);
+        st.action_timer = Some(ActionTimer {
+            player_seat: 0,
+            started_at: NOW,
+            expires_at: NOW + 30 * SEC,
+            using_time_bank: false,
+        });
+        // An Active seat last seen 80 s ago is 10 s from the disconnect threshold,
+        // which is sooner than the action clock.
+        st.players[1] = Some(seat(
+            100,
+            PlayerStatus::Active,
+            NOW - (DISCONNECT_TIMEOUT_SECS - 10) * SEC,
+        ));
+        assert_eq!(
+            next_wake_deadline(&st, NOW),
+            Some(NOW + 10 * SEC + 1),
+            "the schedule must be the MINIMUM of every pending deadline, not the first one found"
+        );
+    }
+
+    /// **THE ANTI-SPIN PROPERTY.** Crossing `auto_deal_at` on a table that CAN deal
+    /// changes nothing: `advance_table_clock` returns `AutoDealReady` and leaves the
+    /// field set, so the same deadline is due again immediately. Scheduling it would
+    /// re-arm at the floor forever, burning ~15.4M cycles a second on a table that is
+    /// merely waiting for a client to call `start_new_hand`.
+    #[test]
+    fn auto_deal_is_not_scheduled_when_the_table_could_actually_deal() {
+        let mut st = bare_table(GamePhase::HandComplete);
+        st.players[0] = Some(seat(100, PlayerStatus::Active, NOW));
+        st.players[1] = Some(seat(100, PlayerStatus::Active, NOW));
+        st.auto_deal_at = Some(NOW + 3 * SEC);
+        assert_eq!(
+            next_wake_deadline(&st, NOW),
+            Some(NOW + DISCONNECT_TIMEOUT_SECS * SEC + 1),
+            "the only thing due here is the disconnect threshold; auto-deal must not be scheduled"
+        );
+    }
+
+    /// The other half of the same rule: when crossing it CLEARS the field, it is a
+    /// real one-time state change and must be scheduled.
+    #[test]
+    fn auto_deal_is_scheduled_when_crossing_it_would_clear_it() {
+        let mut st = bare_table(GamePhase::HandComplete);
+        st.players[0] = Some(seat(100, PlayerStatus::Active, NOW));
+        st.auto_deal_at = Some(NOW + 3 * SEC);
+        assert_eq!(next_wake_deadline(&st, NOW), Some(NOW + 3 * SEC));
+    }
+
+    /// A deadline ALREADY in the past is not scheduled, and that is deliberate.
+    ///
+    /// An action clock that is past its expiry and still there means the last
+    /// attempt to resolve it did not commit -- on this canister, that means it
+    /// TRAPPED. Re-arming at the one-second floor would retry it once a second
+    /// forever at ~15.4M cycles a go. The watchdog retries it every 30 s instead,
+    /// which is the right pacing for a retry, and `clock_should_abandon` refunds
+    /// the hand once the grace period is up.
+    #[test]
+    fn an_already_missed_deadline_is_left_to_the_watchdog_rather_than_spun_on() {
+        let mut st = bare_table(GamePhase::PreFlop);
+        st.action_timer = Some(ActionTimer {
+            player_seat: 0,
+            started_at: NOW - 100 * SEC,
+            expires_at: NOW - 70 * SEC,
+            using_time_bank: false,
+        });
+        // The expiry is past; the stuck-hand threshold is still ahead, and that is
+        // the only thing left to aim at.
+        assert_eq!(
+            next_wake_deadline(&st, NOW),
+            Some(NOW - 70 * SEC + STUCK_HAND_GRACE_NS + 1)
+        );
+    }
+
+    /// The clock's automatic refund is strictly narrower than the manual one.
+    #[test]
+    fn the_clock_refuses_the_no_clock_branch_that_abandon_stuck_hand_accepts() {
+        let st = bare_table(GamePhase::Flop); // live hand, no action timer at all
+        assert!(
+            hand_is_stuck(&st, NOW),
+            "the manual door stays open for a live hand with no clock"
+        );
+        assert!(
+            !clock_should_abandon(&st, NOW),
+            "the automatic door must NOT act on the branch whose truth conditions are not \
+             fully understood; see clock_should_abandon"
+        );
+    }
+
+    #[test]
+    fn the_clock_takes_the_expired_clock_branch_after_the_grace_period() {
+        let mut st = bare_table(GamePhase::Turn);
+        st.action_timer = Some(ActionTimer {
+            player_seat: 0,
+            started_at: 0,
+            expires_at: NOW,
+            using_time_bank: false,
+        });
+        assert!(!clock_should_abandon(&st, NOW + STUCK_HAND_GRACE_NS));
+        assert!(clock_should_abandon(&st, NOW + STUCK_HAND_GRACE_NS + 1));
+    }
+
+    #[test]
+    fn a_finished_hand_is_never_abandonable_by_the_clock() {
+        for phase in [GamePhase::WaitingForPlayers, GamePhase::HandComplete] {
+            let mut st = bare_table(phase);
+            st.action_timer = Some(ActionTimer {
+                player_seat: 0,
+                started_at: 0,
+                expires_at: 0,
+                using_time_bank: false,
+            });
+            assert!(!clock_should_abandon(&st, u64::MAX));
+        }
+    }
 }
 
 /// Player heartbeat to show they're connected
@@ -5766,7 +7675,7 @@ fn sit_in() -> Result<(), String> {
                 // Check if we should trigger auto-deal
                 if state.phase == GamePhase::WaitingForPlayers || state.phase == GamePhase::HandComplete {
                     let active_count = state.players.iter()
-                        .filter(|p| p.as_ref().map(|p| p.status == PlayerStatus::Active && p.chips > 0).unwrap_or(false))
+                        .filter(|p| p.as_ref().map(will_be_dealt_in).unwrap_or(false))
                         .count();
 
                     if active_count >= 2 && state.auto_deal_at.is_none() {
@@ -5809,7 +7718,7 @@ fn use_time_bank() -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
     let now = ic_cdk::api::time();
 
-    TABLE.with(|t| {
+    let out = TABLE.with(|t| {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
 
@@ -5850,7 +7759,12 @@ fn use_time_bank() -> Result<u64, String> {
         });
 
         Ok(0) // Time bank is now depleted
-    })
+    });
+    // The clock this just extended is the one the on-chain wake is aimed at.
+    if out.is_ok() {
+        schedule_next_wake();
+    }
+    out
 }
 
 /// Voluntarily show your hole cards to the table
@@ -6088,6 +8002,11 @@ fn get_table_view() -> Option<TableView> {
             can_raise,
             min_bet: state.config.big_blind,
             last_action: state.last_action.clone(),
+            // FINDING 18. Computed for the CALLER, not for `my_seat`: a player
+            // who has left still has a stake in the hand and no seat at all, and
+            // that is precisely the case every other field here goes blank for.
+            my_committed_in_pot: committed_stake_of(state, caller),
+            hand_is_unmovable: hand_is_stuck(state, now),
         })
     })
 }
@@ -6885,6 +8804,21 @@ fn post_upgrade() {
             names.insert(k, v);
         }
     });
+
+    // ------------------------------------------------------------------------
+    // RE-ARM THE CLOCK. LAST, AND NOT OPTIONAL.
+    //
+    // Timers are not persisted across canister upgrades: the CDK's task queue is
+    // heap, and the system's global-timer field is cleared. An upgrade that skips
+    // this leaves a canister that still holds every player's money, still holds a
+    // live hand, and has silently lost the only thing on chain that can move it --
+    // and nothing about it looks wrong from outside. `get_cycle_status().clock_ticks`
+    // staying at 0 is how you would find out; `tests/money_safety/tests/timers.rs`
+    // is how this build proves it does not happen.
+    //
+    // Last, so it schedules against the state that was actually restored above.
+    // ------------------------------------------------------------------------
+    start_clock();
 }
 
 // ============================================================================
@@ -8351,5 +10285,217 @@ mod stuck_hand_tests {
         let plan = refund_every_stake(&st);
         assert!(plan.conserves());
         assert_eq!(plan.awarded, 5);
+    }
+
+    // ---------------------------------------------------------------------
+    // CUSTODY VISIBILITY (docs/SECURITY-FINDINGS.md FINDING 18)
+    // ---------------------------------------------------------------------
+    //
+    // These pin the MECHANISM the two exit doors use, at host speed, with no
+    // replica and no clock. They exist because on a tree that also carries the
+    // on-chain clock (FINDING 19) the replica fixture can be satisfied by the
+    // clock's 30-second watchdog instead of by the exit door, and a gate that
+    // another fix can satisfy is a gate that stops convicting when the code it
+    // names is deleted.
+
+    fn funded_seat(principal: u8, seat: u8, chips: u64, staked: u64) -> Player {
+        Player {
+            principal: Principal::from_slice(&[principal]),
+            seat,
+            chips,
+            hole_cards: None,
+            current_bet: 0,
+            total_bet_this_hand: staked,
+            has_folded: false,
+            has_acted_this_round: false,
+            is_all_in: chips == 0,
+            status: PlayerStatus::Active,
+            last_seen: 0,
+            timeout_count: 0,
+            time_bank_remaining: 0,
+            is_sitting_out_next_hand: false,
+            broke_at: None,
+            sitting_out_since: None,
+        }
+    }
+
+    /// The whole of FINDING 18 in one assertion: a stake is counted for its OWNER
+    /// whether or not that owner still has a chair.
+    #[test]
+    fn committed_stake_counts_a_stake_whose_seat_is_already_gone() {
+        let alice = Principal::from_slice(&[1]);
+        let bob = Principal::from_slice(&[2]);
+        let mut st = table_at(GamePhase::PreFlop, timer_expiring_at(30 * SEC));
+        st.players[0] = Some(funded_seat(1, 0, 100, 40));
+        st.pot = 100;
+        let hand = st.hand_number;
+        st.departed_stakes_mut().push(DepartedStake {
+            hand_number: hand,
+            seat: 1,
+            principal: bob,
+            contributed: 60,
+        });
+
+        assert_eq!(committed_stake_of(&st, alice), 40, "the seated stake");
+        assert_eq!(
+            committed_stake_of(&st, bob),
+            60,
+            "the stake of a seat that has already been vacated -- the figure every \
+             caller-scoped surface used to report as zero"
+        );
+
+        // A stale entry from an earlier hand can never be counted into this one.
+        st.departed_stakes_mut().push(DepartedStake {
+            hand_number: hand - 1,
+            seat: 2,
+            principal: bob,
+            contributed: 999,
+        });
+        assert_eq!(committed_stake_of(&st, bob), 60, "an earlier hand is not this hand");
+
+        // And once the hand is over there is nothing committed: the money is in a
+        // stack or an escrow balance, both of which the ordinary surfaces report.
+        st.phase = GamePhase::HandComplete;
+        assert_eq!(committed_stake_of(&st, alice), 0);
+        assert_eq!(committed_stake_of(&st, bob), 0);
+    }
+
+    /// The exit doors' mechanism: every stake goes back to the principal that put
+    /// it in -- INCLUDING a departed one, which lands in escrow -- and the hand is
+    /// closed.
+    #[test]
+    fn settling_an_unmovable_hand_returns_every_stake_to_its_owner() {
+        let alice = Principal::from_slice(&[1]);
+        let bob = Principal::from_slice(&[2]);
+        BALANCES.with(|b| b.borrow_mut().clear());
+
+        let mut st = table_at(GamePhase::PreFlop, None);
+        st.players[0] = Some(funded_seat(1, 0, 100, 40));
+        let hand = st.hand_number;
+        st.departed_stakes_mut().push(DepartedStake {
+            hand_number: hand,
+            seat: 1,
+            principal: bob,
+            contributed: 60,
+        });
+        st.pot = 100;
+
+        let refunded = settle_unmovable_hand(&mut st, 42, UnmovableReason::AnExitDoorFoundItUnmovable)
+            .expect("a conserving refund plan must be acted on");
+
+        assert_eq!(refunded, 100, "every e8 collected is handed back");
+        assert_eq!(
+            st.players[0].as_ref().unwrap().chips,
+            140,
+            "the seated owner's stake goes back into their stack"
+        );
+        assert_eq!(
+            BALANCES.with(|b| b.borrow().get(&bob).copied().unwrap_or(0)),
+            60,
+            "the departed owner's stake goes to THEIR escrow, not to whoever holds the seat"
+        );
+        assert_eq!(
+            BALANCES.with(|b| b.borrow().get(&alice).copied().unwrap_or(0)),
+            0,
+            "and not to anybody else"
+        );
+        assert_eq!(st.pot, 0);
+        assert_eq!(st.phase, GamePhase::HandComplete);
+        assert!(st.departed_stakes().is_empty(), "the hand is closed out");
+        BALANCES.with(|b| b.borrow_mut().clear());
+    }
+
+    /// It must never trap, because it runs INSIDE `cash_out` and `leave_table`
+    /// and a trap there rolls back the exit the player was taking -- FINDING 15
+    /// re-created by the fix for FINDING 18.
+    ///
+    /// # This test does NOT claim to have reached the guard
+    ///
+    /// It could not, and that is the finding it records. `refund_every_stake`
+    /// derives `awarded` and `collected` from the SAME list of stakes, so
+    /// `conserves()` is true by construction, and no state this test could build
+    /// -- saturating stakes, two stakes at one seat, a stake with no seat, zero
+    /// stakes -- made it false. Writing a test that pretends otherwise (build a
+    /// hostile state, watch it not trap, call it proof) is exactly the kind of
+    /// instrument this project keeps finding to be blind.
+    ///
+    /// So what is asserted is the reason the guard is unreachable: the plan
+    /// conserves for every one of those states. The guard itself is deliberate
+    /// belt-and-braces -- it makes "the exit door cannot trap" a property of
+    /// `settle_unmovable_hand`, rather than a property inherited from a
+    /// construction somewhere else that a later change could break silently.
+    #[test]
+    fn the_refund_plan_conserves_for_every_state_the_exit_doors_can_meet() {
+        let bob = Principal::from_slice(&[2]);
+        let cases: Vec<(&str, TableState)> = vec![
+            ("empty table, live hand", table_at(GamePhase::PreFlop, None)),
+            (
+                "one seat, saturating stake",
+                {
+                    let mut st = table_at(GamePhase::Turn, None);
+                    st.players[0] = Some(funded_seat(1, 0, 0, u64::MAX));
+                    st
+                },
+            ),
+            (
+                "two saturating stakes",
+                {
+                    let mut st = table_at(GamePhase::River, None);
+                    st.players[0] = Some(funded_seat(1, 0, 0, u64::MAX));
+                    st.players[1] = Some(funded_seat(2, 1, 0, u64::MAX));
+                    st
+                },
+            ),
+            (
+                "a departed stake at a re-occupied seat (E-36)",
+                {
+                    let mut st = table_at(GamePhase::Flop, None);
+                    st.players[1] = Some(funded_seat(3, 1, 10, 7));
+                    let hand = st.hand_number;
+                    st.departed_stakes_mut().push(DepartedStake {
+                        hand_number: hand,
+                        seat: 1,
+                        principal: bob,
+                        contributed: 11,
+                    });
+                    st
+                },
+            ),
+            (
+                "everybody in for zero",
+                {
+                    let mut st = table_at(GamePhase::PreFlop, None);
+                    st.players[0] = Some(funded_seat(1, 0, 10, 0));
+                    st.players[1] = Some(funded_seat(2, 1, 10, 0));
+                    st
+                },
+            ),
+        ];
+
+        for (name, st) in cases {
+            let plan = refund_every_stake(&st);
+            assert!(
+                plan.conserves(),
+                "{name}: refund plan awards {} of {} collected, so settle_unmovable_hand would \
+                 DECLINE to settle and the stakes would stay in the pot",
+                plan.awarded,
+                plan.collected
+            );
+        }
+    }
+
+    /// A hand that is not live has nothing to settle, whichever door asks.
+    #[test]
+    fn settling_a_finished_hand_is_a_no_op() {
+        let mut st = table_at(GamePhase::HandComplete, None);
+        assert_eq!(
+            settle_unmovable_hand(&mut st, 42, UnmovableReason::NobodyLeftToWinIt),
+            None
+        );
+        let mut st = table_at(GamePhase::WaitingForPlayers, None);
+        assert_eq!(
+            settle_unmovable_hand(&mut st, 42, UnmovableReason::NoMessageCanMoveIt),
+            None
+        );
     }
 }

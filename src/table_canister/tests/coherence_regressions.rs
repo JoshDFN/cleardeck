@@ -80,9 +80,18 @@ fn player(seat: u8, chips: u64) -> Player {
 }
 
 fn flop_table(stacks: &[u64], now: u64) -> TableState {
+    // Every seat in a live betting round holds cards. These used to be built with
+    // `hole_cards: None` while `deck_index` was already past `2 * stacks.len()`
+    // hole cards, so the fixture's own accounting said they had been dealt in and
+    // the seats said they had not. It passed only because `is_in_hand` accepted a
+    // cardless `Active` seat, which is docs/SECURITY-FINDINGS.md FINDING 17.
+    // Same correction as `tests/betting_rules.rs`.
+    let deck = poker_core::create_deck();
     let mut players: Vec<Option<Player>> = Vec::new();
     for (i, chips) in stacks.iter().enumerate() {
-        players.push(Some(player(i as u8, *chips)));
+        let mut p = player(i as u8, *chips);
+        p.hole_cards = Some((deck[2 * i], deck[2 * i + 1]));
+        players.push(Some(p));
     }
     while players.len() < 6 {
         players.push(None);

@@ -536,3 +536,114 @@ fn every_mirrored_constant_lives_inside_the_fence() {
         );
     }
 }
+
+// ===========================================================================
+// THE OUTSTANDING-STAKE SURFACE (docs/SECURITY-FINDINGS.md FINDING 18)
+// ===========================================================================
+//
+// Same shape of gate as the mirrored limits above, and it exists for the same
+// reason: the canister can be right while the screen a player reads is silent.
+// FINDING 18 was exactly that -- money in a pot, `get_balance() -> 0`, and no
+// surface between the two. These read the two money screens as TEXT, so they cost
+// no replica and no browser, and they fail if the surface is edited away.
+//
+// They deliberately assert on the CALL and the FIELD rather than on any wording:
+// copy is the frontend's to change, and a test that pins prose is a test that gets
+// deleted the first time somebody rewrites a sentence.
+
+fn table_component_source(name: &str) -> String {
+    read(&repo_root()
+        .join("src/cleardeck_frontend/src/lib/components")
+        .join(name))
+}
+
+#[test]
+fn the_withdraw_screen_asks_the_canister_what_else_it_is_holding() {
+    let src = modal_source("WithdrawModal.svelte");
+    for needle in [
+        // The query that answers "what else of mine is in there".
+        "get_custody_status",
+        // The figure it exists to show.
+        "committed_in_pot",
+        // The recovery the canister's own advice names, reachable from this screen.
+        "abandon_stuck_hand",
+    ] {
+        assert!(
+            src.contains(needle),
+            "WithdrawModal.svelte no longer mentions `{needle}`. This is the last screen a \
+             leaving player looks at, and docs/SECURITY-FINDINGS.md FINDING 18 is what happens \
+             when it shows only get_balance(): an auditor read 0, withdrew \"everything\", and \
+             left 2.98 ICP in a pot."
+        );
+    }
+}
+
+#[test]
+fn the_table_screen_shows_a_stake_that_is_still_in_the_pot() {
+    let src = table_component_source("PokerTable.svelte");
+    assert!(
+        src.contains("my_committed_in_pot"),
+        "PokerTable.svelte no longer reads `my_committed_in_pot` from the table view. That field \
+         exists so the call every client already polls carries the player's own stake; dropping \
+         it puts the player back where FINDING 18 found them."
+    );
+    assert!(
+        src.contains("hand_is_unmovable"),
+        "PokerTable.svelte no longer reads `hand_is_unmovable`, so it cannot tell a player the \
+         difference between money that is contested and money nobody can win."
+    );
+}
+
+/// The one line that locked the auditor out of the screen that would have told
+/// them: `disabled={tableBalance <= 0}` on the Withdraw button, on a player whose
+/// escrow read zero BECAUSE their 2.98 ICP was in a pot.
+#[test]
+fn the_withdraw_button_opens_when_the_only_money_left_is_in_a_pot() {
+    let src = table_component_source("PokerTable.svelte");
+    assert!(
+        !src.contains("onclick={onShowWithdraw} disabled={tableBalance <= 0}"),
+        "the Withdraw button is disabled on `tableBalance <= 0` alone again. A player whose \
+         balance is zero BECAUSE their stake is in a pot is exactly the player who needs that \
+         dialog: it is where the stake and its recovery button are. FINDING 18."
+    );
+    assert!(
+        src.contains("tableBalance <= 0 && myCommittedInPot <= 0"),
+        "PokerTable.svelte must open the withdraw dialog whenever a stake is outstanding, even \
+         with a zero balance. FINDING 18."
+    );
+}
+
+/// Neither surface may be an overlay. HARD RULE 2: nothing in this app may cover
+/// the unaudited-alpha disclaimer, the 18+ notice, the jurisdiction warning or the
+/// no-rake property, and E-52 is the wave-6 measurement of the app's own toast
+/// doing precisely that at 9 of 9 sample points.
+#[test]
+fn the_outstanding_stake_surface_cannot_cover_the_protected_notices() {
+    for (file, blocks) in [
+        (
+            "WithdrawModal.svelte",
+            vec![".committed-stake", ".recover-btn", ".committed-unknown"],
+        ),
+        ("PokerTable.svelte", vec![".wallet-committed"]),
+    ] {
+        let src = table_component_source(file);
+        for selector in blocks {
+            let Some(start) = src.find(&format!("{selector} {{")) else {
+                panic!("{file}: the custody surface rule `{selector}` is gone");
+            };
+            let end = src[start..]
+                .find('}')
+                .map(|e| start + e)
+                .unwrap_or(src.len());
+            let rule = &src[start..end];
+            for forbidden in ["position: fixed", "position: absolute", "z-index"] {
+                assert!(
+                    !rule.contains(forbidden),
+                    "{file}: `{selector}` uses `{forbidden}`. The outstanding-stake surface is \
+                     rendered in the document flow precisely so it can never sit on top of the \
+                     four player-protection notices (HARD RULE 2, docs/DEFECTS.md E-52).\n{rule}"
+                );
+            }
+        }
+    }
+}

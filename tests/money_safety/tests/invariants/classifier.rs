@@ -146,6 +146,9 @@ fn never_excusable_severities_block_even_on_a_registered_check() {
         Severity::DurabilityLoss,
         Severity::SelfReportedFailure,
         Severity::Misattribution,
+        // docs/SECURITY-FINDINGS.md FINDING 07.
+        Severity::FundsUnreachable,
+        Severity::OrphanedCustody,
     ] {
         let v = violation(
             Invariant::M1Conservation,
@@ -223,29 +226,35 @@ fn the_formerly_enumerated_bug_line_now_blocks_too() {
     assert_eq!(vs[0].severity, Severity::SelfReportedFailure);
     assert_eq!(reason(&vs[0]), BlockingReason::NeverExcusable);
     // The tolerated list must contain exactly the lines a DOCUMENTED open defect
-    // produces, and nothing else. It was empty until the coherence pass, which is
-    // the right default; the one entry names E-36. When E-36 is fixed the entry
-    // goes with it and this drops back to zero.
-    assert_eq!(
-        documented::TOLERATED_SELF_REPORTS,
-        ["carries both a live stake and a departed stake"],
-        "the tolerated-self-report list changed. Every entry must name an OPEN defect in \
-         docs/DEFECTS.md and must be deleted when that defect is fixed; adding one is \
-         admitting a money-path defect is shipping."
+    // produces, and nothing else. It is EMPTY, which is the goal state: it held one
+    // entry for E-36 through wave 6 and that entry went when E-36 was fixed
+    // (docs/SECURITY-FINDINGS.md FINDING 17).
+    assert!(
+        documented::TOLERATED_SELF_REPORTS.is_empty(),
+        "the tolerated-self-report list is no longer empty: {:?}. Every entry must name an \
+         OPEN defect in docs/DEFECTS.md and must be deleted when that defect is fixed; \
+         adding one is admitting a money-path defect is shipping.",
+        documented::TOLERATED_SELF_REPORTS
     );
 }
 
-/// E-36's dual-stake line is TOLERATED, not invisible.
+/// E-36's dual-stake line is no longer tolerated, and never was invisible.
 ///
-/// The payout fix wrote it as `WARNING:` rather than `CRITICAL:`, which is a
+/// The wave-2 payout fix wrote it as `WARNING:` rather than `CRITICAL:`, which is a
 /// defensible severity -- nothing about the engine's accounting is inconsistent
 /// there -- but `check_self_reported_inconsistency` matched neither, so 296
 /// occurrences of a real open defect executing against the real canister were
 /// reported as `0 documented finding(s)` in a 1,200-step fuzz run. Tolerance living
 /// in a string the classifier does not read is exactly the H-03 pathology this
 /// module exists to prevent. docs/DEFECTS.md H-20.
+///
+/// E-36 is now FIXED (docs/SECURITY-FINDINGS.md FINDING 17): a mid-hand arrival is
+/// never dealt the action, so it can never put money into a hand it holds no cards
+/// in, so no chair can carry two owners' live stakes. The engine STILL CONTAINS the
+/// line -- deliberately, as a tripwire -- and it is no longer excused, so emitting
+/// it would stop a run. This test asserts that.
 #[test]
-fn a_warning_line_is_a_finding_and_e36s_is_a_tolerated_one() {
+fn e36s_dual_stake_line_is_no_longer_excused_and_would_block() {
     let logs = vec![
         "WARNING: seat 2 carries both a live stake and a departed stake in hand 6 \
          (the chair was re-occupied mid-hand, docs/DEFECTS.md E-36)."
@@ -255,8 +264,14 @@ fn a_warning_line_is_a_finding_and_e36s_is_a_tolerated_one() {
     assert_eq!(vs.len(), 1, "a WARNING: line must not be invisible");
     assert_eq!(
         vs[0].severity,
-        Severity::BreakdownDrift,
-        "E-36 is named in the register, so it is counted rather than blocking"
+        Severity::SelfReportedFailure,
+        "nothing excuses this line any more: E-36 is fixed, so the state it reports is \
+         supposed to be unreachable and reaching it is a NEW defect"
+    );
+    assert_eq!(
+        reason(&vs[0]),
+        BlockingReason::NeverExcusable,
+        "and it must STOP a run rather than be counted"
     );
 }
 

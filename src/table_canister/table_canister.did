@@ -189,6 +189,49 @@ type StuckHandStatus = record {
   abandonable_in_ns : opt nat64;
   refundable_pot : nat64;
 };
+// Everything this canister is holding for ONE caller, including the part that is
+// not in their withdrawable balance. get_balance() answers only "what can I
+// withdraw right now", which is why an auditor read 0 while 2.98 ICP of theirs
+// was in a pot. docs/SECURITY-FINDINGS.md FINDING 18.
+type CustodyStatus = record {
+  // Withdrawable now: the same figure get_balance() returns.
+  escrow : nat64;
+  // Chips in front of you at the table.
+  chips_at_table : nat64;
+  // Your own money in the current hand's pot, INCLUDING the stake of a seat you
+  // have already left.
+  committed_in_pot : nat64;
+  // True when that hand can no longer be moved by any message.
+  committed_is_stuck : bool;
+  // Nanoseconds until it becomes abandonable; null when it already is.
+  abandonable_in_ns : opt nat64;
+  // escrow + chips_at_table + committed_in_pot.
+  total : nat64;
+  // What to do next, in words, naming abandon_stuck_hand when it is needed.
+  advice : text;
+};
+// How long this canister can keep answering update calls, and whether its
+// on-chain clock is running. docs/SECURITY-FINDINGS.md FINDING 19.
+type CycleStatus = record {
+  balance : nat;
+  // What can actually be SPENT: balance minus the freezing reserve. THIS is the
+  // number that reaches zero when deposit/withdraw/cash_out start being rejected.
+  liquid_balance : nat;
+  reserved_for_freezing : nat;
+  // Measured on this instance, not taken from a price list.
+  observed_burn_per_day : nat;
+  // null means the measurement window is too short to say, which is NOT the same
+  // as "plenty".
+  runway_days : opt nat64;
+  sample_window_secs : nat64;
+  measurement_is_meaningful : bool;
+  // Ticks the on-chain clock has run since this instance started. Zero on a
+  // canister that has been up for minutes means the clock is NOT running.
+  clock_ticks : nat64;
+  clock_last_tick_at : nat64;
+  clock_watchdog_armed : bool;
+  next_wake_at : opt nat64;
+};
 type Result_2 = variant { Ok : TableState; Err : text };
 type Result_3 = variant { Ok : record { Card; Card }; Err : text };
 type Result_4 = variant { Ok : ShuffleProof; Err : text };
@@ -263,6 +306,14 @@ type TableView = record {
   is_my_turn : bool;
   can_raise : bool;
   last_action : opt LastActionInfo;
+  // THE CALLER's own money in this pot: their seat's stake plus any stake
+  // recorded for a seat of theirs already vacated in this hand. Non-zero with
+  // `my_seat = null` means money of yours is in a hand you are no longer sitting
+  // in. docs/SECURITY-FINDINGS.md FINDING 18.
+  my_committed_in_pot : nat64;
+  // True when no message can move this hand, so nobody can win the pot and
+  // abandon_stuck_hand refunds every stake on request.
+  hand_is_unmovable : bool;
 };
 type TimeoutCheckResult = variant {
   AutoDealReady;
@@ -295,17 +346,45 @@ type UtxoOutpoint = record {
 service : (TableConfig) -> {
   // Add a controller (controller only)
   add_controller : (principal) -> (Result);
-  // Admin: Re-initialize the table (for recovery after upgrade issues)
+  // Admin: RECOVERY. Return every chip at the table to the escrow of the player
+  // who owns it, ABANDONING any hand in progress, and then rebuild the table with
+  // this configuration. Controller only.
+  //
+  // NOT a config-only call, and no longer a destructive one. Until 2026-08-05 this
+  // was byte-identical to reset_table and its comment here read "for recovery after
+  // upgrade issues": it replaced the table wholesale, so every seated player's chips
+  // ceased to exist -- not returned to escrow, not withdrawable, not recoverable by
+  // anybody including you. Measured live: 40.00000000 ICP destroyed by one call.
+  // It now returns the money first and refuses outright if any of the pot cannot be
+  // attributed to an owner. See docs/SECURITY-FINDINGS.md FINDING 07.
+  //
+  // If you only want to change the configuration, use reset_table (empty table) or
+  // admin_update_config (live table, between hands). Use this one when you need the
+  // table structure itself rebuilt and you accept that the hand in progress ends.
   admin_reinit_table : (TableConfig) -> (Result);
+  // Admin: RECOVERY, non-destructive. Return every chip at the table -- seated
+  // stacks and every stake in the live hand -- to the ESCROW of the player who owns
+  // it, and abandon the hand. Returns the total moved, in e8s/sats.
+  // Controller only. Conserving: it cannot create or destroy a single unit, it does
+  // not touch the ledger, and escrow only ever goes up. Refuses, changing nothing,
+  // if state.pot and the attributed stakes disagree (call abandon_stuck_hand first).
+  // This is the recovery step FINDING 07 needed and did not have.
+  admin_return_all_chips_to_escrow : () -> (Result_1);
   // Admin: Get balance for a specific player (controller only, read-only)
   admin_get_balance : (principal) -> (Result_1) query;
-  // REMOVED: admin_restore_balance - unnecessary attack surface
+  // REMOVED: admin_restore_balance - unnecessary attack surface. It could MINT
+  // escrow from nothing. admin_return_all_chips_to_escrow is not a replacement for
+  // it and is not the same shape: it only MOVES money the table already holds.
   // Admin: Get all balances (for auditing/recovery)
   // Returns (total_assigned, list of (principal, balance))
   admin_get_all_balances : () -> (variant { Ok : record { nat64; vec record { principal; nat64 } }; Err : text }) query;
   // Admin: Get total chips at table (seated players)
   admin_get_table_chips : () -> (Result_1) query;
-  // Admin: Update table configuration (controller only, not during a hand)
+  // Admin: Update table configuration (controller only, not during a hand).
+  // Refuses a change to `currency` while this canister still owes anybody
+  // anything: currency selects the LEDGER withdrawals are paid from, so changing
+  // it under funded balances makes every one of them unpayable.
+  // See docs/SECURITY-FINDINGS.md FINDING 20.
   admin_update_config : (TableConfig) -> (Result_5);
   // Buy into the table using your escrow balance
   buy_in : (nat8, nat64) -> (Result);
@@ -328,7 +407,10 @@ service : (TableConfig) -> {
   // Check if a player voluntarily showed their cards this hand
   did_player_show : (nat8) -> (bool) query;
   get_action_timer : () -> (opt ActionTimer) query;
-  // Get your current escrow balance
+  // Your WITHDRAWABLE escrow balance, and nothing else: it excludes the chips in
+  // front of you and any stake of yours still in a live pot, including a pot you
+  // have already left. Call get_custody_status for the whole answer.
+  // docs/SECURITY-FINDINGS.md FINDING 18.
   get_balance : () -> (nat64) query;
   get_community_cards : () -> (vec Card) query;
   // Get all controllers
@@ -373,7 +455,16 @@ service : (TableConfig) -> {
   reload : (nat64) -> (Result_1);
   // Remove a controller (controller only)
   remove_controller : (principal) -> (Result);
-  // Reset the table (controller only) - CAUTION: destroys all state
+  // Reset the table CONFIGURATION (controller only).
+  //
+  // REFUSES while any player has chips at the table or there is money in the pot,
+  // and tells you to call admin_return_all_chips_to_escrow (or admin_reinit_table)
+  // instead. It does NOT require escrow to be empty: escrow is a separate ledger
+  // this call provably never writes.
+  //
+  // Until 2026-08-05 the comment here read "CAUTION: destroys all state". It
+  // destroyed MONEY, not state: one call deleted every seated chip permanently.
+  // See docs/SECURITY-FINDINGS.md FINDING 07.
   reset_table : (TableConfig) -> (Result);
   // Set dev mode (controller only)
   set_dev_mode : (bool) -> (Result);
@@ -420,6 +511,17 @@ service : (TableConfig) -> {
   // Is this table holding a hand that no message can move, and can it be ended?
   // A query, so it answers even when every update on the settlement path fails.
   get_stuck_hand_status : () -> (StuckHandStatus) query;
+  // Everything the canister is holding for YOU, including money in a pot that
+  // get_balance cannot report. A client that shows a balance should call this.
+  // docs/SECURITY-FINDINGS.md FINDING 18.
+  get_custody_status : () -> (CustodyStatus) query;
+  // The cycles runway, and whether the on-chain clock is alive. Open to anybody,
+  // including anonymous callers: a canister below its freezing threshold rejects
+  // EVERY update call -- deposit, withdraw, cash_out, abandon_stuck_hand -- which
+  // is a total custody failure with no attacker, so the number that predicts it
+  // must not be privileged. There is deliberately no top-up method here yet; see
+  // docs/SECURITY-FINDINGS.md FINDING 19 for what one would need.
+  get_cycle_status : () -> (CycleStatus) query;
   // End a hand that no message can move and give every stake back to the player
   // who put it in. Anybody may call it; it refuses unless the hand's action clock
   // has been expired for 5 minutes, or the hand has no clock at all. Nobody wins:

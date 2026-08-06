@@ -4,26 +4,26 @@
 //! work it reconciled. These drive sequences none of the builders' own tests
 //! drive, and they are the evidence behind docs/WAVE-06.md.
 //!
-//! # THIS FILE IS NOT WIRED INTO ANY GATE, AND THAT IS A KNOWN HOLE
+//! # WHAT IS WIRED IN, AND WHAT IS NOT
 //!
 //! `scripts/dev.sh cmd_test` names its money-safety targets explicitly —
 //! `invariants`, `regressions`, `deposit_replay`, `ui_limits`, `fuzz` — precisely
 //! so that a target cannot go unrun by accident (docs/DEFECTS.md: `deposit_replay`
 //! carried the only proven fund-theft primitive in the project and was named by no
-//! make target for a whole wave). This file is deliberately NOT added to that list,
-//! because `probe2`/`probe4`/`probe5` currently RECORD defective behaviour rather
-//! than forbid it, and a target that passes while the defect is present teaches
-//! nobody anything.
+//! make target for a whole wave).
 //!
-//! **Wiring it in is part of closing the findings, not a separate chore:**
-//!
-//! * `probe1` is a genuine gate today and asserts. It could be added to
-//!   `cmd_test` as-is.
-//! * `probe4` becomes a gate the moment [FINDING 17](../../../docs/SECURITY-FINDINGS.md)
-//!   is fixed: invert its final assertion from "everyone got their buy-in back" to
-//!   "the fold-out winner was paid the pot", and it convicts the defect returning.
-//! * `probe5` becomes a gate the moment [FINDING 07](../../../docs/SECURITY-FINDINGS.md)
-//!   is fixed: assert that `reset_table` either refuses or conserves.
+//! * `probe1` is a genuine gate and asserts.
+//! * `probe4` is a genuine gate as of the FINDING 17 fix: it now asserts that the
+//!   fold-out winner IS paid the pot, and it goes RED if `is_in_hand` starts
+//!   accepting a cardless seat again. **This file is named by `cmd_test` for
+//!   `probe1` and `probe4`'s sake.**
+//! * `probe5` is a genuine gate as of the FINDING 07 fix. It used to PIN the
+//!   defect — it asserted that `reset_table` destroyed every seated chip and that
+//!   M9 stayed silent about it — and was `#[ignore]`d for that reason. It now
+//!   asserts that `reset_table` REFUSES, that `admin_reinit_table` CONSERVES, and
+//!   that the drain leaves nothing belonging to nobody. The `#[ignore]` is gone
+//!   with the pin, because leaving a marker pinned after its defect is fixed is
+//!   how a gate goes red for a whole wave and teaches everyone to ignore it.
 //!
 //! Run them by name:
 //!
@@ -158,24 +158,28 @@ fn probe1_the_auditors_lock_reached_by_real_silence() {
 // PROBE 4 — FINDING 17: the hand that is settled with NO live claim on it
 // ---------------------------------------------------------------------------
 
-/// **RECORDS A DEFECT. See docs/SECURITY-FINDINGS.md FINDING 17.**
+/// **A GATE. It convicts docs/SECURITY-FINDINGS.md FINDING 17 returning.**
 ///
-/// `is_in_hand` (participation) accepts a seat that is `Active` and holds NO
-/// CARDS; `live_claims` (eligibility) does not. `count_active_players(state) == 1`
-/// is what calls `end_hand_single_winner`, and the one seat it counts can be the
-/// cardless one — at which point `live_claims` is empty, `plan_payouts` takes its
-/// no-claimant branch, and every stake goes back to its funder.
+/// FINDING 17 was: `is_in_hand` (participation) accepted a seat that was `Active`
+/// and held NO CARDS; `live_claims` (eligibility) did not.
+/// `count_active_players(state) == 1` is what calls `end_hand_single_winner`, and
+/// the one seat it counted could be the cardless one — at which point `live_claims`
+/// was empty, `plan_payouts` took its no-claimant branch, and every stake went back
+/// to its funder, including the folders'. Measured here as a 52,000,000 e8 pot with
+/// all three seats ending on exactly their buy-in.
 ///
 /// **Nothing in this sequence is hostile.** A mid-hand arrival takes an empty
 /// chair and sits in (two ordinary `Ok` calls); one player folds (ordinary poker);
-/// and the LAST CARD-HOLDER — the seat that has just won by fold-out — is folded by
-/// its own action clock, which is exactly what this wave's headline fix now does to
-/// a dropped client.
+/// and the LAST CARD-HOLDER — the seat that has just won by fold-out — stops
+/// answering and its own action clock runs.
 ///
-/// When FINDING 17 is fixed, invert the final assertion: the fold-out winner must
-/// be paid the pot, and this becomes the gate that convicts the defect returning.
+/// The two predicates are now one function, so the hand settles the instant the
+/// folder folds and the fold-out winner is paid. **This test asserts the OUTCOME,
+/// not the totals:** the totals were exact while the defect was live. Restoring the
+/// `|| p.status == PlayerStatus::Active` disjunct on `is_in_hand` makes it RED at
+/// the `winner_stack > buy_in` assertion.
 #[test]
-fn probe4_finding_17_a_foldout_winner_loses_the_pot_to_their_own_clock() {
+fn probe4_finding_17_the_foldout_winner_is_paid_the_pot() {
     let world = World::new(TableConfig::six_max_icp(), &["alice", "bob", "carol"]);
     let alice = world.actor("alice");
     let bob = world.actor("bob");
@@ -235,24 +239,45 @@ fn probe4_finding_17_a_foldout_winner_loses_the_pot_to_their_own_clock() {
     let t = world.table_state();
     eprintln!("PROBE4 FINAL phase={:?} pot={}\n    {}", t.phase, t.pot, seats(&t));
     let stack = |seat: u8| t.player_at(seat).map(|p| p.chips).unwrap_or(0);
-    let winner_stack = if folder == alice { stack(1) } else { stack(0) };
+    let (winner_seat, folder_seat) = if folder == alice { (1u8, 0u8) } else { (0u8, 1u8) };
+    let winner_stack = stack(winner_seat);
+    let folder_stack = stack(folder_seat);
 
-    // THE DEFECT, PINNED. Everybody ends on exactly their buy-in: the hand was
-    // un-played, the folder was refunded, and the winner was paid nothing.
+    // THE OUTCOME, ASSERTED. The totals were EXACT while the defect was live —
+    // every seat ended on precisely its buy-in and M1 through M9 were silent — so
+    // an assertion about conservation cannot see this defect at all. What has to be
+    // true is who was paid.
+    assert!(
+        winner_stack > buy_in,
+        "FINDING 17 HAS RETURNED: seat {winner_seat} won a {pot} e8 pot by fold-out and came out \
+         of the hand on {winner_stack}, no better than its {buy_in} buy-in. Stacks were \
+         ({}, {}, {}). The likely cause is `is_in_hand` accepting a seat that holds no cards \
+         again: see docs/SECURITY-FINDINGS.md FINDING 17 and the \"WHO IS IN THE HAND\" section \
+         of src/table_canister/src/lib.rs.",
+        stack(0),
+        stack(1),
+        stack(2)
+    );
+    assert!(
+        folder_stack < buy_in,
+        "FINDING 17 HAS RETURNED: seat {folder_seat} FOLDED and got its stake back \
+         ({folder_stack} against a {buy_in} buy-in). A refund-everyone settlement happened on a \
+         hand somebody had won."
+    );
+    // The chair that arrived mid-hand staked nothing and can win nothing.
     assert_eq!(
-        (stack(0), stack(1), stack(2)),
-        (buy_in, buy_in, buy_in),
-        "FINDING 17 pin: if this no longer holds, the defect has been FIXED. Invert this \
-         assertion to `winner_stack > buy_in` and update docs/SECURITY-FINDINGS.md FINDING 17 \
-         and docs/DEFECTS.md E-36 in the same change."
+        stack(2),
+        buy_in,
+        "the mid-hand arrival staked nothing and must end exactly where it started"
     );
     assert_eq!(
-        winner_stack, buy_in,
-        "FINDING 17: the seat that won by fold-out was paid nothing for a {pot} e8 pot"
+        stack(0) + stack(1) + stack(2),
+        3 * buy_in,
+        "CONSERVATION: the outcome moved, the total must not have"
     );
     eprintln!(
-        "PROBE4 FINDING 17 REPRODUCED: a {pot} e8 pot was refunded to its funders, including \
-         the seat that FOLDED; the fold-out winner got nothing."
+        "PROBE4 OK: seat {winner_seat} won the fold-out and was paid ({buy_in} -> \
+         {winner_stack}); seat {folder_seat} folded and paid for it ({buy_in} -> {folder_stack})."
     );
 }
 
@@ -260,19 +285,30 @@ fn probe4_finding_17_a_foldout_winner_loses_the_pot_to_their_own_clock() {
 // PROBE 5 — FINDING 07: one controller call destroys every seated chip
 // ---------------------------------------------------------------------------
 
-/// **RECORDS A DEFECT. See docs/SECURITY-FINDINGS.md FINDING 07.**
+/// **A GATE SINCE 2026-08-05. It used to be the PIN for FINDING 07.**
 ///
-/// `reset_table` and `admin_reinit_table` have byte-identical bodies and both call
-/// `init_table_state`, which builds a fresh `TableState` with empty seats. Every
-/// seated chip ceases to exist: not returned to escrow, not withdrawable, and
-/// `admin_restore_balance` was deliberately removed so nobody can put it back.
+/// What it recorded: `reset_table` and `admin_reinit_table` had byte-identical
+/// bodies and both called `init_table_state`, which builds a fresh `TableState`
+/// with empty seats. Every seated chip ceased to exist — not returned to escrow,
+/// not withdrawable, and `admin_restore_balance` was deliberately removed so
+/// nobody could put it back. This test ASSERTED `chips_after == 0` and asserted
+/// that M9's drain still reported `fully_drained`, which was true and was the
+/// finding: `internal_total` counts what the canister SAYS it owes, and after the
+/// reset it said it owed nothing.
 ///
-/// The part that matters most for the harness: **M9's drain reports
-/// `fully_drained` afterwards**, because `internal_total` counts what the canister
-/// SAYS it owes and after the reset it says it owes nothing. Every invariant in
-/// this suite is silent while 4 ICP is destroyed.
+/// Both assertions are now inverted, exactly as the old comment instructed:
+/// *"becomes a gate the moment FINDING 07 is fixed: assert that `reset_table`
+/// either refuses or conserves."* It does both, because the two doors are no
+/// longer the same function — `reset_table` REFUSES while money is at the table,
+/// `admin_reinit_table` CONSERVES by paying every chip into its owner's escrow
+/// first — and the drain is now checked with `table_is_really_empty()`, which asks
+/// the LEDGER rather than the canister's own books.
+///
+/// The `#[ignore]` is gone with the pin. The wide coverage of the admin custody
+/// surface, including the sweep over every controller-callable method, is in
+/// `tests/admin_custody.rs`.
 #[test]
-fn probe5_finding_07_reset_table_destroys_every_seated_chip_and_m9_is_silent() {
+fn probe5_finding_07_reset_table_can_no_longer_destroy_a_seated_chip() {
     let world = World::new(TableConfig::six_max_icp(), &["alice", "bob"]);
     let alice = world.actor("alice");
     let bob = world.actor("bob");
@@ -292,43 +328,59 @@ fn probe5_finding_07_reset_table_destroys_every_seated_chip_and_m9_is_silent() {
             Err(e) => format!("REJECTED {e:?}"),
         }
     };
-    eprintln!("PROBE5 reset_table        -> {}", admin("reset_table"));
-    eprintln!("PROBE5 admin_reinit_table -> {}", admin("admin_reinit_table"));
+    let reset = admin("reset_table");
+    let reinit = admin("admin_reinit_table");
+    eprintln!("PROBE5 reset_table        -> {reset}");
+    eprintln!("PROBE5 admin_reinit_table -> {reinit}");
 
     let chips_after = world.chips_total();
     let held_after = world.ledger_balance(world.table, None);
+    let owed_after = world.snapshot().internal_total();
     eprintln!(
-        "PROBE5 chips {chips_before} -> {chips_after}; canister still holds {held_after} \
-         (was {held_before}); owed was {owed_before}"
+        "PROBE5 chips {chips_before} -> {chips_after}; canister holds {held_after} \
+         (was {held_before}); owed {owed_before} -> {owed_after}"
     );
 
-    // THE DEFECT, PINNED.
+    // THE GATE. Door one must refuse rather than delete.
+    assert!(
+        reset.contains("Err"),
+        "FINDING 07 HAS RETURNED: reset_table accepted a table holding {chips_before} e8s of \
+         seated chips. Its body must refuse while the table holds custody. Got: {reset}"
+    );
+
+    // Door two must conserve: the money moved out of the seats and into escrow,
+    // and the canister owes exactly as much as it did before.
     assert_eq!(
-        chips_after, 0,
-        "FINDING 07 pin: if reset_table now refuses or conserves, the defect has been FIXED. \
-         Assert that instead and update docs/SECURITY-FINDINGS.md FINDING 07."
+        owed_after, owed_before,
+        "FINDING 07 HAS RETURNED: the two admin calls changed what this canister owes players \
+         from {owed_before} to {owed_after} without paying anybody. reset={reset} reinit={reinit}"
     );
     assert_eq!(
         held_after, held_before,
-        "the canister still holds every e8 it held before; the chips did not leave, they \
-         stopped being owed to anybody"
+        "no money should have left the canister"
     );
 
-    // AND THE HARNESS DOES NOT NOTICE.
+    // AND THE HARNESS NOW NOTICES. `fully_drained()` was true here before the fix
+    // too -- that was the finding -- so the assertion is on the ledger-anchored
+    // verdict, not on the canister's own claim.
     let mut w = world;
     let report = reachability::drain(&mut w);
     assert!(
-        report.fully_drained(),
-        "unexpected: M9 caught this. If it now does, say so in FINDING 07."
+        report.table_is_really_empty(),
+        "PROBE5: after the two admin calls the table could not be emptied honestly. owed_after={} \
+         orphaned={} (money inside a canister that owes it to nobody).\n  {}",
+        report.owed_after,
+        report.orphaned_e8s(),
+        report.log.join("\n  ")
     );
-    let unreachable = held_before.saturating_sub(report.returned_to_wallets.values().sum::<u64>());
+    let returned: u64 = report.returned_to_wallets.values().sum();
     eprintln!(
-        "PROBE5 FINDING 07 REPRODUCED: M9 reports fully_drained, and {unreachable} e8s \
-         ({} ICP) are inside a canister that owes them to nobody.",
-        unreachable as f64 / ICP as f64
+        "PROBE5 FINDING 07 CLOSED: reset_table refused, admin_reinit_table conserved, and \
+         {returned} e8s ({} ICP) reached real wallets with nothing left belonging to nobody.",
+        returned as f64 / ICP as f64
     );
     assert!(
-        unreachable >= chips_before,
-        "at least the destroyed chips must be unreachable; got {unreachable}"
+        returned >= chips_before,
+        "at least the once-destroyed chips must reach a wallet; got {returned}"
     );
 }

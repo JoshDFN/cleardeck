@@ -103,6 +103,56 @@ export function pageFaults(page) {
 }
 
 /**
+ * Drops CONSOLE lines a scene deliberately caused, and returns what it dropped.
+ *
+ * THE ONLY LEGITIMATE USE IS A SCENE THAT BREAKS SOMETHING ON PURPOSE, and
+ * `toast-notices` is the only such scene: it aborts every canister call at the
+ * network layer so the app raises its own error toast. The app then behaves
+ * CORRECTLY -- `loadTables()` catches the rejection and calls
+ * `logger.error('Failed to load tables: ...')` -- but the transport's message
+ * quotes the words "TypeError: Failed to fetch", and `UNCAUGHT_CONSOLE` matches
+ * `/\b(Type|Reference|...)Error\b/` anywhere in the text. So a handled failure,
+ * logged on purpose, was classified as an escaped throw. This module's own
+ * doc comment says that must not happen; this is how that promise is kept
+ * without loosening the pattern for every other scene.
+ *
+ * THREE THINGS THIS DELIBERATELY WILL NOT DO:
+ *   1. It never touches `pageErrors`. Those are real uncaught exceptions and
+ *      the rule above them stands: no allowlist, and there is not going to be
+ *      one. If the pattern matches one, this THROWS rather than dropping it.
+ *   2. It takes an explicit pattern and an explicit reason, and returns the
+ *      lines it removed so the caller can put them in the manifest. An excuse
+ *      nobody can read is indistinguishable from a bug nobody noticed.
+ *   3. It is not reachable from run.mjs and no scene gets it by default.
+ *
+ * @param {object} page
+ * @param {RegExp} pattern lines to forgive
+ * @param {string} reason recorded by the caller, required
+ * @returns {{forgiven: string[], reason: string}}
+ */
+export function forgetConsoleFaults(page, pattern, reason) {
+  if (!(pattern instanceof RegExp)) throw new Error('forgetConsoleFaults needs a RegExp');
+  if (!reason || typeof reason !== 'string') {
+    throw new Error('forgetConsoleFaults needs a written reason; it goes in the manifest');
+  }
+  const w = watchersFor(page);
+  if (!w) return { forgiven: [], reason };
+  const offendingPageError = w.pageErrors.find((e) => pattern.test(String(e)));
+  if (offendingPageError) {
+    throw new Error(
+      'REFUSING to forgive an uncaught EXCEPTION. forgetConsoleFaults only ever applies to '
+      + `console lines; \`pageErrors\` has no allowlist. Offender: ${offendingPageError}`,
+    );
+  }
+  const forgiven = w.consoleErrors.filter((e) => pattern.test(String(e)));
+  for (const line of forgiven) {
+    const i = w.consoleErrors.indexOf(line);
+    if (i >= 0) w.consoleErrors.splice(i, 1);
+  }
+  return { forgiven, reason };
+}
+
+/**
  * Throws if the page logged an uncaught error. Call before publishing any
  * artifact derived from it.
  *

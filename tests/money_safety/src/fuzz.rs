@@ -25,9 +25,11 @@ use std::collections::BTreeMap;
 use crate::actions::{apply, Act, Op, StepResult};
 use crate::hand_attribution::HandAttributionWatch;
 use crate::invariants::reachability;
+use crate::invariants::outcome::{check_hand_outcome, OutcomeCoverage, OutcomeWatch};
 use crate::invariants::{
-    check_hand_attribution, check_hand_payout_total, check_no_rake, check_no_settlement_trap,
-    check_point_in_time, check_self_reported_inconsistency, check_upgrade_durability, Violation,
+    check_custody_is_visible, check_hand_attribution, check_hand_payout_total, check_no_rake,
+    check_no_settlement_trap, check_point_in_time, check_self_reported_inconsistency,
+    check_upgrade_durability, Violation,
 };
 use crate::rng::Rng;
 use crate::table_api::{GamePhase, TableConfig};
@@ -63,6 +65,9 @@ pub struct RunReport {
     /// counted: an attribution gate that quietly declines to measure is
     /// indistinguishable from one that passes.
     pub attribution: AttributionCoverage,
+    /// M11 OUTCOME coverage over this run: how many hands had their OUTCOME
+    /// checked, as opposed to their totals. Reported for the same reason.
+    pub outcome: OutcomeCoverage,
     pub transcript_tail: Vec<StepResult>,
     pub final_ledger_main: u64,
     pub final_internal_total: u64,
@@ -437,6 +442,12 @@ pub fn run_sequence(
     // loop already takes, so it costs no extra messages, and it answers on every
     // hand a randomised hostile sequence happens to complete.
     let mut attribution = HandAttributionWatch::new();
+    // M11 OUTCOME, in the same per-step loop and off the same snapshot.
+    //
+    // The legs M8 already runs all ask about money at the moment a hand ENDED. This
+    // one asks whether the hand ended at the right moment, which is the question
+    // FINDING 17 got wrong while every money assertion in this file stayed silent.
+    let mut outcome_watch = OutcomeWatch::new();
 
     let record = |findings: &mut BTreeMap<String, Finding>,
                       all: &mut Vec<Violation>,
@@ -524,6 +535,21 @@ pub fn run_sequence(
             check_point_in_time(&after, world.uncredited_raw_deposits),
         );
 
+        // M10 CUSTODY VISIBILITY, per step. Reads the canister AS EACH PLAYER whose
+        // money is in the pot and who has no ordinary way of seeing it -- a stake
+        // that outlived its seat, or a hand that can no longer be moved. Costs
+        // nothing on the steps where nobody is in that position, which is almost
+        // all of them, and it is the one check here that is not a controller's
+        // view of the table. docs/SECURITY-FINDINGS.md FINDING 18.
+        record(
+            &mut findings,
+            &mut all,
+            &mut max_stranded,
+            i + 1,
+            Some(op),
+            check_custody_is_visible(&world, &after),
+        );
+
         // The engine's own testimony about its accounting.
         let logs = world.new_canister_logs();
         record(
@@ -543,19 +569,40 @@ pub fn run_sequence(
         {
             // Lazily: the history is one query, and it is only needed on the step a
             // hand settles. See `HandAttributionWatch::observe_lazily`.
-            if let Some(hand) =
-                attribution.observe_lazily(&after, world.uncredited_raw_deposits, |n| {
-                    world.hand_history(n)
-                })
-            {
+            let attributed = attribution.observe_lazily(
+                &after,
+                world.uncredited_raw_deposits,
+                |n| world.hand_history(n),
+            );
+            if let Some(hand) = attributed.as_ref() {
                 record(
                     &mut findings,
                     &mut all,
                     &mut max_stranded,
                     i + 1,
                     Some(op),
-                    check_hand_attribution(&hand),
+                    check_hand_attribution(hand),
                 );
+            }
+
+            // --- M11 OUTCOME, per step AND per hand -------------------------
+            //
+            // The per-step half is structural and needs nothing but the snapshot:
+            // a live hand with money in it may never be observed with one claimant
+            // or with none. The per-hand half needs the attribution's measured
+            // value deltas, so it runs on the same step, with the same numbers.
+            let (structural, finished) = outcome_watch.observe(&after);
+            record(
+                &mut findings,
+                &mut all,
+                &mut max_stranded,
+                i + 1,
+                Some(op),
+                structural,
+            );
+            if let (Some(o), Some(hand)) = (finished.as_ref(), attributed.as_ref()) {
+                let vs = check_hand_outcome(o, hand, &mut outcome_watch.coverage);
+                record(&mut findings, &mut all, &mut max_stranded, i + 1, Some(op), vs);
             }
         }
 
@@ -681,6 +728,7 @@ pub fn run_sequence(
             hands_oracle_checked: attribution.hands_oracled,
             declined: attribution.declined.clone(),
         },
+        outcome: outcome_watch.coverage.clone(),
         transcript_tail: transcript[tail_start..].to_vec(),
         final_ledger_main: final_snap.ledger_main,
         final_internal_total: final_snap.internal_total(),

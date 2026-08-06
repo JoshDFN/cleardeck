@@ -63,6 +63,15 @@ path = "tests/fuzz.rs"
 name = "ui_limits"
 path = "tests/ui_limits.rs"
 
+# THE ADMIN CUSTODY SURFACE (docs/SECURITY-FINDINGS.md FINDING 07). Named
+# explicitly for the reason `deposit_replay` had to be named in scripts/dev.sh: an
+# auto-discovered target is a target no human ever types, and the largest fund-loss
+# path in this project survived four waves partly because nothing ran at it. If
+# this file is renamed, this line fails rather than the coverage silently going away.
+[[test]]
+name = "admin_custody"
+path = "tests/admin_custody.rs"
+
 # PocketIC instances are heavy (one replica per instance). Keep test binaries
 # from fighting over CPU by default; see README.md.
 [profile.test]
