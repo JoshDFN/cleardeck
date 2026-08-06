@@ -4,6 +4,7 @@ import { idlFactory as tableIdlFactory } from 'declarations/table_1/table_1.did.
 import { idlFactory as historyIdlFactory } from 'declarations/history/history.did.js';
 import { building } from '$app/environment';
 import { auth } from './auth.js';
+import { agentHost, isLocal, isMainnet, isMainnetCanisterId, NETWORK } from './ic-config.js';
 
 // Network timeout in milliseconds (30 seconds)
 const NETWORK_TIMEOUT_MS = 30000;
@@ -28,9 +29,103 @@ function withTimeout(promise, timeoutMs, errorMessage = 'Request timed out') {
 
 const buildingOrTesting = building || process.env.NODE_ENV === "test";
 
-// Canister IDs from environment
-export const lobbyCanisterId = import.meta.env.CANISTER_ID_LOBBY || process.env.CANISTER_ID_LOBBY;
-export const historyCanisterId = import.meta.env.CANISTER_ID_HISTORY || process.env.CANISTER_ID_HISTORY;
+// ---------------------------------------------------------------------------
+// Canister ID resolution
+// ---------------------------------------------------------------------------
+//
+// docs/DEFECTS.md T-01. This fallback chain used to end at the repo-root `.env`,
+// which vite dotenv-loads and which holds the MAINNET ids. A bare
+// `npm run build` therefore produced a bundle that pointed a local dev UI at the
+// live canisters custodying real ICP and ckBTC, with no warning anywhere.
+//
+// Two layers now make that structurally impossible:
+//
+//   1. BUILD TIME (the real guarantee). vite.config.js refuses to build unless
+//      the target network is stated explicitly, loads the repo-root `.env` ONLY
+//      for an `ic` build, and aborts if a `local` build resolves a mainnet id.
+//      A bad bundle cannot be produced.
+//
+//   2. RUNTIME (belt and braces, for a bundle built by some other toolchain).
+//      resolveCanisterId() below refuses a mainnet id on a local build and
+//      refuses a missing id on any build. It throws with an actionable message
+//      instead of silently talking to the wrong canister — or to nothing.
+//
+// The mainnet ids are still displayed as text in the "Verify the Code" panel;
+// that display is legitimate and comes from ic-config.js MAINNET_CANISTER_IDS.
+// What is forbidden is a mainnet id reaching the WIRING of a non-mainnet build.
+
+/**
+ * Resolves one canister id from the build environment, with no silent fallback.
+ *
+ * The deploy scripts export VITE_CANISTER_ID_* from .icp/data/mappings (icp-cli
+ * has no dfx-style .env writer); legacy dfx wrote CANISTER_ID_*. Both prefixes
+ * are read so the build works under either toolchain.
+ *
+ * @param {string} name canister name, e.g. "LOBBY"
+ * @param {string|undefined} viteValue import.meta.env.VITE_CANISTER_ID_<name>
+ * @param {string|undefined} legacyValue import.meta.env.CANISTER_ID_<name>
+ * @param {string|undefined} processValue process.env.CANISTER_ID_<name>
+ * @returns {string|undefined} the id, or undefined while building/prerendering
+ * @throws {Error} if the id is missing, or is a mainnet id on a non-mainnet build
+ */
+function resolveCanisterId(name, viteValue, legacyValue, processValue) {
+    const id = viteValue || legacyValue || processValue;
+
+    if (!id) {
+        // Prerender/SSR and unit tests never make a call, so an absent id there
+        // is not an error: dummyActor() below stands in for the actor.
+        if (buildingOrTesting) return undefined;
+        throw new Error(
+            `ClearDeck build is broken: no canister id for ${name}. Set ` +
+            `VITE_CANISTER_ID_${name} (or CANISTER_ID_${name}) at build time. ` +
+            'The build must never guess: guessing is how a local build ends up ' +
+            'wired to the live fund-holding canisters (docs/DEFECTS.md T-01).',
+        );
+    }
+
+    if (!isMainnet() && isMainnetCanisterId(id)) {
+        throw new Error(
+            `REFUSING to run: this bundle was built for network "${NETWORK}" but ` +
+            `${name} is wired to ${id}, a ClearDeck MAINNET canister holding real ` +
+            'user funds. Build with the local canister ids ' +
+            '(./scripts/dev.sh local-up), or build for mainnet explicitly with ' +
+            'DFX_NETWORK=ic. See docs/DEFECTS.md T-01.',
+        );
+    }
+
+    return id;
+}
+
+export const lobbyCanisterId = resolveCanisterId(
+    'LOBBY',
+    import.meta.env.VITE_CANISTER_ID_LOBBY,
+    import.meta.env.CANISTER_ID_LOBBY,
+    typeof process !== 'undefined' ? process.env?.CANISTER_ID_LOBBY : undefined,
+);
+export const historyCanisterId = resolveCanisterId(
+    'HISTORY',
+    import.meta.env.VITE_CANISTER_ID_HISTORY,
+    import.meta.env.CANISTER_ID_HISTORY,
+    typeof process !== 'undefined' ? process.env?.CANISTER_ID_HISTORY : undefined,
+);
+
+/**
+ * Guards a table canister id that came from the lobby at runtime. A compromised
+ * or misconfigured local lobby must not be able to point a local build at a
+ * mainnet table.
+ * @param {unknown} tableCanisterId
+ * @returns {string}
+ */
+function assertTableIdAllowed(tableCanisterId) {
+    const id = typeof tableCanisterId === 'string' ? tableCanisterId : String(tableCanisterId);
+    if (!isMainnet() && isMainnetCanisterId(id)) {
+        throw new Error(
+            `REFUSING to open table ${id}: that is a ClearDeck MAINNET canister ` +
+            `holding real user funds, and this bundle was built for "${NETWORK}".`,
+        );
+    }
+    return id;
+}
 
 // Get current auth state
 function getAuthState() {
@@ -42,15 +137,9 @@ function getAuthState() {
 
 // Create an agent - uses authenticated identity if available, anonymous otherwise
 async function createAgent() {
-    // Detect if we're on mainnet by checking the hostname
-    // If the page is served from icp0.io, ic0.app, or internetcomputer.org, we're on mainnet
-    const isMainnet = typeof window !== 'undefined' &&
-        (window.location.hostname.includes('icp0.io') ||
-         window.location.hostname.includes('ic0.app') ||
-         window.location.hostname.includes('internetcomputer.org'));
-
-    const isLocal = !isMainnet;
-    const host = isLocal ? "http://127.0.0.1:4943" : "https://ic0.app";
+    // Network host + mainnet detection are centralized in ./ic-config.js
+    // (mainnet agent host = https://icp-api.io, env-overridable).
+    const host = agentHost();
 
     const authState = getAuthState();
 
@@ -68,7 +157,7 @@ async function createAgent() {
     const agent = new HttpAgent(agentOptions);
 
     // Fetch root key for local development (required for certificate verification)
-    if (isLocal) {
+    if (isLocal()) {
         await agent.fetchRootKey();
     }
 
@@ -117,7 +206,7 @@ export async function createTableActor(tableCanisterId) {
     const agent = await createAgent();
     return Actor.createActor(tableIdlFactory, {
         agent,
-        canisterId: tableCanisterId,
+        canisterId: assertTableIdAllowed(tableCanisterId),
     });
 }
 
@@ -129,13 +218,15 @@ export function createTableActorProxy(tableCanisterId) {
         return dummyActor();
     }
 
+    const safeTableId = assertTableIdAllowed(tableCanisterId);
+
     return new Proxy({}, {
         get(target, prop) {
             return async (...args) => {
                 const agent = await createAgent();
                 const actor = Actor.createActor(tableIdlFactory, {
                     agent,
-                    canisterId: tableCanisterId,
+                    canisterId: safeTableId,
                 });
                 // Wrap the call with a timeout
                 return withTimeout(

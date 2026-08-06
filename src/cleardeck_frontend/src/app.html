@@ -4,7 +4,24 @@
 <head>
 	<meta charset="utf-8" />
 	<link rel="icon" href="%sveltekit.assets%/favicon.ico" />
-	<meta name="viewport" content="width=device-width" />
+	<!--
+		`initial-scale=1` is not cosmetic. Without it, Chrome on a phone widens the
+		LAYOUT viewport until the widest element on the page fits and then paints the
+		whole document scaled down to the screen: measured on a 390x844 device this
+		build laid out at 425 CSS px and painted at 0.918, so every glyph was 8.2%
+		smaller than the stylesheet says and ~32 device px of the right edge was
+		blank background (docs/DEFECTS.md T-19).
+
+		Pinning the scale only works while nothing forces the document past the
+		device width -- otherwise the overflow is clipped instead of shrunk. The
+		element that did force it was `.header-right` at 411.8 CSS px on the table
+		view; `routes/+page.svelte` now lays that header out in two short rows in
+		portrait, and the screenshot probe asserts `documentElement.scrollWidth ==
+		390` so a future overflow is a measured failure and not a silent 0.9 zoom.
+
+		No `maximum-scale` and no `user-scalable=no`: pinch-zoom stays available.
+	-->
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
 	<title>ClearDeck - Provably Fair Poker</title>
 	%sveltekit.head%
 </head>

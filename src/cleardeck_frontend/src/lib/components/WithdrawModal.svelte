@@ -12,7 +12,129 @@
   // Currency-specific settings
   const isBTC = currency === 'BTC';
   const currencySymbol = isBTC ? 'BTC' : 'ICP';
-  const minWithdrawal = isBTC ? 11n : 100000n; // 11 sats (fee is 10) vs 0.001 ICP
+
+  // >>> MIRRORED-LIMITS-BEGIN  (tests/money_safety/tests/ui_limits.rs reads this fence)
+  // ===========================================================================
+  // MIRRORED CANISTER LIMITS -- THE ONLY NUMBERS IN THIS FILE (docs/DEFECTS.md T-26)
+  // ===========================================================================
+  //
+  // Every limit this modal states or enforces is derived from this block, so no
+  // surface can drift from the constant the canister actually applies. That drift
+  // is what T-26 was: the enforced BTC floor was 11 sats while the copy, the
+  // input's `min` attribute and the error string all said 1,000, which made
+  // `Minimum withdrawal is 1,000 sats` UNREACHABLE for every amount from 12 to 999
+  // and gave a player in that band a rejection they could not explain.
+  //
+  // WHICH NUMBER IS RIGHT: 11. Three reasons, in order.
+  //
+  //  1. The canister is the enforcement. `withdraw()` compares against
+  //     `Currency::min_withdrawal()` and nothing else does; a player calling the
+  //     canister directly gets 11 whatever this file says. A UI that states a
+  //     floor the canister does not apply is lying in the only direction that
+  //     matters, and it is the direction that produces unreachable error strings.
+  //  2. Enforcing 1,000 client-side would TRAP DUST. A BTC player who loses down
+  //     to 400 sats has exactly one exit -- `withdraw` -- and a UI-only floor of
+  //     1,000 closes it permanently. The canister would pay them 390 sats.
+  //     Choosing the higher number costs a player their remaining balance.
+  //  3. Raising BTC_MIN_WITHDRAWAL_AMOUNT to 1,000 in the canister would be the
+  //     same trap, written into a canister that custodies real funds, and it is
+  //     not a change to make from a frontend pass.
+  //
+  // The real complaint behind "1,000" is sound and is answered honestly instead of
+  // by a false floor: 11 sats nets 1 sat, because the 10-sat fee is most of it. So
+  // the modal now states the fee, computes the NET the wallet will receive from
+  // whatever is typed, and warns when the fee takes more than half. A player can
+  // still withdraw 11 sats; they can no longer be surprised by what arrives.
+  //
+  // THE SAME ARGUMENT, ONE CURRENCY OVER (docs/SECURITY-FINDINGS.md FINDING 27).
+  // Reason 2 above was written about BTC and was true about ICP the whole time,
+  // in the canister rather than in this file: `deposit()` accepted 20,000 e8s and
+  // `withdraw()` refused anything under 100,000, so an ICP player holding
+  // anything in between -- including a player who deposited exactly the
+  // advertised minimum -- had no exit at all. The canister's two floors are now
+  // one number per currency and the invariant is compile-time asserted there
+  // ("THE FLOOR INVARIANT" in lib.rs). This file mirrors the result.
+  //
+  // src/table_canister/src/lib.rs -- MIRRORED, keep in step:
+  //   :36 ICP_TRANSFER_FEE          10_000          (0.0001 ICP)
+  //   :40 CKBTC_TRANSFER_FEE        10              (10 sats)
+  //   :47 ICP_MAX_WITHDRAWAL_PER_TX 10_000_000_000  (100 ICP)
+  //   :48 ICP_MIN_WITHDRAWAL_AMOUNT 20_000          (0.0002 ICP == the deposit floor)
+  //   :51 BTC_MAX_WITHDRAWAL_PER_TX 10_000_000      (0.1 BTC)
+  //   :52 BTC_MIN_WITHDRAWAL_AMOUNT 11              (fee + 1 sat)
+  //   :54 WITHDRAWAL_COOLDOWN_NS    60_000_000_000  (60 s)
+  // `tests/money_safety/tests/ui_limits.rs` reads both files and fails if any of
+  // these five numbers stops matching, and fails if any surface in this file states
+  // a limit as a literal instead of interpolating one of the values below.
+  const MIN_WITHDRAWAL = isBTC ? 11n : 20_000n;
+  const MAX_WITHDRAWAL = isBTC ? 10_000_000n : 10_000_000_000n;
+  const TRANSFER_FEE = isBTC ? 10n : 10_000n;
+  const WITHDRAWAL_COOLDOWN_SECS = 60;
+
+  // The canister sends `amount - fee` (lib.rs:1038), so TRANSFER_FEE is what the
+  // wallet does NOT receive.
+  const transferFee = TRANSFER_FEE;
+
+  /** Exact, never rounded: a limit rendered with `toFixed` is a limit that lies. */
+  function formatExact(smallestUnit) {
+    const v = BigInt(smallestUnit);
+    if (isBTC) return `${v.toLocaleString('en-US')} sats`;
+    const whole = v / 100_000_000n;
+    const frac = (v % 100_000_000n).toString().padStart(8, '0').replace(/0+$/, '');
+    return frac ? `${whole}.${frac} ICP` : `${whole} ICP`;
+  }
+
+  /**
+   * A balance as a BigInt of smallest units, tolerating whatever the caller has.
+   * `myBalance` arrives as `Number(await get_balance())` and `BigInt()` throws on a
+   * non-integer Number, so the floor is not decoration.
+   */
+  function toSmallest(value) {
+    if (typeof value === 'bigint') return value;
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? BigInt(Math.floor(n)) : 0n;
+  }
+
+  /** The same value as a bare decimal, for an input's `min` / `max` attribute. */
+  function formatPlain(smallestUnit) {
+    const v = BigInt(smallestUnit);
+    const whole = v / 100_000_000n;
+    const frac = (v % 100_000_000n).toString().padStart(8, '0').replace(/0+$/, '');
+    return frac ? `${whole}.${frac}` : `${whole}`;
+  }
+
+  const minDisplay = formatExact(MIN_WITHDRAWAL);
+  const maxDisplay = formatExact(MAX_WITHDRAWAL);
+  const feeDisplay = formatExact(TRANSFER_FEE);
+
+  // The attributes track the unit toggle, so the browser's own validation agrees
+  // with the canister in whichever unit the player is typing.
+  const inputMinAttr = $derived(
+    isBTC && inputUnit === 'sats' ? MIN_WITHDRAWAL.toString() : formatPlain(MIN_WITHDRAWAL)
+  );
+  const inputMaxAttr = $derived(
+    isBTC && inputUnit === 'sats' ? MAX_WITHDRAWAL.toString() : formatPlain(MAX_WITHDRAWAL)
+  );
+
+  // What the wallet will actually receive, from whatever is typed right now.
+  const enteredSmallest = $derived.by(() => {
+    if (!withdrawAmount || !Number.isFinite(Number(withdrawAmount))) return null;
+    const n = Number(withdrawAmount);
+    if (n <= 0) return null;
+    return inputToSmallestUnit(withdrawAmount);
+  });
+  const netReceived = $derived(
+    enteredSmallest === null
+      ? null
+      : enteredSmallest > TRANSFER_FEE
+        ? enteredSmallest - TRANSFER_FEE
+        : 0n
+  );
+  /** True when the network fee eats at least half of what the player asked for. */
+  const feeDominates = $derived(
+    enteredSmallest !== null && enteredSmallest > 0n && TRANSFER_FEE * 2n >= enteredSmallest
+  );
+  // <<< MIRRORED-LIMITS-END
 
   // Format balance for display
   function formatBalance(smallestUnit) {
@@ -36,12 +158,30 @@
     return formatted;
   }
 
+  /**
+   * Exact decimal text -> smallest units, WITHOUT going through a float.
+   *
+   * `Number('0.00012345') * 100_000_000` is `12344.999999999998`, which floors to
+   * 12,344 -- one unit less than the player has. That is invisible at ordinary
+   * sizes and fatal at the bottom: MAX writes the balance out as exact decimal
+   * text, and if reading it back lands one unit short then the amount is no
+   * longer the WHOLE balance, the sweep below does not recognise it, and a
+   * sub-floor balance becomes unwithdrawable again by rounding alone.
+   */
+  function decimalToSmallest(text) {
+    const m = /^\s*(\d*)(?:\.(\d*))?\s*$/.exec(String(text));
+    if (!m || (m[1] === '' && (m[2] ?? '') === '')) return 0n;
+    const whole = m[1] === '' ? '0' : m[1];
+    const frac = (m[2] ?? '').padEnd(8, '0').slice(0, 8);
+    return BigInt(whole) * 100_000_000n + BigInt(frac);
+  }
+
   // Convert user input to smallest unit
   function inputToSmallestUnit(amount) {
     if (isBTC && inputUnit === 'sats') {
       return BigInt(Math.floor(Number(amount)));
     }
-    return BigInt(Math.floor(Number(amount) * 100_000_000));
+    return decimalToSmallest(amount);
   }
 
   async function handleWithdraw() {
@@ -51,15 +191,38 @@
     }
 
     const amountSmallest = inputToSmallestUnit(withdrawAmount);
+    const balanceSmallest = toSmallest(currentBalance);
 
-    // Minimum withdrawal check
-    if (amountSmallest < minWithdrawal) {
-      const minDisplay = isBTC ? '1,000 sats' : '0.001 ICP';
-      error = `Minimum withdrawal is ${minDisplay}`;
+    // THE WHOLE-BALANCE SWEEP, MIRRORED (docs/SECURITY-FINDINGS.md FINDING 27).
+    //
+    // `withdraw()` waives its floor for one request: "send me everything I have
+    // left", at any size the ledger can move. That waiver is the thing that stops
+    // a floor from becoming a trap for a balance the pot produced rather than the
+    // deposit door. A client-side floor that did not mirror the waiver would put
+    // the trap straight back, one layer up, where it is invisible to every
+    // canister-side gate -- which is the shape of defect this project keeps
+    // finding. So the modal waives it on exactly the same condition.
+    const sweepingWholeBalance =
+      amountSmallest === balanceSmallest && amountSmallest > TRANSFER_FEE;
+
+    // Both bounds, in the same words the canister uses, from the same numbers.
+    if (amountSmallest < MIN_WITHDRAWAL && !sweepingWholeBalance) {
+      error =
+        `Minimum withdrawal is ${minDisplay}. Your whole remaining balance can always be `
+        + `withdrawn in one call whatever its size, as long as it is more than the `
+        + `${feeDisplay} network fee -- press MAX.`;
+      return;
+    }
+    // The canister enforces a per-transaction ceiling too and the modal never
+    // mentioned it, so a player with a large balance pressed MAX and got a
+    // rejection out of nowhere. Stating it here cannot trap funds: the balance
+    // comes out in successive withdrawals.
+    if (amountSmallest > MAX_WITHDRAWAL) {
+      error = `Maximum withdrawal per transaction is ${maxDisplay}`;
       return;
     }
 
-    if (amountSmallest > BigInt(currentBalance || 0)) {
+    if (amountSmallest > balanceSmallest) {
       error = 'Insufficient balance';
       return;
     }
@@ -71,7 +234,20 @@
     try {
       const result = await tableActor.withdraw(amountSmallest);
       if ('Ok' in result) {
-        success = `Withdrawal successful! ${formatWithUnit(result.Ok)} sent to your wallet.`;
+        // `withdraw` returns the LEDGER BLOCK INDEX, not an amount
+        // (src/table_canister/src/lib.rs:1894 `-> Result<u64, String>`, `Ok(block)`
+        // at :1991). This line used to run it through formatWithUnit and print it
+        // as ICP, so the confirmation stated a wrong amount of money — a block
+        // index of 4,000 renders as "0.0000 ICP sent to your wallet". docs/DEFECTS.md T-18.
+        //
+        // What actually happens: `transfer_tokens` sends `amount - fee`
+        // (lib.rs:1038), so the wallet receives LESS than the amount withdrawn and
+        // nothing on screen said so. Both figures are now stated, and the block
+        // index is labelled as what it is.
+        const received = amountSmallest > transferFee ? amountSmallest - transferFee : 0n;
+        success = `Withdrew ${formatWithUnit(amountSmallest)}. `
+          + `${formatWithUnit(received)} reached your wallet after the `
+          + `${formatWithUnit(transferFee)} network fee. Ledger block #${result.Ok}.`;
         setTimeout(() => {
           onWithdrawSuccess?.();
           onClose();
@@ -86,18 +262,109 @@
   }
 
   function setMaxAmount() {
-    // Withdraw full balance - the transfer fee is deducted from the amount sent, not from balance
-    const maxSmallest = currentBalance || 0;
+    // MAX must be a number the canister will ACCEPT, which means two corrections
+    // the old three-liner did not make.
+    //
+    //  1. It is capped at MAX_WITHDRAWAL. The old version put the whole balance in
+    //     the box, so a player holding more than the per-transaction ceiling got
+    //     "Maximum withdrawal per transaction is ..." from the canister after
+    //     pressing a button labelled MAX.
+    //  2. It FLOORS instead of rounding. `toFixed(4)` on an ICP balance rounds to
+    //     the nearest 0.0001 ICP, i.e. UPWARDS half the time: a balance of
+    //     123,456,789 e8s became "1.2346", which is 123,460,000 e8s -- 3,211 e8s
+    //     MORE than the player has -- and the modal then refused its own MAX with
+    //     "Insufficient balance".
+    const balance = toSmallest(currentBalance);
+    const capped = balance > MAX_WITHDRAWAL ? MAX_WITHDRAWAL : balance;
     if (isBTC && inputUnit === 'sats') {
-      withdrawAmount = String(maxSmallest);
-    } else {
-      const maxDisplay = maxSmallest / 100_000_000;
-      withdrawAmount = isBTC ? maxDisplay.toFixed(8) : maxDisplay.toFixed(4);
+      withdrawAmount = capped.toString();
+      return;
     }
+    // 8 decimal places is the full precision of a smallest unit, so this is exact
+    // for both currencies and can never exceed `capped`.
+    withdrawAmount = formatPlain(capped);
+  }
+
+  // =========================================================================
+  // MONEY OF YOURS THAT IS NOT IN THIS BALANCE (docs/SECURITY-FINDINGS.md
+  // FINDING 18)
+  // =========================================================================
+  //
+  // "Available Balance" above is `get_balance()`, and `get_balance()` answers
+  // exactly one question: what can I withdraw right now. An auditor read it as
+  // zero, withdrew "everything", and left -- while 2.98 ICP of theirs sat in a
+  // pot on a table they had already cashed out of. The number was right. It was
+  // never the whole answer, and this screen is the last one a leaving player
+  // looks at.
+  //
+  // `get_custody_status()` is the whole answer. It is a query, so it costs
+  // nothing and still answers when every update is failing, and it is
+  // caller-scoped, so this cannot show the wrong person's money.
+  let custody = $state(null);
+  let custodyError = $state(null);
+  let recovering = $state(false);
+
+  async function loadCustody() {
+    if (!tableActor?.get_custody_status) {
+      // An older canister build: say so rather than silently show nothing. A
+      // missing surface and a zero stake must never look the same.
+      custodyError = 'This table cannot report money committed to a pot (older canister build).';
+      return;
+    }
+    try {
+      const s = await tableActor.get_custody_status();
+      custody = {
+        committed: BigInt(s.committed_in_pot ?? 0n),
+        stuck: !!s.committed_is_stuck,
+        total: BigInt(s.total ?? 0n),
+        chips: BigInt(s.chips_at_table ?? 0n),
+        advice: s.advice || '',
+        abandonableInSecs:
+          Array.isArray(s.abandonable_in_ns) && s.abandonable_in_ns.length
+            ? Number(s.abandonable_in_ns[0] / 1_000_000_000n)
+            : null
+      };
+      custodyError = null;
+    } catch (e) {
+      custodyError = e.message || 'Could not read what this table is holding for you.';
+    }
+  }
+
+  // Follow the canister's own advice, from the withdrawal screen, with one press.
+  async function recoverStuckPot() {
+    if (!tableActor?.abandon_stuck_hand) return;
+    recovering = true;
+    error = null;
+    try {
+      const result = await tableActor.abandon_stuck_hand();
+      if ('Err' in result) {
+        error = result.Err;
+      } else {
+        success = `Recovered ${formatWithUnit(custody?.committed ?? 0n)} from the stuck hand. `
+          + `It is in your withdrawable balance now.`;
+        // The pot is gone and the balance has moved: re-read both.
+        await loadCustody();
+        onWithdrawSuccess?.();
+      }
+    } catch (e) {
+      error = e.message || 'Recovery failed';
+    }
+    recovering = false;
+  }
+
+  $effect(() => {
+    loadCustody();
+  });
+
+  // ONE dismissal contract for every dialog in this app (docs/DEFECTS.md T-13).
+  function onWindowKeydown(e) {
+    if (e.key === 'Escape') onClose();
   }
 </script>
 
-<div class="modal-backdrop" onclick={onClose} onkeydown={(e) => e.key === 'Escape' && onClose()} role="button" tabindex="-1" aria-label="Close modal"></div>
+<svelte:window onkeydown={onWindowKeydown} />
+
+<div class="modal-backdrop" onclick={onClose} role="presentation"></div>
 
 <div class="modal-content" class:btc-modal={isBTC} role="dialog" aria-labelledby="withdraw-modal-title">
   <div class="modal-header">
@@ -115,10 +382,60 @@
   </div>
 
   <div class="modal-body">
+    <!-- THE FOUR PROTECTED NOTICES, INSIDE THE DIALOG (HARD RULE 2, docs/DEFECTS.md T-31).
+         Measured, not assumed: with either money modal open, all four notices in
+         the page banner are behind `.modal-backdrop` -- `rgba(0,0,0,0.7)` plus
+         `backdrop-filter: blur(4px)` at z-index 200 -- so `elementFromPoint` at the
+         centre of each returns the backdrop and not the text. 0 of 4 unobstructed,
+         at 1440x900 AND at 390x844, and identical on `fe72d46`, so the scrim is not
+         new. It is still a player who cannot read the warning on the one screen
+         where they are about to move real money.
+         Raising the banner above the backdrop is not this file's to do (the banner
+         lives in routes/+page.svelte and src/index.scss). Restating the notices
+         INSIDE the dialog is: more prominent is always allowed, it needs nothing
+         outside these two components, and it holds whatever any backdrop does. -->
+    <!-- WAVE 5 COHERENCE PASS: see the same note in DepositModal.svelte. The last
+         clause states the no-rake property in the weaker wording, so the repo's own
+         notice gate read 4 of 5 with this dialog open at both viewports. The
+         canonical sentence is added verbatim below it; nothing already here moved. -->
+    <p class="player-notice">
+      <strong>Unaudited code with known bugs: your funds are NOT safe.</strong>
+      Online gambling is illegal in many jurisdictions. 18+ only.
+      No middleman, no house, 0% rake.
+      No rake is taken from any pot on any table.
+    </p>
     <div class="balance-info" class:btc={isBTC}>
       <span class="label">Available Balance</span>
       <span class="amount" class:btc={isBTC}>{formatWithUnit(currentBalance)}</span>
     </div>
+
+    <!-- MONEY OF YOURS THAT IS NOT IN THE FIGURE ABOVE.
+         docs/SECURITY-FINDINGS.md FINDING 18. Rendered IN FLOW, directly under the
+         balance it corrects, and never as an overlay: nothing in this app may
+         cover the four notices above (HARD RULE 2). -->
+    {#if custody && custody.committed > 0n}
+      <div class="committed-stake" class:stuck={custody.stuck}>
+        <div class="committed-headline">
+          <span class="committed-label">
+            {custody.stuck ? 'In a pot nobody can win' : 'In a pot right now'}
+          </span>
+          <span class="committed-amount">{formatWithUnit(custody.committed)}</span>
+        </div>
+        <p class="committed-advice">{custody.advice}</p>
+        {#if custody.stuck}
+          <button class="recover-btn" onclick={recoverStuckPot} disabled={recovering || processing}>
+            {recovering ? 'Recovering…' : `Recover ${formatWithUnit(custody.committed)} now`}
+          </button>
+        {:else if custody.abandonableInSecs !== null}
+          <p class="committed-countdown">
+            If the table stops moving, this becomes recoverable in about
+            {Math.max(0, Math.ceil(custody.abandonableInSecs / 60))} min.
+          </p>
+        {/if}
+      </div>
+    {:else if custodyError}
+      <p class="committed-unknown">{custodyError}</p>
+    {/if}
 
     <div class="form-section">
       <div class="label-row">
@@ -137,12 +454,16 @@
         {/if}
       </div>
       <div class="input-with-max">
+        <!-- `step` is the full precision of a smallest unit, not a coarser grid the
+             canister never asked for: at step 0.0001 the box could not express an
+             exact ICP balance, so MAX was unrepresentable in its own input. -->
         <input
           id="withdraw-amount"
           type="number"
-          step={isBTC ? (inputUnit === 'sats' ? "1" : "0.00000001") : "0.0001"}
-          min={isBTC ? (inputUnit === 'sats' ? "1000" : "0.00001") : "0.001"}
-          placeholder={isBTC ? (inputUnit === 'sats' ? "1000" : "0.00000000") : "0.0000"}
+          step={isBTC && inputUnit === 'sats' ? "1" : "0.00000001"}
+          min={inputMinAttr}
+          max={inputMaxAttr}
+          placeholder={inputMinAttr}
           bind:value={withdrawAmount}
           disabled={processing}
         />
@@ -151,13 +472,28 @@
           MAX
         </button>
       </div>
+      <!-- Every figure here is interpolated from the mirrored constants. A literal
+           in this block is what docs/DEFECTS.md T-26 was, and ui_limits.rs fails
+           the build if one comes back. -->
       <p class="hint">
-        {#if isBTC}
-          Minimum: 1,000 sats (Fee: 10 sats)
-        {:else}
-          Minimum withdrawal: 0.001 ICP. A small network fee applies.
-        {/if}
+        Minimum {minDisplay}, maximum {maxDisplay} per transaction. The network fee
+        is {feeDisplay} and is taken out of what you withdraw, so your wallet
+        receives that much less. One withdrawal every {WITHDRAWAL_COOLDOWN_SECS} seconds.
       </p>
+      <p class="hint">
+        Whatever your balance is, all of it can leave in one call: press MAX. That
+        works below the stated floor too, as long as what is left is more than the
+        network fee.
+      </p>
+      {#if netReceived !== null}
+        <p class="net-line" class:dust={feeDominates}>
+          Your wallet receives <strong>{formatWithUnit(netReceived)}</strong>
+          after the {feeDisplay} fee.
+          {#if feeDominates}
+            The fee is most of this withdrawal.
+          {/if}
+        </p>
+      {/if}
     </div>
 
     {#if error}
@@ -327,6 +663,85 @@
     color: #f7931a;
   }
 
+  /* MONEY OF YOURS THAT IS NOT IN THE BALANCE ABOVE.
+     docs/SECURITY-FINDINGS.md FINDING 18. Deliberately in the document flow, with
+     no `position: fixed/absolute` and no z-index, so it can never cover the four
+     notices at the top of this dialog (HARD RULE 2). */
+  .committed-stake {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px 16px;
+    background: rgba(255, 184, 0, 0.08);
+    border: 1px solid rgba(255, 184, 0, 0.45);
+    border-radius: 12px;
+  }
+
+  .committed-stake.stuck {
+    background: rgba(255, 92, 92, 0.1);
+    border-color: rgba(255, 92, 92, 0.6);
+  }
+
+  .committed-headline {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+  }
+
+  .committed-label {
+    color: #ffb800;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .committed-stake.stuck .committed-label {
+    color: #ff7676;
+  }
+
+  .committed-amount {
+    color: #fff;
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .committed-advice {
+    margin: 0;
+    color: #ddd;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .committed-countdown {
+    margin: 0;
+    color: #999;
+    font-size: 12px;
+  }
+
+  .recover-btn {
+    padding: 10px 14px;
+    border: 1px solid rgba(255, 92, 92, 0.8);
+    border-radius: 8px;
+    background: rgba(255, 92, 92, 0.18);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .recover-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .committed-unknown {
+    margin: 0;
+    color: #ffb800;
+    font-size: 12px;
+  }
+
   .form-section {
     display: flex;
     flex-direction: column;
@@ -447,10 +862,31 @@
   }
 
   .hint {
-    color: #666;
+    color: #8a8a97;
     font-size: 11px;
     margin: 0;
-    line-height: 1.4;
+    line-height: 1.5;
+  }
+
+  /* The net figure is the one a player checks against their wallet afterwards, so
+     it is brighter than the hint above it, not dimmer. */
+  .net-line {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #b9c6c2;
+  }
+
+  .net-line strong {
+    color: #00d4aa;
+  }
+
+  .net-line.dust {
+    color: #fbbf24;
+  }
+
+  .net-line.dust strong {
+    color: #fcd34d;
   }
 
   .alert {
@@ -554,5 +990,22 @@
 
   @keyframes spin {
     to { transform: rotate(360deg); }
+  }
+
+  /* The protected notices, restated inside the dialog. Deliberately NOT dimmed:
+     it is the one block in this modal that must not read as fine print. */
+  .player-notice {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #fca5a5;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .player-notice strong {
+    color: #fecaca;
   }
 </style>

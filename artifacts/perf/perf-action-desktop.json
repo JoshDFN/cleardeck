@@ -1,0 +1,678 @@
+{
+  "startedAt": "2026-08-05T00:31:20.294Z",
+  "gitSha": "7bc69db",
+  "gateway": "http://localhost:8077",
+  "appOrigin": "http://127.0.0.1:4943",
+  "frontendCanisterId": "5uljf-s3777-77775-aaaea-cai",
+  "viewport": {
+    "name": "desktop",
+    "width": 1440,
+    "height": 900,
+    "deviceScaleFactor": 1,
+    "isMobile": false
+  },
+  "table": {
+    "name": "6-Max - 0.01/0.02",
+    "canisterId": "4zfnl-5t777-77775-aaadq-cai"
+  },
+  "method": {
+    "timeBase": "performance.now() inside the page; click times are the browser's own event.timeStamp",
+    "visible": "first requestAnimationFrame callback after the DOM change that carries the state",
+    "headless": "headless Chromium; rAF cadence is a proxy for presented frames",
+    "thirdParty": "no interception in this run: fonts/avatars are fetched live or fail, exactly as the app would",
+    "quantiles": "nearest-rank, so every reported value is an observation that happened"
+  },
+  "action": {
+    "visibleAcknowledgementMs": {
+      "n": 32,
+      "unit": "ms",
+      "min": 10.7,
+      "p50": 15,
+      "p95": 16.2,
+      "max": 16.5,
+      "mean": 14.9,
+      "samples": [
+        15.3,
+        15.2,
+        14.8,
+        14.5,
+        14.8,
+        13.7,
+        10.7,
+        15,
+        15.7,
+        14.9,
+        16.2,
+        15.1,
+        15.2,
+        15,
+        14.5,
+        14.8,
+        13.7,
+        14.2,
+        14.9,
+        16.5,
+        13.7,
+        15.2,
+        15.3,
+        15.1,
+        15.9,
+        14.6,
+        14.3,
+        15.9,
+        14.7,
+        15.5,
+        15.4,
+        15
+      ]
+    },
+    "domAcknowledgementMs": {
+      "n": 32,
+      "unit": "ms",
+      "min": 4.6,
+      "p50": 6.7,
+      "p95": 8.3,
+      "max": 8.7,
+      "mean": 6.6,
+      "samples": [
+        5.3,
+        5.8,
+        5.9,
+        6.8,
+        6.7,
+        6.7,
+        4.6,
+        6.9,
+        8.3,
+        6.7,
+        8.7,
+        7,
+        6.9,
+        6.5,
+        7.3,
+        6.6,
+        6.9,
+        6.1,
+        7.1,
+        7.3,
+        7.1,
+        7,
+        7.3,
+        6.9,
+        6.6,
+        6.5,
+        5.1,
+        5.8,
+        5.9,
+        6.5,
+        7.2,
+        6.8
+      ]
+    },
+    "updateCallReturnedMs": {
+      "n": 32,
+      "unit": "ms",
+      "min": 65.4,
+      "p50": 178,
+      "p95": 464.5,
+      "max": 473.5,
+      "mean": 228.5,
+      "samples": [
+        356.5,
+        131.9,
+        206.3,
+        149.5,
+        189.8,
+        172.8,
+        178,
+        180.1,
+        107.9,
+        215,
+        149.3,
+        455.5,
+        423.4,
+        181.8,
+        141.1,
+        456.5,
+        188.9,
+        154.8,
+        65.4,
+        124.6,
+        156.4,
+        173.6,
+        174.4,
+        207,
+        174,
+        140.3,
+        356.4,
+        174.1,
+        464.5,
+        181.8,
+        407,
+        473.5
+      ]
+    },
+    "settledVisibleStateMs": {
+      "n": 32,
+      "unit": "ms",
+      "min": 132.1,
+      "p50": 356.4,
+      "p95": 731.7,
+      "max": 732.5,
+      "mean": 388.8,
+      "samples": [
+        356.5,
+        398.3,
+        239.9,
+        399.5,
+        239.8,
+        706.1,
+        276.7,
+        248.3,
+        132.1,
+        305.9,
+        191.4,
+        455.5,
+        423.4,
+        355.1,
+        730.9,
+        456.5,
+        731.7,
+        281.1,
+        232.2,
+        165.1,
+        248.6,
+        205.3,
+        216.6,
+        706.6,
+        357.3,
+        723.7,
+        356.4,
+        732.5,
+        464.5,
+        222.7,
+        407,
+        473.5
+      ]
+    },
+    "settledVisibleStateMoneyMovingOnly": {
+      "n": 20,
+      "unit": "ms",
+      "min": 132.1,
+      "p50": 248.6,
+      "p95": 464.5,
+      "max": 473.5,
+      "mean": 293,
+      "samples": [
+        239.9,
+        239.8,
+        276.7,
+        248.3,
+        132.1,
+        305.9,
+        191.4,
+        355.1,
+        456.5,
+        281.1,
+        232.2,
+        165.1,
+        248.6,
+        205.3,
+        357.3,
+        356.4,
+        464.5,
+        222.7,
+        407,
+        473.5
+      ]
+    },
+    "pollWaitAfterCallReturnedMs": {
+      "n": 32,
+      "unit": "ms",
+      "min": 0,
+      "p50": 50,
+      "p95": 583.4,
+      "max": 589.8,
+      "mean": 160.3,
+      "samples": [
+        0,
+        266.4,
+        33.6,
+        250,
+        50,
+        533.3,
+        98.7,
+        68.2,
+        24.2,
+        90.9,
+        42.1,
+        0,
+        0,
+        173.3,
+        589.8,
+        0,
+        542.8,
+        126.3,
+        166.8,
+        40.5,
+        92.2,
+        31.7,
+        42.2,
+        499.6,
+        183.3,
+        583.4,
+        0,
+        558.4,
+        0,
+        40.9,
+        0,
+        0
+      ]
+    },
+    "settleTimeouts": 0,
+    "byLabel": {
+      "Check": {
+        "visibleAcknowledgementMs": {
+          "n": 12,
+          "unit": "ms",
+          "min": 13.7,
+          "p50": 15.1,
+          "p95": 15.9,
+          "max": 15.9,
+          "mean": 14.8,
+          "samples": [
+            15.3,
+            15.2,
+            14.5,
+            13.7,
+            15.1,
+            15.2,
+            14.5,
+            13.7,
+            15.3,
+            15.1,
+            14.6,
+            15.9
+          ]
+        },
+        "updateCallReturnedMs": {
+          "n": 12,
+          "unit": "ms",
+          "min": 131.9,
+          "p50": 174.1,
+          "p95": 455.5,
+          "max": 455.5,
+          "mean": 226.3,
+          "samples": [
+            356.5,
+            131.9,
+            149.5,
+            172.8,
+            455.5,
+            423.4,
+            141.1,
+            188.9,
+            174.4,
+            207,
+            140.3,
+            174.1
+          ]
+        },
+        "settledVisibleStateMs": {
+          "n": 12,
+          "unit": "ms",
+          "min": 216.6,
+          "p50": 455.5,
+          "p95": 732.5,
+          "max": 732.5,
+          "mean": 548.4,
+          "samples": [
+            356.5,
+            398.3,
+            399.5,
+            706.1,
+            455.5,
+            423.4,
+            730.9,
+            731.7,
+            216.6,
+            706.6,
+            723.7,
+            732.5
+          ]
+        }
+      },
+      "Call 0.10": {
+        "visibleAcknowledgementMs": {
+          "n": 17,
+          "unit": "ms",
+          "min": 10.7,
+          "p50": 14.9,
+          "p95": 16.5,
+          "max": 16.5,
+          "mean": 14.8,
+          "samples": [
+            14.8,
+            14.8,
+            10.7,
+            15.7,
+            14.9,
+            16.2,
+            15,
+            14.8,
+            14.2,
+            16.5,
+            13.7,
+            15.2,
+            15.9,
+            14.3,
+            14.7,
+            15.4,
+            15
+          ]
+        },
+        "updateCallReturnedMs": {
+          "n": 17,
+          "unit": "ms",
+          "min": 107.9,
+          "p50": 181.8,
+          "p95": 473.5,
+          "max": 473.5,
+          "mean": 245.3,
+          "samples": [
+            206.3,
+            189.8,
+            178,
+            107.9,
+            215,
+            149.3,
+            181.8,
+            456.5,
+            154.8,
+            124.6,
+            156.4,
+            173.6,
+            174,
+            356.4,
+            464.5,
+            407,
+            473.5
+          ]
+        },
+        "settledVisibleStateMs": {
+          "n": 17,
+          "unit": "ms",
+          "min": 132.1,
+          "p50": 281.1,
+          "p95": 473.5,
+          "max": 473.5,
+          "mean": 303.3,
+          "samples": [
+            239.9,
+            239.8,
+            276.7,
+            132.1,
+            305.9,
+            191.4,
+            355.1,
+            456.5,
+            281.1,
+            165.1,
+            248.6,
+            205.3,
+            357.3,
+            356.4,
+            464.5,
+            407,
+            473.5
+          ]
+        }
+      },
+      "Call 0.05": {
+        "visibleAcknowledgementMs": {
+          "n": 3,
+          "unit": "ms",
+          "min": 14.9,
+          "p50": 15,
+          "p95": 15.5,
+          "max": 15.5,
+          "mean": 15.1,
+          "samples": [
+            15,
+            14.9,
+            15.5
+          ]
+        },
+        "updateCallReturnedMs": {
+          "n": 3,
+          "unit": "ms",
+          "min": 65.4,
+          "p50": 180.1,
+          "p95": 181.8,
+          "max": 181.8,
+          "mean": 142.4,
+          "samples": [
+            180.1,
+            65.4,
+            181.8
+          ]
+        },
+        "settledVisibleStateMs": {
+          "n": 3,
+          "unit": "ms",
+          "min": 222.7,
+          "p50": 232.2,
+          "p95": 248.3,
+          "max": 248.3,
+          "mean": 234.4,
+          "samples": [
+            248.3,
+            232.2,
+            222.7
+          ]
+        }
+      }
+    },
+    "fixture": {
+      "handsStarted": 6,
+      "oppActions": 24,
+      "oppBets": 18
+    },
+    "longAnimationFrames": 2,
+    "samples": [
+      {
+        "label": "Check",
+        "paintedAckMs": 15.3,
+        "callReturnedMs": 356.5,
+        "settledMs": 356.5
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 15.2,
+        "callReturnedMs": 131.9,
+        "settledMs": 398.3
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 14.8,
+        "callReturnedMs": 206.3,
+        "settledMs": 239.9
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 14.5,
+        "callReturnedMs": 149.5,
+        "settledMs": 399.5
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 14.8,
+        "callReturnedMs": 189.8,
+        "settledMs": 239.8
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 13.7,
+        "callReturnedMs": 172.8,
+        "settledMs": 706.1
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 10.7,
+        "callReturnedMs": 178,
+        "settledMs": 276.7
+      },
+      {
+        "label": "Call 0.05",
+        "paintedAckMs": 15,
+        "callReturnedMs": 180.1,
+        "settledMs": 248.3
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15.7,
+        "callReturnedMs": 107.9,
+        "settledMs": 132.1
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 14.9,
+        "callReturnedMs": 215,
+        "settledMs": 305.9
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 16.2,
+        "callReturnedMs": 149.3,
+        "settledMs": 191.4
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 15.1,
+        "callReturnedMs": 455.5,
+        "settledMs": 455.5
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 15.2,
+        "callReturnedMs": 423.4,
+        "settledMs": 423.4
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15,
+        "callReturnedMs": 181.8,
+        "settledMs": 355.1
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 14.5,
+        "callReturnedMs": 141.1,
+        "settledMs": 730.9
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 14.8,
+        "callReturnedMs": 456.5,
+        "settledMs": 456.5
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 13.7,
+        "callReturnedMs": 188.9,
+        "settledMs": 731.7
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 14.2,
+        "callReturnedMs": 154.8,
+        "settledMs": 281.1
+      },
+      {
+        "label": "Call 0.05",
+        "paintedAckMs": 14.9,
+        "callReturnedMs": 65.4,
+        "settledMs": 232.2
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 16.5,
+        "callReturnedMs": 124.6,
+        "settledMs": 165.1
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 13.7,
+        "callReturnedMs": 156.4,
+        "settledMs": 248.6
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15.2,
+        "callReturnedMs": 173.6,
+        "settledMs": 205.3
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 15.3,
+        "callReturnedMs": 174.4,
+        "settledMs": 216.6
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 15.1,
+        "callReturnedMs": 207,
+        "settledMs": 706.6
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15.9,
+        "callReturnedMs": 174,
+        "settledMs": 357.3
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 14.6,
+        "callReturnedMs": 140.3,
+        "settledMs": 723.7
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 14.3,
+        "callReturnedMs": 356.4,
+        "settledMs": 356.4
+      },
+      {
+        "label": "Check",
+        "paintedAckMs": 15.9,
+        "callReturnedMs": 174.1,
+        "settledMs": 732.5
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 14.7,
+        "callReturnedMs": 464.5,
+        "settledMs": 464.5
+      },
+      {
+        "label": "Call 0.05",
+        "paintedAckMs": 15.5,
+        "callReturnedMs": 181.8,
+        "settledMs": 222.7
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15.4,
+        "callReturnedMs": 407,
+        "settledMs": 407
+      },
+      {
+        "label": "Call 0.10",
+        "paintedAckMs": 15,
+        "callReturnedMs": 473.5,
+        "settledMs": 473.5
+      }
+    ]
+  },
+  "finishedAt": "2026-08-05T00:31:54.764Z"
+}

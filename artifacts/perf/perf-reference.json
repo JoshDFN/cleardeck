@@ -1,0 +1,63 @@
+{
+  "startedAt": "2026-08-05T00:24:31.458Z",
+  "gitSha": "7bc69db",
+  "viewport": {
+    "name": "desktop",
+    "width": 1440,
+    "height": 900,
+    "deviceScaleFactor": 1,
+    "isMobile": false
+  },
+  "method": {
+    "instrument": "the same PerformanceObserver + requestAnimationFrame code as tools/shots/perf.mjs",
+    "browser": "headless Chromium via Playwright, same binary and same machine as the ClearDeck run",
+    "interaction": "NONE. No account, no game joined, no consent banner clicked, no money involved.",
+    "networkCaveat": "these are public-internet loads; the ClearDeck numbers are localhost loads. The two are NOT comparable as absolute load times and must not be presented as a race."
+  },
+  "targets": [
+    {
+      "key": "pokernow-home",
+      "url": "https://www.pokernow.club/",
+      "label": "PokerNow — landing/lobby entry",
+      "reachable": true,
+      "failure": null,
+      "firstPaint": {
+        "n": 10,
+        "unit": "ms",
+        "min": 556,
+        "p50": 684,
+        "p95": 1656,
+        "max": 1656
+      },
+      "firstContentfulPaint": {
+        "n": 10,
+        "unit": "ms",
+        "min": 556,
+        "p50": 684,
+        "p95": 1656,
+        "max": 1656
+      },
+      "largestContentfulPaint": {
+        "n": 10,
+        "unit": "ms",
+        "min": 624,
+        "p50": 744,
+        "p95": 2056,
+        "max": 2056
+      },
+      "idleFrameIntervalMs": {
+        "n": 479,
+        "unit": "ms",
+        "min": 6.6,
+        "p50": 8.3,
+        "p95": 9.7,
+        "max": 10.2
+      },
+      "notMeasured": [
+        "click-to-acknowledgement (needs a seat at a table)",
+        "action-to-settled (needs a seat at a table)",
+        "showdown animation cadence (needs a hand in progress)"
+      ]
+    }
+  ]
+}

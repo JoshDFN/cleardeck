@@ -1,0 +1,245 @@
+{
+ "chainAgreement": "DISAGREES",
+ "moneyFiguresChecked": 20,
+ "moneyMismatches": [
+  "lobby row NAME \"9-Max - 0.01/0.02\" quotes a small blind: DISAGREES: screen \"0.01\" means 500000 e8s..1500000 e8s, canister says 10000000 e8s (screen is 0.100x the chain)",
+  "lobby row NAME \"9-Max - 0.01/0.02\" quotes a big blind: DISAGREES: screen \"0.02\" means 1500000 e8s..2500000 e8s, canister says 20000000 e8s (screen is 0.100x the chain)",
+  "lobby row NAME \"6-Max - 0.01/0.02\" quotes a small blind: DISAGREES: screen \"0.01\" means 500000 e8s..1500000 e8s, canister says 5000000 e8s (screen is 0.200x the chain)",
+  "lobby row NAME \"6-Max - 0.01/0.02\" quotes a big blind: DISAGREES: screen \"0.02\" means 1500000 e8s..2500000 e8s, canister says 10000000 e8s (screen is 0.200x the chain)"
+ ],
+ "structuralProblems": [
+  "ON-CHAIN DATA DEFECT for \"9-Max - 0.01/0.02\": the LOBBY canister's stored record says smallBlind=1000000, bigBlind=2000000, minBuyIn=200000000, maxBuyIn=1000000000 but the TABLE canister enforces smallBlind=10000000, bigBlind=20000000, minBuyIn=2000000000, maxBuyIn=10000000000. That is 10x/10x/10x/10x the advertised figure. Fix is in src/lobby_canister (init_microstakes_tables), not in the client: the rendered cells were compared against the TABLE canister above.",
+  "ON-CHAIN DATA DEFECT for \"6-Max - 0.01/0.02\": the LOBBY canister's stored record says smallBlind=1000000, bigBlind=2000000, minBuyIn=200000000, maxBuyIn=1000000000 but the TABLE canister enforces smallBlind=5000000, bigBlind=10000000, minBuyIn=1000000000, maxBuyIn=5000000000. That is 5x/5x/5x/5x the advertised figure. Fix is in src/lobby_canister (init_microstakes_tables), not in the client: the rendered cells were compared against the TABLE canister above."
+ ],
+ "advisory": [],
+ "figures": [
+  {
+   "label": "lobby \"9-Max - 0.01/0.02\" small blind (vs TABLE canister config)",
+   "chain": 10000000,
+   "screen": "0.10",
+   "ok": true,
+   "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby \"9-Max - 0.01/0.02\" big blind (vs TABLE canister config)",
+   "chain": 20000000,
+   "screen": "0.20",
+   "ok": true,
+   "detail": "screen \"0.20\" == canister 20000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby \"9-Max - 0.01/0.02\" min buy-in (vs TABLE canister config)",
+   "chain": 2000000000,
+   "screen": "20.00",
+   "ok": true,
+   "detail": "screen \"20.00\" == canister 2000000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby \"9-Max - 0.01/0.02\" max buy-in (vs TABLE canister config)",
+   "chain": 10000000000,
+   "screen": "100.00",
+   "ok": true,
+   "detail": "screen \"100.00\" == canister 10000000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby row NAME \"9-Max - 0.01/0.02\" quotes a small blind",
+   "chain": 10000000,
+   "screen": "0.01",
+   "ok": false,
+   "detail": "DISAGREES: screen \"0.01\" means 500000 e8s..1500000 e8s, canister says 10000000 e8s (screen is 0.100x the chain)"
+  },
+  {
+   "label": "lobby row NAME \"9-Max - 0.01/0.02\" quotes a big blind",
+   "chain": 20000000,
+   "screen": "0.02",
+   "ok": false,
+   "detail": "DISAGREES: screen \"0.02\" means 1500000 e8s..2500000 e8s, canister says 20000000 e8s (screen is 0.100x the chain)"
+  },
+  {
+   "label": "lobby \"9-Max - 0.01/0.02\" live pot vs get_pot()",
+   "chain": 15500000000,
+   "screen": "pot 155.00 ICP",
+   "ok": true,
+   "detail": "screen \"pot 155.00 ICP\" == canister 15500000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby \"Heads Up - 0.01/0.02\" small blind (vs TABLE canister config)",
+   "chain": 1000000,
+   "screen": "0.01",
+   "ok": true,
+   "detail": "screen \"0.01\" == canister 1000000 e8s (±500000 e8s); NOTE the client's precision here cannot distinguish 500000 e8s"
+  },
+  {
+   "label": "lobby \"Heads Up - 0.01/0.02\" big blind (vs TABLE canister config)",
+   "chain": 2000000,
+   "screen": "0.02",
+   "ok": true,
+   "detail": "screen \"0.02\" == canister 2000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby \"Heads Up - 0.01/0.02\" min buy-in (vs TABLE canister config)",
+   "chain": 200000000,
+   "screen": "2.00",
+   "ok": true,
+   "detail": "screen \"2.00\" == canister 200000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby \"Heads Up - 0.01/0.02\" max buy-in (vs TABLE canister config)",
+   "chain": 1000000000,
+   "screen": "10.00",
+   "ok": true,
+   "detail": "screen \"10.00\" == canister 1000000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby row NAME \"Heads Up - 0.01/0.02\" quotes a small blind",
+   "chain": 1000000,
+   "screen": "0.01",
+   "ok": true,
+   "detail": "screen \"0.01\" == canister 1000000 e8s (±500000 e8s); NOTE the client's precision here cannot distinguish 500000 e8s"
+  },
+  {
+   "label": "lobby row NAME \"Heads Up - 0.01/0.02\" quotes a big blind",
+   "chain": 2000000,
+   "screen": "0.02",
+   "ok": true,
+   "detail": "screen \"0.02\" == canister 2000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby \"Heads Up - 0.01/0.02\" live pot vs get_pot()",
+   "chain": 4000000,
+   "screen": "pot 0.04 ICP",
+   "ok": true,
+   "detail": "screen \"pot 0.04 ICP\" == canister 4000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby \"6-Max - 0.01/0.02\" small blind (vs TABLE canister config)",
+   "chain": 5000000,
+   "screen": "0.05",
+   "ok": true,
+   "detail": "screen \"0.05\" == canister 5000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby \"6-Max - 0.01/0.02\" big blind (vs TABLE canister config)",
+   "chain": 10000000,
+   "screen": "0.10",
+   "ok": true,
+   "detail": "screen \"0.10\" == canister 10000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby \"6-Max - 0.01/0.02\" min buy-in (vs TABLE canister config)",
+   "chain": 1000000000,
+   "screen": "10.00",
+   "ok": true,
+   "detail": "screen \"10.00\" == canister 1000000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby \"6-Max - 0.01/0.02\" max buy-in (vs TABLE canister config)",
+   "chain": 5000000000,
+   "screen": "50.00",
+   "ok": true,
+   "detail": "screen \"50.00\" == canister 5000000000 e8s (±500000 e8s)"
+  },
+  {
+   "label": "lobby row NAME \"6-Max - 0.01/0.02\" quotes a small blind",
+   "chain": 5000000,
+   "screen": "0.01",
+   "ok": false,
+   "detail": "DISAGREES: screen \"0.01\" means 500000 e8s..1500000 e8s, canister says 5000000 e8s (screen is 0.200x the chain)"
+  },
+  {
+   "label": "lobby row NAME \"6-Max - 0.01/0.02\" quotes a big blind",
+   "chain": 10000000,
+   "screen": "0.02",
+   "ok": false,
+   "detail": "DISAGREES: screen \"0.02\" means 1500000 e8s..2500000 e8s, canister says 10000000 e8s (screen is 0.200x the chain)"
+  }
+ ],
+ "onChain": [
+  {
+   "name": "9-Max - 0.01/0.02",
+   "lobbyConfig": {
+    "smallBlind": 1000000,
+    "bigBlind": 2000000,
+    "minBuyIn": 200000000,
+    "maxBuyIn": 1000000000,
+    "maxPlayers": 9
+   },
+   "tableConfig": {
+    "smallBlind": 10000000,
+    "bigBlind": 20000000,
+    "minBuyIn": 2000000000,
+    "maxBuyIn": 10000000000,
+    "maxPlayers": 9
+   },
+   "livePlayerCount": 4,
+   "renderedFaithfullyFromLobbyRecord": false
+  },
+  {
+   "name": "6-Max - 0.01/0.02",
+   "lobbyConfig": {
+    "smallBlind": 1000000,
+    "bigBlind": 2000000,
+    "minBuyIn": 200000000,
+    "maxBuyIn": 1000000000,
+    "maxPlayers": 6
+   },
+   "tableConfig": {
+    "smallBlind": 5000000,
+    "bigBlind": 10000000,
+    "minBuyIn": 1000000000,
+    "maxBuyIn": 5000000000,
+    "maxPlayers": 6
+   },
+   "livePlayerCount": 2,
+   "renderedFaithfullyFromLobbyRecord": false
+  },
+  {
+   "name": "Heads Up - 0.01/0.02",
+   "lobbyConfig": {
+    "smallBlind": 1000000,
+    "bigBlind": 2000000,
+    "minBuyIn": 200000000,
+    "maxBuyIn": 1000000000,
+    "maxPlayers": 2
+   },
+   "tableConfig": {
+    "smallBlind": 1000000,
+    "bigBlind": 2000000,
+    "minBuyIn": 200000000,
+    "maxBuyIn": 1000000000,
+    "maxPlayers": 2
+   },
+   "livePlayerCount": 2,
+   "renderedFaithfullyFromLobbyRecord": true
+  }
+ ],
+ "onScreen": [
+  {
+   "name": "9-Max - 0.01/0.02",
+   "stakesText": "0.10/0.20",
+   "buyInText": "20.00 – 100.00",
+   "playersText": "4/9",
+   "nowLabel": "Flop",
+   "livePotText": "pot 155.00 ICP",
+   "currencyTag": "ICP"
+  },
+  {
+   "name": "Heads Up - 0.01/0.02",
+   "stakesText": "0.01/0.02",
+   "buyInText": "2.00 – 10.00",
+   "playersText": "2/2",
+   "nowLabel": "Pre-flop",
+   "livePotText": "pot 0.04 ICP",
+   "currencyTag": "ICP"
+  },
+  {
+   "name": "6-Max - 0.01/0.02",
+   "stakesText": "0.05/0.10",
+   "buyInText": "10.00 – 50.00",
+   "playersText": "2/6",
+   "nowLabel": "All sitting out",
+   "livePotText": null,
+   "currencyTag": "ICP"
+  }
+ ]
+}

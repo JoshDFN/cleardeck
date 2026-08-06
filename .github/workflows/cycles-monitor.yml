@@ -1,0 +1,64 @@
+name: Cycles monitor
+
+# Daily low-balance check. Opens an `incident` issue if any canister is below
+# threshold. Reading `icp canister status` is controller-only, so it reuses the
+# IC_DEPLOY_IDENTITY secret read-only.
+on:
+  schedule:
+    - cron: '0 14 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  ICP_CLI_VERSION: '1.0.0'
+  CYCLES_LOW_THRESHOLD: '1000000000000' # 1T
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+      - name: Install pinned icp-cli
+        run: npm i -g @icp-sdk/icp-cli@${ICP_CLI_VERSION}
+      - name: Import identity (read-only status queries)
+        env:
+          IC_DEPLOY_IDENTITY: ${{ secrets.IC_DEPLOY_IDENTITY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$IC_DEPLOY_IDENTITY" | base64 -d > /tmp/monitor.pem
+          icp identity import --from-pem /tmp/monitor.pem --storage plaintext monitor
+          icp identity default monitor
+      - name: Check balances and open incident if low
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          THRESHOLD: ${{ env.CYCLES_LOW_THRESHOLD }}
+        run: |
+          set -euo pipefail
+          report=""; any_low=0
+          for c in lobby table_1 table_2 table_3 btc_table_1 history frontend; do
+            # Parse the structured JSON (robust vs scraping human output). Confirm
+            # the cycles key against `icp canister status --json` on first run.
+            bal=$(icp canister status "$c" -e ic --identity monitor --json 2>/dev/null \
+              | jq -r '(.cycles // .status.cycles // .moduleHash_cycles // empty)' | tr -d '_,"')
+            [ -z "${bal:-}" ] && { echo "::warning::no cycles parsed for $c"; continue; }
+            row="- $c: $bal cycles"
+            if [ "$bal" -lt "$THRESHOLD" ]; then any_low=1; row="$row — BELOW THRESHOLD"; fi
+            report="$report"$'\n'"$row"
+          done
+          if [ "$any_low" = "0" ]; then echo "all canisters above threshold"; exit 0; fi
+          printf 'Canister cycles below %s:\n%s\n' "$THRESHOLD" "$report" > /tmp/body.md
+          gh issue create --repo "$REPO" \
+            --title "incident: canister cycles low ($(date -u +%F))" \
+            --label incident --body-file /tmp/body.md
+      - name: Shred identity
+        if: always()
+        run: |
+          rm -f /tmp/monitor.pem || true
+          icp identity delete monitor || true

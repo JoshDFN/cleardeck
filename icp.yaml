@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=https://github.com/dfinity/icp-cli/raw/refs/tags/v1.0.0/docs/schemas/icp-yaml-schema.json
+#
+# ClearDeck project manifest for @icp-sdk/icp-cli (target: 1.0.0 GA).
+# Replaces dfx.json. Build/deploy with `icp`, not `dfx`.
+#
+# ⚠️  FUND-HOLDING CANISTERS: lobby, table_*, btc_table_1 and history hold real
+#     ICP / ckBTC on mainnet. `icp deploy` defaults to `--mode auto`, which can
+#     resolve to `install` on a canister it considers fresh. ALWAYS deploy the
+#     backend with `--mode upgrade` (see scripts/deploy-mainnet.sh) and NEVER
+#     `reinstall` — reinstall wipes stable state, including user balances.
+#
+# Recipe versions are pinned and independent of the CLI version. The asset
+# recipe is on v2.2.1: icp-cli 1.0.2 removed the `assets` sync step type that
+# v2.1.0 emitted, so v2.1.0 now fails to render at all (every `icp` command in
+# this project errored, not just deploys).
+#
+# The Rust canisters do NOT use a registry recipe. They use the vendored
+# recipes/rust-reproducible.hbs, a fork of @dfinity/rust@v3.2.0 that makes the
+# module hash byte-reproducible and path-independent and that publishes the git
+# revision as canister metadata. The build procedure is part of what a verifier
+# checks, so it lives in this tree under the same review as the source: a
+# registry tag can be re-pointed after the fact, a file at a commit cannot.
+# Read recipes/rust-reproducible.hbs for the list of differences and why each
+# one exists. Verify with `./scripts/verify-build.sh --local`.
+
+# The default gateway port 8000 is regularly taken by another local icp-cli
+# project on a shared dev machine, and `icp network start` refuses to share it.
+# Pin our own port so bringing up the ClearDeck stack never requires stopping
+# somebody else's replica.
+networks:
+  - name: local
+    mode: managed
+    gateway:
+      port: 8077
+
+canisters:
+  # --- Table registry -------------------------------------------------------
+  - name: lobby
+    recipe:
+      type: "file://recipes/rust-reproducible.hbs"
+      configuration:
+        package: lobby_canister
+        candid: src/lobby_canister/lobby_canister.did
+        shrink: true
+
+  # --- Permanent hand history (provably-fair shuffle records) ---------------
+  - name: history
+    recipe:
+      type: "file://recipes/rust-reproducible.hbs"
+      configuration:
+        package: history_canister
+        candid: src/history_canister/history_canister.did
+        shrink: true
+
+  # --- Poker tables (one Rust package, distinct init args per instance) ------
+  - name: table_1 # Heads-Up, 0.01/0.02 ICP
+    recipe:
+      type: "file://recipes/rust-reproducible.hbs"
+      configuration:
+        package: table_canister
+        candid: src/table_canister/table_canister.did
+        shrink: true
+    init_args:
+      value: '(record { small_blind = 1000000 : nat64; big_blind = 2000000 : nat64; min_buy_in = 200000000 : nat64; max_buy_in = 1000000000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })'
+
+  - name: table_2 # 6-max, 0.05/0.10 ICP
+    recipe:
+      type: "file://recipes/rust-reproducible.hbs"
+      configuration:
+        package: table_canister
+        candid: src/table_canister/table_canister.did
+        shrink: true
+    init_args:
+      value: '(record { small_blind = 5000000 : nat64; big_blind = 10000000 : nat64; min_buy_in = 1000000000 : nat64; max_buy_in = 5000000000 : nat64; max_players = 6 : nat8; action_timeout_secs = 45 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })'
+
+  - name: table_3 # 9-max, 0.10/0.20 ICP
+    recipe:
+      type: "file://recipes/rust-reproducible.hbs"
+      configuration:
+        package: table_canister
+        candid: src/table_canister/table_canister.did
+        shrink: true
+    init_args:
+      value: '(record { small_blind = 10000000 : nat64; big_blind = 20000000 : nat64; min_buy_in = 2000000000 : nat64; max_buy_in = 10000000000 : nat64; max_players = 9 : nat8; action_timeout_secs = 60 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { ICP } })'
+
+  - name: btc_table_1 # Heads-Up, 100/200 sats (ckBTC)
+    recipe:
+      type: "file://recipes/rust-reproducible.hbs"
+      configuration:
+        package: table_canister
+        candid: src/table_canister/table_canister.did
+        shrink: true
+    init_args:
+      value: '(record { small_blind = 100 : nat64; big_blind = 200 : nat64; min_buy_in = 10000 : nat64; max_buy_in = 100000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { BTC } })'
+
+  # --- SvelteKit frontend (asset canister; `npm run build` -> dist) ----------
+  - name: frontend
+    recipe:
+      type: "@dfinity/asset-canister@v2.2.1"
+      configuration:
+        dir: src/cleardeck_frontend/dist
+
+# Internet Identity is not a project canister: on mainnet the frontend points
+# at https://id.ai directly; for local dev `ii: true` deploys a local II.
+environments:
+  - name: local
+    network: local
+    ii: true
+  - name: ic
+    network: ic

@@ -1,0 +1,55 @@
+name: Security
+
+# Advisory scanning + fund-safety static checks. Read-only; no secrets, no deploy.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 13 * * 1' # weekly, Monday — catches newly-published advisories
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: '1.90.0'
+  NODE_VERSION: '20'
+
+jobs:
+  audit:
+    name: Dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: cargo install cargo-audit --locked
+      - name: cargo audit (RustSec — fund canister has crypto deps)
+        run: cargo audit
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+      - run: npm ci
+      - name: npm audit (warn-first; tighten to fail once clean)
+        run: npm audit --audit-level=high || true
+
+  fund-safety:
+    name: Fund-safety static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Forbid --mode reinstall on a backend (fund-holding) canister
+        # Backend canisters (lobby/table_*/btc_table_*/history) hold balances;
+        # reinstall wipes stable state. The frontend ASSET canister is exempt.
+        run: |
+          if grep -rEn '(dfx|icp) deploy.*(lobby|table_[0-9]|btc_table_[0-9]|history)' scripts/ .github/ 2>/dev/null \
+               | grep -E -- '--mode +reinstall'; then
+            echo "::error::--mode reinstall on a fund-holding backend canister is forbidden"
+            exit 1
+          fi
+          echo "No forbidden reinstall patterns found."

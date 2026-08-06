@@ -1,0 +1,90 @@
+[package]
+name = "money_safety"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "ClearDeck money-safety harness: named fund invariants M1..M6, a hostile-sequence fuzzer, and minimal regression reproducers, executed against the REAL table canister wasm and the REAL ICP ledger wasm on PocketIC."
+
+# Deliberately DETACHED from the root workspace.
+#
+# 1. `pocket-ic` drags in tokio + reqwest + rustls. Adding it as a dev-dependency
+#    of `table_canister` would put that tree in the lockfile of a canister that
+#    custodies real ICP/ckBTC on mainnet, and would slow every `cargo build` of
+#    the fund-holding crates.
+# 2. This crate is written by a different owner than src/table_canister/**, so it
+#    must not need edits to the shared root Cargo.toml / Cargo.lock.
+#
+# It therefore carries its own lockfile and its own target dir. See README.md for
+# how to run it (it is NOT picked up by `cargo test --workspace`).
+[workspace]
+
+[lib]
+name = "money_safety"
+path = "src/lib.rs"
+
+[dependencies]
+# The REAL pure engine the canister links, host-built. Used ONLY as an oracle: the
+# seam tests re-evaluate each showdown hand from the cards the canister revealed and
+# compare against the rank the canister recorded, which is what makes "the canister
+# actually consulted evaluate_hand" a checkable claim rather than an assumption
+# (docs/DEFECTS.md H-04, mutation 6). `HandRank` and `Card` are also the exact
+# Candid types on the canister's wire, so there is no second mirror to drift.
+poker_core = { path = "../../src/poker_core" }
+settlement_oracle = { path = "../settlement", default-features = false }
+pocket-ic = "11.0.0"
+# Same version pocket-ic 11 depends on: the settings/snapshot types the fault-injection
+# tests need to talk to the management canister directly.
+ic-management-canister-types = "0.5.0"
+candid = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+crc32fast = "1.3"
+hex = "0.4"
+
+# `tests/invariants/main.rs` is picked up by cargo's own target auto-discovery as
+# the test target named `invariants`, so `cargo test --test invariants` -- the exact
+# command `scripts/dev.sh test` runs -- still names it. It is a DIRECTORY so the
+# seam tests and the classifier tests are part of the gate instead of sitting in a
+# target nobody invokes. Declaring it explicitly here as well would collide with the
+# auto-discovered target, so it is deliberately absent.
+[[test]]
+name = "regressions"
+path = "tests/regressions.rs"
+
+[[test]]
+name = "fuzz"
+path = "tests/fuzz.rs"
+
+# Named explicitly for the same reason `regressions` and `fuzz` are, and for the
+# reason `deposit_replay` had to be named in scripts/dev.sh: a cargo-auto-discovered
+# target is a target no human ever types. This one reads src/table_canister/src/lib.rs
+# and the two money modals and fails when a limit the UI STATES stops matching the
+# limit the canister ENFORCES (docs/DEFECTS.md T-26). It needs no replica and no
+# wasm -- two file reads -- so it is in the fast gate.
+[[test]]
+name = "ui_limits"
+path = "tests/ui_limits.rs"
+
+# THE ADMIN CUSTODY SURFACE (docs/SECURITY-FINDINGS.md FINDING 07). Named
+# explicitly for the reason `deposit_replay` had to be named in scripts/dev.sh: an
+# auto-discovered target is a target no human ever types, and the largest fund-loss
+# path in this project survived four waves partly because nothing ran at it. If
+# this file is renamed, this line fails rather than the coverage silently going away.
+[[test]]
+name = "admin_custody"
+path = "tests/admin_custody.rs"
+
+# PocketIC instances are heavy (one replica per instance). Keep test binaries
+# from fighting over CPU by default; see README.md.
+[profile.test]
+opt-level = 1
+
+# THE LEDGER/ESCROW BOUNDARY UNDER FAULT (docs/SECURITY-FINDINGS.md FINDING 29).
+# Named explicitly for the reason `admin_custody` is: an auto-discovered target is
+# a target no human ever types, and this one is the only gate on the money path
+# that survives a discarded post-await continuation. If the file is renamed, this
+# line fails rather than the coverage silently going away.
+[[test]]
+name = "ledger_boundary"
+path = "tests/ledger_boundary.rs"

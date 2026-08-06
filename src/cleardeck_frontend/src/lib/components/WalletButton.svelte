@@ -4,6 +4,7 @@
   import { onMount } from 'svelte';
   import { Principal } from '@dfinity/principal';
   import { Actor, HttpAgent } from '@dfinity/agent';
+  import { isMainnet, IC_HOST } from '../ic-config.js';
   import logger from '$lib/logger.js';
 
   // Props
@@ -261,13 +262,7 @@
     }
   }
 
-  // Check if on mainnet
-  function isMainnet() {
-    return typeof window !== 'undefined' &&
-      (window.location.hostname.includes('icp0.io') ||
-       window.location.hostname.includes('ic0.app') ||
-       window.location.hostname.includes('internetcomputer.org'));
-  }
+  // Mainnet detection + the agent host (icp-api.io) are centralized in ../ic-config.js.
 
   // Fetch BTC deposit address from ckBTC minter
   async function loadBtcDepositAddress() {
@@ -276,7 +271,7 @@
     loadingBtcAddress = true;
     try {
       const agent = new HttpAgent({
-        host: 'https://ic0.app',
+        host: IC_HOST,
         identity: authState.identity,
       });
 
@@ -314,7 +309,7 @@
 
     try {
       const agent = new HttpAgent({
-        host: 'https://ic0.app',
+        host: IC_HOST,
         identity: authState.identity,
       });
 
@@ -412,7 +407,7 @@
       await updateBtcBalance();
 
       const agent = new HttpAgent({
-        host: 'https://ic0.app',
+        host: IC_HOST,
         identity: authState.identity,
       });
 

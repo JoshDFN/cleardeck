@@ -1,0 +1,108 @@
+{{! ClearDeck reproducible Rust canister recipe.                                }}
+{{!                                                                             }}
+{{! WHY THIS FILE EXISTS AND IS VENDORED                                        }}
+{{!                                                                             }}
+{{! An independent auditor could not match the deployed module hash to ANY      }}
+{{! commit in this repository, and found that the same source built at two      }}
+{{! different directories produced two different hashes. This recipe is the     }}
+{{! fix. It is a fork of @dfinity/rust@v3.2.0 held in-repo on purpose. The      }}
+{{! build procedure is part of the thing being verified, so it must be under    }}
+{{! the same version control and the same review as the canister source: a      }}
+{{! registry tag can be re-pointed after the fact, a file at a commit cannot.   }}
+{{!                                                                             }}
+{{! DIFFERENCES FROM @dfinity/rust@v3.2.0, EACH ONE A REPRODUCIBILITY FIX       }}
+{{!                                                                             }}
+{{!  1. RUSTFLAGS -Cstrip=symbols                                               }}
+{{!     Upstream passes --keep-name-section to every ic-wasm invocation, so a   }}
+{{!     ~274 KB wasm `name` custom section survived into the deployed module.   }}
+{{!     88 of those symbols carry an LLVM disambiguator (`.llvm.<module-id>`)   }}
+{{!     derived from the absolute path of the compilation unit, so the module   }}
+{{!     hash changed with the directory the repo happened to sit in. Stripping  }}
+{{!     removes the cause rather than masking it, and removes 12% of a module   }}
+{{!     that the replica never executes.                                        }}
+{{!                                                                             }}
+{{!  2. --remap-path-prefix for CARGO_HOME and for the workspace root           }}
+{{!     Panic-location strings from dependency crates bake the absolute path    }}
+{{!     of the crate source into the wasm DATA section (58 of them in           }}
+{{!     table_canister). Those paths are $CARGO_HOME-dependent, so a build on   }}
+{{!     one machine could never equal a build on another, container included.   }}
+{{!     Both prefixes are computed below at build time, so no verifier has to   }}
+{{!     remember to export anything. rustc's own /rustc/<hash>/library/...      }}
+{{!     paths are already virtual and are pinned by rust-toolchain.toml.        }}
+{{!                                                                             }}
+{{!  3. --locked                                                                }}
+{{!     Upstream passes it only when `locked: true` is configured. A build      }}
+{{!     that is allowed to update Cargo.lock is not reproducible.               }}
+{{!                                                                             }}
+{{!  4. git:revision / git:dirty PUBLIC metadata                                }}
+{{!     So a stranger can ask a running canister which commit it claims to be.  }}
+{{!     The revision is an INPUT to the build, never something the build        }}
+{{!     discovers on its own: a Docker context has no .git, so a build.rs that  }}
+{{!     shelled out to git would silently produce a different artifact there    }}
+{{!     than here. Order is env var, then working-tree git, then "unknown". A   }}
+{{!     verifier who checks out the commit gets the right value for free; a     }}
+{{!     Docker build is handed it with --build-arg. See the README section      }}
+{{!     "Verify the Code" for what this does and does not prove.                }}
+{{!                                                                             }}
+{{!  5. All metadata sections are `-v public`                                   }}
+{{!     Upstream leaves cargo:version and template:type controller-only.        }}
+{{!     Third-party verification needs the compiler version, so publish it.     }}
+{{!                                                                             }}
+{{! TWO PARSER RULES FOR EDITING THIS FILE, BOTH LEARNED THE HARD WAY           }}
+{{!                                                                             }}
+{{!  a. A command line is a YAML plain scalar. It must not contain a colon      }}
+{{!     followed by a space, or the parser turns the command into a map and     }}
+{{!     `icp build` dies with "invalid type: map, expected a string".           }}
+{{!  b. icp-cli word-splits each command before running it and cannot parse a   }}
+{{!     `#` comment inside one. Keep shell comments out of the command blocks;  }}
+{{!     put the explanation in a handlebars comment like this one.              }}
+{{!                                                                             }}
+{{! Guarded by `./scripts/verify-build.sh --two-paths` and by the               }}
+{{! reproducible-build job in .github/workflows/ci.yml.                         }}
+build:
+  steps:
+    - type: script
+      commands:
+        - command -v ic-wasm >/dev/null 2>&1 || { echo >&2 'ic-wasm not found -- run `cargo install ic-wasm --version 0.9.9 --locked`'; exit 1; }
+
+    - type: script
+      commands:
+        - |
+          set -eu
+          CARGO_HOME_ABS="${CARGO_HOME:-$HOME/.cargo}"
+          WORKSPACE_ABS="$(pwd)"
+          RUSTFLAGS="-Cstrip=symbols --remap-path-prefix=${CARGO_HOME_ABS}=/cargo --remap-path-prefix=${WORKSPACE_ABS}=/cleardeck"
+          export RUSTFLAGS
+          echo "reproducible-build RUSTFLAGS=${RUSTFLAGS}"
+          cargo build --package {{ package }} --target wasm32-unknown-unknown --release --locked
+        - TARGET_DIR=$(cargo metadata --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p'); cp "${TARGET_DIR}/wasm32-unknown-unknown/release/{{ replace "-" "_" package }}.wasm" "$ICP_WASM_OUTPUT_PATH"
+
+    - type: script
+      commands:
+        - |
+          set -eu
+          REV="${CLEARDECK_GIT_REVISION:-}"
+          if [ -z "$REV" ]; then REV="$(git rev-parse HEAD 2>/dev/null || echo unknown)"; fi
+          DIRTY="${CLEARDECK_GIT_DIRTY:-}"
+          if [ -z "$DIRTY" ]; then
+            if git rev-parse --git-dir >/dev/null 2>&1; then
+              if [ -n "$(git status --porcelain 2>/dev/null)" ]; then DIRTY=dirty; else DIRTY=clean; fi
+            else
+              DIRTY=unknown
+            fi
+          fi
+          ic-wasm "$ICP_WASM_OUTPUT_PATH" -o "$ICP_WASM_OUTPUT_PATH" metadata "git:revision" -d "$REV" -v public
+          ic-wasm "$ICP_WASM_OUTPUT_PATH" -o "$ICP_WASM_OUTPUT_PATH" metadata "git:dirty" -d "$DIRTY" -v public
+          echo "reproducible-build git:revision=${REV} git:dirty=${DIRTY}"
+        - ic-wasm "$ICP_WASM_OUTPUT_PATH" -o "$ICP_WASM_OUTPUT_PATH" metadata "cargo:version" -d "$(cargo --version)" -v public
+        - ic-wasm "$ICP_WASM_OUTPUT_PATH" -o "$ICP_WASM_OUTPUT_PATH" metadata "template:type" -d "rust" -v public
+        - ic-wasm "$ICP_WASM_OUTPUT_PATH" -o "$ICP_WASM_OUTPUT_PATH" metadata "candid:service" -f '{{ candid }}' -v public
+
+    {{! shrink WITHOUT --keep-name-section. -Cstrip=symbols already removed the }}
+    {{! name section; this is the second lock on the same door. icp.yaml sets   }}
+    {{! shrink: true for every canister.                                        }}
+    {{#if shrink}}
+    - type: script
+      commands:
+        - ic-wasm "$ICP_WASM_OUTPUT_PATH" -o "$ICP_WASM_OUTPUT_PATH" shrink
+    {{/if}}

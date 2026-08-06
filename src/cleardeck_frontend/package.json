@@ -4,9 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "setup": "npm i && dfx generate && dfx deploy",
+    "setup": "npm i && icp deploy -e local",
     "start": "vite --port 3000",
-    "prebuild": "dfx generate lobby && dfx generate table_1 && dfx generate table_2 && dfx generate table_3 && dfx generate history || true",
     "build": "vite build",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "format": "prettier --write \"src/**/*.{json,js,jsx,ts,tsx,css,scss}\""

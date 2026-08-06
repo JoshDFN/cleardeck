@@ -1,0 +1,17 @@
+{
+  "name": "cleardeck-shots",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Deterministic screenshot harness for ClearDeck (real canisters, real UI).",
+  "scripts": {
+    "shots": "node run.mjs",
+    "selftest": "node test-occlusion.mjs && node test-census.mjs && node test-money.mjs && node test-rake.mjs"
+  },
+  "dependencies": {
+    "@dfinity/agent": "^3.4.3",
+    "@dfinity/identity": "^3.4.3",
+    "@dfinity/principal": "^3.4.3",
+    "playwright": "1.61.1"
+  }
+}

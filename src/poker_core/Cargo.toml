@@ -1,0 +1,13 @@
+[package]
+name = "poker_core"
+version = "0.1.0"
+edition = "2021"
+description = "Pure, host-testable poker engine shared by the ClearDeck table canister and its test harnesses"
+
+# NOTE: deliberately NO ic-cdk dependency. This crate must build for the host
+# target so unit tests, differential harnesses and fuzzers can link the REAL
+# engine instead of re-implementing it.
+[dependencies]
+candid = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"

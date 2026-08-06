@@ -1,0 +1,102 @@
+{
+  "what_this_is": [
+    "Every RED (scene, viewport) in the last recorded screenshot sweep must appear here,",
+    "filed under a defect id that exists in docs/DEFECTS.md. `./scripts/dev.sh shots-verdict`",
+    "-- which `make hygiene` runs -- fails on any red that is NOT listed, and equally on any",
+    "entry here that is no longer red.",
+    "",
+    "WHY IT EXISTS. The pixel gate caught a real regression at 4af6dc6 (docs/DEFECTS.md E-63:",
+    "8.7% of a money figure covered by the felt) and NOBODY ACTED, for a whole wave. It was not",
+    "hidden: the sweep exited 1 and wrote it into the manifest. It was unreachable -- the only",
+    "thing that could see it was a sweep that needed a live replica, and the replica was down,",
+    "so no gate anyone could run was red and the finding sat in an artifact. This file makes",
+    "the LAST RECORDED VERDICT itself a gate: writing a red down is the only way past it, and",
+    "writing it down means filing a defect.",
+    "",
+    "IT IS NOT A WAIVER LIST. An entry does not make a red acceptable; it makes it ACKNOWLEDGED.",
+    "The stale check is what keeps that honest: the moment a sweep comes back green for one of",
+    "these, its entry here fails the gate until it is deleted. docs/DEFECTS.md HARD RULE 7 --",
+    "a marker that pins a fixed defect is worse than no marker."
+  ],
+  "rebased_2026_08_06_wave_8": [
+    "THIS LIST WAS REWRITTEN FROM A REAL SWEEP, not carried forward. Every entry before this",
+    "wave acknowledged a red recorded at 4af6dc6 with the note 'cannot be re-measured'. The",
+    "sweep has now run (docs/DEFECTS.md E-74 is why it could not), so each of those was checked",
+    "against rendered pixels rather than re-copied.",
+    "",
+    "WHAT WENT GREEN, measured, and is therefore deleted from this list:",
+    "  E-61  the no-rake gate: no RAKE TAKEN line on any of the 24 shots. The archived-hand",
+    "        read is correct on real canister output.",
+    "  E-63  the action dock occlusion: 'pixel gate: 25 money/equity/card figures on screen,",
+    "        25 with something overlapping them, 81 pairs pixel-tested, 0 occluded' on",
+    "        table-allin/mobile, the exact shot that carried it. FIXED ON PIXELS.",
+    "  E-64  the unasserted committed-stake readout: '0 unaccounted for' in the token census",
+    "        on every table scene, both viewports. FIXED ON PIXELS.",
+    "",
+    "The reds below are what the sweep actually found. Three of them are NEW, because this is",
+    "the first sweep in three waves that could reach a table scene at all."
+  ],
+  "recorded_run": "artifacts/screens/latest/verdicts.json (sweep at 150a46b, dirty, 2026-08-06T10:00Z) -- 24 shots, 14 verified, 10 red",
+  "reds": [
+    {
+      "scene": "lobby",
+      "viewport": "desktop",
+      "defect": "E-65",
+      "note": "LOBBY CHAIN DISAGREEMENT: every lobby row's NAME quotes 0.01/0.02 while the table canisters run 0.05/0.10 (table_2) and 0.10/0.20 (table_3), so a player picking '9-Max - 0.01/0.02' sits at TEN TIMES the advertised stake. The token-census failure on the same shot is the same two figures repeated in the join nudge. OPEN: init_microstakes_tables hardcodes small_blind 1_000_000 for all three tables and never reads the table's own config."
+    },
+    {
+      "scene": "lobby",
+      "viewport": "mobile",
+      "defect": "E-65",
+      "note": "the same two disagreements at 390x844."
+    },
+    {
+      "scene": "toast-notices",
+      "viewport": "desktop",
+      "defect": "E-65",
+      "note": "the same lobby rows, under a real error toast raised by the app's own error path. The notices themselves are GREEN on this shot: 5/5 on screen and unoccluded under the toast."
+    },
+    {
+      "scene": "toast-notices",
+      "viewport": "mobile",
+      "defect": "E-65",
+      "note": "as above at 390x844. Notices 5/5 under the toast."
+    },
+    {
+      "scene": "table-preflop",
+      "viewport": "desktop",
+      "defect": "E-76",
+      "note": "FELT: 27.8% of the 1440x900 frame (870x414.3), floor 28%. Marginal by 0.2 points and real. NEW this sweep."
+    },
+    {
+      "scene": "table-facing-bet",
+      "viewport": "desktop",
+      "defect": "E-76",
+      "note": "FELT: 27.8% of the 1440x900 frame, floor 28%. Same layout, same cause. NEW this sweep."
+    },
+    {
+      "scene": "table-allin",
+      "viewport": "mobile",
+      "defect": "E-76",
+      "note": "FELT: 42.8% of the 390x844 frame (279.5x503.6), floor 45%, in the ring-crowded 9-pod layout. NEW this sweep. NOTE: this shot's OCCLUSION gate is now GREEN -- it is the shot that carried E-63, and 81 pixel pairs came back 0 occluded."
+    },
+    {
+      "scene": "table-sidepots",
+      "viewport": "mobile",
+      "defect": "E-75",
+      "note": "OCCLUSION FAILED: 9.8% of \"50.00\" (span.chips) painted over by span.pod-clock. NEW this sweep: same class as E-63, different pair of elements -- the action clock badge inside a player pod, over that pod's own stack figure."
+    },
+    {
+      "scene": "handhistory",
+      "viewport": "desktop",
+      "defect": "E-71",
+      "note": "HISTORY CHAIN DISAGREEMENT: 'hand 1: the TABLE canister paid 2400000000 e8s but the HISTORY canister recorded 5010000000 e8s paid'. Both numbers are true of A hand 1 and they are not the same hand 1: hand_number restarts at 1 on every table reset and the archive has no uniqueness on (table_id, hand_number). NEW this sweep. The E-61 rake red that used to be filed on this scene is GONE."
+    },
+    {
+      "scene": "handhistory",
+      "viewport": "mobile",
+      "defect": "E-71",
+      "note": "the same disagreement at 390x844."
+    }
+  ]
+}

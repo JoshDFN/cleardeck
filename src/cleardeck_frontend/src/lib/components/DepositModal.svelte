@@ -62,8 +62,99 @@
   const isBTC = currency === 'BTC';
   const currencySymbol = isBTC ? 'BTC' : 'ICP';
   const unitName = isBTC ? 'sats' : 'e8s';
-  const transferFee = isBTC ? 10n : 10000n; // 10 sats vs 0.0001 ICP
-  const minDeposit = isBTC ? 1000n : 20000n; // 1000 sats vs 0.0002 ICP
+
+  // >>> MIRRORED-LIMITS-BEGIN  (tests/money_safety/tests/ui_limits.rs reads this fence)
+  // ===========================================================================
+  // MIRRORED CANISTER LIMITS -- THE ONLY NUMBERS IN THIS FILE (docs/DEFECTS.md T-26)
+  // ===========================================================================
+  //
+  // The deposit floor is the one limit in this app the copy already agreed with, and
+  // the point of this block is that it stays that way by construction rather than by
+  // luck. Every stated figure below is interpolated from these constants.
+  //
+  // WHAT THE FLOOR NOW PROMISES (docs/SECURITY-FINDINGS.md FINDING 27). Agreeing
+  // with the deposit door was never enough: the canister accepted this amount and
+  // its WITHDRAWAL floor then refused to return it, so a player who deposited
+  // exactly the figure this modal advertises could not get it back out. The two
+  // floors are now one number per currency, and lib.rs asserts at compile time
+  // that the withdrawal floor can never rise above this one again. The number
+  // below is therefore a promise in both directions.
+  //
+  // src/table_canister/src/lib.rs -- MIRRORED, keep in step:
+  //   :36 ICP_TRANSFER_FEE       10_000  (0.0001 ICP)
+  //   :40 CKBTC_TRANSFER_FEE     10      (10 sats)
+  //   :66 ICP_MIN_DEPOSIT_AMOUNT 20_000  (0.0002 ICP)
+  //   :67 BTC_MIN_DEPOSIT_AMOUNT 1_000   (1000 sats)
+  // `tests/money_safety/tests/ui_limits.rs` fails if these stop matching, and fails
+  // if any surface here states the floor or the fee as a literal.
+  const TRANSFER_FEE = isBTC ? 10n : 10_000n;
+  const MIN_DEPOSIT = isBTC ? 1_000n : 20_000n;
+
+  const transferFee = TRANSFER_FEE;
+  const minDeposit = MIN_DEPOSIT;
+
+  /** Exact, never rounded: a limit rendered with `toFixed` is a limit that lies. */
+  function formatExact(smallestUnit) {
+    const v = BigInt(smallestUnit);
+    if (isBTC) return `${v.toLocaleString('en-US')} sats`;
+    const whole = v / 100_000_000n;
+    const frac = (v % 100_000_000n).toString().padStart(8, '0').replace(/0+$/, '');
+    return frac ? `${whole}.${frac} ICP` : `${whole} ICP`;
+  }
+
+  /**
+   * A wallet balance as a BigInt of smallest units. Balances reach this component as
+   * `Number(...)` from three different places (the II ledger query, `oisy.js`, and a
+   * Candid `Nat`), and `BigInt()` throws on a non-integer Number.
+   */
+  function toSmallest(value) {
+    if (typeof value === 'bigint') return value;
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? BigInt(Math.floor(n)) : 0n;
+  }
+
+  /** The same value as a bare decimal, for an input's `min` attribute. */
+  function formatPlain(smallestUnit) {
+    const v = BigInt(smallestUnit);
+    const whole = v / 100_000_000n;
+    const frac = (v % 100_000_000n).toString().padStart(8, '0').replace(/0+$/, '');
+    return frac ? `${whole}.${frac}` : `${whole}`;
+  }
+
+  const minDepositDisplay = formatExact(MIN_DEPOSIT);
+  const feeDisplay = formatExact(TRANSFER_FEE);
+  // The floor the LEDGER imposes, which is the floor that actually matters. An
+  // ICRC-2 deposit costs the depositor TWO ledger fees, not one: one for
+  // `icrc2_approve` and one for the canister's `icrc2_transfer_from`, both charged
+  // to the depositor's account. So a wallet holding exactly the minimum cannot make
+  // the minimum deposit, and the old `balance > minDeposit` test understated the
+  // requirement by both fees -- it showed the deposit form to a wallet whose every
+  // possible deposit the ledger would refuse.
+  const DEPOSIT_LEDGER_FEES = TRANSFER_FEE * 2n;
+  const minWalletBalance = MIN_DEPOSIT + DEPOSIT_LEDGER_FEES;
+  const minWalletBalanceDisplay = formatExact(minWalletBalance);
+
+  // The input's own floor, in whichever unit the player is typing, so the browser's
+  // validation agrees with the canister instead of with a hardcoded string.
+  const inputMinAttr = $derived(
+    isBTC && inputUnit === 'sats' ? MIN_DEPOSIT.toString() : formatPlain(MIN_DEPOSIT)
+  );
+
+  // NOT ClearDeck limits, and NOT enforced by anything in this repository.
+  //
+  // The native-BTC path hands the player an address owned by the ckBTC MINTER and
+  // the thresholds below are the minter's, not the table canister's. There is no
+  // constant in this tree for ui_limits.rs to check them against, which is itself
+  // worth knowing: these two figures are the only limits this app states that
+  // nothing here can verify. They are named once, here, so that at least they
+  // cannot drift between the four places the native-BTC flow mentions them -- which
+  // is what made the withdrawal floor in T-26 wrong on three surfaces at once.
+  const BTC_NATIVE_MIN_SATS = 10_000n;
+  const BTC_NATIVE_MINTER_FEE_SATS = 2_000n;
+  const btcNativeMinDisplay = `${BTC_NATIVE_MIN_SATS.toLocaleString('en-US')} sats`;
+  const btcNativeMinBtcDisplay = formatPlain(BTC_NATIVE_MIN_SATS);
+  const btcNativeMinterFeeDisplay = `${BTC_NATIVE_MINTER_FEE_SATS.toLocaleString('en-US')} sats`;
+  // <<< MIRRORED-LIMITS-END
 
   // CRC32 implementation
   function crc32(data) {
@@ -396,7 +487,10 @@
 
   const effectiveHasEnoughBalance = $derived.by(() => {
     const bal = effectiveWalletBalance;
-    return bal !== null && bal > Number(minDeposit);
+    // `>= minWalletBalance`, not `> minDeposit`: the deposit costs the minimum
+    // PLUS both ledger fees, so this is the balance at which a deposit can actually
+    // succeed. See the note on DEPOSIT_LEDGER_FEES.
+    return bal !== null && toSmallest(bal) >= minWalletBalance;
   });
 
   onMount(() => {
@@ -422,13 +516,12 @@
     const amountSmallest = inputToSmallestUnit(depositAmount);
 
     if (amountSmallest < minDeposit) {
-      const minDisplay = isBTC ? '0.00001 BTC (1000 sats)' : '0.0002 ICP';
-      error = `Minimum deposit is ${minDisplay}`;
+      error = `Minimum deposit is ${minDepositDisplay}`;
       return;
     }
 
     const currentBalance = effectiveWalletBalance;
-    if (currentBalance !== null && amountSmallest > BigInt(currentBalance)) {
+    if (currentBalance !== null && amountSmallest > toSmallest(currentBalance)) {
       error = `Insufficient balance. You have ${formatWithUnit(currentBalance)} in your wallet.`;
       return;
     }
@@ -580,8 +673,7 @@
           const errVal = approveResult.Err[errKey];
           if (errKey === 'InsufficientFunds') {
             const balanceDisplay = formatWithUnit(errVal.balance);
-            const feeDisplay = isBTC ? '10 sats' : '0.0001 ICP';
-            error = `Insufficient funds. You have ${balanceDisplay} but need ${depositAmount} ${currencySymbol} plus ${feeDisplay} fee.`;
+            error = `Insufficient funds. You have ${balanceDisplay} but need ${depositAmount} ${currencySymbol} plus the ${feeDisplay} ledger fee.`;
           } else if (errKey === 'GenericError') {
             error = errVal.message;
           } else {
@@ -616,25 +708,35 @@
   }
 
   function setMaxAmount() {
-    const minRequired = Number(minDeposit);
     const bal = effectiveWalletBalance;
-    if (bal !== null && bal > minRequired) {
-      const feeBuffer = isBTC ? 20 : 20000;
-      const maxSmallest = Math.max(0, bal - feeBuffer);
-      if (isBTC && inputUnit === 'sats') {
-        depositAmount = String(maxSmallest);
-      } else {
-        const maxDisplay = maxSmallest / 100_000_000;
-        depositAmount = isBTC ? maxDisplay.toFixed(8) : maxDisplay.toFixed(4);
-      }
-    }
+    if (bal === null) return;
+    const balance = toSmallest(bal);
+    if (balance < minWalletBalance) return;
+    // Hold back both ledger fees, derived from the constant rather than written out
+    // as 20 / 20000, and FLOOR rather than round: `toFixed(4)` on an ICP balance
+    // rounds up half the time, which is how a MAX button produces an amount its own
+    // wallet cannot cover.
+    const maxSmallest = balance - DEPOSIT_LEDGER_FEES;
+    depositAmount = isBTC && inputUnit === 'sats'
+      ? maxSmallest.toString()
+      : formatPlain(maxSmallest);
   }
 
   // Use effective balance (from II or OISY depending on walletSource)
-  const hasEnoughBalance = $derived(effectiveWalletBalance !== null && effectiveWalletBalance > Number(minDeposit));
+  const hasEnoughBalance = $derived(effectiveHasEnoughBalance);
+
+  // ONE dismissal contract for every dialog in this app (docs/DEFECTS.md T-13).
+  // The old handler sat on a `tabindex="-1"` backdrop that nothing ever focuses,
+  // so Escape could not close this modal — measured: Escape left the backdrop up
+  // and a following click on any header button was swallowed by it.
+  function onWindowKeydown(e) {
+    if (e.key === 'Escape') onClose();
+  }
 </script>
 
-<div class="modal-backdrop" onclick={onClose} onkeydown={(e) => e.key === 'Escape' && onClose()} role="button" tabindex="-1" aria-label="Close modal"></div>
+<svelte:window onkeydown={onWindowKeydown} />
+
+<div class="modal-backdrop" onclick={onClose} role="presentation"></div>
 
 <div class="modal-content" class:btc-modal={isBTC} role="dialog" aria-labelledby="deposit-modal-title">
   <div class="modal-header">
@@ -653,6 +755,32 @@
   </div>
 
   <div class="modal-body">
+    <!-- THE FOUR PROTECTED NOTICES, INSIDE THE DIALOG (HARD RULE 2, docs/DEFECTS.md T-31).
+         Measured, not assumed: with either money modal open, all four notices in
+         the page banner are behind `.modal-backdrop` -- `rgba(0,0,0,0.7)` plus
+         `backdrop-filter: blur(4px)` at z-index 200 -- so `elementFromPoint` at the
+         centre of each returns the backdrop and not the text. 0 of 4 unobstructed,
+         at 1440x900 AND at 390x844, and identical on `fe72d46`, so the scrim is not
+         new. It is still a player who cannot read the warning on the one screen
+         where they are about to move real money.
+         Raising the banner above the backdrop is not this file's to do (the banner
+         lives in routes/+page.svelte and src/index.scss). Restating the notices
+         INSIDE the dialog is: more prominent is always allowed, it needs nothing
+         outside these two components, and it holds whatever any backdrop does. -->
+    <!-- WAVE 5 COHERENCE PASS: ONE SENTENCE ADDED, NOTHING CHANGED.
+         The last clause states the no-rake property as "No middleman, no house,
+         0% rake", which is the property in different words. Measured with the
+         repo's own gate (tools/shots/lib/protected-notices.mjs), this dialog
+         therefore read 4 of 5 at both viewports: the fifth protected phrase, the
+         app's own canonical sentence, was left outside the dialog behind the very
+         scrim this notice exists to escape. It is stated verbatim now, on its own
+         line, with every existing word left where it was. -->
+    <p class="player-notice">
+      <strong>Unaudited code with known bugs: your funds are NOT safe.</strong>
+      Online gambling is illegal in many jurisdictions. 18+ only.
+      No middleman, no house, 0% rake.
+      No rake is taken from any pot on any table.
+    </p>
     <!-- BTC Deposit Method Toggle -->
     {#if isBTC}
       <div class="deposit-method-toggle">
@@ -846,9 +974,9 @@
             <input
               id="deposit-amount"
               type="number"
-              step={isBTC ? (inputUnit === 'sats' ? "1" : "0.00000001") : "0.0001"}
-              min={isBTC ? (inputUnit === 'sats' ? "1000" : "0.00001") : "0.0002"}
-              placeholder={isBTC ? (inputUnit === 'sats' ? "5000" : "0.00000000") : "0.0000"}
+              step={isBTC && inputUnit === 'sats' ? "1" : "0.00000001"}
+              min={inputMinAttr}
+              placeholder={inputMinAttr}
               bind:value={depositAmount}
               disabled={processing}
             />
@@ -887,11 +1015,13 @@
               <line x1="12" y1="16" x2="12" y2="12"/>
               <line x1="12" y1="8" x2="12.01" y2="8"/>
             </svg>
-            {#if isBTC}
-              <span><strong>Minimum: 1,000 sats</strong> (Fee: 10 sats)</span>
-            {:else}
-              <span><strong>Minimum deposit: 0.0002 ICP</strong> (Network fee: 0.0001 ICP)</span>
-            {/if}
+            <!-- Interpolated, never literal: docs/DEFECTS.md T-26 is what a
+                 literal here becomes, and ui_limits.rs fails if one comes back. -->
+            <span>
+              <strong>Minimum deposit: {minDepositDisplay}</strong>
+              (network fee {feeDisplay}, charged twice by the ledger, so you need
+              {minWalletBalanceDisplay} in your wallet to deposit the minimum)
+            </span>
           </div>
         </div>
 
@@ -1040,15 +1170,19 @@
               <line x1="12" y1="17" x2="12.01" y2="17"/>
             </svg>
             <div>
-              <strong>Minimum: 10,000 sats</strong>
-              <span>Smaller amounts may not be processed (ckBTC has a ~2,000 sat fee)</span>
+              <strong>Minimum: {btcNativeMinDisplay}</strong>
+              <span>
+                Smaller amounts may not be processed. This floor and its
+                roughly {btcNativeMinterFeeDisplay} cost belong to the ckBTC minter,
+                not to this table, and nothing in ClearDeck enforces them.
+              </span>
             </div>
           </div>
 
           <div class="btc-steps">
             <div class="step">
               <span class="step-num">1</span>
-              <span>Send BTC to the address above (min 10,000 sats)</span>
+              <span>Send BTC to the address above (at least {btcNativeMinDisplay})</span>
             </div>
             <div class="step">
               <span class="step-num">2</span>
@@ -1109,7 +1243,7 @@
               <line x1="12" y1="8" x2="12.01" y2="8"/>
             </svg>
             <p>
-              <strong>Minimum deposit:</strong> 0.0001 BTC (10,000 sats)<br/>
+              <strong>Minimum deposit:</strong> {btcNativeMinBtcDisplay} BTC ({btcNativeMinDisplay})<br/>
               Your BTC will be converted to ckBTC at a 1:1 rate. ckBTC can be converted back to BTC anytime.
             </p>
           </div>
@@ -2205,5 +2339,22 @@
 
   .no-balance-warning.oisy.btc .warning-content p {
     color: #d97706;
+  }
+
+  /* The protected notices, restated inside the dialog. Deliberately NOT dimmed:
+     it is the one block in this modal that must not read as fine print. */
+  .player-notice {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #fca5a5;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .player-notice strong {
+    color: #fecaca;
   }
 </style>

@@ -1,5 +1,19 @@
 <script>
-  const { actions = [], previousActions = [], mySeat = null, handNumber = 0, previousHandNumber = 0, shuffleProof = null, onShowProof = null } = $props();
+  const {
+    actions = [],
+    previousActions = [],
+    mySeat = null,
+    handNumber = 0,
+    previousHandNumber = 0,
+    shuffleProof = null,
+    onShowProof = null,
+    /**
+     * Money formatter, injected by the table so the log uses the SAME precision
+     * as every figure on the felt. Without this the log re-derived its own
+     * precision per value and printed "0.0000" beside "50.00".
+     */
+    format = null
+  } = $props();
 
   // Toggle to show previous hand
   let showPreviousHand = $state(false);
@@ -14,14 +28,22 @@
     return `${hash.slice(0, 6)}...${hash.slice(-4)}`;
   }
 
-  // Format e8s amount as ICP display
+  // Format e8s amount as ICP display. One precision for the whole log.
   function formatChips(e8s) {
+    if (format) return format(e8s);
     const num = typeof e8s === 'bigint' ? Number(e8s) : e8s;
-    const icp = num / 100_000_000;
-    if (icp >= 1000) return `${(icp / 1000).toFixed(1)}K`;
-    if (icp >= 1) return icp.toFixed(2);
-    if (icp >= 0.01) return icp.toFixed(2);
-    return icp.toFixed(4);
+    return (Number(num) / 100_000_000).toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  }
+
+  /** HH:MM, per docs/DESIGN-BAR.md bar 17 (PokerNow's Session Log floor). */
+  function clockOf(ts) {
+    if (!ts) return '';
+    const d = new Date(Number(ts) > 1e14 ? Number(ts) / 1e6 : Number(ts));
+    if (Number.isNaN(d.getTime())) return '';
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }
 
   // Get player name for display
@@ -41,6 +63,7 @@
       case 'allin': return '★';
       case 'blind': return '◐';
       case 'phase': return '→';
+      case 'showdown': return '◆';
       case 'winner': return '♛';
       default: return '•';
     }
@@ -57,6 +80,7 @@
       case 'allin': return 'action-allin';
       case 'blind': return 'action-blind';
       case 'phase': return 'action-phase';
+      case 'showdown': return 'action-showdown';
       case 'winner': return 'action-winner';
       default: return '';
     }
@@ -120,13 +144,23 @@
       {#each displayActions as action, i (i)}
         <div class="feed-item {getActionClass(action.type)}" class:is-me={action.seat === mySeat}>
           <span class="action-icon">{getActionIcon(action.type)}</span>
+          <span class="action-time">{clockOf(action.timestamp)}</span>
           <div class="action-content">
             {#if action.type === 'phase'}
               <span class="phase-text">{action.text}</span>
+            {:else if action.type === 'showdown'}
+              <!-- The hand that was turned up, in words. No amount: the pot that
+                   moved is the NEXT line, and one number belongs in one place. -->
+              <span class="player-name">{getPlayerName(action.seat)}</span>
+              <span class="showdown-text">{action.text}</span>
             {:else if action.type === 'winner'}
               <span class="winner-name">{getPlayerName(action.seat)}</span>
               <span class="action-text">won</span>
-              <span class="action-amount">{formatChips(action.amount)}</span>
+              <!-- SIGNED, like the delta chip on the pod. The log is where a
+                   player reconstructs a session, and "24.00" does not say
+                   whether it arrived or left. Same token, same value, same
+                   assertion; it just states its direction. -->
+              <span class="action-amount">+{formatChips(action.amount)}</span>
             {:else}
               <span class="player-name">{getPlayerName(action.seat)}</span>
               <span class="action-text">{action.text}</span>
@@ -147,10 +181,12 @@
     flex-direction: column;
     background: linear-gradient(145deg, rgba(20, 20, 35, 0.95), rgba(10, 10, 20, 0.95));
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px;
+    border-radius: 14px;
     overflow: hidden;
-    width: 220px;
-    max-height: 400px;
+    /* Sized by the container the table gives it, not by a fixed width. */
+    width: 100%;
+    max-height: 100%;
+    min-height: 0;
     box-shadow:
       0 10px 40px rgba(0, 0, 0, 0.4),
       inset 0 1px 0 rgba(255, 255, 255, 0.05);
@@ -331,16 +367,33 @@
     letter-spacing: 0.5px;
   }
 
-  /* Fold */
+  /* docs/DESIGN-BAR.md bar 17: folds RED, calls BLUE, blind posts GREEN,
+     checks GREY. The previous scheme had folds grey and checks green. */
   .action-fold .action-icon {
-    background: rgba(107, 114, 128, 0.2);
-    color: #9ca3af;
+    background: rgba(219, 49, 49, 0.22);
+    color: #f87171;
   }
 
-  /* Check */
+  .action-fold .action-text { color: rgba(248, 113, 113, 0.75); }
+
   .action-check .action-icon {
+    background: rgba(148, 155, 168, 0.2);
+    color: #b6bcc8;
+  }
+
+  .action-blind .action-icon {
     background: rgba(34, 197, 94, 0.2);
     color: #4ade80;
+  }
+
+  .action-blind .action-amount { color: #4ade80; }
+
+  .action-time {
+    flex-shrink: 0;
+    font-size: 10px;
+    line-height: 20px;
+    color: rgba(255, 255, 255, 0.32);
+    font-variant-numeric: tabular-nums;
   }
 
   /* Call */
@@ -398,6 +451,22 @@
   .action-blind .action-icon {
     background: rgba(168, 85, 247, 0.2);
     color: #c084fc;
+  }
+
+  /* Showdown reveal — the named hand, one step below a win in weight */
+  .action-showdown {
+    background: rgba(126, 226, 184, 0.07);
+    border-left-color: rgba(126, 226, 184, 0.45);
+  }
+
+  .action-showdown .action-icon {
+    background: rgba(126, 226, 184, 0.2);
+    color: #7ee2b8;
+  }
+
+  .showdown-text {
+    color: #9ef0c8;
+    font-weight: 600;
   }
 
   /* Winner */

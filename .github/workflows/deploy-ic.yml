@@ -1,0 +1,113 @@
+name: Deploy to IC mainnet
+
+# ⚠️  DANGER: ClearDeck canisters hold REAL ICP + ckBTC.
+#   - MANUAL ONLY (workflow_dispatch). There is intentionally NO push trigger —
+#     a fund-holding app must never auto-deploy on merge.
+#   - Gated by the `IC mainnet` Environment (add a required reviewer in repo
+#     Settings → Environments so a human must approve each run).
+#   - Backend canisters are UPGRADED (--mode upgrade), NEVER reinstalled.
+#   - The deploy identity comes from the encrypted IC_DEPLOY_IDENTITY secret
+#     (base64 PEM). It is NEVER committed; fork PRs never receive secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      allow_frontend_reinstall:
+        description: 'Allow --mode reinstall on the FRONTEND ASSET canister ONLY (never balances). Default false.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-ic
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN: '1.90.0'
+  ICP_CLI_VERSION: '1.0.0'
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy mainnet (gated)
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: IC mainnet # required-reviewer gate — the only human approval
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install pinned toolchain (icp-cli + ic-wasm)
+        run: |
+          npm i -g @icp-sdk/icp-cli@${ICP_CLI_VERSION}
+          cargo install ic-wasm --locked
+          icp --version
+
+      - name: Import deploy identity (encrypted secret; plaintext store in CI)
+        env:
+          IC_DEPLOY_IDENTITY: ${{ secrets.IC_DEPLOY_IDENTITY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$IC_DEPLOY_IDENTITY" | base64 -d > /tmp/ci-deploy.pem
+          icp identity import --from-pem /tmp/ci-deploy.pem --storage plaintext ci-deploy
+          icp identity default ci-deploy
+          echo "Deploying as principal: $(icp identity principal --identity ci-deploy)"
+
+      - name: Build frontend
+        # icp does NOT emit a canister-id .env (unlike dfx). Supply the two IDs the
+        # bundle needs; table IDs are fetched from the lobby at runtime. Add
+        # VITE_BETA_PASSWORD_HASH here (from a secret) if you password-gate beta.
+        env:
+          VITE_CANISTER_ID_LOBBY: kpfcd-kyaaa-aaaaj-qor3a-cai
+          VITE_CANISTER_ID_HISTORY: kggj7-4qaaa-aaaaj-qor2q-cai
+        run: |
+          npm ci
+          npm --workspace src/cleardeck_frontend run build
+          # Fail fast if the live lobby ID didn't make it into the bundle.
+          grep -rq 'kpfcd-kyaaa-aaaaj-qor3a-cai' src/cleardeck_frontend/dist \
+            || { echo '::error::frontend bundle missing lobby canister ID — aborting deploy'; exit 1; }
+
+      - name: Snapshot backend canisters (best-effort rollback safety)
+        run: |
+          for c in history lobby table_1 table_2 table_3 btc_table_1; do
+            icp canister snapshot create "$c" -e ic --identity ci-deploy \
+              || echo "::warning::no snapshot for $c (snapshot quota or first deploy)"
+          done
+
+      - name: Deploy backend (UPGRADE ONLY — never reinstall)
+        run: |
+          set -euo pipefail
+          for c in history lobby table_1 table_2 table_3 btc_table_1; do
+            echo "::group::upgrade $c"
+            icp deploy -e ic "$c" --identity ci-deploy --mode upgrade -y
+            echo "::endgroup::"
+          done
+
+      - name: Deploy frontend asset canister
+        env:
+          ALLOW_REINSTALL: ${{ inputs.allow_frontend_reinstall }}
+        run: |
+          set -euo pipefail
+          if [ "$ALLOW_REINSTALL" = "true" ]; then
+            echo "Reinstalling FRONTEND asset canister (wipes asset state, not balances)"
+            icp deploy -e ic frontend --identity ci-deploy --mode reinstall -y
+          else
+            icp deploy -e ic frontend --identity ci-deploy --mode upgrade -y
+          fi
+
+      - name: Shred identity
+        if: always()
+        run: |
+          rm -f /tmp/ci-deploy.pem || true
+          icp identity delete ci-deploy || true

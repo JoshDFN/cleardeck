@@ -1,10 +1,83 @@
 <script>
+  import { onMount } from 'svelte';
+
   const { onClose } = $props();
+
+  // Escape has to work from anywhere in the dialog, not only while the backdrop
+  // happens to hold focus (which it never does, since it is not in the tab
+  // order). Bound on <svelte:window> so it fires wherever the caret is.
+  function onKeydown(e) {
+    if (e.key === 'Escape') onClose();
+  }
+
+  /** Focus the close button when the dialog opens, so Escape/Tab land somewhere. */
+  function autofocus(node) {
+    node.focus();
+  }
+
+  // ---------------------------------------------------------------------------
+  // THIS DIALOG OPENS BELOW THE APP CHROME, AND THAT IS A CORRECTNESS RULE.
+  //
+  // The disclaimer banner is `z-index: 100` on `.alpha-warning-banner`, a child
+  // of `.app`; this dialog is `z-index: 1000` but it renders inside <main>,
+  // which is its own stacking context, so the banner and the header PAINT OVER
+  // it however high its z-index goes. Centred on the viewport, the dialog's own
+  // title and its close button therefore ended up UNDER the banner: measured at
+  // 1440x900 the dialog box started at y=67.5 with 243 px of chrome above it, so
+  // 92 px of it — the entire header row and the × — could not be seen or
+  // clicked. The keyboard path (Escape, autofocus) still worked, which is why no
+  // textContent gate ever noticed.
+  //
+  // Raising the z-index is the wrong fix twice over: it would put the dialog
+  // over the unaudited-alpha disclaimer, the 18+ notice, the jurisdiction
+  // warning and the no-house statement, which the project's rules forbid making
+  // less visible on any view. So the dialog measures the chrome instead and
+  // starts under it. The four notices stay on screen, undimmed, with the dialog
+  // open — verified on the rendered page, not in the source.
+  let chromeBottom = $state(0);
+
+  function measureChrome() {
+    const bottomOf = (sel) => document.querySelector(sel)?.getBoundingClientRect().bottom ?? 0;
+    // Whichever of the two ends lower; either may be absent on a given view.
+    chromeBottom = Math.max(0, Math.ceil(Math.max(bottomOf('.alpha-warning-banner'), bottomOf('header'))));
+  }
+
+  onMount(() => {
+    measureChrome();
+    // Re-read on SCROLL as well as resize, and both matter:
+    //   * the banner reflows with the width (3 lines at 1440, 7 at 390);
+    //   * the chrome is in the page flow, not fixed, so its bottom edge in
+    //     viewport coordinates moves as the page scrolls. On a phone the only
+    //     "How it works" links are below the list, so the dialog opens with the
+    //     banner already scrolled off — offset 0, full viewport, correct — and
+    //     has to give the space back the moment the page returns to the top.
+    //     Latching the value at open time put the × back under the banner.
+    const remeasure = () => measureChrome();
+    window.addEventListener('resize', remeasure);
+    window.addEventListener('scroll', remeasure, { passive: true });
+    return () => {
+      window.removeEventListener('resize', remeasure);
+      window.removeEventListener('scroll', remeasure);
+    };
+  });
 </script>
 
-<div class="modal-backdrop" onclick={onClose} onkeydown={(e) => e.key === 'Escape' && onClose()} role="button" tabindex="-1" aria-label="Close modal"></div>
+<svelte:window onkeydown={onKeydown} />
 
-<div class="modal-content" role="dialog" aria-labelledby="how-it-works-title">
+<div
+  class="modal-backdrop"
+  style:--how-chrome="{chromeBottom}px"
+  onclick={onClose}
+  role="presentation"
+></div>
+
+<div
+  class="modal-content"
+  style:--how-chrome="{chromeBottom}px"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="how-it-works-title"
+>
   <div class="modal-header">
     <h2 id="how-it-works-title">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -13,7 +86,7 @@
       </svg>
       How ClearDeck Works
     </h2>
-    <button class="close-btn" onclick={onClose} aria-label="Close">
+    <button class="close-btn" onclick={onClose} aria-label="Close" use:autofocus>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M18 6L6 18M6 6l12 12"/>
       </svg>
@@ -21,6 +94,24 @@
   </div>
 
   <div class="modal-body">
+    <!-- The strongest claim first, because it is the one a rake-funded operator
+         structurally cannot make. It is a property of the payout code, not a
+         promotion, so it is stated as a fact and not as an offer. -->
+    <section class="section">
+      <div class="rake-banner">
+        <span class="rake-figure">0%</span>
+        <div>
+          <strong>No rake. Not on any pot, not at any stake.</strong>
+          <p>
+            There is no house cut anywhere in the settlement code. Every chip that goes
+            into a pot is paid back out to the players eligible for it, down to the last
+            e8s, and the remainder of an odd split goes to a player rather than the house.
+            There is no fee at the table, no time charge, and no tournament juice.
+          </p>
+        </div>
+      </div>
+    </section>
+
     <section class="section">
       <h3>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -160,33 +251,105 @@
         <div class="guarantee">
           <span class="icon">2</span>
           <div>
-            <strong>Immutable History</strong>
-            <p>All hands are recorded on-chain and cannot be altered</p>
+            <strong>Self-checking history</strong>
+            <p>Every hand is stored with its own commitment and revealed seed, so a hand that had been rewritten would no longer hash to its published commitment</p>
           </div>
         </div>
         <div class="guarantee">
           <span class="icon">3</span>
           <div>
             <strong>Open Source</strong>
-            <p>All canister code can be inspected and verified</p>
+            <p>All canister code can be inspected, and the deployed module hash is reproducible from this source</p>
           </div>
         </div>
         <div class="guarantee">
           <span class="icon">4</span>
           <div>
-            <strong>Non-Custodial</strong>
-            <p>You control your funds via Internet Identity - we can't access them</p>
+            <strong>No rake on settlement</strong>
+            <p>The payout path has no house cut: the pot is distributed in full to the winning players</p>
           </div>
         </div>
       </div>
     </section>
+
+    <!-- The two claims this modal used to make that were not true, corrected.
+         A fairness page that overstates its own guarantees is worse than one
+         that has none, because it is the page a player trusts. -->
+    <section class="section">
+      <h3>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        What This Does NOT Guarantee
+      </h3>
+      <div class="limits">
+        <div class="limit">
+          <strong>Your chips are held by the table canister, not by you.</strong>
+          <p>
+            Deposits are credited to a balance the canister keeps for your principal. That
+            is a custodial arrangement. Internet Identity proves who you are; it does not
+            hold your chips and it cannot recover them if the canister misbehaves.
+          </p>
+        </div>
+        <div class="limit">
+          <strong>A controller can upgrade these canisters.</strong>
+          <p>
+            Upgradeable code means the rules and the stored history can change. What a
+            controller cannot do is retroactively make an already-published commitment
+            hash match a different deck, which is why the commit-reveal record above is
+            the part worth checking rather than the promise.
+          </p>
+        </div>
+        <div class="limit danger">
+          <strong>Unaudited code with known bugs.</strong>
+          <p>
+            This is published for education and testing. Any deposit is at your own risk
+            and your funds are NOT safe: expect to lose everything you deposit. Online
+            gambling is illegal in many jurisdictions. Only use it where legally
+            permitted. 18+ only.
+          </p>
+        </div>
+      </div>
+    </section>
   </div>
+
+  <!-- PINNED OUTSIDE THE SCROLLING REGION, and that is the point.
+       The dialog already states all four notices in the "Limits" section above,
+       but that section is the LAST thing in a 1,900 px scroller, so on arrival
+       none of it is on screen. The banner behind this dialog is what carries
+       them today — the dialog opens below it precisely so that stays true — but
+       that guarantee depends on a stacking order in another component, and this
+       wave's lesson is that a guarantee nobody measures is not one.
+
+       So the four protected phrases are restated here, verbatim and
+       `flex-shrink: 0`, the same treatment the hand-history dialog uses
+       (docs/DEFECTS.md H-36). Whatever happens to the z-index of anything else,
+       a player reading this dialog has the unaudited-alpha disclaimer, the
+       funds-at-risk warning, the jurisdiction warning, the 18+ notice and the
+       no-rake property on screen and unscrollable. Additional copy only:
+       nothing anywhere else is weakened by it. -->
+  <p class="modal-notices">
+    <span class="notice-icon" aria-hidden="true">⚠️</span>
+    <strong>Unaudited code with known bugs</strong> — this is for education and testing, any
+    deposit is at your own risk and your funds are NOT safe. Online gambling is illegal in many
+    jurisdictions; only use it where legally permitted. 18+ only. No middleman, no house, 0% rake.
+    <!-- WAVE 5 COHERENCE PASS: added, nothing changed. "0% rake" above is the
+         property in different words; this is the sentence both of the repo's
+         notice checks actually look for. -->
+    No rake is taken from any pot on any table.
+  </p>
 </div>
 
 <style>
+  /* Starts under the chrome, so the scrim never dims the four protected notices
+     and the dialog is never behind them (see the note in the script block). */
   .modal-backdrop {
     position: fixed;
-    inset: 0;
+    top: var(--how-chrome, 0px);
+    left: 0;
+    right: 0;
+    bottom: 0;
     background: rgba(0, 0, 0, 0.8);
     backdrop-filter: blur(4px);
     z-index: 999;
@@ -194,12 +357,12 @@
 
   .modal-content {
     position: fixed;
-    top: 50%;
+    top: calc(var(--how-chrome, 0px) + 10px);
     left: 50%;
-    transform: translate(-50%, -50%);
+    transform: translateX(-50%);
     width: 90%;
     max-width: 700px;
-    max-height: 85vh;
+    max-height: calc(100vh - var(--how-chrome, 0px) - 20px);
     background: linear-gradient(145deg, #1a1a2e, #16162a);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 16px;
@@ -216,7 +379,23 @@
     padding: 20px 24px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     background: rgba(255, 255, 255, 0.02);
+    flex-shrink: 0;
   }
+
+  /* Not in the scroller. See the markup note. */
+  .modal-notices {
+    flex-shrink: 0;
+    margin: 0;
+    padding: 10px 24px 12px;
+    border-top: 1px solid rgba(248, 113, 113, 0.28);
+    background: rgba(185, 28, 28, 0.16);
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .modal-notices strong { color: #fef08a; }
+  .notice-icon { font-size: 12px; }
 
   .modal-header h2 {
     display: flex;
@@ -469,11 +648,83 @@
     color: rgba(255, 255, 255, 0.5);
   }
 
+  /* No rake — the lead claim */
+  .rake-banner {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 18px;
+    align-items: center;
+    padding: 16px 18px;
+    border-radius: 12px;
+    background:
+      linear-gradient(100deg, rgba(0, 212, 170, 0.18), rgba(0, 212, 170, 0.05) 70%),
+      rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(0, 212, 170, 0.3);
+  }
+
+  .rake-figure {
+    font-size: 44px;
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    color: #00d4aa;
+  }
+
+  .rake-banner strong {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 15px;
+    color: #fff;
+  }
+
+  .rake-banner p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.62);
+  }
+
+  /* Limits — stated as plainly as the guarantees */
+  .limits {
+    display: grid;
+    gap: 12px;
+  }
+
+  .limit {
+    padding: 14px;
+    border-radius: 10px;
+    background: rgba(240, 180, 41, 0.07);
+    border: 1px solid rgba(240, 180, 41, 0.22);
+  }
+
+  .limit.danger {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.3);
+  }
+
+  .limit strong {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 13.5px;
+    color: #f0b429;
+  }
+
+  .limit.danger strong { color: #f87171; }
+
+  .limit p {
+    margin: 0;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.62);
+  }
+
   /* Responsive */
   @media (max-width: 600px) {
     .modal-content {
       width: 95%;
-      max-height: 90vh;
+      /* The phone's chrome is 388 px of an 844 px screen, so a fraction-of-vh
+         cap would put the dialog's foot 340 px below the fold. */
+      max-height: calc(100vh - var(--how-chrome, 0px) - 16px);
     }
 
     .modal-header {
@@ -493,6 +744,9 @@
     .guarantees {
       grid-template-columns: 1fr;
     }
+
+    .rake-banner { gap: 14px; padding: 14px; }
+    .rake-figure { font-size: 34px; }
 
     .section h3 {
       font-size: 15px;
