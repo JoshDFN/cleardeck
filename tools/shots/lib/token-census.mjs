@@ -90,6 +90,18 @@ export const CHAIN_SITES = [
         why: 'the escrow balance in the wallet panel',
     },
     {
+        id: 'committed-stake',
+        selector: '.wallet-committed .committed-value',
+        label: /^committed stake vs get_table_view\(\)\.my_committed_in_pot$/,
+        why: "the caller's own money in the pot, the FINDING 18 readout",
+    },
+    {
+        id: 'committed-note-hand',
+        selector: '.wallet-committed .committed-note',
+        label: /^the hand named in the committed note vs get_table_view\(\)\.hand_number$/,
+        why: 'the hand number the committed-stake sentence names',
+    },
+    {
         id: 'pot-odds-strip',
         selector: '.pot-odds-explanation',
         label: /^pot-odds "/,

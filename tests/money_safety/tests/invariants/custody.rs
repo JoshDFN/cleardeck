@@ -92,18 +92,23 @@ fn seat_with_exact_stack(world: &World, who: Principal, seat: u8, chips: u64) {
 /// actually performs, and it either ends with 2.98 ICP on their ledger wallet or
 /// it does not.
 ///
-/// # Why the clock is advanced WITHOUT a tick
+/// # WHAT CHANGED IN WAVE 7, and why this fixture no longer settles the hand
 ///
-/// This tree also carries an on-chain clock (FINDING 19), and its 30-second
-/// watchdog abandons a hand that has been unmovable for the grace period. That is
-/// a second, independent fix for the same money, and it is welcome -- but if the
-/// fixture let it run first, this test would pass without ever executing the exit
-/// door it exists to gate, and would keep passing if the exit door were deleted.
-/// So time is advanced without executing a round, which is the state a real
-/// subnet is in for however long the canister goes unexecuted, and the log is
-/// then asserted on: the line must be the EXIT DOOR's.
+/// This test used to advance time WITHOUT a tick and then assert that `cash_out`
+/// itself had voided the hand -- `logs.contains("BY AN EXIT DOOR")`. That is
+/// docs/DEFECTS.md E-59: the hand in that window is not unmovable, it is merely
+/// unwatched, and the on-chain clock plays it out two rounds later. An exit door
+/// that voids it is a door that pays a different set of recipients than the clock
+/// would, for whoever sends a message first. So the fixture now asserts the
+/// opposite of what it used to on that one point:
+///
+/// * during the stall, `cash_out` **must refuse**, and the refusal must state what
+///   bob still has in the middle -- that is FINDING 18's actual guarantee, and it
+///   is now carried by the refusal rather than by voiding the hand;
+/// * once the clock has played the hand out, the withdrawal path must get bob's
+///   money to his ledger wallet. That was and is the whole point.
 #[test]
-fn m10_the_auditors_sequence_bob_leaves_a_stuck_hand_with_his_stake() {
+fn m10_the_auditors_sequence_bob_leaves_with_his_stake() {
     let mut world = World::new(TableConfig::heads_up_icp(), &["alice", "bob"]);
     let alice = world.actor("alice");
     let bob = world.actor("bob");
@@ -161,9 +166,53 @@ fn m10_the_auditors_sequence_bob_leaves_a_stuck_hand_with_his_stake() {
         "bob must be all-in for 2.98 ICP, the auditor's own number"
     );
 
-    // ---- the withdrawal path, exactly as a leaving player walks it ----------
-    let cashed = world.cash_out(bob).expect("cash_out must not refuse");
-    let logs = world.new_canister_logs();
+    // ---- MID-STALL: the exit door must REFUSE, and must say what he has -----
+    //
+    // docs/DEFECTS.md E-59. Nothing is unmovable here. The seat on the clock has
+    // simply not been folded yet because the canister has not executed since the
+    // clock ran out, and voiding the hand from this state hands every stake back
+    // instead of paying the winner the clock is about to produce.
+    let refused = world.cash_out(bob).expect_err("cash_out must refuse: the hand is playable");
+    let refused = match refused {
+        OpError::Err(m) => m,
+        other => panic!("expected a clean Err, got {other:?}"),
+    };
+    eprintln!("AUDITOR/cash_out(bob) mid-stall -> Err({refused})");
+    let mid_stall_logs = world.new_canister_logs();
+    assert!(
+        !mid_stall_logs.iter().any(|l| l.contains("ABANDONED as unmovable")),
+        "an exit door VOIDED a hand the clock goes on to play out. logs:\n  {}",
+        mid_stall_logs.join("\n  ")
+    );
+    assert!(
+        refused.contains(&bob_stake.to_string()),
+        "FINDING 18: the refusal must state the exact amount of his that is in the middle, or \
+         he is told nothing while the canister holds 2.98 ICP of his; got {refused:?}"
+    );
+    assert!(
+        world.table_state().phase.hand_in_progress(),
+        "and the refusal must have left the hand exactly where it was"
+    );
+
+    // ---- AND NOW THE CLOCK GETS ITS TURN -----------------------------------
+    //
+    // With no ingress at all. The seat that did not act is folded and the hand is
+    // decided, which is the outcome bob's cash_out was racing.
+    for _ in 0..12 {
+        world.pic.advance_time(Duration::from_secs(10));
+        for _ in 0..4 {
+            world.pic.tick();
+        }
+        if !world.table_state().phase.hand_in_progress() {
+            break;
+        }
+    }
+    assert!(
+        !world.table_state().phase.hand_in_progress(),
+        "the on-chain clock must resolve the hand with no external caller (FINDING 19)"
+    );
+
+    let cashed = world.cash_out(bob).expect("cash_out must not refuse once the hand is over");
     let balance = world.get_balance(bob);
     let surfaces = read_surfaces(&world, bob);
     eprintln!(
@@ -182,17 +231,6 @@ fn m10_the_auditors_sequence_bob_leaves_a_stuck_hand_with_his_stake() {
         balance >= bob_stake,
         "FINDING 18: get_balance() reports {balance} while {bob_stake} e8s of bob's is still \
          inside the canister"
-    );
-
-    // ...and it was THIS FIX that did it. On a tree that also carries the on-chain
-    // clock, the assertions above can be satisfied by the clock's watchdog instead
-    // of by the exit door, and would then keep passing with the exit door deleted.
-    // Asserted after the money, so a reverted build fails on the finding first.
-    assert!(
-        logs.iter().any(|l| l.contains("BY AN EXIT DOOR")),
-        "the exit door itself must be what settled this hand, or this test is gating somebody \
-         else's fix. logs:\n  {}",
-        logs.join("\n  ")
     );
 
     // The point of the whole exercise: the money reaches his wallet, using only
@@ -244,13 +282,47 @@ fn m10_a_live_hand_cannot_outlive_its_last_player() {
     }
     world.advance(Duration::from_secs(4));
     world.start_new_hand(alice).expect("deal");
-    // Without a tick, so the exit door is what finds the hand unmovable rather
-    // than the on-chain clock -- see the note on the auditor's sequence above.
     world.advance_time_only(PAST_THE_GRACE);
 
     let before = world.table_state();
     eprintln!("ORPHAN/before: phase={:?} pot={}", before.phase, before.pot);
     assert!(before.pot > 0, "the fixture must put money in the middle");
+
+    // MID-STALL, BOTH DOORS MUST REFUSE (docs/DEFECTS.md E-59). This fixture used
+    // to have both players walk out of the stall, which voided a playable hand
+    // twice over. Neither may.
+    let _ = world.new_canister_logs();
+    for who in [alice, bob] {
+        let r = world.cash_out(who);
+        eprintln!("ORPHAN/mid-stall cash_out -> {r:?}");
+        assert!(
+            r.is_err(),
+            "cash_out must not vacate a seat in a hand the clock is about to play out"
+        );
+    }
+    assert!(
+        !world
+            .new_canister_logs()
+            .iter()
+            .any(|l| l.contains("ABANDONED as unmovable")),
+        "an exit door voided a hand the clock goes on to play out"
+    );
+    assert!(
+        world.table_state().phase.hand_in_progress(),
+        "and nothing moved: the refusals must have left the hand exactly where it was"
+    );
+
+    // The clock resolves it, with no ingress. THEN both players leave, which is
+    // the sequence that used to strand a live pre-flop hand at an empty table.
+    for _ in 0..12 {
+        world.pic.advance_time(Duration::from_secs(10));
+        for _ in 0..4 {
+            world.pic.tick();
+        }
+        if !world.table_state().phase.hand_in_progress() {
+            break;
+        }
+    }
 
     let a = world.cash_out(alice).expect("alice cash_out");
     let b = world.cash_out(bob).expect("bob cash_out");
@@ -411,14 +483,14 @@ fn m10_a_departed_stake_in_a_pot_that_stopped_moving_is_visible_to_its_owner() {
 
     // ---- AND NOW BOB AND CAROL CLOSE THEIR TABS TOO ------------------------
     //
-    // Advanced without a tick again, so the round the `withdraw` below executes
-    // is the first thing to run at the new time and the refusal is written from
-    // the state the auditor was actually in.
+    // Advanced without a tick, so the round the `withdraw` below executes is the
+    // first thing to run at the new time and the refusal is written from the state
+    // the auditor was actually in.
     world.advance_time_only(PAST_THE_GRACE);
 
-    // The withdrawal path must point at the recovery, not merely refuse. This is
-    // the exact reply the auditor got, and the last thing the canister ever said
-    // to them: "Insufficient balance. Have: 0.0000 ICP".
+    // The withdrawal path must state the amount and name the recovery. This is the
+    // exact reply the auditor got, and the last thing the canister ever said to
+    // them: "Insufficient balance. Have: 0.0000 ICP".
     let refusal = world
         .withdraw(alice, status.escrow + alice_stake)
         .expect_err("withdrawing more than escrow must refuse");
@@ -435,29 +507,59 @@ fn m10_a_departed_stake_in_a_pot_that_stopped_moving_is_visible_to_its_owner() {
         refusal.contains(&alice_stake.to_string()),
         "withdraw's refusal must state the exact amount that is committed; got {refusal:?}"
     );
+
+    // **AND IT MUST NOT SAY THE HAND IS DEAD.** docs/DEFECTS.md E-59: this
+    // assertion used to be `refusal.contains("no longer be moved")`, and the
+    // sentence was false -- the hand is playable and the clock plays it out. Alice
+    // FOLDED by leaving, so the outcome she was being invited to buy with one
+    // permissionless call is the return of a stake she had already surrendered.
     assert!(
-        refusal.contains("no longer be moved"),
-        "and it must say the hand is unmovable, which is what makes it recoverable NOW; got \
-         {refusal:?}"
+        !refusal.contains("no longer be moved"),
+        "the canister told a player who folded that the hand is dead, at the moment its own \
+         clock was about to award her stake to somebody else; got {refusal:?}"
+    );
+    let denied = world.abandon_stuck_hand(alice);
+    eprintln!("DEPARTED/abandon_stuck_hand(alice) -> {denied:?}");
+    assert!(
+        denied.is_err(),
+        "a hand nobody has watched fail is not abandonable, whoever asks"
     );
 
-    // And following that advice actually works, with no help from anybody else.
-    // `abandon_stuck_hand` is idempotent-by-refusal: if the on-chain clock got
-    // there first the money is already home, which is the same outcome by the
-    // other route.
-    let recovered = world.abandon_stuck_hand(alice);
-    let balance = world.get_balance(alice);
-    eprintln!("DEPARTED/abandon_stuck_hand -> {recovered:?}; alice's balance -> {balance}");
-    assert!(
-        balance >= alice_stake,
-        "after following the advice the canister gave her, alice's escrow must hold her stake: \
-         {balance} < {alice_stake}"
+    // The clock decides it, and her stake goes where folding sends it.
+    let owed_before = world.snapshot().internal_total();
+    for _ in 0..12 {
+        world.pic.advance_time(Duration::from_secs(10));
+        for _ in 0..4 {
+            world.pic.tick();
+        }
+        if !world.table_state().phase.hand_in_progress() {
+            break;
+        }
+    }
+    let after = world.table_state();
+    eprintln!(
+        "DEPARTED/after the clock: phase={:?} pot={}  {}",
+        after.phase,
+        after.pot,
+        seats(&after)
     );
-    let wallet_before = world.ledger_balance(alice, None);
-    world.withdraw(alice, balance).expect("withdraw");
     assert!(
-        world.ledger_balance(alice, None) > wallet_before,
-        "the recovered stake must reach her ledger wallet"
+        !after.phase.hand_in_progress(),
+        "the on-chain clock must resolve it with no external caller"
+    );
+    assert_eq!(
+        world.snapshot().internal_total(),
+        owed_before,
+        "resolving the hand must not create or destroy an e8"
+    );
+    let residual = custody_status(&world, alice).expect("get_custody_status must answer");
+    assert_eq!(
+        residual.committed_in_pot, 0,
+        "once the hand is settled nothing of hers is in the middle any more: {residual:?}"
+    );
+    assert!(
+        residual.advice.is_empty() || !residual.advice.contains("no longer be moved"),
+        "and no surface may still be describing a hand that is over: {residual:?}"
     );
 }
 

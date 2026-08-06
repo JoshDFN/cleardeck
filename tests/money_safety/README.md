@@ -27,15 +27,33 @@ picked up by `cargo test --workspace`.
 
 | | Name | Statement |
 |---|---|---|
-| **M1** | CONSERVATION | `icrc1_balance_of(table) == escrow + chips + pot + uncredited_raw_deposits`, exactly. No chips created, none destroyed. |
+| **M1** | CONSERVATION | `icrc1_balance_of(table, None) + sum(icrc1_balance_of(table, deposit_subaccount(p)))` `== escrow + chips + pot + unswept_deposit_custody + the harness's own two allowances`, exactly. No chips created, none destroyed. **Both kinds of account the canister owns are on the left**; anchoring it to the main account alone is what let a canister hold 5 ICP for a player at an address it had published and satisfy M1 (FINDING 21, FINDING 28). |
 | **M1b** | POT BREAKDOWN | `side_pots` sums to `pot`; and mid-hand `pot` equals the sum of the seated players' `total_bet_this_hand`, so every e8 in the middle is attributable. |
 | **M2** | LEDGER REALITY | The canister's real ledger balance is never less than what it owes. It can never be short. |
 | **M3** | NO RAKE | Over a completed hand, chips awarded == chips wagered. The house takes exactly zero. |
 | **M4** | NO NEGATIVE / NO OVERFLOW | Nothing wraps; `saturating_*` never hides a real deficit; hostile amounts are rejected, not clamped. |
 | **M5** | UPGRADE DURABILITY | A real `--mode upgrade` preserves every balance, every chip stack and the in-progress hand. |
 | **M6** | NO DOUBLE PAY | A pot is awarded once; a withdrawal is paid at most once; a deposit block or allowance is credited at most once. |
-| **M8** | PRINCIPAL ATTRIBUTION | The money reached the right PERSON, not merely the right seat and the right total. |
+| **M8** | PRINCIPAL ATTRIBUTION | The money reached the right PERSON, not merely the right seat and the right total. Includes `check_deposit_attribution`, which compares the canister's deposit-subaccount books against the ledger **one principal at a time**, because every other check here compares sums and a canister that books alice's deposit against bob's address satisfies all of them. |
 | **M9** | FUND REACHABILITY | For any state a sequence of legal calls can reach, there is a sequence of legal calls by each funded player that returns that player's balance to the ledger. |
+| **M14** | LEDGER/BOOKS COHERENCE | Money that has moved on the ledger is money the canister's books must either HOLD or NAME. There is no third state. `ledger_main + every deposit subaccount == escrow + chips + pot + uncredited raw transfers + open ledger-intent journal`. See `src/fault.rs`, `tests/ledger_boundary.rs` and docs/SECURITY-FINDINGS.md FINDING 29. |
+
+**M14 is the second odd one out, and it is the only invariant here whose subject is a state
+ordinary play cannot produce.** M1 is evaluated between messages, and between messages the ledger
+and the books always agreed. The gap opens *inside* one message: `deposit`,
+`claim_external_deposit` and `withdraw` each move real money and settle the books in the post-await
+continuation, so a continuation that does not run leaves the movement standing and the book entry
+undone. That state was worth 3.0 ICP of a player's money with eleven closed doors out of it, and
+nothing in this harness could see it because nothing in this harness could produce it.
+
+`src/fault.rs` produces it, without instrumenting the canister and without a mock ledger: walk the
+call to its LAST await, take a canister snapshot there, let the call finish so the ledger really
+performs the movement, load the snapshot back. By the IC's atomicity rule that discards exactly the
+final continuation, which is what a trap discards. The same file records the four attempts at
+forcing a literal trap and the measured reason each failed — read it before trying a fifth.
+
+One fuzz run in four injects a fault this way and then makes the OWNER recover it with a
+player-only call, so M14 is exercised by randomised sequences and not only by fixtures.
 
 **M9 is the odd one out and it is the reason the list needed a ninth entry.** M1 to
 M8 all ask whether the arithmetic is right. None of them asks whether the player

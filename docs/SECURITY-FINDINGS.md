@@ -3,6 +3,90 @@
 Findings that touch real user funds. Each entry states what was actually executed, so a
 reader can tell a demonstrated defect from a suspected one.
 
+> ## 🚨 STATUS, WAVE 8 COHERENCE PASS, 2026-08-06: THE CENSUS HAS SIX ACCOUNTS AND THE CANISTER CAN READ FOUR
+>
+> The banner below says every instrument now measures both kinds of ledger account. **That is
+> true of the harness and false of the canister**, and the difference is
+> [FINDING 35](#finding-35).
+>
+> | account | canister-side observation record | in `total_liability()` | operator can audit it |
+> |---|---|---|---|
+> | ICP **main** / ckBTC **main** | **NONE** | **no** | **no** |
+> | ICP / ckBTC **deposit subaccounts** | `DEPOSIT_CUSTODY` | yes | yes |
+>
+> Driven on this tree: `admin_audit_deposit_custody` replies **`(1 audited, 0 held, 0 unaudited)`
+> on a canister holding 5 ICP** of a named player's, and `admin_update_config(BTC)` is then
+> ACCEPTED, which routes `notify_deposit`, the money's only recovery door, at the wrong
+> ledger. No attacker, no trap, no unfinished call: one exchange withdrawal and one config change.
+> The flip **is** reversible (measured), but no surface would ever tell an operator to reverse it.
+>
+> Two more instances of the same shape, both in the instruments:
+> [FINDING 36](#finding-36) (the harness's `CustodyStatus` mirror silently drops the field
+> carrying FINDING 29's money, under a comment saying it is mirrored in full) and
+> [FINDING 37](#finding-37) (`total_liability()`, the last custody guard's only input, has one
+> caller, no query and, until this pass, no gate).
+>
+> **[FINDING 33](#finding-33) is CLOSED** in this pass: one word, reproduced three times first,
+> now gated by `tests/money_safety/tests/coherence_w8.rs` inside `./scripts/dev.sh test`.
+
+> ## 🚨 STATUS, 2026-08-06: THE UNBOUNDED ONE WAS DRIVEN, AND IT WAS AS BAD AS IT LOOKED
+>
+> [FINDING 29](#finding-29) -- *"both deposit paths move real money on the ledger before writing any
+> record of intent"* -- was the only wave-7 blocker no reviewer could exercise, and the only one that
+> can cost an arbitrary amount. **It has now been reproduced against the real mainnet ICP ledger
+> wasm, measured, and closed.**
+>
+> | | measured, on the module the auditor reviewed |
+> |---|---|
+> | the loss | 3.0 ICP pulled out of a player's wallet into the canister, **0 credited** |
+> | the recovery | **eleven doors tried, player and controller, none returns it.** `notify_deposit` refuses the pull's real block index with *"it was credited to your balance when the pull happened"* -- the exact lie the auditor predicted; `admin_restore_balance` no longer exists |
+> | the door nobody had named | **`withdraw()` has the same shape.** Its escrow debit and its `PENDING_WITHDRAWALS` flag are committed at the await, its refund only ever existed in the continuation, and one hour later the player was still told *"a withdrawal is already in progress"*. `withdraw` is the only door from escrow to the ledger, so that was a permanent unbounded fund lock |
+> | the trap itself | **NOT forced.** Four mechanisms tried, each with the measured reason it failed, recorded in the finding and printed by the gate. The reproduction is faithful to the consequence, not to the cause -- and the last of the four shows the trap is not the only trigger |
+>
+> **Fixed** by a durable ledger-intent journal written *before* every irreversible movement, made
+> replayable by the ledger's own ICRC-1/ICRC-2 deduplication (`memo` + `created_at_time`), with an
+> owner-drivable `resolve_my_ledger_intents()`, persistence as `opt` across upgrades, and a bound
+> enforced by refusing to start rather than by forgetting. Gate: **M14 LEDGER/BOOKS COHERENCE**,
+> `tests/money_safety/tests/ledger_boundary.rs` (6 tests) plus fault injection on one fuzz run in
+> four.
+
+> ## 🚨 STATUS, 2026-08-06: THE CANISTER OWNS TWO KINDS OF LEDGER ACCOUNT, AND EVERY INSTRUMENT NOW MEASURES BOTH
+>
+> **This canister has always held money in two places and measured one.** Its main account, and
+> one deposit subaccount per principal -- `sha256("cleardeck-deposit:" || principal)`, the address
+> `get_deposit_subaccount()` publishes to external wallets. `total_liability()`, M1, M9's orphan
+> check, the drain's `table_is_really_empty` and all four balance surfaces were anchored to the
+> main account alone. Two independent reviewers reached that hole from opposite directions in one
+> wave, and it is now closed at the anchor rather than at either symptom.
+>
+> | | finding | what it cost | status |
+> |---|---|---|---|
+> | 1 | [FINDING 28](#finding-28) high | a player was told *"No claimable balance. Send ICP to your deposit address first"* **while this canister held their ICP at exactly that address**, and `get_custody_status` -- the surface built to answer "what is this canister holding for me" -- answered `total = 0` | **FIXED 2026-08-06.** The canister now records what the ledger says about each of its deposit subaccounts, persisted across upgrades; `get_custody_status` carries it in a field and in `total`; the refusal states the amount, the fee, that the money is not lost and the exact top-up that recovers it; `get_deposit_custody()`, `refresh_deposit_custody()`, `admin_get_deposit_custody()` and `admin_audit_deposit_custody()` are new |
+> | 2 | [FINDING 21](#finding-21) high | the FINDING 20 currency guard read a liability of **zero** on a table holding 5 ICP of a player's money, and permitted the re-denomination that strands it. The wave-7 orphan invariant reported **0** orphaned e8s on a canister holding 7 ICP in its own subaccounts | **FIXED 2026-08-06.** `total_liability()` includes every deposit subaccount the canister has read, **and** the guard refuses while any address it published has never been read -- unknown is not zero, which the arithmetic fix alone would have missed |
+> | 3 | [FINDING 11](#finding-11) / [E-12](DEFECTS.md#e-12) low | dust at or below the transfer fee, stranded and silent | **ANSWERED 2026-08-06.** Still immovable on its own (arithmetic), now visible on every surface and **recoverable by topping the same address up past the fee** -- driven end to end |
+>
+> **What this does not claim.** A deposit subaccount is a pure function of a principal, so the set
+> of these accounts is as large as the set of principals and this canister cannot enumerate it. It
+> enumerates every principal it holds escrow for, has seated, or has already read, and
+> `admin_audit_deposit_custody(also)` takes an operator-supplied list for the rest. The derivation
+> is written down in the code next to the anchor ("THE ACCOUNT CENSUS" in
+> `src/table_canister/src/lib.rs`) so any address can be checked by hand. The harness asserts the
+> limit rather than papering over it.
+>
+> Gates: `tests/money_safety/tests/deposit_subaccount_anchor.rs` (11 tests). Seven one-at-a-time
+> reverts of the seven re-anchorings were driven in a `cp -Rc` copy, each anchor asserted to match
+> exactly once and every file asserted byte-identical afterwards. **All seven turn a gate red:**
+>
+> | revert | gate that goes red |
+> |---|---|
+> | `total_liability()` drops the deposit-subaccount term | `the_currency_guard_refuses_on_a_table_funded_only_through_a_deposit_subaccount` |
+> | the currency guard drops the "unknown is not zero" leg | `the_currency_guard_refuses_while_a_published_address_has_never_been_read` |
+> | `claim_external_deposit` restores the original refusal text | `the_claim_refusal_may_not_say_there_is_nothing_when_there_is` |
+> | `get_custody_status` stops folding the deposit into `total` | `money_at_a_published_deposit_address_is_visible_on_every_surface` |
+> | `check_no_orphaned_custody` re-anchored to `ledger_main` alone | `the_orphan_invariant_is_red_on_money_held_only_in_deposit_subaccounts` |
+> | `Snapshot::internal_total` drops the canister's deposit custody | `the_drain_reports_not_empty_while_a_deposit_address_still_holds_money` |
+> | `check_deposit_attribution` gutted to return nothing | `the_attribution_leg_is_red_when_the_totals_are_right_and_the_recipients_are_not` |
+
 > ## 🚨 STATUS, 2026-08-05, AFTER WAVE 6: A SECOND INDEPENDENT AUDITOR STILL SAYS NO
 >
 > A second blind auditor was run **after** this wave's fixes, on the running system, with the
@@ -155,6 +239,7 @@ work.
 | FINDING 11 | [E-12](DEFECTS.md#e-12) | low |
 | FINDING 12 | [E-06](DEFECTS.md#e-06) | high |
 | [FINDING 16](#finding-16) | [E-32](DEFECTS.md#e-32) + [E-06](DEFECTS.md#e-06) | **player-to-player fund theft (demonstrated, FIXED)** |
+| [FINDING 30](#finding-30) | [E-66](DEFECTS.md#e-66) | high — **FIXED 2026-08-06** (the permanent record; not a fund defect, and that is why every money instrument was green) |
 
 Detailed write-ups that predate this file live alongside it:
 
@@ -797,11 +882,14 @@ paying withdrawals by another. Both are now written together.
 **The fix:** `refuse_currency_change_while_funded` on all three doors. A currency change is
 allowed only when escrow + chips + pot is exactly zero.
 
-**THE FIX IS INCOMPLETE.** "Escrow + chips + pot" is not everything the canister holds. See
-FINDING 21, which walks the surviving hole and demonstrates it.
+**THE FIX WAS INCOMPLETE, AND IS NOW COMPLETE (2026-08-06).** "Escrow + chips + pot" is not
+everything the canister holds. [FINDING 21](#finding-21) walked the surviving hole, demonstrated it
+at 5 ICP, and is now closed: `total_liability()` includes every deposit subaccount this canister
+has read, and the guard additionally refuses while any address it published has never been read.
+Read FINDING 21 for the fix and for why the arithmetic half alone would not have been enough.
 
 <a id="finding-21"></a>
-## FINDING 21 (high) -- the FINDING 20 guard measures the wrong total, so a funded table can still be re-denominated -- **OPEN**
+## FINDING 21 (high) -- the FINDING 20 guard measures the wrong total, so a funded table can still be re-denominated -- **FIXED 2026-08-06**
 
 **Severity:** HIGH. Controller-only, fund LOCK. Recoverable only while the table stays empty.
 **Status:** OPEN. Found by the wave-7 critic while attacking the FINDING 20 fix. Demonstrated
@@ -861,6 +949,66 @@ canister's MAIN ACCOUNT may never hold money it owes to nobody."
 every account the canister owns, main plus every deposit subaccount, not to `ledger_main` alone.
 Until then FINDING 20 is half-closed and the wave-7 orphan invariant has a blind spot of exactly
 the shape FINDING 07 had.
+
+### THE FIX (2026-08-06) -- and the part of it that is not arithmetic
+
+Both halves are re-anchored, and a third thing had to be built that neither reviewer named.
+
+**1. `total_liability()` now includes the deposit subaccounts.** It is
+`escrow + chips + pot + observed_deposit_total()`, where the last term is what the ledger last told
+this canister was sitting in its own subaccounts. The currency guard therefore refuses on a table
+whose only money is at a published deposit address. Gate:
+`deposit_subaccount_anchor::the_currency_guard_refuses_on_a_table_funded_only_through_a_deposit_subaccount`.
+
+**2. `check_no_orphaned_custody` is anchored to every account.** It is now
+`(ledger_main + ledger_deposit_subaccounts) - claims - exemptions`, and `claims` includes the
+canister's OWN report of its deposit custody, read from `admin_get_deposit_custody()` and never
+computed by the harness from the ledger. That keeps the two sides independent: money in a
+subaccount the canister knows about is *owed*; money in one it does not know about is *orphaned*.
+Both directions are gated in
+`deposit_subaccount_anchor::the_orphan_invariant_is_red_on_money_held_only_in_deposit_subaccounts`,
+driven on the finding's own numbers (7 ICP, 0 hits before).
+
+**3. UNKNOWN IS NOT ZERO, and this is the part the arithmetic fix alone would have missed.** A
+query cannot call the ledger, so the only way this canister can know what is at one of its
+subaccounts is to ask from an update and write the answer down. Re-anchoring the guard to
+"what has been written down" leaves the whole attack intact one step earlier: a controller who
+flips the currency **before anybody looks** strands the same 5 ICP by the same mechanism, and
+`total_liability()` reads zero *correctly*, because the balance is genuinely unknown.
+
+So the guard has a second leg. A currency change is refused while any deposit address the canister
+can enumerate has never been read, and the refusal names the remedy
+(`admin_audit_deposit_custody`, controller-only, reads the ledger, moves nothing). Measured:
+
+```text
+  victim deposits 3 ICP and withdraws all of it   -> the canister owes 0, and knows this principal
+  victim's external wallet sends 5 ICP to their deposit address (no message to the canister)
+  admin_update_config(currency = BTC)
+      -> Err "...1 deposit address(es) this canister published have never been read..."
+  admin_audit_deposit_custody([])  -> read 1, observed 500000000, unaudited 0
+  admin_update_config(currency = BTC)
+      -> Err "...while it still owes players 5.0000 ICP..."
+```
+
+Gate: `deposit_subaccount_anchor::the_currency_guard_refuses_while_a_published_address_has_never_been_read`.
+
+**THE ENUMERABILITY LIMIT, WRITTEN DOWN RATHER THAN PAPERED OVER.** A deposit subaccount is
+`sha256("cleardeck-deposit:" || principal)` -- a pure function of a principal -- so the set of
+these accounts is as large as the set of principals and **this canister cannot enumerate it**.
+What it can enumerate is every principal it holds escrow for, has seated, or has already observed.
+A principal who derives the address off-chain and funds it without ever calling the canister is
+outside that set. Three things follow, all of them deliberate:
+
+* the derivation is written down in the code, in the "THE ACCOUNT CENSUS" comment block at the top
+  of the deposit section of `lib.rs`, so an operator can compute the address for any principal and
+  check it against the ledger by hand;
+* `admin_audit_deposit_custody(also: vec principal)` takes an operator-supplied list, so a
+  principal learned from a support ticket or from the ledger's own log can be brought into the
+  census permanently -- reading an account writes an entry for it;
+* the harness asserts the limit rather than hiding it: in
+  `the_canisters_deposit_books_match_the_ledger_per_principal`, an audit with an empty `also` list
+  on three funded-but-never-seen principals is required to report `read = 0, found = 0`, because
+  "I have not looked" is the honest answer and "the accounts are empty" would be a lie.
 
 <a id="finding-22"></a>
 ## FINDING 22 (medium/high) -- the FINDING 07 fix gives a controller a new power: void any live hand after reading every hole card -- **OPEN**
@@ -1299,17 +1447,22 @@ Two things about this door are worth recording even though they are not double-c
   approximate in a place where it does not need to be.
 
 <a id="finding-11"></a>
-## FINDING 11 (NEW, low) -- dust at or below the transfer fee in a deposit subaccount can never be swept
+## FINDING 11 (NEW, low) -- dust at or below the transfer fee in a deposit subaccount can never be swept -- **ANSWERED 2026-08-06: VISIBLE, AND RECOVERABLE BY TOPPING UP**
 
-> **SUPERSEDED IN SCOPE BY [FINDING 28](#finding-28) (2026-08-06).** This finding records the dust
-> half only. The third independent auditor showed that money in a deposit subaccount is invisible to
-> **every** balance surface at any size, not only below the fee, and that the error text tells the
-> player to send more money to the address already holding theirs. Read FINDING 28 first.
+> **SUPERSEDED IN SCOPE BY [FINDING 28](#finding-28).** This finding records the dust half only.
+> The third independent auditor showed that money in a deposit subaccount is invisible to **every**
+> balance surface at any size, not only below the fee, and that the error text tells the player to
+> send more money to the address already holding theirs. Read FINDING 28 first.
 
 **Severity:** LOW. Bounded by the fee (10,000 e8s per player per stuck deposit).
-**Status:** CONFIRMED incidentally by the harness: a transfer of exactly the fee into a
-deposit subaccount leaves it unclaimable.
+**Status:** The *arithmetic* is unchanged and cannot be changed: an ICRC-1 transfer of an amount at
+or below the ledger's own fee is not a transfer any code can make. What was actually wrong was the
+other two thirds of it, and both are now closed. Gates:
+`deposit_subaccount_anchor::dust_below_the_fee_is_accounted_for_and_recoverable_by_topping_up`
+and `::the_claim_refusal_may_not_say_there_is_nothing_when_there_is`.
 **Where:** `claim_external_deposit`, `src/table_canister/src/lib.rs`
+
+The original:
 
 ```rust
 if balance <= transfer_fee {
@@ -1317,10 +1470,28 @@ if balance <= transfer_fee {
 }
 ```
 
-There is no path that sweeps a subaccount balance at or below the fee, so anything a user
-sends to their deposit address that does not exceed 0.0001 ICP is stranded there. The error
-message tells the user to "send ICP to your deposit address first", which is misleading when
-they already have.
+Three separate things were wrong and only one of them was physics:
+
+| | what | state now |
+|---|---|---|
+| 1 | the dust cannot be moved by a transfer | **unchanged, and unchangeable.** An amount at or below the fee cannot pay its own fee |
+| 2 | no surface reported it, so it was silently gone | **closed.** It is in `get_custody_status.unswept_deposit` and in `total`, in `get_deposit_custody()`, in `admin_get_deposit_custody()`, and in `total_liability()` |
+| 3 | the refusal told the player to send money to an address already holding theirs, and did not say the money was still there | **closed.** The refusal now states the amount, the fee, why no transfer can move it, that it is not lost, and the exact top-up that makes it claimable |
+
+**And it is recoverable, which nobody had checked.** Dust is stuck *on its own*; it is not stuck.
+Sending anything to the SAME address that takes the total past the fee makes the whole balance
+sweepable, dust included, and the refusal now says so with the exact number. Driven end to end:
+
+```text
+  alice sends 9,999 e8s (one below the fee)
+    claim_external_deposit -> Err, and get_custody_status.unswept_deposit = 9999, total = 9999
+  alice sends 2 ICP to the same address
+    claim_external_deposit -> Ok, credited 199_999_999 = (9_999 + 200_000_000) - 10_000
+```
+
+The 9,999 e8s came out with the top-up. The honest description of dust is therefore
+**"immovable alone, visible always, recoverable by topping up"**, and the one option that was
+being taken before -- silent -- is the one that is no longer available.
 
 <a id="finding-12"></a>
 
@@ -2997,7 +3168,61 @@ it falsifies is repeated in four places and is the basis of the cycles plan.
 ---
 
 <a id="finding-25"></a>
-## FINDING 25 (HIGH -- raised from medium in wave 7) -- after a stall, one permissionless call VOIDS the hand the clock would have played out; the player who was losing is the one with the incentive, and the canister TELLS them to do it
+## FINDING 25 (HIGH -- raised from medium in wave 7) -- after a stall, one permissionless call VOIDS the hand the clock would have played out; the player who was losing is the one with the incentive, and the canister TELLS them to do it -- **FIXED 2026-08-06**
+
+> ### FIXED 2026-08-06. One predicate, and it is about ATTEMPTS.
+>
+> Reproduced first, on the same construction, and then closed. The reproduction and the gate are
+> the same file: `tests/money_safety/tests/stall_agreement.rs`, **M13 ONE BELIEF**, which forks
+> **138 states** and drives each one down two arms -- the clock alone with zero ingress, and the
+> same state with one door call sent at the first instant it can be sent.
+>
+> | measured on 138 states | before | after |
+> |---|---|---|
+> | rows whose two arms paid different recipients | **118** | **0** |
+> | `Err` replies that changed the table anyway | **20** | **0** |
+> | hands voided by a door that the clock plays out | not separately counted | **0** |
+>
+> The 118 carries a caveat and it is stated rather than buried: the first run demanded exact
+> recipient equality on every row, including `leave_table` by a seated player, whose mid-hand use
+> is an ordinary fold and legitimately changes the outcome. At most 30 of the 138 rows are that
+> confound, so at least 88 were the defect. The shipped criterion is narrower and the after-run is
+> zero under both.
+>
+> **What changed.** `clock_should_abandon` is deleted. `hand_is_stuck` is the only predicate, all
+> six surfaces read it -- the on-chain clock, `abandon_stuck_hand`, `cash_out`, `leave_table`,
+> `get_custody_status`/`get_stuck_hand_status`, `TableView.hand_is_unmovable` -- and it now says:
+>
+> > a hand is stuck when this canister, **while executing**, has handed it to the ordinary
+> > resolution path in at least 3 separate committed messages spanning at least 300 s, and the hand
+> > has not moved.
+>
+> An hour-long stall therefore buys no credit toward abandonment on any door. The evidence is a
+> `STALL_WITNESS` keyed on `(hand_number, action_timer.expires_at)`, so it clears itself the instant
+> the hand moves, and it is deliberately **not persisted across upgrades** -- an upgrade is exactly
+> a period in which the canister was not executing.
+>
+> **The objection this write-up raised against the fix is answered, not ignored.** The concern was
+> that coupling the permissionless escape hatch to timer state rebuilds [FINDING 15](#finding-15)'s
+> fund lock, because a canister whose clock never re-armed would have a permanently closed hatch.
+> The witness is therefore written from **two** places, not one: `on_clock_tick`, and
+> `check_timeouts` -- which is permissionless, has no rate limit, and needs no seat. Three of those
+> calls across a grace period open the door with the timer completely dead. The floor described in
+> the original write-up ("refuse until the clock has been overdue for the grace period AND the
+> canister has been executing for at least one grace period") is what was built, with the second
+> clause measured as opportunities given rather than as time elapsed.
+>
+> **The `Err` that commits is gone too.** `cash_out` and `leave_table` are restructured so every
+> refusal is decided before the first mutation, with the boundary marked in the source. `cash_out`'s
+> in-a-hand refusal now carries the committed-stake sentence, so [FINDING 18](#finding-18)'s
+> guarantee is carried by the refusal instead of by voiding a playable hand.
+>
+> **What a reader should check for themselves.** Three gates in
+> `tests/money_safety/tests/invariants/custody.rs` and three unit tests in `lib.rs` pinned the old
+> belief. They are rewritten, not deleted, and each replacement states in its own doc comment what
+> it replaced. One of them had asserted that a player who **folded by leaving** could call
+> `abandon_stuck_hand` and get her stake back -- E-59 in miniature, living inside the gate for
+> FINDING 18.
 
 **Severity:** **HIGH**, raised from MEDIUM by the wave-7 coherence pass. Total money is conserved
 exactly. What moves is the *outcome*: a pot that one player had won on a fold-out is handed back,
@@ -3079,7 +3304,7 @@ is not a stuck hand: the seat whose clock expired should have been folded and th
 out"* -- which the system does not have. Adding one `abandon_stuck_hand` call to that test turns
 it red.
 
-### The fix, and the reason it is not obviously free
+### The fix, and the reason it was not obviously free
 
 Making `hand_is_stuck` agree with `clock_should_abandon` means the manual door also has to be
 told when the canister first saw the clock overdue, i.e. it has to read `CLOCK_STUCK_SINCE`.
@@ -3091,6 +3316,81 @@ substitution: refuse until the clock has been overdue for the grace period **and
 has been executing for at least one grace period, using a first-sighting timestamp that
 `post_upgrade` re-seeds. That is a design decision, not a patch, which is why it is recorded
 here rather than changed.
+
+> **RESOLVED, 2026-08-06 -- and this paragraph is left standing because it is the objection the
+> fix had to answer.** The floor is what was built. The part it got wrong is "using a first-sighting
+> timestamp that `post_upgrade` re-seeds": the witness is a thread-local and is simply *lost* on
+> upgrade, which is stronger and simpler -- an upgrade is a period in which the canister was not
+> executing, so its evidence does not survive one, and the door reopens a grace period later. The
+> dead-timer worry is answered by writing the witness from `check_timeouts` as well as from the
+> tick. `check_timeouts` is permissionless and unrestricted, so the hatch is reachable by any
+> player in three calls plus the grace, with the clock completely dead. It is a *slower* hatch,
+> never a closed one.
+
+### CRITIC AMENDMENT, 2026-08-06 -- "never a closed one" is false in the one state the hatch exists for
+
+The paragraph above is right about a dead timer and wrong about a dead timer **in FINDING 15's
+state**, and the two have to be separated because only the second one loses money.
+
+`check_timeouts` writes the witness like this (`src/table_canister/src/lib.rs`):
+
+```rust
+let result = advance_table_clock(now);   // the attempt
+note_stall_opportunity(now);             // the evidence
+```
+
+Both are in ONE message. FINDING 15's state is the state in which the ordinary resolution path
+**traps** -- that is the whole reason an escape hatch exists at all. A trap in
+`advance_table_clock` aborts the entire `check_timeouts` message, so `note_stall_opportunity`
+never commits, so `opportunities` never reaches `STUCK_HAND_MIN_OPPORTUNITIES`, so
+`hand_is_stuck` is false forever and `abandon_stuck_hand` refuses forever. The function's own
+comment says so: *"an attempt that TRAPS takes this whole message with it, which is what the
+two-message timer path exists to cover."* The two-message split exists only in `on_clock_tick`.
+
+So the reachability of the hatch is:
+
+| resolution path | on-chain timer | hatch |
+| --- | --- | --- |
+| returns normally | alive | opens (grace + 3 sightings) |
+| returns normally | dead | opens via `check_timeouts` -- the paragraph above is right here |
+| **traps** | alive | opens (the tick writes the sighting in its own message) |
+| **traps** | **dead** | **never opens.** Every stake in that pot is unrecoverable by any caller. |
+
+Under the wall-clock predicate this fix replaced, the bottom row opened. It is a narrow row --
+it needs both a trapping engine and a lost 30 s interval timer -- but it is the exact
+intersection of the two conditions this hatch was built for, and it is now the only row the
+hatch does not cover.
+
+**The one-line shape of the fix**: split `check_timeouts` the way `on_clock_tick` is already
+split -- call `note_stall_opportunity(now)` FIRST, in a message that cannot trap, and dispatch
+`advance_table_clock` behind it. `note_stall_opportunity` clears the witness whenever the hand
+moved, so counting the opportunity before the attempt rather than after costs nothing on a
+healthy table.
+
+Not fixed here; this pass is a review, and the change belongs to the owner of that file.
+
+### CRITIC AMENDMENT, 2026-08-06 -- what the M13 gate's green does and does not say
+
+Re-run of `tests/money_safety/tests/stall_agreement.rs` against the shipped module,
+`138 states compared / 0 voided / 0 recipient disagreements / 0 Err-replies that changed state`,
+865 s -- confirmed. What the row table also shows, and what the summary line does not:
+
+* `abandon_stuck_hand` replied `Err("This hand can still progress...")` on **42 of 42** rows;
+* `cash_out` replied `Err` on **42 of 42** rows;
+* the `voided` column reads `0/0` on **all 138** rows.
+
+No door opened anywhere in the gate. The agreement it proves is agreement between *doing
+nothing* and *being refused*, which is the correct answer for those 138 states but is not
+evidence that the two paths agree when the predicate is TRUE -- the gate contains no such state.
+`settle_unmovable_hand`, the exit-door settle and `NobodyLeftToWinIt` are consequently pinned at
+unit level only.
+
+That also leaves `fn voided()` -- which scrapes the canister log for the literal
+`"ABANDONED as unmovable"` and carries the strongest property in the file -- with **no positive
+control in the green run**. Change that log string and every row still reads `0/0`, every
+assertion still passes, and the `one_belief` property becomes permanently vacuous with nothing
+to notice. A reverted-predicate build does produce `voided=true` (measured: 95 of 138 rows), so
+the check is not dead today; it is unguarded.
 
 ---
 
@@ -3178,6 +3478,65 @@ rule.
 
 ---
 
+### WHAT WAS ACTUALLY BUILT, 2026-08-06
+
+Point by point against the five above.
+
+**1. The advice string.** `committed_stake_sentence` no longer says *"once the action clock has been
+expired for 5 minutes"*. It says the hand becomes refundable *"once this canister has watched it
+fail to move for 5 minutes"*, and that the canister does the refunding itself, so
+`abandon_stuck_hand` is named as **the same door, open to anyone, not a faster one**. The field it
+is derived from, `committed_is_stuck`, reads the one predicate.
+
+**2. `cash_out` and `leave_table`.** Both read the one predicate, so neither can settle a hand the
+clock is about to play out. `cash_out` refuses during a stall -- correctly, the hand can progress --
+and its refusal now carries the committed-stake sentence, which is where FINDING 18's guarantee
+lives in this state.
+
+**3. The `Err` that commits.** Both functions do their seat lookup and their in-a-hand refusal
+before the first mutation, with the boundary marked in the source
+(`---- FROM HERE ON NOTHING RETURNS Err ----`). Measured on 138 states: **20 → 0**.
+
+**4. The two arms.** They agree. Recipient disagreements: **118 → 0**.
+
+**5. The gate.** `tests/money_safety/tests/stall_agreement.rs`, **M13 ONE BELIEF**. It is the first
+thing in this repository to send an **UPDATE** through `advance_time_only`'s window, and
+`World::advance_time_only`'s own doc comment now says that is the point. Per scenario it forks one
+control row plus three doors × (every seat + one principal who has never sat down); over 12
+scenarios that is **138 forked states**, each compared against the clock-alone arm from a state the
+gate first asserts is identical in both worlds. Three properties per state:
+
+  1. no door voided a hand the clock plays out -- read off the canister's own
+     `ABANDONED as unmovable` log line, so it also binds `leave_table`, whose mid-hand use is an
+     ordinary fold and legitimately changes the outcome;
+  2. for the doors that are not ordinary game actions, **every principal ends with the same e8s in
+     both arms** -- not the same total, the same amount each;
+  3. no `Err` reply changed the table.
+
+A second, cheap test in the same file, `m13b_no_surface_calls_a_playable_hand_dead`, gates point 1
+above directly and needs no arms at all: in the stall window it reads `get_stuck_hand_status`,
+`get_custody_status` and `TableView.hand_is_unmovable` **as each player**, and fails if any of them
+says the hand is dead -- including if the advice string contains *"no longer be moved"* or
+*"nobody can win it"*. Those are queries, which execute no round, so they can only ever be caught
+by a test that opens the window; they were the sentence the losing player was shown.
+
+**One thing this fix deliberately widened.** The on-chain clock may now act on the
+live-hand-with-no-clock arm, which `clock_should_abandon` refused. That is not the automatic door
+getting bolder: under the one predicate that arm also requires a full grace period of witnessed
+failure, where it used to be abandonable by a caller the instant anybody looked at it. Both doors
+are now strictly more conservative on that arm than the manual door was.
+
+**A consequence worth stating plainly.** On a healthy canister, a hand is now almost never
+"stuck": the ordinary resolution path folds the expired seat within a tick, so the state cannot
+persist. `settle_unmovable_hand`, the exit-door settle and the `NobodyLeftToWinIt` branch are
+therefore defence-in-depth for a broken engine rather than paths ordinary play reaches. That is
+correct -- they are FINDING 15 escape hatches -- but it means **the harness can no longer construct
+a genuinely unmovable hand end to end**, and those branches are pinned at unit level in
+`stuck_hand_tests` rather than through PocketIC. A future wave that wants an integration gate on
+them needs a fault-injection route into the engine.
+
+---
+
 <a id="finding-26"></a>
 ## FINDING 26 (high) -- the 226-day runway assumes nobody is hostile: a free, permissionless ingress flood burns a table 65x faster, collapsing it to about three days
 
@@ -3224,12 +3583,19 @@ because whatever budget a top-up mechanism is sized against has to survive this.
 ---
 
 <a id="finding-27"></a>
-## FINDING 27 (high) -- the ICP deposit floor is BELOW the withdrawal floor, so money that arrives at the product's own documented minimum can never leave -- **OPEN**
+## FINDING 27 (high) -- the ICP deposit floor is BELOW the withdrawal floor, so money that arrives at the product's own documented minimum can never leave -- **CLOSED 2026-08-06**
+
+> **CLOSED.** The two floors are one number per currency, the relation
+> `min_withdrawal <= min_deposit` is asserted **at compile time** so the old value is a build
+> failure rather than a failing test, and a caller's whole remaining balance can always leave at
+> any size the ledger can move. Six PocketIC tests drive it through the real canister
+> (`tests/money_safety/tests/deposit_floor.rs`, in `./scripts/dev.sh test`). The evidence is at the
+> end of this entry; everything above it is the finding as the auditor left it.
 
 **Severity:** HIGH. Fund LOCK, no malice at any step, reachable by following the application's own
 instructions. Bounded at 99,999 e8s per player per table, but unrecoverable and silent.
-**Status:** OPEN. Found by the THIRD independent auditor, 2026-08-05, reproduced live on the
-running replica. Recorded here by the wave-7 coherence pass; it appeared in no document before.
+**Status:** CLOSED 2026-08-06. Found by the THIRD independent auditor, 2026-08-05, reproduced live
+on the running replica. Recorded by the wave-7 coherence pass; it appeared in no document before.
 **Where:** `src/table_canister/src/lib.rs:1889` (`min_deposit`) against `:66`
 (`ICP_MIN_WITHDRAWAL_AMOUNT`); mirrored into
 `src/cleardeck_frontend/src/lib/components/DepositModal.svelte` and `WithdrawModal.svelte`.
@@ -3267,8 +3633,66 @@ remaining balance"* -- without noticing the canister does it for ICP.
 `ui_limits.rs` must assert the relation `min_deposit >= min_withdrawal` per currency rather than
 only mirroring each into the modals.
 
+### THE FIX, 2026-08-06, and the half of it the auditor's framing does not reach
+
+**1. The relation is now a compile-time assertion, not a number somebody has to remember.**
+The deposit floor was an anonymous literal inside `deposit()` (`if currency == Currency::BTC
+{ 1_000 } else { 20_000 }`), which is *why* nothing in the tree could compare it against
+`ICP_MIN_WITHDRAWAL_AMOUNT`. It is a named constant per currency now, with a
+`Currency::min_deposit()` beside the existing `min_withdrawal()`, and:
+
+```rust
+const _: () = assert!(ICP_MIN_WITHDRAWAL_AMOUNT <= ICP_MIN_DEPOSIT_AMOUNT, "FLOOR INVARIANT ...");
+const _: () = assert!(ICP_MIN_WITHDRAWAL_AMOUNT >  ICP_TRANSFER_FEE,       "FLOOR INVARIANT ...");
+```
+
+Restoring `100_000` produces `error[E0080]: evaluation panicked: FLOOR INVARIANT BROKEN: the ICP
+withdrawal floor is above the ICP deposit floor... This is FINDING 27.` — measured, on a copy of
+the tree. `ICP_MIN_WITHDRAWAL_AMOUNT` is now `20_000`, equal to the deposit floor; the direction
+matters, because raising the DEPOSIT floor to 100,000 would have made new deposits safe and left
+the auditor's 80,000 e8s exactly where it was.
+
+**2. Equal floors are not enough, and this is the part worth reading.** The finding above names the
+band `[20,000, 100,000)` and the fix that closes it. But escrow balances are not only made of
+deposits. An odd-chip split, a partial withdrawal, or a `claim_external_deposit` sweep that paid
+the ledger fee out of the amount can each leave a balance *below any floor at all* — the finding
+says so itself, one paragraph in ("the band is reachable by ordinary play"), and then proposes a
+fix that does not reach it. A consistent pair of floors would have closed the door the auditor came
+through and left the pot's door open, which is this project's recurring shape: the instrument was
+built by people who knew where the money was supposed to have come from.
+
+So the floor is a statement about the smallest REQUEST, never about the smallest balance that can
+leave. `withdraw` waives it for the one request that cannot be a mistake — **the caller's whole
+remaining balance**, at any size the ledger can move — and the refusal below that names the network
+fee rather than a policy number a player cannot act on:
+
+```text
+Minimum withdrawal is 0.0002 ICP. Your whole remaining balance can always be withdrawn in
+one call whatever its size, as long as it is more than the 0.0001 ICP network fee -- you
+have 0.00015 ICP.
+```
+
+**3. What is measured** (`tests/money_safety/tests/deposit_floor.rs`, six tests, real canister and
+real ICP ledger on PocketIC, in the default `./scripts/dev.sh test` gate):
+
+| | |
+|---|---|
+| the auditor's exact sequence | deposit exactly 20,000 e8s, withdraw it, and it lands on the LEDGER. The round trip costs exactly three ledger fees (approve, `transfer_from`, `icrc1_transfer`) and **no principal** |
+| the whole dead band | 20,000 / 20,001 / 50,000 / 99,999 / 100,000 all go in and all come out |
+| below the floor | 40,000 in, 25,000 out, then the 15,000 residue — under the floor, over the fee, nothing to do with a deposit — swept whole |
+| the waiver is narrow | a PARTIAL request under the floor is still refused, and the refusal names the way out |
+| the honest boundary | a residue equal to the transfer fee cannot move, because the LEDGER cannot move it, and the refusal says so instead of quoting a policy minimum |
+| no other refusal weakened | more-than-you-have, zero, and the 60-second cooldown all still bind after a sweep |
+
+**4. The mirrors.** `MIN_WITHDRAWAL` in `WithdrawModal.svelte` is `20_000n`, and the modal mirrors
+the sweep as well as the floor — a client-side floor without the waiver would have rebuilt this
+finding one layer up, where no canister-side gate can see it. Its MAX button had to be made exact
+for that to work: `Number('0.00012345') * 100_000_000` is `12344.999999999998`, which floors to one
+unit short, and one unit short of the whole balance is not a sweep. `ui_limits.rs` reads the
+relation off the canister source and fails if either modal drifts.
+
 <a id="finding-28"></a>
-## FINDING 28 (high) -- money at the canister's OWN published deposit address is reported as zero by every balance surface, and the error text tells the player to send more -- **OPEN**
+## FINDING 28 (high) -- money at the canister's OWN published deposit address is reported as zero by every balance surface, and the error text tells the player to send more -- **FIXED 2026-08-06**
 
 **Severity:** HIGH. Fund LOCK below the transfer fee, total invisibility above it.
 **Status:** OPEN. Found by the third independent auditor, 2026-08-05, reproduced live. This is the
@@ -3309,51 +3733,293 @@ anything**. See docs/WAVE-07.md §5: re-anchoring to every account the canister 
 highest-leverage fix in the project, because it closes this, half of FINDING 21, and the M9 hole at
 once.
 
+### THE FIX (2026-08-06)
+
+The one structural cause and the five symptoms, each with what it says now.
+
+**The cause: a query cannot see the ledger.** Money arrives at a deposit subaccount with *no
+message to this canister at all* -- the ledger changes and the canister is not told -- and an IC
+query cannot call another canister to find out. Every balance surface is a query. So the canister
+now keeps a written record, `DEPOSIT_CUSTODY`, of what the ledger last said about each of its
+deposit subaccounts, taken by the updates that can ask (`claim_external_deposit`,
+`refresh_deposit_custody`, `admin_audit_deposit_custody`), persisted across upgrades because it is
+a liability record, and reported with its own timestamp because a stale figure presented as
+current is the same lie in a different font.
+
+| symptom | now |
+|---|---|
+| `claim_external_deposit` -> *"No claimable balance. Send ICP to your deposit address first"* while holding the money | states the amount, the fee, why no transfer can move it, that **it is not lost**, and the exact top-up that makes it claimable. It also writes the balance down BEFORE deciding anything, so the refusal path can no longer throw away the one fact no query can discover |
+| `get_custody_status()` -> `total = 0, advice = ""` | new field `unswept_deposit`, folded into `total`, with `unswept_deposit_observed_at_ns` -- `null` means NEVER ASKED, documented as not meaning "empty" -- and advice naming `claim_external_deposit()` |
+| `get_balance()` -> `0` | **unchanged, deliberately, and now documented.** It is the WITHDRAWABLE figure, and it already excludes chips at the table for the same reason: both are one player-callable step away from escrow. Reporting unswept deposits here would offer a client a "withdraw everything" amount that `withdraw` must then refuse. `withdraw`'s own refusals now carry the deposit sentence, exactly as FINDING 18 made them carry the pot sentence |
+| `admin_get_balance` / `admin_get_all_balances` -> `0` | **signatures unchanged** -- Candid will not let a tuple grow an element without breaking every existing reader, verified, and `tests/settlement` is one of them -- so the deposit half is a new controller surface, `admin_get_deposit_custody()`, returning the per-principal amounts, their observation times, and **the list of addresses never read**. Both old methods' doc comments now state their scope and name it |
+| no instrument measured it | `total_liability()`, `check_no_orphaned_custody`, M1/M2 and `DrainReport::table_is_really_empty` are all re-anchored -- see FINDING 21 |
+
+**New surfaces, all local, none privileged except the audit:**
+`get_deposit_custody()` (query, caller-scoped), `refresh_deposit_custody()` (update, any principal,
+their own address only, moves no money), `admin_get_deposit_custody()` (query, controller),
+`admin_audit_deposit_custody(also)` (update, controller, reads the ledger, moves no money).
+
+**Measured on the fixed module:**
+
+```text
+  bob's wallet sends 5 ICP to the address get_deposit_custody() published
+    icrc1_balance_of(that account)     -> 500000000
+    get_custody_status()               -> unswept_deposit_observed_at_ns = null
+                                          ("never asked", NOT "empty")
+  bob calls refresh_deposit_custody()  -> Ok, observed 500000000, sweepable
+    get_custody_status()               -> unswept_deposit = 500000000, total = 500000000,
+                                          advice names claim_external_deposit()
+    admin_get_deposit_custody()        -> total 500000000, attributed to bob, 0 unaudited
+  bob calls claim_external_deposit()   -> Ok, escrow 499990000, unswept back to 0
+```
+
+and the dust case, which is where the original sentence was worst:
+
+```text
+  bob sends exactly the fee, 10,000 e8s
+  claim_external_deposit -> Err "Nothing was swept, and you are NOT empty-handed. 0.0001 ICP
+     (10000 e8s) of yours is at the deposit address this canister published for you. ... at or
+     below the ICP ledger's transfer fee (10000 e8s), so no transfer can move it on its own ...
+     IT IS NOT LOST AND IT IS NOT FORGOTTEN ... sending 1 e8s or more to the SAME address makes
+     the whole balance claimable ..."
+  get_custody_status -> unswept_deposit = 10000, total = 10000
+```
+
+**Gates:** `tests/money_safety/tests/deposit_subaccount_anchor.rs`, ten tests. The two that convict
+the original defect directly are `money_at_a_published_deposit_address_is_visible_on_every_surface`
+and `the_claim_refusal_may_not_say_there_is_nothing_when_there_is`; the rest are one per
+re-anchored instrument, phrased as properties.
+
+**The leg that answers the standing lesson.** Every check above could pass on a canister that
+attributes alice's deposit to bob: correct totals, wrong recipients, every invariant silent -- the
+signature this project has produced four times.
+`the_canisters_deposit_books_match_the_ledger_per_principal` compares the canister's books against
+the ledger **per principal**, for three actors including one who sent nothing, and asserts each
+player's own caller-scoped surface agrees with the ledger for THEIR address.
+
 <a id="finding-29"></a>
-## FINDING 29 (high) -- both deposit paths move real money on the ledger before writing any record of intent, with no journal and no recovery -- **OPEN, NEVER EXERCISED**
+## FINDING 29 (high) -- all three money doors move real money on the ledger before writing any record of intent, with no journal and no recovery -- **DRIVEN AND FIXED 2026-08-06**
 
 **Severity:** HIGH, **unbounded**. The only finding in the wave-7 audit that can cost an arbitrary
-amount, and the only one no reviewer has been able to drive.
-**Status:** OPEN. Read from the code by the third independent auditor, who states plainly that they
-could not force the trap on the local replica. **NOT REPRODUCED BY ANYBODY.** Recorded at full
-severity anyway, because the shape is the textbook one and the recovery paths were deliberately
-deleted.
-**Where:** `deposit()` (`src/table_canister/src/lib.rs:1876`) and `claim_external_deposit()`
-(`:2008`).
+amount, and the only one no reviewer had been able to drive.
+**Status:** **REPRODUCED, MEASURED, AND CLOSED.** Read from the code by the third independent
+auditor, who said plainly that they could not force the trap on the local replica. It has now been
+driven at all three doors, its unrecoverability has been measured door by door, and a durable
+ledger-intent journal makes the same fault survivable.
+**Where:** `deposit()`, `claim_external_deposit()` and -- the auditor did not name this one --
+`withdraw()`, in `src/table_canister/src/lib.rs`.
+**Gate:** `tests/money_safety/tests/ledger_boundary.rs` (6 tests), M14 LEDGER/BOOKS COHERENCE in
+`tests/money_safety/src/fault.rs`, plus fault injection on one fuzz run in four.
 
-Both perform an irreversible ledger movement and credit `BALANCES` in the **post-await
-continuation**. If that continuation traps -- instruction limit, memory, any panic in the tail --
-the ledger movement stands and the credit is rolled back with the message. There is no journal
-written before the call and no resume path afterwards.
+### The defect, stated precisely
 
-There is also no manual repair:
+An IC message is atomic only **up to each await**. `deposit()` runs as two separate executions:
 
-* `notify_deposit` categorically refuses any block whose spender is the canister, with *"This block
-  is an ICRC-2 pull performed by this canister on your behalf (the deposit() flow). It was credited
-  to your balance when the pull happened and cannot be credited again"* -- a sentence that would be
-  **false** in exactly this state;
-* `admin_restore_balance` was deliberately removed (*"If balance recovery is needed, redeploy with a
-  migration in post_upgrade"*), and removing it was right for its own reason (it could mint escrow
-  from nothing) but it means the last in-band repair is gone.
+```text
+  execution A   entry .. ic0.call_perform(icrc2_transfer_from) .. return Pending
+                ^ every state change A made is COMMITTED here
+  -- the ledger executes. REAL MONEY MOVES. This cannot be undone. --
+  execution B   the reply callback: claim the block, credit BALANCES
+                ^ if B traps, exactly B's writes are discarded. A's stand.
+```
 
-**What settling it needs**, in the auditor's own words and repeated here because it is the next
-thing somebody should build: a PocketIC harness that forces a trap in the post-await continuation
-(instruction-limit exhaustion, or a fault-injecting ledger stub that returns `Ok` and then makes the
-tail panic), and then asks whether ANY player- or controller-callable method can recover the funds.
-Everything that needs is local; nothing about it needs mainnet.
+Before this fix, **A wrote nothing**. So a discarded B left money inside the canister that nothing
+in the canister accounted for, belonging to somebody whose name had never been written down.
 
-The fix is the standard one and does not depend on the answer: write intent to stable state
-**before** the ledger call, make the continuation idempotent against that record, and give the
-record a resume path any principal can drive for their own entry.
+### It was driven, and the money was gone
+
+Reproduced without instrumenting the canister and without a mock ledger, against the real mainnet
+ICP ledger wasm on PocketIC. The state a trapped tail leaves behind *is*, by the atomicity rule, the
+committed state at the await point with the ledger movement standing -- so the harness walks the
+call to its last await, takes a **canister snapshot** there, lets the call finish so the ledger
+really performs the movement, and loads the snapshot back. That discards exactly execution B.
+Mechanism and its limits: `tests/money_safety/src/fault.rs`.
+
+Measured on module `cb26fb9495fbe2084590ff087245968f33bb78460b3c2c977d06c002e632c105` (the module
+the auditor reviewed):
+
+```text
+deposit(3 ICP)              ledger main 0 -> 300_000_000    escrow 0    ORPHANED 300_000_000
+claim_external_deposit()    subaccount 200_000_000 -> 0, main 0 -> 199_990_000, escrow 0
+withdraw(2 ICP)             escrow -200_000_000, wallet +199_990_000, pending flag STUCK
+```
+
+**Every door out of the deposit state, and what each one said.** This is the complete sweep, not a
+selection:
+
+| caller | call | reply |
+|---|---|---|
+| victim | `claim_external_deposit()` | *"No claimable balance. Send ICP to your deposit address first."* |
+| victim | `notify_deposit(5)` -- the real block the pull wrote | *"This block is an ICRC-2 pull performed by this canister on your behalf (the deposit() flow). **It was credited to your balance when the pull happened** and cannot be credited again."* |
+| victim | `withdraw(1 ICP)` | *"Insufficient balance. Have: 0.0000 ICP"* |
+| victim | `cash_out()` / `leave_table()` | *"Not at table"* |
+| controller | `admin_return_all_chips_to_escrow()` | no chips; nothing moves |
+| controller | `admin_restore_balance(victim, 1 ICP)` | **method does not exist** (deliberately deleted) |
+
+`alice` started with 1,000,000,000,000 e8s and ended with 999,699,980,000. **300,000,000 e8s of a
+player's money, inside the canister, reachable by nobody.** The auditor's prediction that
+`notify_deposit`'s sentence would be a lie in exactly this state is confirmed verbatim.
+
+### `withdraw()` is the same shape and the auditor did not name it
+
+`withdraw` debits escrow and sets `PENDING_WITHDRAWALS` **before** the await, so both are committed
+at the await point and a discarded continuation does not undo them. Measured: the money reached the
+player, and one hour later an unrelated withdrawal was still refused with *"A withdrawal is already
+in progress"*. `withdraw` is the only door from escrow to the ledger, so **a discarded withdraw
+continuation was a permanent, unbounded fund lock** (M9), on top of a refund path that only ever
+existed inside the continuation that had just been discarded.
+
+### The literal trap was NOT forced, and here is exactly what was tried
+
+The reproduction above is faithful to the **consequence**. It does not prove a trap is reachable on
+mainnet. Four mechanisms were tried and all four failed; recorded so nobody repeats them
+(`TRAP_FORCING_ATTEMPTS` in `tests/money_safety/src/fault.rs` prints them on every run):
+
+| attempt | measured reason it did not work |
+|---|---|
+| `wasm_memory_limit` squeeze | set to the canister's exact `memory_size` (6,946,875 bytes), and to +1 and +64 KiB. All three deposits completed and credited: the limit only bites on `memory.grow`, and neither half of `deposit()` grows the heap |
+| out-of-cycles in the callback | a whole deposit costs **12,565,638** cycles net, but making the outbound call **reserves 42,109,265,417** for the response and the callback executes out of that reservation. Any balance small enough to starve B is too small for `call_perform` to succeed at all, so no money moves |
+| upgrade inside the window | `install_code` on a canister with an open call context does drop the callback, but the window is not addressable: the ledger movement and the credit land in the **same** round, and the 2.4 MB module needs a chunk upload that costs more rounds than the window is wide |
+| a fault-injecting ledger stub | a callee cannot make its caller's callback trap. The nearest thing it can do is reply undecodably, and ic-cdk 0.19 turns a decode failure into `Err((CanisterError, ..))`, **not** a trap (`api/call.rs::decoder_error_to_reject`) |
+
+**The trap is not the only trigger, and that is the more important point.** The last row reaches the
+identical end state through `deposit()`'s ordinary `Err` branch: a call-level error is not evidence
+that nothing happened -- the ledger may well have executed and the reply been lost or undecodable --
+and the old code returned a tidy error message and forgot. So did an upgrade with a call in flight,
+which is an ordinary operational act. **The fix is required whether or not a trap is reachable.**
+
+### The fix: a durable ledger-intent journal, and the ledger's own deduplication
+
+`src/table_canister/src/lib.rs`, section "THE LEDGER-INTENT JOURNAL".
+
+1. **Nothing performs an irreversible ledger movement unless an entry naming the OWNER, the AMOUNT
+   and the exact WIRE ARGUMENTS has already been committed.** The write happens before the await, so
+   it is committed at the await and survives a discarded continuation.
+2. **The retry is safe because the LEDGER decides, not our bookkeeping.** A discarded continuation
+   never learned the block index, so the journal does not try to look it up: it re-issues the
+   identical transaction. ICRC-1/ICRC-2 deduplicate on the whole transaction including `memo` and
+   `created_at_time`, so a movement that already happened comes back `Duplicate { duplicate_of }` --
+   a positive answer carrying the block index the first attempt never saw -- and one that never
+   happened is simply performed. Exactly-once, by construction. The intent stores the memo and the
+   created_at_time and every attempt reproduces them byte for byte.
+3. **Retirement is the once-only token.** `take_ledger_intent` removes the entry and the credit
+   happens in the same message with no await between, exactly like `claim_deposit_block`. A
+   concurrent resolver finds the entry gone and credits nothing.
+4. **`resolve_my_ledger_intents()` and `resolve_ledger_intent(id)`** -- any principal, their own
+   entries; a controller, anyone's. This is the resume path.
+5. **The lease is an efficiency guard and is deliberately short (30 s).** Two callers driving one
+   entry can neither double-move it (the ledger deduplicates) nor double-credit it (the removal is
+   atomic). A long lease would be a second lock for a discarded continuation to get stuck behind,
+   which is the defect wearing a hat.
+6. **Persisted as `opt` in `PersistentState`**, with `next_intent_id` restored monotonically (an id
+   is the ledger memo; reusing one would make two different movements look like one transaction)
+   and leases dropped on the way in (their holder was a message in a module that no longer exists).
+   An upgrade is one of the events that creates these entries, so losing them there would
+   reintroduce the defect at the moment it is most likely to fire.
+7. **Bounded** -- 4 open entries per principal, 512 in the canister -- and the bound is enforced by
+   **refusing to start**, never by dropping an entry. Dropping an entry is the forgetting this
+   finding is about.
+8. **`transfer_tokens()` was deleted, not left unused.** It sent `created_at_time: None` and
+   `memo: None`, which is a transaction the ledger cannot deduplicate, so a retry of it is a second
+   real payment. A fund canister with an un-deduplicable transfer helper in it is one call site away
+   from having the defect back.
+9. **Both lying sentences now consult the journal.** `notify_deposit`'s *"it was credited when the
+   pull happened"* and `claim_external_deposit`'s *"send ICP to your deposit address first"* each
+   name the open entry and `resolve_my_ledger_intents()` instead. `get_custody_status` carries a new
+   `unfinished_ledger_ops` field in the record and in `total`, so this fourth place a player's money
+   can be is visible on the surface whose whole job is to say where their money is.
+
+**The honest limit.** Automatic resolution works only while the ledger still deduplicates, i.e.
+inside its transaction window. Past `retry_deadline_ns` (20 h, inside the ICP ledger's 24 h window)
+the canister **refuses** to re-issue, because a re-issue outside the window would move the money a
+second time. The entry stays, visible, naming the owner and the amount, and resolving it then needs
+an operator to reconcile against the ledger. That is worse than automatic recovery and far better
+than the state before this change, in which there was no record at all.
+
+### The gate
+
+**M14 LEDGER/BOOKS COHERENCE**, `tests/money_safety/src/fault.rs`:
+
+> Money that has moved on the ledger is money the canister's own books must either HOLD or NAME.
+> There is no third state.
+>
+> `ledger_main + every deposit subaccount == escrow + chips + pot + uncredited raw transfers +
+> open ledger-intent journal`
+
+Both directions are checked and they are different failures: an **orphan** (the canister holds money
+nothing accounts for -- FundDestruction, because there is no admin crediting path) and a **short**
+(the books promise more than the canister holds -- FundCreation, which is what a discarded *withdraw*
+continuation produces). It runs on every fuzz step, and one fuzz run in four injects a real
+discarded continuation and then makes the OWNER recover it with a player-only call.
+
+Six tests, all green, each asserting a property rather than an example:
+
+| test | property |
+|---|---|
+| `m14_deposit_continuation_discarded_is_accounted_for_and_recoverable` | accounted for, named to the right principal, `get_custody_status` names the recovery method, the owner recovers it, a second resolve does not credit twice, and the money reaches her wallet |
+| `m14_sweep_continuation_discarded_is_accounted_for_and_recoverable` | the same, and the retry refusal may no longer say *"send ICP to your deposit address first"* while holding it |
+| `m14_withdraw_continuation_discarded_does_not_lock_the_player_out` | the debit is written down, the player is whole modulo ledger fees, and she can withdraw again |
+| `m14_journal_survives_an_upgrade` | a real `--mode upgrade` keeps the entry, drops the stale lease, and the money is still recoverable on the far side |
+| `m14_each_victim_drains_their_own_money_after_a_fault` | **the recipient dimension.** Three faults, three doors, three people; each recovers and drains their own with player-only calls, and no victim is more than a few ledger fees down. A journal that named the wrong owner would keep every total right and fail here |
+| `m14_past_the_dedup_window_the_retry_is_refused_and_the_record_kept` | **the one place where doing the helpful thing would move money twice.** Past the ledger's transaction window the retry is refused, nothing is credited, and the entry stays |
+| `m14_the_journal_is_bounded_by_refusing_to_start_not_by_forgetting` | the cap refuses new deposits rather than dropping entries, the refusal names the way out, and resolving frees capacity |
+| `m14_instrument_self_check` | the reading is non-zero with the journal ignored, so the gate is not vacuously green; also prints the four failed trap attempts and the five places the gate cannot see |
+
+### Where this gate cannot see
+
+Written down rather than left to be rediscovered; `NOT_COVERED` in
+`tests/money_safety/src/fault.rs` prints it on every run of the self-check.
+
+* **`IntentOutcome::Unknown`** -- the branch taken when the ledger CALL fails rather than the ledger
+  refusing, which leaves the entry open because nobody knows whether the money moved. Unreachable
+  from this harness for the same reason a trap is: the real ledger neither rejects nor replies
+  undecodably. **Verified by reading only.**
+* **A payout the ledger definitively refuses** (`settle_intent`'s refund path for a `Payout`). The
+  canister's ledger balance always covers its escrow -- that is M2 holding -- so a well-formed
+  payout is never refused here. **Verified by reading only.**
+* **Two resolvers in the same round.** Exactly-once is measured sequentially. The concurrent
+  argument (the journal removal is atomic, the ledger deduplicates the movement) is sound but is
+  not measured.
+* **Deposit subaccounts of principals that are not harness actors** -- the same unenumerability
+  limit [FINDING 21](#finding-21) documents, inherited.
+* **The trap itself**, as above.
+
+### One thing this fix found in somebody else's work
+
+Netting the journal against the deposit-custody observation ([FINDING 28](#finding-28)) is not
+cosmetic. A `sweep` moves money **between two accounts this canister already owns**, and the
+observation that says "X is at this deposit subaccount" is taken before the sweep and reset in the
+continuation. With both terms summed and the continuation discarded, the canister counted the same
+e8s twice -- and netting by the sweep amount alone still left the burned transfer fee being claimed
+by books after it had ceased to exist anywhere. `observed_deposit_total()` now nets open sweeps
+**gross of fee**, and `journalled_incoming_total()` carries them instead, so exactly one term holds
+the money at any instant. M14 was red until both halves were right.
+
+> **THE PARAGRAPH ABOVE IS NOT TRUE OF THE CODE, AND THE GAP IS A CRITICAL, OPEN, FUND-LOCKING
+> DEFECT. See [FINDING 33](#finding-33).** `journalled_incoming_total()` does *not* carry open
+> sweeps: its body is `.filter(|i| i.kind == LedgerIntentKind::Pull)`. The comment above it says
+> "`Pull` AND `Sweep`"; the filter says `Pull`. So while a sweep is unfinished the money is
+> subtracted from `observed_deposit_total()` and added to **neither** term, `total_liability()`
+> reads ZERO on a funded canister, and the FINDING 20 / FINDING 21 currency guard lets a
+> re-denomination through -- after which the flip cannot be undone. Reproduced independently
+> twice, from opposite directions, and shown to be a **regression introduced by this wave**: the
+> same probe is REFUSED against a build with only the pre-await intent write reverted. M14 does
+> not see it because M14 reads its own `pull + sweep` total in `fault.rs`, not the canister's.
+> **Two measures of the same money, each correct inside its own file, disagreeing from above
+> both: the standing signature, for the sixth time.**
 
 <a id="finding-30"></a>
-## FINDING 30 (high) -- the permanent hand archive is built from the seats as they stand at settlement, so it omits anyone who left mid-hand and invents anyone who sat down -- **OPEN**
+## FINDING 30 (high) -- the permanent hand archive is built from the seats as they stand at settlement, so it omits anyone who left mid-hand and invents anyone who sat down -- **FIXED 2026-08-06**
 
 **Severity:** HIGH. Not a fund loss. It falsifies the one durable artifact behind the product's
 central claim.
-**Status:** OPEN. Found by the third independent auditor, 2026-08-05, on four archived hands read
+**Status:** **FIXED 2026-08-06.** Reproduced first, on the real table canister and the real archive
+canister under PocketIC, then fixed at the source and gated three ways. The fix and its proof are
+at the bottom of this entry.
+Found by the third independent auditor, 2026-08-05, on four archived hands read
 by hand from the running instance.
-**Where:** `record_hand_to_history` (`src/table_canister/src/lib.rs:1157`).
+**Where:** `record_hand_to_history` (`src/table_canister/src/lib.rs`), now
+`hand_participants` in the same file.
 
 The player list comes from `state.players`, not from `hand_stakes` -- the payout basis that
 [FINDING 13](#finding-13) exists because of. The payout path was taught that a seat is not a person;
@@ -3368,8 +4034,8 @@ archived hand_id 4 (table_2)
   total_pot 900_000_000 against listed player deltas of +300_000_000 -- the record does not balance
 ```
 
-**It breaks the shuffle specification's own instruction.** SHUFFLE-SPEC §4 says to derive the
-player count from the hand's own record: *"Count it from the hand's own record -- every seat the
+**It breaks the shuffle specification's own instruction.** SHUFFLE-SPEC §4 SAID to derive the
+player count from the hand's own record -- it no longer does, see the fix below: *"Count it from the hand's own record -- every seat the
 history shows with cards, plus any that folded."* Do that for archived hand 10 and you get P = 2
 instead of 3, and you reproduce the board `9c Kc Qh / 6c / 4h` instead of the real
 `Qh Ts 6c / 4h / 3s`. **For any hand somebody left, the published record is not sufficient to
@@ -3381,3 +4047,808 @@ thing.
 **The gate this owes**, and it is a property rather than an example: for every archived hand,
 `sum(ending_chips - starting_chips)` reconciles against `total_pot`, and the recorded seat set
 equals the dealt-in set the shuffle actually consumed.
+
+---
+
+### REPRODUCED, 2026-08-06, on the real table and the real archive
+
+`tests/money_safety/tests/invariants/archive.rs` installs the table canister under test and the
+`history` canister built from this tree, wires them together, and plays the auditor's sequence:
+four players dealt in, one leaves after putting 2,000,000 e8s into the pot, and in one arm another
+principal buys the empty chair before the hand settles. Then it reads the archive.
+
+The record the archive held, before the fix, verbatim from the run:
+
+```text
+--- leaver, chair re-occupied: archived hand_id 1 (table hand 1) ---
+  total_pot 8000000  rake 0  showdown true
+  dealt in: THE RECORD DOES NOT SAY (no such field)
+  players named by the record:
+      seat 0 toldy-vthks-...-aae  pos=Seat 0  start=200000000 end=200000000 won=0
+      seat 1 lpoz5-mcd63-...-oae  pos=BTN     start=200000000 end=198000000 won=0
+      seat 2 weeos-hluch-...-7ae  pos=SB      start=200000000 end=206000000 won=8000000
+      seat 3 f6m43-ks6kd-...-rae  pos=BB      start=200000000 end=198000000 won=0
+```
+
+`toldy-…` is the intruder. He bought seat 0 after the deal, was never dealt a card, put in nothing,
+and the permanent record lists him as a player with the DEPARTED player's starting stack of
+200,000,000 e8s -- because `STARTING_CHIPS` is keyed by seat. `74yuz-…`, who was dealt in and paid
+2,000,000 into that pot, is not named at all. The record's own player deltas sum to +2,000,000
+against a `total_pot` of 8,000,000: **it does not balance.**
+
+**And the board comes out wrong, measured.** The archived seed is
+`96edd81596bc467971d030ca90cb36fd6fe8e027107679271a6e23c46ac794ee`. Running the outsider verifiers
+-- the Python and the JavaScript one, neither of which shares a line with the canister --
+
+```text
+verify_shuffle.py <seed> --players 4   ->  flop 9d 4d 8c   turn 2h   river Js   # what was dealt
+verify_shuffle.mjs <seed> --players 3  ->  flop 6h 5h 9d   turn 8c   river 2h   # what SHUFFLE-SPEC
+                                                                                # section 4 told a
+                                                                                # verifier to compute
+```
+
+Three is what you get by counting the players in the old record. A verifier following the
+specification would have concluded the table dealt a board that does not follow from its own seed.
+
+Every conservation invariant in the money-safety harness is GREEN on that sequence, in both arms.
+That is the fourth instance of the standing signature: correct totals, wrong recipients, every
+invariant silent -- here it is the RECORD's recipients rather than the money's.
+
+### THE FIX
+
+**One builder, from the settlement basis.** `hand_participants` replaces the seat walk. It unions
+two sources, neither of which is the seat vector:
+
+* `hand_stakes(state)` -- THE PAYOUT BASIS, the same list `plan_payouts` pays out of, which carries
+  the OWNER of every stake including stakes whose seat has since been vacated. Everyone who put
+  money in the hand is in it, and their money is attributed to them.
+* `DEALT_IN` -- a new record written by the deal loop in `start_new_hand`, as it deals, listing
+  every seat that took cards and the principal it took them for, in deck order. Everyone who was
+  dealt in is in it, including a player who folded pre-flop without putting in a chip.
+
+A principal in neither is not in the hand and does not appear. The list is built ONCE and cloned
+into both the archive record and the table's own `get_hand_history` ring, so the two cannot drift
+apart the way they had.
+
+**The record now states what a verifier needs.** `HandHistoryRecord.dealt_in` is the ordered list;
+`P` for SHUFFLE-SPEC section 4 is its length. Per player the record adds `dealt_in`, `contributed`
+and `left_mid_hand`. Every new field is `opt` on both canisters, deliberately: the archive is
+append-only and holds records written before the fix, and a bare field would make `stable_restore`
+reject every future upgrade of the one canister in this project that must never be reinstalled.
+`null` reads as *"the table that wrote this record did not record that fact"*, which is the truth
+for the auditor's four hands and is what a verifier should be told instead of a fabricated `false`.
+
+**The specification was wrong too, and is fixed.** SHUFFLE-SPEC section 4 told a verifier to count
+`P` out of the player list. It now says to READ `dealt_in`, states that a `null` `dealt_in` means
+the board cannot be reproduced, and carries the measured 4-vs-3 board above as the reason.
+`check_recorded_hand` on the archive prints the exact verifier command with that hand's `P` already
+filled in -- and refuses to print one for a record that does not state `P`, rather than suggesting
+a command that would silently produce the wrong board.
+
+**The action log had the same defect and is fixed with it.** Action records resolved their
+principal from `state.players[seat]` at settlement, so a departed player's actions were filed under
+whoever took the chair (or under `anonymous` if it was empty) -- the auditor's *"none of her actions
+recorded"*. They now resolve through `DEALT_IN`.
+
+**Two consequences inside the archive that follow for free, and matter.** `insert_hand` indexes
+`hands_by_player` and accumulates `player_stats` from the player list it is given. So before the
+fix, a player who left mid-hand **could not find that hand in their own history at all** and their
+loss was not in their statistics, while a principal who bought the chair got a hand they never
+played added to their `hands_played`. Both follow the participant list, so both are now right.
+
+### AFTER, same sequence, same harness
+
+```text
+--- leaver, chair re-occupied: archived hand_id 1 (table hand 1) ---
+  total_pot 8000000  rake 0  showdown true
+  dealt in (4 players, deal order):
+      k=0 seat 0 74yuz-2axoe-...-dae      k=1 seat 1 lpoz5-mcd63-...-oae
+      k=2 seat 2 weeos-hluch-...-7ae      k=3 seat 3 f6m43-ks6kd-...-rae
+  players named by the record:
+      seat 0 74yuz-...  start=200000000 end=198000000 won=0        contributed=2000000
+                                                       dealt_in=true  left_mid_hand=true
+      seat 1 lpoz5-...  start=200000000 end=198000000 won=0        contributed=2000000
+      seat 2 weeos-...  start=200000000 end=206000000 won=8000000  contributed=2000000
+      seat 3 f6m43-...  start=200000000 end=198000000 won=0        contributed=2000000
+```
+
+The intruder is gone. The departed player is named, with what she paid and the fact that she left.
+`sum(contributed) = sum(amount_won) = total_pot = 8,000,000` and `sum(ending - starting) = 0`.
+Reproducing the hand from **the archived record alone** -- the seed and `P = 4`, nothing else --
+gives `9d 4d 8c / 2h / Js`, which is the board in the record.
+
+### THE GATES
+
+| gate | what it fails on | where |
+|---|---|---|
+| 7 tests in `cargo test --test invariants -- archive::` | the leaver missing; the intruder present; the record not balancing; `P` absent; the board not reproducing from the archived `P`; the deal record lost across a mid-hand upgrade; the table's copy and the archive's copy disagreeing. Also asserts the OLD `P` gives a *different* board, so it cannot pass vacuously | `tests/money_safety/tests/invariants/archive.rs`, run by `./scripts/dev.sh test` |
+| **M12 ARCHIVE FIDELITY**, on every hand the fuzzer settles | leg A: the record must say who played, state who was dealt in, add up, and name nobody who neither took a card nor put in a chip. leg B: what the record says each person contributed must equal what the harness watched them stake, reconstructed step by step from `total_bet_this_hand` and `departed_stakes` and never from the record. leg C: `P` must be stated and everyone it names must be in the player list | `tests/money_safety/src/invariants/record.rs` |
+| `Severity::FalseRecord` | never excusable, no id, no magnitude -- it carries zero e8s by construction, which is exactly why every money instrument was green | `tests/money_safety/src/documented.rs` |
+
+Coverage, from `make fuzz-default` on this build: **14 of 14 settled hands checked, 12
+cross-checked against the watched stakes, and 3 of them with a mid-hand departure** -- the shape the
+defect needs. The count of departures is printed on every run, because a run with none has not
+tested this and a gate that quietly declines to measure is indistinguishable from one that passes.
+
+**Reverted, the gates go red.** With `hand_participants` put back on the seat vector and
+everything else unchanged, in a `cp -Rc` copy — `cargo test --test invariants -- archive::` gives
+`4 passed; 3 failed`:
+
+```text
+the_archive_does_not_name_a_player_who_bought_the_chair_mid_hand
+    FALSE RECORD: toldy-… bought seat 0 AFTER the deal and was never dealt a card,
+    and the permanent record of hand 1 names him as a player.
+the_archive_names_the_player_who_left_mid_hand
+    the record must say she put in the 2000000 e8s the live table said she had in the pot
+    before she left        left: 0   right: 2000000
+the_archived_record_balances
+    the record's own contributions must add up to the pot it records
+                           left: 6000000   right: 8000000
+```
+
+and `cargo test --test fuzz` goes from `0 blocking finding(s)` to `3 blocking finding(s)` on the
+first default seed alone, shrinking
+`M12_ARCHIVE_FIDELITY:record_balances|FalseRecord|HandComplete`.
+
+The four tests that stay green under that mutation are the ones that gate the DEAL record and the
+table-versus-archive comparison, neither of which the mutation touches. That is the correct
+behaviour and is the reason there are seven tests and not one: each fails on a different thing, so
+which ones go red says what broke.
+
+### What is NOT fixed by this
+
+* **The records already in an archive stay wrong.** Nothing can edit them and nothing should:
+  the archive is append-only. They read `dealt_in = null`, which is how a verifier can tell.
+  No hand has ever been played on mainnet, so the only such records are on local instances.
+* **The frontend's generated bindings (`src/declarations/history/history.did.js`) are not
+  regenerated**, so the new fields do not reach the UI yet. The interface files are updated;
+  the JS binding is a separate owner's file. [DEFECTS.md E-67](DEFECTS.md#e-67).
+* **The un-archived backlog is still heap-only.** `UNRECORDED_HANDS` is not in `PersistentState`,
+  so an upgrade before `flush_unrecorded_hands` runs destroys the proofs it holds.
+  [DEFECTS.md E-68](DEFECTS.md#e-68).
+* **`left_mid_hand` is false for the commonest way of leaving a hand.** Found by the wave-8 critic,
+  2026-08-06, driving the real table and the real archive on PocketIC. The flag is derived from
+  `state.departed_stakes()`, and `record_departed_stake` returns early when `contributed == 0`
+  (`src/table_canister/src/lib.rs`), so it writes nothing for a player who was dealt in, folded
+  pre-flop **before putting a chip in**, and then left. Measured: UTG folds for free, calls
+  `leave_table`, the hand plays on and settles, and the archived record for her reads
+  `dealt_in=Some(true) contributed=Some(0) left_mid_hand=Some(false)` — a statement about a person
+  that is not true, in the one field added to say whether they left.
+
+  **Not a verifiability defect and not a fund defect:** she is named, `P` is right, the board and
+  every hole card still reproduce from the record, and the record balances. What it costs is the
+  claim the field makes, plus one thing that is easy to miss: `ArchiveCoverage.hands_with_a_departure`
+  in `tests/money_safety/src/invariants/record.rs` counts `left_mid_hand == Some(true)`, so the
+  number printed on every fuzz run to prove the gate reached FINDING 30's shape **under-counts by
+  exactly the departures this misses**. The two candidate fixes are to record a zero-contribution
+  departure as well, or to derive the flag from "dealt in and no longer seated" rather than from the
+  stake ledger.
+
+  A neighbouring case that looks the same and is **not** a defect, checked and ruled out: when the
+  last seated player leaves, `leave_table` settles the hand *before* vacating the chair, so the
+  record correctly says they had not left at settlement time.
+
+<a id="finding-31"></a>
+## FINDING 31 (high) -- FINDING 27 IS ONLY HALF CLOSED: a deposit of exactly the advertised minimum, made to the address the canister publishes, is still unwithdrawable -- **OPEN, REPRODUCED 2026-08-06**
+
+**Severity:** HIGH. Fund LOCK. No malice at any step. Reachable by following the application's own
+printed instructions, at the exact number the application prints.
+**Status:** OPEN. Found by the wave-8 critic while verifying the FINDING 27 fix. Reproduced end to
+end against the real table canister and the real ICP ledger on PocketIC.
+**Where:** `src/table_canister/src/lib.rs` `claim_external_deposit` (`sweep_amount = balance -
+transfer_fee`) against the whole-balance waiver in `withdraw`
+(`sweeping_whole_balance = amount == balance_now && amount > currency.transfer_fee()`).
+
+**How it is reached.** Not through `DepositModal.svelte` — that modal's "Your Deposit Address" is
+the player's OWN NNS account id (`computeAccountId(principal)`), not a canister subaccount, so the
+UI does not currently drive this path. It is reached through the canister's public API, which is
+this project's own documented second deposit method: `CLAUDE.md`, "Secure Deposit Patterns on ICP
+/ 2. Subaccount-based Deposits (External Wallets — `claim_external_deposit()`)". `20_000` is the
+number `ICP_MIN_DEPOSIT_AMOUNT` states, the number `DepositModal.svelte` prints as **"Minimum
+deposit: 0.0002 ICP"** on its other branch, and the number `deposit_floor.rs` calls
+`ADVERTISED_MINIMUM_DEPOSIT`. The third auditor reached the sibling finding
+([FINDING 28](#finding-28)) by sending real money to exactly this address.
+
+### This is the STATUS banner's own insight, landing again
+
+The canister owns two kinds of ledger account. FINDING 27 was measured, fixed and gated on **one**
+of them -- the ICRC-2 `deposit()` door, where the wallet pays the fee and the full amount lands in
+escrow. `tests/money_safety/tests/deposit_floor.rs` drives that door six ways and is correct about
+it. **Not one of its six tests sends anything to a deposit subaccount.** On the other door the fee
+comes out of the money, and that changes the arithmetic the whole fix rests on.
+
+### Driven, not argued
+
+Real `table_canister` wasm built from this tree, real ICP ledger, PocketIC. One actor, one table.
+Send to `(canister, sha256("cleardeck-deposit:" || principal))` -- the address
+`get_deposit_subaccount()` publishes -- then `claim_external_deposit()`, then `withdraw(whole
+escrow)`:
+
+```text
+sent  10001 to the published deposit address -> escrow      1 -> withdraw REFUSED
+sent  11000 to the published deposit address -> escrow   1000 -> withdraw REFUSED
+sent  15000 to the published deposit address -> escrow   5000 -> withdraw REFUSED
+sent  19999 to the published deposit address -> escrow   9999 -> withdraw REFUSED
+sent  20000 to the published deposit address -> escrow  10000 -> withdraw REFUSED   <-- THE ADVERTISED MINIMUM
+sent  20001 to the published deposit address -> escrow  10001 -> withdraw OK
+```
+
+The player's wallet is down 30,000 e8s (20,000 principal + the 10,000 fee their own wallet paid to
+reach the address) and the canister permanently holds 10,000 e8s of theirs. The refusal reads:
+
+```text
+Minimum withdrawal is 0.0002 ICP. Your whole remaining balance can always be withdrawn in
+one call whatever its size, as long as it is more than the 0.0001 ICP network fee -- you
+have 0.0001 ICP.
+```
+
+That message is true and it is not actionable: the balance is *equal to* the fee, and the waiver
+requires *strictly greater*. Topping the ESCROW balance up is not possible without another deposit,
+which restarts the same arithmetic.
+
+### Two separate causes, both needed for the trap
+
+1. **`claim_external_deposit()` enforces no deposit floor at all.** `ICP_MIN_DEPOSIT_AMOUNT` is
+   checked in `deposit()` and nowhere on this path, so the canister accepts 10,001 e8s at a
+   published address and turns it into 1 e8 of escrow. The whole dead band
+   `(transfer_fee, transfer_fee * 2]` -- 10,001 through 20,000 -- becomes unwithdrawable escrow.
+2. **The advertised minimum sits inside that band, by exactly one e8.** The effective minimum on
+   this door is `min_deposit + transfer_fee` if a player expects the round trip to behave like the
+   other door, and `transfer_fee * 2 + 1` at the absolute floor. The product states `min_deposit`.
+
+   The coincidence that makes this land exactly on the advertised number is worth writing down:
+   `ICP_MIN_DEPOSIT_AMOUNT` is `20_000` and `ICP_TRANSFER_FEE` is `10_000`, so
+   `min_deposit - fee == fee` **exactly**, and the waiver's test is a strict `>`. One e8 either way
+   and there is no trap. ckBTC does not have it: `BTC_MIN_DEPOSIT_AMOUNT` is `1_000` against a
+   `10` sat fee, so `1_000 - 10 = 990` is comfortably above `BTC_MIN_WITHDRAWAL_AMOUNT` of `11`.
+   The ICP door is trapped and the BTC door is not, from the same code, which is why no test that
+   parameterises over currency would have found it either.
+
+### Why the compile-time invariant did not catch it
+
+The `const _: () = assert!(ICP_MIN_WITHDRAWAL_AMOUNT <= ICP_MIN_DEPOSIT_AMOUNT, ...)` at
+`src/table_canister/src/lib.rs:110` is real -- restoring the old `100_000` is a build failure,
+verified in a `cp -Rc` copy. But it relates the two floors of the **main-account** door only.
+Nothing in it knows that the subaccount door charges the ledger fee out of the deposit, so the
+relation it enforces is not the relation that governs the money on this path. The invariant is
+anchored to one of the two account kinds, exactly like the instruments the STATUS banner describes.
+
+### What would close it
+
+Any one of these is sufficient and they are not equivalent:
+
+* refuse a claim that would credit less than `min_withdrawal`, and say so with the amount, the fee,
+  and the top-up that fixes it (the FINDING 11 pattern already in this file); or
+* charge the sweep fee to the canister rather than to the player, so the escrow credit equals what
+  arrived; or
+* state `min_deposit + transfer_fee` beside the deposit address, and assert that relation at
+  compile time the way rule 1 already is.
+
+Whichever is chosen, the gate has to send money to a **deposit subaccount** -- no test in
+`deposit_floor.rs` does, which is why six green tests and a compile-time invariant sat on top of a
+live reproduction of the finding they were written to close.
+
+### The blind spot, in the gate's own words
+
+`deposit_floor.rs` does not merely omit this door. Its comment on
+`a_balance_below_the_floor_can_still_be_swept_whole` **names** it:
+
+> *"Escrow balances are not only made of deposits: a partial withdrawal leaves the remainder, an
+> odd-chip split leaves a few e8s, and `claim_external_deposit` credits the swept amount minus a
+> ledger fee. Every one of those can leave a balance under the floor..."*
+
+and then simulates it with `fund_escrow(40_000)` + `withdraw(25_000)`, producing a residue of
+15,000 -- a value the sweep recovers. The real path at the advertised minimum produces 10,000, the
+single value the sweep refuses, and the test immediately below it
+(`a_residue_at_the_transfer_fee_is_refused_in_words_that_explain_it`) pins that refusal as correct
+behaviour. The suite knows the door exists, models it with a friendly number, and files the hostile
+number as expected. `ui_limits.rs` contains no reference to a subaccount at all.
+
+### Reproducer
+
+`cp -Rc src tests Cargo.toml Cargo.lock` into a scratch copy, add a test that calls
+`world.transfer_to_deposit_subaccount(alice, 20_000)`, then `world.claim_external_deposit(alice)`,
+then `world.withdraw(alice, world.get_balance(alice))`. Every helper it needs already exists in
+`tests/money_safety/src/world.rs`.
+
+<a id="finding-32"></a>
+## FINDING 32 (high) -- the screenshot harness's NO-RAKE gate cannot go red on any rake this canister is capable of taking: both of its clauses are tautologies on canister-produced data -- **OPEN, DEMONSTRATED 2026-08-06**
+
+**Severity:** HIGH. Not a fund loss on its own. It is the absence of the only gate that guards the
+product's headline claim against the PERMANENT ARCHIVE, which is the artifact "provably fair"
+rests on.
+**Status:** OPEN. Demonstrated by the wave-8 critic by building a canister that takes a 1% house
+rake and running the project's own gate function against the record that canister archived.
+**Where:** `tools/shots/lib/chain-agreement.mjs`, `assertHandHistoryAgreement` (the two `rake`
+clauses) and `foldArchivedHand`; against `src/table_canister/src/lib.rs`
+`record_hand_to_history` (`let total_pot: u64 = winners.iter().map(|w| w.amount).sum();` and
+`rake: 0,`).
+
+### The two clauses, and why neither can fire
+
+The gate asserts exactly two things about a rake:
+
+```js
+if (hist.rake !== null && hist.rake !== 0) { /* RAKE TAKEN */ }
+if (hist.totalPot !== hist.awarded + hist.rake) { /* pot != awarded + rake */ }
+```
+
+In the canister that produces those records:
+
+* `rake` is the **literal `0`** at `src/table_canister/src/lib.rs` in the `HandHistoryRecord`
+  the table sends to the archive. It is not computed from the settlement. No code path anywhere
+  can make it non-zero, so clause 1 is dead.
+* `total_pot` is **derived from the same winners list the gate sums**:
+  `let total_pot: u64 = winners.iter().map(|w| w.amount).sum();`. So `totalPot == awarded` by
+  construction and `rake == 0` by construction, and clause 2 is `x !== x + 0`. Dead.
+
+A rake does not make either clause true. It makes the recorded `total_pot` **smaller**, and the
+gate compares that smaller number against itself.
+
+### Driven end to end
+
+A 1% house rake was added to `plan_payouts` in a `cp -Rc` copy: each pot share is reduced by
+`amount / 100` and the remainder is credited to a house principal's escrow, not reported as a
+winner. This is what a real rake looks like, and it passes `PayoutPlan::conserves()` because
+`awarded == collected` still holds.
+
+Real wasm, real ICP ledger, real archive canister, PocketIC, four seats, one hand:
+
+```text
+pot collected      = 8,000,000 e8s
+HOUSE ESCROW       =    80,000 e8s      <-- 1%, withdrawable by the house
+archived total_pot = 7,920,000
+archived rake      =         0
+awarded_total      = 7,920,000
+GATE CHECK 1  rake != 0                  -> GREEN
+GATE CHECK 2  total_pot != awarded+rake  -> GREEN   (7,920,000 vs 7,920,000 + 0)
+M3 check_no_rake (conservation form)     -> 0 violations
+internal_total before = 2,400,000,000    after = 2,400,000,000
+```
+
+The record was then fed through the project's own exported `foldArchivedHand` and the gate's own
+two clauses, verbatim:
+
+```text
+foldArchivedHand -> {"handId":1,"totalPot":7920000,"rake":0,"awarded":7920000,"structural":[]}
+gate problems    -> []
+NO-RAKE GATE: GREEN  <-- the house took 80000 e8s
+```
+
+`tools/shots/test-rake.mjs` passes all 22 of its cases on this tree. Its "a rake of 1 e8 is
+caught" and "a balanced 5% rake is still caught" cases construct a `HandHistoryRecord` with a
+non-zero `rake` field **by hand**. No canister in this repository can emit that record, so those
+cases prove the clause is well-formed and prove nothing about whether it guards anything.
+
+### The standing lesson, fifth data point
+
+Correct totals, wrong recipient, every invariant silent. `check_no_rake` is the conservation form
+-- escrow + chips + pot before versus after -- and a rake credited to a house account **at the
+same table** is inside that total, so M3, the invariant literally named NO RAKE, is green. The
+attribution gate declines rather than fires, in these words:
+
+```text
+DECLINED: the observed stakes sum to 248000000 but the canister's own record awards 245520000:
+the harness did not see the whole hand, so it cannot say who was owed what.
+(A rake or a destroyed chip is M3's question, not this one.)
+```
+
+M8 hands the rake question to M3, and M3 cannot see this rake. The gate that names the property
+defers to the gate that cannot measure it.
+
+### What DOES catch it, and this is real
+
+`cd tests/money_safety && cargo test --test invariants` against the raked wasm: **53 passed, 10
+failed**, including `archive::the_archived_record_balances` ("the record's own contributions must
+add up to the pot it records: left 8000000, right 7920000"), `m6_a_pot_is_awarded_exactly_once`,
+four `m8_*` attribution tests and both `seam_*` tests. `check_hand_payout_total` in
+`src/fuzz.rs` compares hand-history `awarded` against `wagered_last_hand` and would fire too.
+So the project is not defenceless against a rake. But every one of those lives in the Rust suite
+behind `./scripts/dev.sh test` (>10 minutes), and none of them is the gate that reads the
+permanent archive a stranger would check.
+
+### What would close it
+
+`rake: 0` and `total_pot = sum(winners)` are the defect, not the JS. Two changes, both in the
+canister:
+
+* record `total_pot` as **`plan.collected`** -- what the hand took off the players -- rather than
+  as the sum of what it paid out; and
+* record `rake` as `plan.collected - plan.awarded_to_players`, computed, so the field means
+  something.
+
+Then clause 2 becomes a real cross-check between two independently derived numbers and the gate
+can fire. Until then the JS clauses should be treated as unasserted, and
+`tools/shots/test-rake.mjs` should carry a case that reads a record the CANISTER produced -- the
+probe used here needs `install_archive` and about forty lines.
+
+<a id="finding-33"></a>
+## FINDING 33 (critical) -- FINDING 21 IS REOPENED BY FINDING 29'S NETTING: while one sweep is unfinished, `total_liability()` reads ZERO on a canister holding 5 ICP, and the currency guard lets the flip through -- **FIXED 2026-08-06 (wave-8 coherence pass), REPRODUCED THREE TIMES FIRST, NOW GATED**
+
+> ### THE FIX, AND WHY IT TOOK THREE REPRODUCTIONS
+>
+> `journalled_incoming_total()`'s filter is now `.filter(|i| i.kind.credits_on_success())`
+> instead of `.filter(|i| i.kind == LedgerIntentKind::Pull)`, one word, making the code do
+> what the comment sitting directly above it already claimed. `credits_on_success()` is the
+> SAME predicate `unfinished_ledger_ops_for()` uses for the player-facing surface, so the guard
+> and the surface now read one definition of "arriving money" and cannot disagree again.
+>
+> Measured on the fixed tree, real mainnet ICP ledger wasm on PocketIC, 2 ICP into bob's
+> published deposit subaccount, `fault::trap_claim_external_tail` to discard the sweep
+> continuation:
+>
+> ```
+> after the discarded continuation: ledger_main 199990000  subaccounts 0  books 0  journalled 199990000
+> journal: [{id 1, who bob, kind "sweep", amount 199990000}]
+> get_custody_status(bob).total  -> 199990000
+> admin_update_config(BTC)       -> REFUSED "Refusing to change this table's currency from ICP
+>                                   to BTC while it still owes players 1.9999 ICP. ..."
+> ```
+>
+> Before the fix, on the identical state, the same call replied
+> `ACCEPTED currency now BTC`, and the flip back was then **REFUSED** ("still owes players
+> 9990 sats"), so 1.9999 ICP of bob's ended permanently locked in a currency the canister holds
+> none of. That one-way trap is measured in the two reproductions below.
+>
+> **GATED:** `tests/money_safety/tests/coherence_w8.rs::finding_33_an_open_sweep_keeps_the_currency_guard_shut_and_the_flip_is_reversible`,
+> named explicitly in `./scripts/dev.sh test`. Reverting the filter to `== LedgerIntentKind::Pull`
+> turns it red. **This is the first gate anywhere in the tree that reads what the currency
+> guard reads.** See [FINDING 37](#finding-37) for why that is its own finding.
+>
+> **What the fix does NOT close:** the same guard is still blind at the canister's MAIN account,
+> for the same structural reason and at a different address. That is
+> [FINDING 35](#finding-35), which is OPEN and was driven on this tree after the fix landed.
+
+Found by the wave-8 critic while falsifying the FINDING 28 / FINDING 21 fix. **The fix is real
+and its own gates are real. This is a new hole opened underneath it by the interaction of two
+changes made in the same wave.**
+
+### The arithmetic
+
+`total_liability()` is `escrow + table + observed_deposit_total() + journalled_incoming_total()`.
+
+* `observed_deposit_total()` deliberately **subtracts** open sweeps:
+  `observed.saturating_sub(open_sweep_total())`, where `open_sweep_total()` is
+  `amount + fee` per open `Sweep` intent. Its comment says the sweep is "counted here instead
+  of there, exactly once".
+* `journalled_incoming_total()`'s own comment says it counts "`Pull` AND `Sweep`, and no double
+  count ... so the sweep is counted here instead of there".
+* **Its code is `.filter(|i| i.kind == LedgerIntentKind::Pull)`.**
+
+So while a sweep intent is open the money is subtracted from one term and added to neither.
+The comment describes the intended design; the filter does not implement it.
+
+### Driven, against the real mainnet ICP ledger wasm
+
+`tests/money_safety/tests/critic_w8_probe.rs`, using the project's own
+`fault::trap_claim_external_tail` (the FINDING 29 injector: the ledger transfer stands, the
+post-await continuation is discarded, the intent stays open -- and `IntentOutcome::Unknown`
+from any ledger call rejection reaches the same state without a trap).
+
+```
+AFTER TRAP: ledger_main=499990000 deposit_subaccounts=0 escrow_total=0 chips=0 pot=0
+            canister_deposit_by_principal={victim: 500000000}
+get_custody_status(victim): escrow=0 unswept_deposit=0 total=499990000
+admin_update_config(BTC) -> Ok(TableConfig { ..., currency: BTC })
+```
+
+The canister is holding **4.9999 ICP that is the victim's**, and `admin_update_config` accepted
+the flip to BTC -- the exact re-denomination FINDING 20 and FINDING 21 exist to refuse. After
+the flip, `claim_external_deposit` and `withdraw` look for that ICP on the ckBTC ledger, where
+this canister holds nothing.
+
+`admin_get_deposit_custody` reports `total = 0` at the same instant. `get_custody_status`
+reports `total = 499990000`, because it reads `unfinished_ledger_ops_for()`, which uses
+`kind.credits_on_success()` -- `Pull | Sweep`. **The player-facing surface is right and the
+guard is wrong**, which is why nothing that looks at a surface can find this.
+
+### Attribution: one word
+
+Changing `journalled_incoming_total()`'s filter to `.filter(|i| i.kind.credits_on_success())`
+-- making the code do what its comment already claims -- makes the guard hold, with no other
+edit:
+
+```
+admin_update_config(BTC) -> Err("Refusing to change this table's currency from ICP to BTC
+  while it still owes players 4.9999 ICP. ...")
+```
+
+### What the harness already knows, and why it did not fire
+
+The money-safety invariants are **not** blind here -- `check_conservation`,
+`check_no_orphaned_custody` and `check_deposit_attribution` all fire loudly on this state
+(`money_belongs_to_nobody`, delta 499990000). **No test puts the canister in it.** The state is
+reachable from the fuzzer's fault injection, but the recovery path closes the intent before the
+point-in-time check runs. This is not the standing "every invariant silent" shape; it is the
+narrower and more ordinary one: a correct instrument that nothing aims at the state.
+
+### Severity
+
+Critical rather than high: it is an unbounded, controller-reachable custody change on money the
+canister is holding, it needs no attacker beyond one unfinished ledger call, and the guard it
+defeats is the last one standing between a funded table and a re-denomination.
+
+### INDEPENDENTLY REPRODUCED, and it is WORSE THAN "the flip is allowed": the flip is ONE-WAY
+
+Confirmed 2026-08-06 by a second reviewer, arriving from the FINDING 29 side rather than the
+FINDING 21 side, with a different amount and a different actor. The value this adds is a fact
+the entry above does not state: **the flip cannot be undone, so the money is not merely
+mis-guarded, it is permanently locked.**
+
+Measured on the fixed tree, real mainnet ICP ledger wasm on PocketIC, 2.0 ICP into bob's
+deposit subaccount, `fault::trap_claim_external_tail` to discard the sweep continuation:
+
+```
+custody:  ledger_main 199990000  subaccounts 0  books 0  journalled(pull+sweep) 199990000
+journal:  [{id 1, who bob, kind "sweep", amount 199990000}]
+admin_update_config(BTC)              -> ACCEPTED -> currency now BTC
+  AFTER THE FLIP, bob resolves        -> Ok(["ledger operation 1: ... "])  entry STILL OPEN,
+                                         attempts 2, lease released -- the retry addressed the
+                                         ckBTC ledger, which is not there
+  AFTER THE FLIP, claim_external_deposit() -> Err("Could not ask the mxzaz-hqaaa-aaaar-qaada-cai
+                                         ledger what is at your deposit address: DestinationInvalid")
+  AFTER THE FLIP, withdraw(1 ICP)     -> Err("Maximum withdrawal per transaction is 0.1000 BTC")
+  ICP still held by the canister      -> main 199990000 + subacc 0 = 199990000
+  flip BACK to ICP                    -> REFUSED: "Refusing to change this table's currency from
+                                         BTC to ICP while it still owes players 9990 sats."
+```
+
+The last line is the trap door. Once the table is BTC, the same netting that read ZERO on the
+way in reads a small NON-ZERO on the way out -- `observed(200000000) - open_sweep_gross(sweep
+amount + the **BTC** fee)` -- so the guard that let the flip through now refuses to let it back.
+The canister ends holding 1.9999 ICP of a player's money, denominated in a currency it holds
+none of, with every door closed and no controller method to reopen them.
+
+Two more measurements that narrow the defect to `Sweep` exactly, so the one-word fix above can
+be trusted not to be papering over a wider hole:
+
+* **an open `Pull` correctly blocks the flip** -- `journalled_incoming_total()` counts it:
+  `REFUSED: "... while it still owes players 3.0000 ICP"`.
+* **an open `Payout` is blocked, but only by accident** -- the refusal that fires is the
+  *unaudited deposit address* rule, not the liability rule. A payout is in no liability term
+  either. It happens not to matter today because the payout's escrow debit is already committed
+  and the money has already left, but nothing states that, and the guard is not the reason it
+  is safe.
+
+The `Sweep` case is the one that defeats **both** guards at once, which is why it is the one
+that gets through: `claim_external_deposit()` READ the subaccount before sweeping, so the
+account is audited and the unaudited-accounts rule is satisfied; and the netting then makes its
+audited balance read zero, so the liability rule is satisfied too.
+
+### And this hole was OPENED by the wave-8 change, not merely missed by it
+
+The same probe was run against a build with one surgical revert -- the ledger-intent write moved
+back into the post-await continuation, everything else in the tree identical:
+
+```
+pre-journal-ordering build:  admin_update_config(BTC) -> REFUSED ("still owes players 2.0000 ICP")
+fixed build:                 admin_update_config(BTC) -> ACCEPTED -> currency now BTC
+```
+
+Before this wave, the stale deposit observation of 200000000 was still counted by
+`observed_deposit_total()` and the guard held for the wrong reason. The netting removed that
+term and `journalled_incoming_total()`'s `Pull`-only filter failed to add it back. This is a
+regression with a clean before/after, not a pre-existing gap.
+
+<a id="finding-34"></a>
+## FINDING 34 (high) -- `get_deposit_address()` publishes the MAIN account under the name "deposit address", and money sent there is invisible on every surface of the FIXED build while `claim_external_deposit()` replies "your deposit address is empty" -- **OPEN, DEMONSTRATED 2026-08-06**
+
+Found by the wave-8 critic. FINDING 28 was closed at the per-player subaccount. **The canister
+publishes two different addresses and only one of them was re-anchored.**
+
+* `get_deposit_subaccount()` -> `sha256("cleardeck-deposit:" || principal)`, per player. This is
+  the one FINDING 28 fixed, and the one `DepositModal.svelte` uses.
+* `get_deposit_address()` -> `compute_account_identifier(canister_id(), None)`: the **main
+  account**, the same 64-hex string for every player. Its `.did` comment is "Get the canister's
+  account for deposits". Nothing in the frontend source calls it; it is a public query on a
+  live canister with "deposit address" in its name.
+
+### Driven on the FIXED build (`tests/money_safety/tests/critic_w8_player.rs`)
+
+```
+get_deposit_address()     -> 73111429194d272dbdb27aa4439e172caeb5618a22c76a6786c81da205247d2f
+get_deposit_subaccount()  -> 5fce1ee947ccaa60b0ae9937c67d22ad68efbdbf112e3cc7a94d70e106b3927a
+LEDGER: main=500000000 deposit_subaccounts=0
+  get_balance()            -> 0
+  get_custody_status()     -> escrow=0 unswept_deposit=0 total=0 advice=""
+  admin_get_deposit_custody total -> 0
+  claim_external_deposit() -> Err("Your deposit address is empty: this canister asked the ICP
+    ledger just now and it holds 0. Send ICP to (canister 7tjcv-..., subaccount
+    get_deposit_subaccount()) and call this again.")
+```
+
+**This is FINDING 28's sentence, at the other published address, on the build that closed
+FINDING 28.** The refusal is now emphatic and specific ("this canister asked the ICP ledger
+just now and it holds 0") and it is false: the canister holds 5 ICP that arrived at the address
+its own `get_deposit_address()` method handed out, and it directs the player to send *more*
+money to a different address.
+
+The money is not lost -- `notify_deposit(block_index)` credits it -- but no surface says so and
+the one error message the player will see points away from the recovery. A player who did not
+keep the block index has no door at all.
+
+### The narrower half, also true
+
+Before anyone calls `refresh_deposit_custody()`, a genuine subaccount deposit reads
+`get_custody_status() -> total=0, advice=""`. The machine-readable honesty signal
+(`unswept_deposit_observed_at_ns = null`) is correct and the human-readable `advice` field --
+the one the product puts on screen -- is the **empty string**. The claim "no surface tells a
+player they have nothing while the canister holds their money" does not hold until `advice`
+says "this canister has never looked at your deposit address; call `refresh_deposit_custody()`".
+
+### Related, not yet driven
+
+`observed_deposit_total()` sums `DepositObservation::amount` across **every** observation
+regardless of `DepositObservation::ledger`, although that field exists (by its own comment) so
+that "a table that has ever been ICP and is now BTC can hold value in both at once" can be told
+apart. `ledger` is read only for display and persistence, never in a sum. Reachable once
+FINDING 33 lets a funded table change currency; the result is ICP e8s and ckBTC sats added into
+one number and formatted as the current currency.
+
+
+---
+
+<a id="finding-35"></a>
+## FINDING 35 (high). THE FIFTH CROSS-AGENT DEFECT: the canister has an observation record for every deposit SUBACCOUNT and none for its MAIN account, so money at `get_deposit_address()` is invisible to every surface INCLUDING the operator's audit tool, and the currency guard will let a controller close its only recovery door, **OPEN, DRIVEN 2026-08-06 on the wave-8 tree**
+
+Found by the wave-8 coherence pass, deliberately, by asking the one question that is above all
+five agents rather than inside any of them: **which of the six accounts in "THE ACCOUNT CENSUS"
+does the CANISTER have an instrument for?**
+
+### The one sentence
+
+The wave's organising insight was: *money arrives at an account with no message to the canister,
+and an IC query cannot call the ledger, so the canister must ASK from an update and WRITE THE
+ANSWER DOWN.* That insight was implemented for accounts **(2)** and **(4)**, the per-player
+deposit subaccounts, and for nothing else. Accounts **(1)** and **(3)**, the MAIN accounts where
+essentially all of the money actually sits, got **no observation record, no reader, and no term in
+any guard**. `refuse_currency_change_while_funded` is a synchronous function, so it can never read
+a ledger; it can only read what somebody wrote down; and nobody writes down the main account.
+
+The census's own rule is *"an instrument that measures fewer than all of these accounts is not
+measuring this canister's custody."* Its own **MEASURED BY** column for account (1) names
+`total_liability()`, but `total_liability()` measures the CLAIMS on the main account, never its
+BALANCE. The only thing in this repository that reads the main account is the money-safety
+harness, which does not ship.
+
+### Driven, on the FIXED tree, after FINDING 33 was closed
+
+`tests/money_safety/tests/coherence_w8.rs::finding_35_reproduction_money_at_get_deposit_address`.
+Real mainnet ICP ledger wasm on PocketIC. alice is an ordinary player: she deposits, is audited,
+sends one transfer to the address the canister publishes, then cashes out and leaves.
+
+```
+get_deposit_address() -> 73111429194d272dbdb27aa4439e172caeb5618a22c76a6786c81da205247d2f
+withdraw(all 300000000) -> Ok(4)
+admin_audit_deposit_custody([alice]) -> Ok((1, 0, 0))   (read, observed_total, still_unaudited)
+LEDGER main=500000000 subaccounts=0
+  get_balance()             -> 0
+  get_custody_status total  -> 0   advice=""
+  admin_get_deposit_custody -> 0
+  admin_update_config(BTC)  -> ACCEPTED currency now BTC
+  notify_deposit(3) while BTC -> Err("Failed to query ckBTC ledger: ... mxzaz-hqaaa-aaaar-qaada-cai")
+  admin_update_config(ICP) back -> ACCEPTED currency now ICP
+  notify_deposit(3) after flip back -> Ok(500000000)
+```
+
+Read the third line again. **`admin_audit_deposit_custody` reports "1 account audited, 0 held,
+0 unaudited" on a canister holding 5 ICP of alice's**, because it iterates deposit subaccounts and
+the money is not in one. The fourth auditor measured the same reply, `(4 audited, 0 held,
+0 unaudited)` on a table 1 ICP over-funded, and it reproduces unchanged on the build that closed
+FINDING 28. The operator's all-clear is structurally incapable of seeing this money.
+
+### Two halves, and the second is the new one
+
+**(a) INVISIBILITY.** This half is [FINDING 34](#finding-34) and is confirmed here: every surface
+reports zero, and the one error message a player sees (`claim_external_deposit`) is emphatic,
+specific and false, and points them at a different address.
+
+**(b) THE GUARD IS BLIND THERE TOO, and that is new.** `total_liability()` is
+`escrow + table + observed_deposit_total() + journalled_incoming_total()`. Uncredited money at the
+MAIN account is in **none** of the four terms, and the "UNKNOWN IS NOT ZERO" leg only enumerates
+deposit **subaccounts**, so an audited, drained table with 5 ICP sitting in its main account reads
+a liability of exactly zero and `admin_update_config(BTC)` is accepted. After the flip
+`notify_deposit`, the door FINDING 34 correctly identifies as the *only* remaining recovery --
+routes to the ckBTC ledger and fails, and `claim_external_deposit` follows it.
+
+This is FINDING 21 and FINDING 33 at a third account, reached with **no attacker, no trap, no
+fault injection and no unfinished call**: one exchange withdrawal and one routine config change.
+
+### The honest mitigation, measured
+
+**The flip is REVERSIBLE here**, unlike FINDING 33's: `admin_update_config(ICP)` back is ACCEPTED
+and `notify_deposit(3)` then returns `Ok(500000000)`. So this is not a permanent loss; it is a
+door that a controller can close and reopen. The reason it is still HIGH rather than medium:
+
+* no player-facing surface, at any point, says the money exists;
+* no operator surface, at any point, says the money exists, `admin_audit_deposit_custody` says
+  the opposite, in the affirmative;
+* so **nothing in the system would ever tell the operator to flip it back**. The recovery exists
+  and is unreachable by anyone acting on the canister's own reports;
+* and it needs the player to have kept the ledger block index, which the product never asks them
+  to do.
+
+### The fix, stated so it cannot be half-done again
+
+One `DepositObservation` for the main account, written by the same three callers that write the
+subaccount ones (`claim_external_deposit`, a `refresh_*`, `admin_audit_deposit_custody`), plus a
+fifth term in `total_liability()`: `observed_main_uncredited = observed_main.saturating_sub(escrow
++ table + open payouts)`. The "UNKNOWN IS NOT ZERO" leg then has to cover the main account too --
+a canister that has never read its own main account must refuse a currency change, exactly as it
+refuses one with an unread subaccount today. And `get_deposit_address()` should either be deleted
+from the interface or return the caller's own derived subaccount, which is the fourth auditor's
+own recommendation and is one line.
+
+---
+
+<a id="finding-36"></a>
+## FINDING 36 (instrument, high), the money-safety harness's `CustodyStatus` mirror is missing the field that carries FINDING 29's money, under a comment that says it is "Mirrored in FULL on purpose", **OPEN, 2026-08-06**
+
+Found by the wave-8 coherence pass, by writing `cs.unfinished_ledger_ops` in a probe and having
+the compiler refuse it.
+
+```
+error[E0609]: no field `unfinished_ledger_ops` on type `money_safety::table_api::CustodyStatus`
+  = note: available fields are: `escrow`, `chips_at_table`, `committed_in_pot`,
+          `committed_is_stuck`, `abandonable_in_ns` ... and 4 others
+```
+
+The canister's `CustodyStatus` has ten fields. `tests/money_safety/src/table_api.rs`'s mirror has
+nine: `unfinished_ledger_ops`, the field the FINDING 29 agent added to carry money that has
+moved on the ledger and not been booked, is absent. **Candid record subtyping drops unknown
+fields silently**, so nothing failed, nothing warned, and every harness assertion written against
+the custody surface this wave has been reading a truncated record.
+
+The mirror's own doc comment, written by a different agent in the same wave:
+
+> **Mirrored in FULL on purpose.** A partial mirror here would let the field be deleted from the
+> canister without a single test noticing, which is precisely how the deposit subaccounts stayed
+> outside every instrument for seven waves.
+
+The exact mechanism that comment exists to prevent is what happened to it, in the wave it was
+written, to the field carrying the money [FINDING 33](#finding-33) was about. This is why
+FINDING 33's blindness could not be seen from the harness side: `total` was right, the component
+was invisible, every gate green.
+
+The second mirror, `tests/money_safety/src/invariants/custody.rs::CustodyStatus`, is explicitly
+and correctly documented as narrow, but its `total` field is now described as *"Everything above,
+added up"*, and `total` includes two fields that are no longer above it.
+
+**Fix:** add `pub unfinished_ledger_ops: u64` to the `table_api.rs` mirror; correct the
+`invariants/custody.rs` doc for `total`; and add one assertion somewhere that
+`escrow + chips_at_table + committed_in_pot + unswept_deposit + unfinished_ledger_ops == total`,
+which is the only thing that makes a full mirror load-bearing rather than decorative.
+
+---
+
+<a id="finding-37"></a>
+## FINDING 37 (instrument, high), `total_liability()` is the only number the project's last custody guard reads, and it has one caller, no query, no surface and no gate: the only way to sample it is to attempt the destructive operation it guards, **PARTLY ADDRESSED 2026-08-06**
+
+The structural reason FINDING 21, FINDING 33 and FINDING 35 are three instances of one defect.
+
+```
+$ grep -n "total_liability()" src/table_canister/src/lib.rs
+4919: fn total_liability() -> u64 {
+4954:     let owed = total_liability();          <-- the ONLY caller
+```
+
+No `#[ic_cdk::query]` returns it. Nothing in `tests/money_safety` reads it. Every gate in the
+project computes its own total from the ledger and the books and compares those two, which is a
+good instrument for conservation and says **nothing whatever** about the arithmetic the guard
+performs. So:
+
+* the harness can be entirely correct and green while the guard reads zero on a funded canister
+  (FINDING 33, measured);
+* a term can be missing from the guard for an entire account and no test can notice
+  (FINDING 35, measured);
+* and the only way anybody has ever discovered either is to call `admin_update_config` with a
+  different currency and see what happens.
+
+**Partly addressed:** `tests/money_safety/tests/coherence_w8.rs` is now the first test in the
+project that aims at the guard, and it is in `./scripts/dev.sh test`. That is one state, not an
+instrument.
+
+**The real fix is one query.** `get_custody_accounting()` returning the four (soon five) terms
+separately and their sum, so the harness can assert term-by-term against its own independently
+computed figures on every fuzz step. A guard whose number no instrument can read is a guard
+nobody can gate, and this project has now shipped three defects inside exactly that gap.

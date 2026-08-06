@@ -400,6 +400,10 @@ mod synthetic {
             escrow: BTreeMap::new(),
             escrow_total: 0,
             chips_total: 0,
+            canister_unswept_deposits: 0,
+            canister_unaudited_deposit_accounts: 0,
+            ledger_deposit_by_principal: BTreeMap::new(),
+            canister_deposit_by_principal: BTreeMap::new(),
             table: TableState {
                 id: 1,
                 config: TableConfig::six_max_icp(),

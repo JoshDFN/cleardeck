@@ -286,9 +286,15 @@ fn the_deposit_modal_mirrors_the_canisters_deposit_floor() {
     let fence = mirror_fence(&modal_source("DepositModal.svelte"), "DepositModal.svelte");
 
     let (ui_btc, ui_icp) = js_currency_const(&fence, "MIN_DEPOSIT");
-    // `deposit()` writes its floor inline rather than as a named constant.
-    let (want_btc, want_icp) =
-        rust_currency_pair(&engine, "let min_deposit = if currency == Currency::BTC");
+    // `deposit()` used to write its floor inline (`if currency == Currency::BTC
+    // { 1_000 } else { 20_000 }`), which is precisely why nothing in the tree could
+    // compare it against the WITHDRAWAL floor and FINDING 27 went unnoticed: a
+    // number that only one parser can find is a number no invariant can hold. It is
+    // now a named constant per currency, read the same way every other limit is.
+    let (want_btc, want_icp) = (
+        rust_const(&engine, "BTC_MIN_DEPOSIT_AMOUNT"),
+        rust_const(&engine, "ICP_MIN_DEPOSIT_AMOUNT"),
+    );
     assert_eq!(
         ui_btc, want_btc,
         "DepositModal.svelte states a BTC minimum deposit of {ui_btc} sats while `deposit()` \
@@ -303,6 +309,40 @@ fn the_deposit_modal_mirrors_the_canisters_deposit_floor() {
     let (fee_btc, fee_icp) = js_currency_const(&fence, "TRANSFER_FEE");
     assert_eq!(fee_btc, rust_const(&engine, "CKBTC_TRANSFER_FEE"));
     assert_eq!(fee_icp, rust_const(&engine, "ICP_TRANSFER_FEE"));
+}
+
+/// THE FLOOR INVARIANT, read off the canister source
+/// (docs/SECURITY-FINDINGS.md FINDING 27, docs/DEFECTS.md E-62).
+///
+/// lib.rs asserts this at compile time, so a violation cannot reach a wasm. This
+/// test exists anyway, for two reasons a `const _: () = assert!(...)` cannot cover:
+/// it names the defect in a suite a human runs and reads, and it fails with the
+/// two numbers in the message instead of a bare "evaluation panicked". The two
+/// belong together -- the compile-time check is the enforcement, this is the
+/// explanation.
+#[test]
+fn no_currency_can_be_deposited_below_what_it_can_be_withdrawn() {
+    let engine = canister_source();
+    for (name, deposit, withdrawal, fee) in [
+        ("ICP", "ICP_MIN_DEPOSIT_AMOUNT", "ICP_MIN_WITHDRAWAL_AMOUNT", "ICP_TRANSFER_FEE"),
+        ("BTC", "BTC_MIN_DEPOSIT_AMOUNT", "BTC_MIN_WITHDRAWAL_AMOUNT", "CKBTC_TRANSFER_FEE"),
+    ] {
+        let d = rust_const(&engine, deposit);
+        let w = rust_const(&engine, withdrawal);
+        let f = rust_const(&engine, fee);
+        assert!(
+            w <= d,
+            "{name}: `deposit()` accepts {d} but `withdraw()` refuses anything below {w}, so \
+             every balance in [{d}, {w}) is money this canister takes and will not give back. \
+             That is docs/SECURITY-FINDINGS.md FINDING 27: an auditor deposited exactly the \
+             advertised minimum of 20,000 e8s and it could never leave."
+        );
+        assert!(
+            w > f,
+            "{name}: the withdrawal floor {w} does not clear the {fee} of {f}, so `withdraw` \
+             would admit an amount `transfer_tokens` then refuses to send."
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

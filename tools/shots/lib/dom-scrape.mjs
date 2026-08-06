@@ -135,6 +135,19 @@ export function scrapeTable(page) {
             tableBalanceText:
                 one(document, '.wallet-panel .balance-value')
                 ?? one(document, '.wallet-collapsed-info .collapsed-balance'),
+            // THE COMMITTED-STAKE READOUT IS A MONEY FIGURE
+            // (docs/SECURITY-FINDINGS.md FINDING 18, docs/DEFECTS.md E-64).
+            // The custody-visibility work added it to tell a player how much of
+            // theirs is in the middle, and nothing scraped it, so five scenes
+            // rendered a real ICP amount that no gate tied to any canister value
+            // and the census correctly reported it as asserted by nothing. It is
+            // read here, and asserted against `get_table_view().my_committed_in_pot`.
+            committedValueText: one(document, '.wallet-committed .committed-value'),
+            committedLabelText: one(document, '.wallet-committed .committed-label'),
+            // The sentence under it names the HAND the stake is in, which is a
+            // number on the screen too and is asserted against `hand_number`.
+            committedNoteText: one(document, '.wallet-committed .committed-note'),
+            committedIsStuck: !!document.querySelector('.wallet-committed.stuck'),
             potOddsText: one(document, '.pot-odds-explanation'),
             potOddsValue: one(document, '.pot-odds-value'),
             // THE HEADER STAKES PILL IS A MONEY FIGURE.

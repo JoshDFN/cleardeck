@@ -369,6 +369,35 @@ pub struct ShowdownRecord {
     pub amount_won: u64,
 }
 
+/// One person's part in one hand, as the table's own record states it.
+///
+/// The SAME VALUES the table sends to the archive canister -- `record_hand_to_history`
+/// builds the list once and clones it into both -- so a gate that reads this is
+/// reading the permanent record without needing the archive installed.
+/// docs/SECURITY-FINDINGS.md FINDING 30.
+#[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub struct ArchivedPlayer {
+    pub seat: u8,
+    pub principal: Principal,
+    pub starting_chips: u64,
+    pub ending_chips: u64,
+    pub amount_won: u64,
+    /// `null` on a record written before the table recorded it.
+    #[serde(default)]
+    pub dealt_in: Option<bool>,
+    #[serde(default)]
+    pub contributed: Option<u64>,
+    #[serde(default)]
+    pub left_mid_hand: Option<bool>,
+}
+
+/// A seat the deal gave cards to, in deck order. `P` for SHUFFLE-SPEC section 4.
+#[derive(Clone, Copy, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub struct DealtInSeat {
+    pub seat: u8,
+    pub principal: Principal,
+}
+
 /// Narrow view of `HandHistory`.
 #[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
 pub struct HandHistoryAmounts {
@@ -376,6 +405,13 @@ pub struct HandHistoryAmounts {
     pub winners: Vec<WinnerAmount>,
     pub community_cards: Vec<Card>,
     pub showdown_players: Vec<ShowdownRecord>,
+    /// Everyone whose money was in the hand. `None` means the build under test
+    /// does not record it -- which is the FINDING 30 defect itself, so M12 treats
+    /// `None` as a violation rather than as "nothing to check".
+    #[serde(default)]
+    pub participants: Option<Vec<ArchivedPlayer>>,
+    #[serde(default)]
+    pub dealt_in: Option<Vec<DealtInSeat>>,
 }
 
 impl HandHistoryAmounts {
@@ -384,4 +420,48 @@ impl HandHistoryAmounts {
             .iter()
             .fold(0u64, |a, w| a.saturating_add(w.amount))
     }
+}
+
+// ---------------------------------------------------------------------------
+// CUSTODY SURFACES -- THE ACCOUNT CENSUS
+// (docs/SECURITY-FINDINGS.md FINDING 21, FINDING 28)
+// ---------------------------------------------------------------------------
+
+/// Reply of `get_custody_status`: everything the canister is holding for ONE
+/// caller, across every ledger account it owns.
+///
+/// `unswept_deposit` is the field FINDING 28 is about. Before it existed this
+/// record answered `total = 0` for a player whose money was sitting at the
+/// deposit address the canister itself had published to them.
+///
+/// **Mirrored in FULL on purpose.** A partial mirror here would let the field be
+/// deleted from the canister without a single test noticing, which is precisely
+/// how the deposit subaccounts stayed outside every instrument for seven waves.
+#[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub struct CustodyStatus {
+    pub escrow: u64,
+    pub chips_at_table: u64,
+    pub committed_in_pot: u64,
+    pub committed_is_stuck: bool,
+    pub abandonable_in_ns: Option<u64>,
+    /// Money at the deposit subaccount the canister published to this caller, as
+    /// of `unswept_deposit_observed_at_ns`.
+    pub unswept_deposit: u64,
+    /// `None` means the canister has NEVER asked the ledger about that address.
+    /// It does not mean the address is empty.
+    pub unswept_deposit_observed_at_ns: Option<u64>,
+    pub total: u64,
+    pub advice: String,
+}
+
+/// Reply of `get_deposit_custody` / `refresh_deposit_custody`.
+#[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub struct DepositAddressCustody {
+    pub subaccount: Vec<u8>,
+    pub ledger: Principal,
+    pub observed_amount: u64,
+    pub observed_at_ns: Option<u64>,
+    pub transfer_fee: u64,
+    pub sweepable: bool,
+    pub note: String,
 }

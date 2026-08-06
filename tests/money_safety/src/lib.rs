@@ -15,7 +15,9 @@
 //! defects already documented in `docs/SECURITY-FINDINGS.md` from new ones.
 
 pub mod actions;
+pub mod archive;
 pub mod documented;
+pub mod fault;
 pub mod fuzz;
 pub mod hand_attribution;
 pub mod invariants;

@@ -12,7 +12,7 @@
 // replica, no browser and no canister — the logic under test is the
 // classification, not the DOM walk.
 
-import { assertEveryTokenAccountedFor } from './lib/token-census.mjs';
+import { assertEveryTokenAccountedFor, CHAIN_SITES } from './lib/token-census.mjs';
 import { ALLOWLIST } from './token-allowlist.mjs';
 
 /** A page stub whose evaluate() returns a fixed token list. */
@@ -167,6 +167,63 @@ const check = (name, condition, detail) => cases.push({ name, ok: Boolean(condit
 
     const ids = ALLOWLIST.map((r) => r.id);
     check('allowlist rule ids are unique', new Set(ids).size === ids.length, ids.join(', '));
+}
+
+// ---------------------------------------------------------------------------
+// 10. THE COMMITTED-STAKE READOUT (docs/DEFECTS.md E-64).
+//
+//     Five scenes went red with `"0.20" in span.committed-value ... asserted by
+//     nothing`, and the census was right: the custody-visibility work rendered a
+//     real ICP amount and no gate tied it to a canister figure. The fix is a
+//     chain check, not an allowlist entry -- allowlisting money is the one thing
+//     this instrument exists to refuse.
+//
+//     A CHAIN_SITES entry is only a CLAIM that something asserts the site; the
+//     claim is verified per scene by matching `label`. So the regex has to match
+//     the label chain-agreement.mjs actually emits, and a typo there would leave
+//     the token silently unasserted -- the same shape of defect one layer over.
+//     Both halves are checked.
+// ---------------------------------------------------------------------------
+{
+    const site = (id) => CHAIN_SITES.find((s) => s.id === id);
+    const valueLabel = 'committed stake vs get_table_view().my_committed_in_pot';
+    const noteLabel = 'the hand named in the committed note vs get_table_view().hand_number';
+
+    check('the committed-stake site is declared', Boolean(site('committed-stake')), 'CHAIN_SITES');
+    check(
+        "...and its label matches the check chain-agreement.mjs emits",
+        site('committed-stake')?.label.test(valueLabel),
+        `${site('committed-stake')?.label} vs ${valueLabel}`,
+    );
+    check(
+        'the committed-note hand number is declared and matches too',
+        site('committed-note-hand')?.label.test(noteLabel),
+        `${site('committed-note-hand')?.label} vs ${noteLabel}`,
+    );
+
+    const r = await assertEveryTokenAccountedFor(
+        pageOf([
+            { token: '0.20', chainRuleId: 'committed-stake' },
+            { token: '1', chainRuleId: 'committed-note-hand' },
+        ]),
+        [figure(valueLabel, '0.20'), figure(noteLabel, '1')],
+    );
+    check(
+        'both committed-stake tokens are accounted for once the checks run',
+        r.ok && r.checks.chainMatched === 2,
+        JSON.stringify(r.checks),
+    );
+
+    // And the failure that was actually recorded: the site is listed, but no
+    // check ran on this scene. Listing a site must never be enough.
+    const unchecked = await assertEveryTokenAccountedFor(
+        pageOf([{ token: '0.20', chainRuleId: 'committed-stake' }]), [],
+    );
+    check(
+        'a listed site with no check behind it is still UNASSERTED',
+        !unchecked.ok && unchecked.checks.unasserted === 1,
+        unchecked.notes,
+    );
 }
 
 let failed = 0;

@@ -82,9 +82,18 @@ fn assert_installed_module_is(
 pub struct Snapshot {
     /// `icrc1_balance_of(table, None)` -- the canister's spendable ledger money.
     pub ledger_main: u64,
-    /// Sum over actors of `icrc1_balance_of(table, deposit_subaccount(actor))`:
-    /// money that has arrived but has not been swept in yet.
+    /// `icrc1_balance_of(table, deposit_subaccount(p))`, summed over every
+    /// principal in [`Snapshot::ledger_deposit_by_principal`].
     pub ledger_deposit_subaccounts: u64,
+    /// **The LEDGER, per principal.** What is actually at each deposit address.
+    ///
+    /// The scanned set is the harness's actors, the controller, AND every
+    /// principal the canister itself names in `admin_get_deposit_custody()` --
+    /// the last one so the canister cannot move a claim onto an account the
+    /// harness would never have thought to look at.
+    pub ledger_deposit_by_principal: BTreeMap<Principal, u64>,
+    /// **The CANISTER, per principal.** What it says is at each deposit address.
+    pub canister_deposit_by_principal: BTreeMap<Principal, u64>,
     /// Every actor's own ledger wallet balance.
     pub actor_wallets: BTreeMap<Principal, u64>,
     /// `admin_get_all_balances()`: the canister's escrow ledger.
@@ -92,6 +101,14 @@ pub struct Snapshot {
     pub escrow_total: u64,
     /// `admin_get_table_chips()`.
     pub chips_total: u64,
+    /// `admin_get_deposit_custody()`: what the CANISTER says it is holding in its
+    /// own deposit subaccounts, summed. **This is the canister's claim; the field
+    /// above it is the ledger's fact, and the whole of FINDING 21 / FINDING 28 is
+    /// the gap between the two.**
+    pub canister_unswept_deposits: u64,
+    /// Enumerable deposit accounts the canister has never read. An account here
+    /// has an UNKNOWN balance, which every guard has to treat as money.
+    pub canister_unaudited_deposit_accounts: usize,
     pub table: TableState,
 }
 
@@ -100,10 +117,27 @@ impl Snapshot {
     /// accounts for it. `side_pots` is deliberately NOT added: it is a breakdown
     /// of `pot`, and adding both would double count (see the comment in
     /// `end_hand_single_winner`).
+    ///
+    /// **`canister_unswept_deposits` IS added**, and that is the wave-8 change.
+    /// The canister owns two kinds of ledger account and this figure used to name
+    /// only the first, so a canister holding 5 ICP for a player at an address it
+    /// had published to them reported that it owed nobody anything
+    /// (docs/SECURITY-FINDINGS.md FINDING 21, FINDING 28).
     pub fn internal_total(&self) -> u64 {
         self.escrow_total
             .saturating_add(self.chips_total)
             .saturating_add(self.table.pot)
+            .saturating_add(self.canister_unswept_deposits)
+    }
+
+    /// **THE FACT.** Every e8 the LEDGER says this canister is holding, across
+    /// every account it owns: the main account plus every deposit subaccount.
+    ///
+    /// Every instrument in this harness used to be anchored to `ledger_main`
+    /// alone. Anchor a new one here.
+    pub fn ledger_holdings(&self) -> u64 {
+        self.ledger_main
+            .saturating_add(self.ledger_deposit_subaccounts)
     }
 }
 
@@ -122,6 +156,21 @@ pub struct World {
     /// reason for the canister's ledger balance to exceed what it owes, so M1
     /// subtracts exactly this and nothing else.
     pub uncredited_raw_deposits: u64,
+    /// Money the harness pushed into a per-player DEPOSIT SUBACCOUNT and has not
+    /// yet asked the canister to look at.
+    ///
+    /// The exact analogue of `uncredited_raw_deposits`, for ledger account (2) of
+    /// "THE ACCOUNT CENSUS", and bounded the same way: an entry is created by
+    /// `transfer_to_deposit_subaccount` and **consumed the moment the canister is
+    /// asked about that account** (`refresh_deposit_custody` /
+    /// `claim_external_deposit`). After that the canister has no excuse, and the
+    /// orphan check requires its books to match the ledger exactly.
+    ///
+    /// This is deliberately per-actor rather than a single total: a blanket
+    /// allowance would let the canister be wrong about actor A and right about
+    /// actor B and still net to zero, which is the CORRECT TOTALS / WRONG
+    /// RECIPIENTS signature this project has produced four times.
+    pub unobserved_subaccount_deposits: BTreeMap<Principal, u64>,
     pub upgrades: u32,
     /// Lowest canister-log index the harness has not read yet.
     next_log_idx: u64,
@@ -192,6 +241,7 @@ impl World {
             config,
             table_wasm,
             uncredited_raw_deposits: 0,
+            unobserved_subaccount_deposits: BTreeMap::new(),
             upgrades: 0,
             next_log_idx: 0,
         }
@@ -231,9 +281,21 @@ impl World {
     /// long the canister goes unexecuted; here it is zero unless the test asks for
     /// it.
     ///
-    /// Used by the custody tests to look at a hand that has just become
-    /// unmovable, through QUERIES (which execute no round), before the on-chain
-    /// clock has had its turn.
+    /// # SEND AN UPDATE THROUGH IT. That is the whole point.
+    ///
+    /// docs/DEFECTS.md E-59. This method existed for a whole wave and was used in
+    /// exactly three places, **all of them queries**. A query executes no round, so
+    /// it can only ever ask the canister what it believes; it can never make the
+    /// canister ACT on that belief before the on-chain clock has had its turn.
+    /// Meanwhile every other test reached time through `advance`, which ticks, so
+    /// the clock always won the race. The result was a harness in which the state
+    /// where a caller and the canister's own timer disagree about one hand was
+    /// **unreachable**, and 138 comparisons later it turned out to be the fourth
+    /// cross-agent defect in this project.
+    ///
+    /// So: `advance_time_only(stall)` and then an **update** is the race, and
+    /// `tests/stall_agreement.rs` (M13) is the gate built on it. Until the harness
+    /// could express the race, no gate could catch it.
     pub fn advance_time_only(&self, d: Duration) {
         self.pic.advance_time(d);
     }
@@ -375,8 +437,14 @@ impl World {
 
     /// A raw `icrc1_transfer` into an actor's own per-player deposit subaccount
     /// on the table canister -- the on-ledger half of `claim_external_deposit`.
+    ///
+    /// **The canister is not told.** That is the whole point of this door: it is
+    /// exactly what an external wallet does, and the ledger moving without a
+    /// message is the reason ledger account (2) of "THE ACCOUNT CENSUS" needs an
+    /// instrument of its own. The amount is recorded in
+    /// `unobserved_subaccount_deposits` until the canister is asked about it.
     pub fn transfer_to_deposit_subaccount(
-        &self,
+        &mut self,
         who: Principal,
         amount: u64,
     ) -> Result<u64, String> {
@@ -400,9 +468,15 @@ impl World {
                 Encode!(&args).expect("transfer arg encode"),
             )
             .map_err(|r| format!("{r:?}"))?;
-        Decode!(&bytes, LedgerResult)
+        let block = Decode!(&bytes, LedgerResult)
             .map_err(|e| format!("transfer reply decode: {e}"))?
-            .block()
+            .block()?;
+        let entry = self
+            .unobserved_subaccount_deposits
+            .entry(who)
+            .or_insert(0);
+        *entry = entry.saturating_add(amount);
+        Ok(block)
     }
 
     // -----------------------------------------------------------------------
@@ -422,8 +496,117 @@ impl World {
         self.deposit(who, amount)
     }
 
-    pub fn claim_external_deposit(&self, who: Principal) -> Outcome<u64> {
-        self.update_result(who, "claim_external_deposit", Encode!().unwrap())
+    /// `claim_external_deposit`. The canister asks the ledger about the caller's
+    /// deposit subaccount before it decides anything, so **whatever the outcome,
+    /// the canister has now looked** and the harness's allowance for that actor is
+    /// spent -- Err included. A refusal that leaves the canister still unaware of
+    /// money it is holding is FINDING 28, and the allowance is what would hide it.
+    pub fn claim_external_deposit(&mut self, who: Principal) -> Outcome<u64> {
+        let out = self.update_result(who, "claim_external_deposit", Encode!().unwrap());
+        if !matches!(out, Err(OpError::Trap(_))) {
+            self.unobserved_subaccount_deposits.remove(&who);
+        }
+        out
+    }
+
+    /// `refresh_deposit_custody`: ask the ledger what is at the caller's deposit
+    /// address and write it into the canister's books. Moves no money.
+    pub fn refresh_deposit_custody(&mut self, who: Principal) -> Outcome<DepositAddressCustody> {
+        let out = self.update_result::<DepositAddressCustody>(
+            who,
+            "refresh_deposit_custody",
+            Encode!().unwrap(),
+        );
+        if !matches!(out, Err(OpError::Trap(_))) {
+            self.unobserved_subaccount_deposits.remove(&who);
+        }
+        out
+    }
+
+    /// `get_deposit_custody` (query, caller-scoped).
+    pub fn deposit_custody(&self, who: Principal) -> DepositAddressCustody {
+        let bytes = self
+            .query_raw(who, "get_deposit_custody", Encode!().unwrap())
+            .expect("get_deposit_custody must not be rejected");
+        decode_one::<DepositAddressCustody>(&bytes).unwrap_or_else(|e| {
+            panic!(
+                "get_deposit_custody reply did not decode: {e}. On a build where the method does \
+                 not exist at all, the canister has no surface that can report money at the \
+                 deposit address it published -- docs/SECURITY-FINDINGS.md FINDING 28."
+            )
+        })
+    }
+
+    /// `admin_audit_deposit_custody`: the controller reads every enumerable
+    /// deposit subaccount. Returns `(read this call, total observed, still
+    /// unaudited)`.
+    pub fn admin_audit_deposit_custody(&mut self, also: &[Principal]) -> Outcome<(u64, u64, u64)> {
+        let also = also.to_vec();
+        let out = self.update_result::<(u64, u64, u64)>(
+            self.controller,
+            "admin_audit_deposit_custody",
+            Encode!(&also).unwrap(),
+        );
+        if !matches!(out, Err(OpError::Trap(_))) {
+            self.unobserved_subaccount_deposits.clear();
+        }
+        out
+    }
+
+    /// `admin_get_deposit_custody` (query). `(total observed, per-principal
+    /// (amount, observed_at_ns), accounts never read)`.
+    pub fn admin_deposit_custody(&self) -> (u64, Vec<(Principal, u64, u64)>, Vec<Principal>) {
+        self.query_result::<(u64, Vec<(Principal, u64, u64)>, Vec<Principal>)>(
+            self.controller,
+            "admin_get_deposit_custody",
+            Encode!().unwrap(),
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "admin_get_deposit_custody must answer the controller, got {e:?}. Without it \
+                 there is no controller surface that names the canister's deposit-subaccount \
+                 custody at all -- docs/SECURITY-FINDINGS.md FINDING 21."
+            )
+        })
+    }
+
+    /// `get_custody_status` for one caller: the complete per-player answer.
+    pub fn custody_status(&self, who: Principal) -> CustodyStatus {
+        let bytes = self
+            .query_raw(who, "get_custody_status", Encode!().unwrap())
+            .expect("get_custody_status must not be rejected");
+        decode_one::<CustodyStatus>(&bytes).unwrap_or_else(|e| {
+            panic!(
+                "get_custody_status reply did not decode into the harness's CustodyStatus: {e}. \
+                 The likely cause is a build whose CustodyStatus has no `unswept_deposit` field, \
+                 i.e. one where the surface that answers \"what is this canister holding for me\" \
+                 cannot express money at the deposit address the canister published -- \
+                 docs/SECURITY-FINDINGS.md FINDING 28."
+            )
+        })
+    }
+
+    /// Spend an actor's deposit-subaccount allowance by hand.
+    ///
+    /// For the tests that bypass the wrappers above and drive
+    /// `claim_external_deposit` through `pic.submit_call` directly (the
+    /// concurrency reproducers). The canister has looked, so the excuse is gone,
+    /// and the allowance must be spent explicitly rather than left standing --
+    /// an allowance nobody spends is an invariant switched off.
+    ///
+    /// Deliberately NOT automatic. Deriving "has the canister looked?" from what
+    /// the canister reports would make the allowance cancel out the very
+    /// discrepancy it exists to expose.
+    pub fn note_deposit_address_observed(&mut self, who: Principal) {
+        self.unobserved_subaccount_deposits.remove(&who);
+    }
+
+    /// The sum of every allowance the harness is still granting for money it put
+    /// into deposit subaccounts and has not asked the canister to look at.
+    pub fn unobserved_subaccount_total(&self) -> u64 {
+        self.unobserved_subaccount_deposits
+            .values()
+            .fold(0u64, |a, v| a.saturating_add(*v))
     }
 
     pub fn notify_deposit(&self, who: Principal, block: u64) -> Outcome<u64> {
@@ -566,11 +749,41 @@ impl World {
 
     pub fn snapshot(&self) -> Snapshot {
         let (escrow_total, escrow) = self.escrow_all();
-        let ledger_deposit_subaccounts = self.actors.iter().fold(0u64, |acc, a| {
-            acc.saturating_add(
-                self.ledger_balance(self.table, Some(ledger::deposit_subaccount(&a.principal))),
-            )
-        });
+        // What the CANISTER says it holds in its own deposit subaccounts, read
+        // from the canister and never computed by the harness. The whole value of
+        // this field is that it can DISAGREE with the ledger scan below;
+        // computing both from the ledger would make the comparison vacuous.
+        let (canister_unswept_deposits, canister_list, unaudited) = self.admin_deposit_custody();
+        let canister_deposit_by_principal: BTreeMap<Principal, u64> = canister_list
+            .iter()
+            .map(|(p, amount, _)| (*p, *amount))
+            .collect();
+
+        // THE SET OF ADDRESSES THE HARNESS LOOKS AT. Actors and the controller,
+        // because those are the principals that exist here -- and every principal
+        // the CANISTER names, because a claim parked on an account the harness
+        // would never scan is unfalsifiable, and "the instrument only looks where
+        // the money is supposed to be" is this project's standing defect.
+        let mut scan: Vec<Principal> = self.actors.iter().map(|a| a.principal).collect();
+        for p in std::iter::once(self.controller).chain(canister_deposit_by_principal.keys().copied())
+        {
+            if !scan.contains(&p) {
+                scan.push(p);
+            }
+        }
+        let ledger_deposit_by_principal: BTreeMap<Principal, u64> = scan
+            .into_iter()
+            .map(|p| {
+                (
+                    p,
+                    self.ledger_balance(self.table, Some(ledger::deposit_subaccount(&p))),
+                )
+            })
+            .collect();
+        let ledger_deposit_subaccounts = ledger_deposit_by_principal
+            .values()
+            .fold(0u64, |acc, v| acc.saturating_add(*v));
+
         let actor_wallets = self
             .actors
             .iter()
@@ -579,10 +792,14 @@ impl World {
         Snapshot {
             ledger_main: self.ledger_balance(self.table, None),
             ledger_deposit_subaccounts,
+            ledger_deposit_by_principal,
+            canister_deposit_by_principal,
             actor_wallets,
             escrow,
             escrow_total,
             chips_total: self.chips_total(),
+            canister_unswept_deposits,
+            canister_unaudited_deposit_accounts: unaudited.len(),
             table: self.table_state(),
         }
     }

@@ -46,18 +46,27 @@
   // whatever is typed, and warns when the fee takes more than half. A player can
   // still withdraw 11 sats; they can no longer be surprised by what arrives.
   //
+  // THE SAME ARGUMENT, ONE CURRENCY OVER (docs/SECURITY-FINDINGS.md FINDING 27).
+  // Reason 2 above was written about BTC and was true about ICP the whole time,
+  // in the canister rather than in this file: `deposit()` accepted 20,000 e8s and
+  // `withdraw()` refused anything under 100,000, so an ICP player holding
+  // anything in between -- including a player who deposited exactly the
+  // advertised minimum -- had no exit at all. The canister's two floors are now
+  // one number per currency and the invariant is compile-time asserted there
+  // ("THE FLOOR INVARIANT" in lib.rs). This file mirrors the result.
+  //
   // src/table_canister/src/lib.rs -- MIRRORED, keep in step:
   //   :36 ICP_TRANSFER_FEE          10_000          (0.0001 ICP)
   //   :40 CKBTC_TRANSFER_FEE        10              (10 sats)
   //   :47 ICP_MAX_WITHDRAWAL_PER_TX 10_000_000_000  (100 ICP)
-  //   :48 ICP_MIN_WITHDRAWAL_AMOUNT 100_000         (0.001 ICP)
+  //   :48 ICP_MIN_WITHDRAWAL_AMOUNT 20_000          (0.0002 ICP == the deposit floor)
   //   :51 BTC_MAX_WITHDRAWAL_PER_TX 10_000_000      (0.1 BTC)
   //   :52 BTC_MIN_WITHDRAWAL_AMOUNT 11              (fee + 1 sat)
   //   :54 WITHDRAWAL_COOLDOWN_NS    60_000_000_000  (60 s)
   // `tests/money_safety/tests/ui_limits.rs` reads both files and fails if any of
   // these five numbers stops matching, and fails if any surface in this file states
   // a limit as a literal instead of interpolating one of the values below.
-  const MIN_WITHDRAWAL = isBTC ? 11n : 100_000n;
+  const MIN_WITHDRAWAL = isBTC ? 11n : 20_000n;
   const MAX_WITHDRAWAL = isBTC ? 10_000_000n : 10_000_000_000n;
   const TRANSFER_FEE = isBTC ? 10n : 10_000n;
   const WITHDRAWAL_COOLDOWN_SECS = 60;
@@ -149,12 +158,30 @@
     return formatted;
   }
 
+  /**
+   * Exact decimal text -> smallest units, WITHOUT going through a float.
+   *
+   * `Number('0.00012345') * 100_000_000` is `12344.999999999998`, which floors to
+   * 12,344 -- one unit less than the player has. That is invisible at ordinary
+   * sizes and fatal at the bottom: MAX writes the balance out as exact decimal
+   * text, and if reading it back lands one unit short then the amount is no
+   * longer the WHOLE balance, the sweep below does not recognise it, and a
+   * sub-floor balance becomes unwithdrawable again by rounding alone.
+   */
+  function decimalToSmallest(text) {
+    const m = /^\s*(\d*)(?:\.(\d*))?\s*$/.exec(String(text));
+    if (!m || (m[1] === '' && (m[2] ?? '') === '')) return 0n;
+    const whole = m[1] === '' ? '0' : m[1];
+    const frac = (m[2] ?? '').padEnd(8, '0').slice(0, 8);
+    return BigInt(whole) * 100_000_000n + BigInt(frac);
+  }
+
   // Convert user input to smallest unit
   function inputToSmallestUnit(amount) {
     if (isBTC && inputUnit === 'sats') {
       return BigInt(Math.floor(Number(amount)));
     }
-    return BigInt(Math.floor(Number(amount) * 100_000_000));
+    return decimalToSmallest(amount);
   }
 
   async function handleWithdraw() {
@@ -164,10 +191,26 @@
     }
 
     const amountSmallest = inputToSmallestUnit(withdrawAmount);
+    const balanceSmallest = toSmallest(currentBalance);
+
+    // THE WHOLE-BALANCE SWEEP, MIRRORED (docs/SECURITY-FINDINGS.md FINDING 27).
+    //
+    // `withdraw()` waives its floor for one request: "send me everything I have
+    // left", at any size the ledger can move. That waiver is the thing that stops
+    // a floor from becoming a trap for a balance the pot produced rather than the
+    // deposit door. A client-side floor that did not mirror the waiver would put
+    // the trap straight back, one layer up, where it is invisible to every
+    // canister-side gate -- which is the shape of defect this project keeps
+    // finding. So the modal waives it on exactly the same condition.
+    const sweepingWholeBalance =
+      amountSmallest === balanceSmallest && amountSmallest > TRANSFER_FEE;
 
     // Both bounds, in the same words the canister uses, from the same numbers.
-    if (amountSmallest < MIN_WITHDRAWAL) {
-      error = `Minimum withdrawal is ${minDisplay}`;
+    if (amountSmallest < MIN_WITHDRAWAL && !sweepingWholeBalance) {
+      error =
+        `Minimum withdrawal is ${minDisplay}. Your whole remaining balance can always be `
+        + `withdrawn in one call whatever its size, as long as it is more than the `
+        + `${feeDisplay} network fee -- press MAX.`;
       return;
     }
     // The canister enforces a per-transaction ceiling too and the modal never
@@ -179,7 +222,7 @@
       return;
     }
 
-    if (amountSmallest > toSmallest(currentBalance)) {
+    if (amountSmallest > balanceSmallest) {
       error = 'Insufficient balance';
       return;
     }
@@ -436,6 +479,11 @@
         Minimum {minDisplay}, maximum {maxDisplay} per transaction. The network fee
         is {feeDisplay} and is taken out of what you withdraw, so your wallet
         receives that much less. One withdrawal every {WITHDRAWAL_COOLDOWN_SECS} seconds.
+      </p>
+      <p class="hint">
+        Whatever your balance is, all of it can leave in one call: press MAX. That
+        works below the stated floor too, as long as what is left is more than the
+        network fee.
       </p>
       {#if netReceived !== null}
         <p class="net-line" class:dust={feeDominates}>

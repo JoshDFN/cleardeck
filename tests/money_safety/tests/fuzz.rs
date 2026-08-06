@@ -116,6 +116,14 @@ fn hostile_sequences_never_create_chips_double_pay_or_lose_state_across_an_upgra
                 format!("; declined: {:?}", report.outcome.declined)
             }
         );
+        // M12 ARCHIVE FIDELITY. Printed for the same reason M8 and M11 are: an
+        // instrument that quietly declines to measure is indistinguishable from
+        // one that passes, and the number that matters here is the last one --
+        // a run with no mid-hand departure has not exercised FINDING 30 at all.
+        eprintln!(
+            "money-fuzz: seed {seed:#x} {}",
+            report.archive.summary()
+        );
         for f in &report.documented_findings {
             documented_sigs.push(f.signature.clone());
             eprintln!(

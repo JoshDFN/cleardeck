@@ -542,6 +542,14 @@ fn sweep_no_admin_call_reduces_what_is_owed() {
         ("reset_table", Encode!(&cfg).unwrap()),
         ("admin_reinit_table", Encode!(&cfg).unwrap()),
         ("admin_return_all_chips_to_escrow", Encode!().unwrap()),
+        // Reads every deposit subaccount the canister can enumerate and writes down
+        // what the ledger says. A measurement, so it must not move an e8 -- and it
+        // must not be able to reduce liability either, which is exactly what the
+        // rule below asserts of it.
+        (
+            "admin_audit_deposit_custody",
+            Encode!(&Vec::<Principal>::new()).unwrap(),
+        ),
         // Not controller-gated, but it is the other update on the admin surface a
         // controller reaches for, and it must not move money either.
         ("flush_unrecorded_hands", Encode!().unwrap()),
@@ -602,6 +610,17 @@ fn census_every_controller_gated_method_is_classified_here() {
         ("admin_get_balance", "query, read-only"),
         ("admin_get_all_balances", "query, read-only"),
         ("admin_get_table_chips", "query, read-only"),
+        (
+            "admin_get_deposit_custody",
+            "query, read-only: reports the deposit-subaccount half of custody that \
+             admin_get_all_balances structurally cannot (FINDING 21, FINDING 28)",
+        ),
+        (
+            "admin_audit_deposit_custody",
+            "reads the LEDGER and writes observations only. Cannot move an e8: it makes no \
+             transfer, and its only write is a liability record that can go UP, never down. \
+             It is the measurement refuse_currency_change_while_funded requires",
+        ),
         // --- CAN touch custody, and is therefore guarded -------------------
         (
             "reset_table",
@@ -841,6 +860,7 @@ fn a_drain_report_that_says_fully_drained_is_not_enough() {
         owed_before: 4_000_000_000,
         owed_after: 0,
         ledger_main_after: 4_000_000_000,
+        ledger_deposit_subaccounts_after: 0,
         uncredited_raw: 0,
         returned_to_wallets: BTreeMap::new(),
         log: vec!["reset_table -> Ok".to_string()],

@@ -181,11 +181,20 @@ type HistoryStatus = record {
 };
 type Result = variant { Ok; Err : text };
 type Result_1 = variant { Ok : nat64; Err : text };
+// docs/SECURITY-FINDINGS.md FINDING 29: one line per unfinished ledger operation
+// that resolve_my_ledger_intents() drove, saying what the ledger said about it.
+type Result_IntentReport = variant { Ok : vec text; Err : text };
+type Result_IntentLine = variant { Ok : text; Err : text };
 // Why a hand is not moving, and whether anybody can end it.
 // docs/SECURITY-FINDINGS.md FINDING 15.
 type StuckHandStatus = record {
   is_stuck : bool;
   hand_in_progress : bool;
+  // A LOWER BOUND: the hand cannot become abandonable before this. Null when it
+  // already is, or when no hand is live. docs/DEFECTS.md E-59 -- abandonment
+  // needs the canister to have WATCHED the hand fail to move, not merely for a
+  // wall-clock interval to have elapsed, so nothing can promise the exact
+  // instant. "Not before" is a sentence a client can show.
   abandonable_in_ns : opt nat64;
   refundable_pot : nat64;
 };
@@ -201,14 +210,94 @@ type CustodyStatus = record {
   // Your own money in the current hand's pot, INCLUDING the stake of a seat you
   // have already left.
   committed_in_pot : nat64;
-  // True when that hand can no longer be moved by any message.
+  // True when that hand can no longer be moved by any message: this canister has
+  // watched the ordinary resolution path fail on it across a full grace period.
   committed_is_stuck : bool;
-  // Nanoseconds until it becomes abandonable; null when it already is.
+  // A LOWER BOUND on when it becomes abandonable; null when it already is or
+  // when nothing of yours is committed. See StuckHandStatus above.
   abandonable_in_ns : opt nat64;
-  // escrow + chips_at_table + committed_in_pot.
+  // YOUR MONEY AT THE DEPOSIT ADDRESS THIS CANISTER PUBLISHED TO YOU, as of
+  // unswept_deposit_observed_at_ns. Held by this canister, in a ledger account
+  // only this canister can move, and not withdrawable until
+  // claim_external_deposit() sweeps it into `escrow`.
+  // docs/SECURITY-FINDINGS.md FINDING 28.
+  unswept_deposit : nat64;
+  // When the ledger was last asked about that address. NULL MEANS NEVER ASKED,
+  // which is not the same as "the address is empty". Call
+  // refresh_deposit_custody() to take a reading.
+  unswept_deposit_observed_at_ns : opt nat64;
+  // MONEY OF YOURS THIS CANISTER HAS MOVED ON THE LEDGER AND NOT YET FINISHED
+  // BOOKING, because the ledger call it made did not come back.
+  // docs/SECURITY-FINDINGS.md FINDING 29. The fourth place your money can be, and
+  // the only one no surface could see before the ledger-intent journal existed:
+  // an interrupted deposit looked exactly like a deposit that never happened.
+  // resolve_my_ledger_intents() finishes them.
+  unfinished_ledger_ops : nat64;
+  // escrow + chips_at_table + committed_in_pot + unswept_deposit +
+  // unfinished_ledger_ops: everything this canister holds that belongs to you,
+  // across every account it owns and every movement it has begun.
   total : nat64;
   // What to do next, in words, naming abandon_stuck_hand when it is needed.
   advice : text;
+};
+// ONE IRREVERSIBLE LEDGER MOVEMENT THIS CANISTER COMMITTED TO, written down
+// BEFORE it was attempted. docs/SECURITY-FINDINGS.md FINDING 29.
+//
+// An IC message is atomic only up to each await, so a deposit or a withdrawal
+// that moves money and then credits the books in its reply callback loses the
+// credit -- and not the movement -- if that callback never runs. An entry here is
+// how the canister knows whose that money is and how much of it there is, and
+// resolve_my_ledger_intents() is how it gets finished. An empty list is the
+// normal state.
+type LedgerIntentView = record {
+  id : nat64;
+  who : principal;
+  // "pull" (icrc2_transfer_from from your wallet), "sweep" (your deposit
+  // subaccount into the main account) or "payout" (the main account to you).
+  kind : text;
+  amount : nat64;
+  opened_at_ns : nat64;
+  // How many times the identical ledger transaction has been issued. Retrying is
+  // safe: it carries a memo and a created_at_time, so the LEDGER deduplicates it.
+  attempts : nat32;
+  // Somebody is driving this entry until then; null means nobody is. A lease
+  // expires, so a caller that disappeared cannot hold the money hostage.
+  leased_until_ns : opt nat64;
+  // After this instant a retry would be a SECOND movement, because the ledger no
+  // longer deduplicates. The canister refuses to retry past it and keeps the
+  // record instead.
+  retry_deadline_ns : nat64;
+};
+// What this canister is holding for one principal at the deposit address it
+// published to them. docs/SECURITY-FINDINGS.md FINDING 28, FINDING 11.
+type DepositAddressCustody = record {
+  // The subaccount half of the address: (this canister, subaccount).
+  subaccount : vec nat8;
+  // The ledger `observed_amount` was read from.
+  ledger : principal;
+  // What the ledger reported at observed_at_ns. Zero WITH observed_at_ns = null
+  // means nobody has looked, not "there is nothing".
+  observed_amount : nat64;
+  observed_at_ns : opt nat64;
+  // The ledger's transfer fee. At or below it, nothing can move the balance on
+  // its own -- top the SAME address up past the fee and the whole balance sweeps.
+  transfer_fee : nat64;
+  // True when claim_external_deposit() would sweep this amount right now.
+  sweepable : bool;
+  // The plain-language answer, including the dust case. Never empty when
+  // observed_amount > 0.
+  note : text;
+};
+type Result_DepositCustody = variant { Ok : DepositAddressCustody; Err : text };
+// (total observed, per-principal (amount, observed_at_ns), addresses NEVER READ).
+type Result_DepositCensus = variant {
+  Ok : record { nat64; vec record { principal; nat64; nat64 }; vec principal };
+  Err : text;
+};
+// (accounts read this call, total observed, accounts still never read).
+type Result_DepositAudit = variant {
+  Ok : record { nat64; nat64; nat64 };
+  Err : text;
 };
 // How long this canister can keep answering update calls, and whether its
 // on-chain clock is running. docs/SECURITY-FINDINGS.md FINDING 19.
@@ -370,13 +459,22 @@ service : (TableConfig) -> {
   // if state.pot and the attributed stakes disagree (call abandon_stuck_hand first).
   // This is the recovery step FINDING 07 needed and did not have.
   admin_return_all_chips_to_escrow : () -> (Result_1);
-  // Admin: Get balance for a specific player (controller only, read-only)
+  // Admin: a specific player's WITHDRAWABLE ESCROW (controller only, read-only).
+  // SCOPE: BALANCES and nothing else. It excludes their chips, their stake in a
+  // live pot, and their money at the deposit address this canister published to
+  // them (admin_get_deposit_custody). Zero here is not "this canister holds
+  // nothing for this player". docs/SECURITY-FINDINGS.md FINDING 28.
   admin_get_balance : (principal) -> (Result_1) query;
   // REMOVED: admin_restore_balance - unnecessary attack surface. It could MINT
   // escrow from nothing. admin_return_all_chips_to_escrow is not a replacement for
   // it and is not the same shape: it only MOVES money the table already holds.
-  // Admin: Get all balances (for auditing/recovery)
-  // Returns (total_assigned, list of (principal, balance))
+  // Admin: every WITHDRAWABLE ESCROW balance (controller only, read-only).
+  // Returns (total_assigned, list of (principal, balance)).
+  // SCOPE: one of this canister's ledger accounts, not all of them. The tuple
+  // shape cannot grow an element without breaking every existing reader, so the
+  // deposit-subaccount half lives at admin_get_deposit_custody. An audit that
+  // reads only this method is the audit FINDING 21 walked past: it returned a
+  // clean zero on a canister holding 5 ICP at its own published addresses.
   admin_get_all_balances : () -> (variant { Ok : record { nat64; vec record { principal; nat64 } }; Err : text }) query;
   // Admin: Get total chips at table (seated players)
   admin_get_table_chips : () -> (Result_1) query;
@@ -399,8 +497,44 @@ service : (TableConfig) -> {
   // Claim funds sent to your unique deposit subaccount by an external wallet
   // External wallets transfer to (canister_id, get_deposit_subaccount()), then call this to claim
   claim_external_deposit : () -> (Result_1);
-  // Get your unique deposit subaccount for external wallet transfers
+  // Get your unique deposit subaccount for external wallet transfers.
+  // A QUERY, so calling it leaves no record: this canister cannot know it
+  // published an address to you until you call refresh_deposit_custody() or
+  // claim_external_deposit() at least once. See "THE ENUMERABILITY LIMIT" in
+  // src/table_canister/src/lib.rs.
   get_deposit_subaccount : () -> (vec nat8) query;
+  // FINISH EVERY LEDGER OPERATION THIS CANISTER STARTED FOR YOU AND DID NOT
+  // FINISH BOOKING. docs/SECURITY-FINDINGS.md FINDING 29.
+  //
+  // Safe to call at any time, by anybody, for their own entries. It re-issues the
+  // IDENTICAL ledger transaction; the ledger either performs it or answers
+  // Duplicate, and either answer settles your balance exactly once. Returns one
+  // line per entry.
+  resolve_my_ledger_intents : () -> (Result_IntentReport);
+  // The same for one entry, by id. Owner or controller.
+  resolve_ledger_intent : (nat64) -> (Result_IntentLine);
+  // Every unfinished ledger operation of YOURS. Empty is the normal state.
+  get_my_ledger_intents : () -> (vec LedgerIntentView) query;
+  // The whole journal for a controller; your own entries for anybody else.
+  get_all_ledger_intents : () -> (vec LedgerIntentView) query;
+  // What this canister LAST SAW at your deposit address, and what to do about it.
+  // A query, so it reports the last observation with its timestamp; it cannot
+  // call the ledger. docs/SECURITY-FINDINGS.md FINDING 28.
+  get_deposit_custody : () -> (DepositAddressCustody) query;
+  // Ask the ledger what is at YOUR deposit address right now, write the answer
+  // into this canister's books, and return it. Any principal, their own address
+  // only, moves no money. This is the call that makes every other surface true.
+  refresh_deposit_custody : () -> (Result_DepositCustody);
+  // Controller: the deposit-subaccount half of custody, which admin_get_balance
+  // and admin_get_all_balances structurally cannot report. The third element is
+  // the list of published addresses that have NEVER BEEN READ -- their balances
+  // are unknown, not zero. docs/SECURITY-FINDINGS.md FINDING 21.
+  admin_get_deposit_custody : () -> (Result_DepositCensus) query;
+  // Controller: read every deposit subaccount this canister can enumerate, plus
+  // any principal named in the argument, and write down what the ledger says.
+  // Moves no money. Required before a currency change: the guard refuses while
+  // any published address has never been read.
+  admin_audit_deposit_custody : (vec principal) -> (Result_DepositAudit);
   // DEV ONLY: Get free test chips for local development
   // Disabled when dev_mode is false (production)
   dev_faucet : (nat64) -> (Result_1);
@@ -408,9 +542,10 @@ service : (TableConfig) -> {
   did_player_show : (nat8) -> (bool) query;
   get_action_timer : () -> (opt ActionTimer) query;
   // Your WITHDRAWABLE escrow balance, and nothing else: it excludes the chips in
-  // front of you and any stake of yours still in a live pot, including a pot you
-  // have already left. Call get_custody_status for the whole answer.
-  // docs/SECURITY-FINDINGS.md FINDING 18.
+  // front of you, any stake of yours still in a live pot including a pot you have
+  // already left, AND any money sitting at the deposit address this canister
+  // published to you. Call get_custody_status for the whole answer.
+  // docs/SECURITY-FINDINGS.md FINDING 18, FINDING 28.
   get_balance : () -> (nat64) query;
   get_community_cards : () -> (vec Card) query;
   // Get all controllers

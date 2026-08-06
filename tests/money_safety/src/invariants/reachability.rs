@@ -162,9 +162,15 @@ pub struct DrainReport {
     /// claim.** Every other number in this struct is the canister describing
     /// itself; this one is the ledger describing the canister.
     pub ledger_main_after: u64,
+    /// `icrc1_balance_of(table, deposit_subaccount(actor))` summed, afterwards.
+    /// **The second fact, and the one no drain in this project measured until
+    /// wave 8.** A table that has been emptied of chips and escrow while its own
+    /// published deposit addresses still hold a player's money is not an empty
+    /// table (docs/SECURITY-FINDINGS.md FINDING 28).
+    pub ledger_deposit_subaccounts_after: u64,
     /// Money the harness pushed straight into the canister's main account with a
-    /// raw transfer and has not asked it to credit yet. The one legitimate reason
-    /// for the canister to hold more than it owes.
+    /// raw transfer and has not asked it to credit yet, plus money it pushed into
+    /// deposit subaccounts and has not asked the canister to look at.
     pub uncredited_raw: u64,
     /// Ledger money each actor gained, net of transfer fees.
     pub returned_to_wallets: BTreeMap<Principal, u64>,
@@ -197,22 +203,46 @@ impl DrainReport {
     /// So there is no such thing as a fee this canister "legitimately absorbs" into
     /// its main account: after a complete drain the honest value here is ZERO.
     ///
-    /// Deposit SUBACCOUNT balances are deliberately excluded. That money is not
-    /// orphaned -- `claim_external_deposit` reaches it and only its owner can call
-    /// that -- and dust at or below the transfer fee is FINDING 11 / E-12.
+    /// # Deposit subaccounts are IN, and the old comment here was the defect
+    ///
+    /// This used to read: *"Deposit SUBACCOUNT balances are deliberately excluded.
+    /// That money is not orphaned -- `claim_external_deposit` reaches it and only
+    /// its owner can call that."* Both clauses were false in the state that
+    /// mattered. `claim_external_deposit` refused with *"No claimable balance"*
+    /// while the money sat at exactly that address, no balance surface reported a
+    /// single e8 of it, and at or below the transfer fee nothing could move it at
+    /// all. An exclusion argued from what a method is SUPPOSED to reach is not a
+    /// measurement (docs/SECURITY-FINDINGS.md FINDING 21, FINDING 28).
+    ///
+    /// So both accounts are on the ledger side, and the canister's own
+    /// deposit-custody figure is on the claims side via `owed_after`: subaccount
+    /// money the canister KNOWS about is owed, subaccount money it does not know
+    /// about is orphaned. That is the distinction the drain has to be able to make.
     pub fn orphaned_e8s(&self) -> u64 {
-        self.ledger_main_after
+        self.ledger_holdings_after()
             .saturating_sub(self.owed_after)
             .saturating_sub(self.uncredited_raw)
     }
 
-    /// Nothing in the canister's main account belongs to nobody.
+    /// Every e8 the ledger says the canister holds, across every account it owns.
+    pub fn ledger_holdings_after(&self) -> u64 {
+        self.ledger_main_after
+            .saturating_add(self.ledger_deposit_subaccounts_after)
+    }
+
+    /// Nothing in any account the canister owns belongs to nobody.
     pub fn nothing_orphaned(&self) -> bool {
         self.orphaned_e8s() <= ORPHAN_TOLERANCE_E8S
     }
 
     /// The honest end-state: the canister neither claims to owe anything nor holds
     /// anything it cannot name an owner for.
+    ///
+    /// `fully_drained()` reads `owed_after`, which is `Snapshot::internal_total()`,
+    /// which now includes the canister's deposit-subaccount custody -- so a table
+    /// still holding a player's money at an address it published reports NOT
+    /// empty, whether or not it knows about it: if it knows, `owed_after` is
+    /// non-zero; if it does not, `orphaned_e8s()` is.
     pub fn table_is_really_empty(&self) -> bool {
         self.fully_drained() && self.nothing_orphaned()
     }
@@ -241,12 +271,59 @@ pub const ORPHAN_TOLERANCE_E8S: u64 = 0;
 ///
 /// Time is advanced between rounds because both (1) and (2) are time-gated, and a
 /// player waiting is a legal move.
+///
+/// # The deposit-subaccount pass runs FIRST, before the early exit
+///
+/// The loop's exit condition is "the canister says it owes nothing", and a
+/// canister that has never looked at its own deposit addresses says exactly that
+/// while holding a player's money at one. Measured: a table holding 9,999 e8s of
+/// alice's at the address it published to her exited at round 0 with an empty
+/// transcript and reported `table_is_really_empty`. So the drain makes the
+/// canister LOOK before it is allowed to conclude anything
+/// (docs/SECURITY-FINDINGS.md FINDING 28).
+/// Make the canister READ every actor's deposit address, then sweep whatever is
+/// there into escrow.
+///
+/// Both calls are player-callable with no privilege check, so they belong in a
+/// drain exactly as `cash_out` does. `refresh_deposit_custody` runs even when
+/// there is nothing to sweep, because the drain's verdict is "this canister holds
+/// nothing that belongs to anybody" and a canister that has not looked at an
+/// account it published cannot support that sentence.
+fn sweep_deposit_addresses(
+    world: &mut World,
+    actors: &[Principal],
+    log: &mut Vec<String>,
+    stage: &str,
+) {
+    for who in actors {
+        match world.refresh_deposit_custody(*who) {
+            Err(OpError::Trap(m)) => {
+                log.push(format!("{stage}: refresh_deposit_custody TRAPPED: {m}"))
+            }
+            Ok(c) if c.observed_amount > 0 => log.push(format!(
+                "{stage}: deposit address of {who} holds {} (sweepable={})",
+                c.observed_amount, c.sweepable
+            )),
+            _ => {}
+        }
+        match world.claim_external_deposit(*who) {
+            Ok(n) => log.push(format!("{stage}: claim_external_deposit -> escrow {n}")),
+            Err(OpError::Trap(m)) => {
+                log.push(format!("{stage}: claim_external_deposit TRAPPED: {m}"))
+            }
+            Err(OpError::Err(_)) => {}
+        }
+    }
+}
+
 pub fn drain(world: &mut World) -> DrainReport {
     let before = world.snapshot();
     let owed_before = before.internal_total();
     let mut log: Vec<String> = Vec::new();
     let wallets_before: BTreeMap<Principal, u64> = before.actor_wallets.clone();
     let actors: Vec<Principal> = world.actors.iter().map(|a| a.principal).collect();
+
+    sweep_deposit_addresses(world, &actors, &mut log, "pre");
 
     // Ten rounds is far more than enough: each round can finish at most one hand,
     // and the loop stops early when nothing is left owing.
@@ -279,6 +356,14 @@ pub fn drain(world: &mut World) -> DrainReport {
                     Err(OpError::Err(_)) => {}
                 }
             }
+        }
+
+        // Money that arrived at a published deposit address, into escrow. Only
+        // when the canister's own books say there is some: the pre-pass above has
+        // already made it look once, so a second sweep is only worth its messages
+        // if something is there.
+        if world.snapshot().canister_unswept_deposits > 0 {
+            sweep_deposit_addresses(world, &actors, &mut log, &format!("round {round}"));
         }
 
         // Stacks out of the seats.
@@ -323,7 +408,8 @@ pub fn drain(world: &mut World) -> DrainReport {
         owed_before,
         owed_after: after.internal_total(),
         ledger_main_after: after.ledger_main,
-        uncredited_raw: world.uncredited_raw_deposits,
+        ledger_deposit_subaccounts_after: after.ledger_deposit_subaccounts,
+        uncredited_raw: crate::invariants::Exemptions::of(world).total(),
         returned_to_wallets: returned,
         log,
     }
@@ -336,13 +422,14 @@ pub fn drain(world: &mut World) -> DrainReport {
 /// [`Severity::OrphanedCustody`] and docs/SECURITY-FINDINGS.md FINDING 07.
 pub fn check_no_orphaned_custody(
     snap: &crate::world::Snapshot,
-    uncredited_raw_deposits: u64,
+    exempt: impl Into<crate::invariants::Exemptions>,
 ) -> Vec<Violation> {
+    let exempt = exempt.into();
     let claims = snap.internal_total();
-    let orphaned = snap
-        .ledger_main
+    let holdings = snap.ledger_holdings();
+    let orphaned = holdings
         .saturating_sub(claims)
-        .saturating_sub(uncredited_raw_deposits);
+        .saturating_sub(exempt.total());
     if orphaned <= ORPHAN_TOLERANCE_E8S {
         return Vec::new();
     }
@@ -353,18 +440,24 @@ pub fn check_no_orphaned_custody(
         orphaned as i128,
         phase_of(&snap.table),
         format!(
-            "the ledger says this canister holds {} e8s and the canister says it owes {} \
-             (escrow {} + chips {} + pot {}), with {} of raw deposits not yet credited. That \
-             leaves {} e8s inside a canister that owes them to NOBODY: no player call can \
-             withdraw them, no controller call can return them, and no invariant anchored to \
-             what the canister SAYS it owes will ever see them. ClearDeck takes no rake, so the \
-             honest value here is zero. docs/SECURITY-FINDINGS.md FINDING 07.",
+            "the ledger says this canister holds {} e8s across every account it owns (main {} + \
+             deposit subaccounts {}) and the canister says it owes {} (escrow {} + chips {} + \
+             pot {} + unswept deposit custody {}), with {} of raw deposits not yet credited and \
+             {} in subaccounts the harness has not yet asked it to look at. That leaves {} e8s \
+             inside a canister that owes them to NOBODY: no player call can withdraw them, no \
+             controller call can return them, and no invariant anchored to what the canister \
+             SAYS it owes will ever see them. ClearDeck takes no rake, so the honest value here \
+             is zero. docs/SECURITY-FINDINGS.md FINDING 07, FINDING 21, FINDING 28.",
+            holdings,
             snap.ledger_main,
+            snap.ledger_deposit_subaccounts,
             claims,
             snap.escrow_total,
             snap.chips_total,
             snap.table.pot,
-            uncredited_raw_deposits,
+            snap.canister_unswept_deposits,
+            exempt.uncredited_raw,
+            exempt.unobserved_total(),
             orphaned
         ),
     )]
@@ -415,13 +508,14 @@ pub fn check_drain(report: &DrainReport, phase: &crate::table_api::GamePhase) ->
             phase,
             format!(
                 "the drain finished and the canister says it owes {} e8s -- but the LEDGER says \
-                 it is holding {} e8s, of which {} is raw deposits not yet credited. {} e8s are \
+                 it is holding {} e8s across every account it owns, of which {} is raw deposits \
+                 and unread deposit subaccounts the harness has not asked it about. {} e8s are \
                  therefore inside a canister that owes them to nobody: unwithdrawable by every \
                  player and unreturnable by every controller. A drain that only asks the canister \
                  what it owes reports `fully_drained` here, which is exactly how FINDING 07 \
                  survived four waves. Drain transcript:\n  {}",
                 report.owed_after,
-                report.ledger_main_after,
+                report.ledger_holdings_after(),
                 report.uncredited_raw,
                 orphaned,
                 report.log.join("\n  ")

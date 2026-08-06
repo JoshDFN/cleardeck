@@ -72,6 +72,19 @@ export async function readTableTruth(tableId, playerNum) {
     ]);
     const view = optional(viewOpt);
     if (!view) throw new Error(`get_table_view() returned null for ${tableId}`);
+    // ABSENCE OF A FIELD IS A STRUCTURAL FAILURE, NEVER A SILENT NaN
+    // (docs/DEFECTS.md E-61, and the same rule applied here rather than only
+    // written down here). Every one of these is read below with `Number(...)`,
+    // and `Number(undefined)` is NaN, which makes every comparison against it
+    // vacuously true and the gate silently vacuous with it.
+    for (const field of ['pot', 'hand_number', 'my_committed_in_pot', 'hand_is_unmovable']) {
+        if (!(field in view)) {
+            throw new Error(
+                `get_table_view() has no '${field}' field, so the checks that read it cannot run. `
+                + `Fields present: ${Object.keys(view).join(', ')}`,
+            );
+        }
+    }
 
     const seats = view.players.map((p, i) => {
         const player = optional(p);
@@ -120,6 +133,12 @@ export async function readTableTruth(tableId, playerNum) {
         smallBlind: Number(view.config.small_blind),
         bigBlind: Number(view.config.big_blind),
         handNumber: Number(view.hand_number),
+        // THE CALLER'S OWN STAKE IN THE MIDDLE (docs/SECURITY-FINDINGS.md
+        // FINDING 18). The dock renders this as ICP; until E-64 nothing read the
+        // canister's own figure for it, so the number on the screen was checked
+        // against nothing at all.
+        myCommittedInPot: Number(view.my_committed_in_pot),
+        handIsUnmovable: Boolean(view.hand_is_unmovable),
         // The Candid board, kept alongside the display strings so the equity
         // oracle can rank real cards rather than re-parse glyphs off the screen.
         boardCards: view.community_cards,
@@ -578,6 +597,44 @@ function compare(truth, dom, opts) {
         figures.push(checkFigure('table balance vs get_balance()', truth.balance, dom.tableBalanceText, { currency }));
     } else if (opts.requireBalance) {
         structural.push('SCRAPE FAILED: no wallet balance on screen');
+    }
+
+    // ---- the caller's own stake in the middle ----------------------------
+    //
+    // docs/DEFECTS.md E-64. This block only renders when `my_committed_in_pot`
+    // is non-zero, so its ABSENCE is checked as hard as its value: a canister
+    // that says a player has money in the pot while the dock says nothing is the
+    // FINDING 18 silence coming back, and it would otherwise look identical to
+    // "the block is not on this scene".
+    if (dom.committedValueText !== null && dom.committedValueText !== undefined) {
+        figures.push(checkFigure(
+            'committed stake vs get_table_view().my_committed_in_pot',
+            truth.myCommittedInPot, dom.committedValueText, { currency },
+        ));
+        // The sentence carries a hand number, which is the other numeric token
+        // the census found unasserted at this site.
+        const notedHand = (dom.committedNoteText || '').match(/hand\s+(\d[\d,]*)/i);
+        if (notedHand) {
+            figures.push(checkPlainNumber(
+                'the hand named in the committed note vs get_table_view().hand_number',
+                truth.handNumber, notedHand[1],
+            ));
+        }
+        // The panel turns red on a hand nothing can move. The canister decides
+        // that, not the client.
+        if (dom.committedIsStuck !== truth.handIsUnmovable) {
+            structural.push(
+                `the committed-stake panel says the hand is ${dom.committedIsStuck ? '' : 'not '}`
+                + `unmovable while get_table_view().hand_is_unmovable is ${truth.handIsUnmovable}`,
+            );
+        }
+    } else if (truth.myCommittedInPot > 0) {
+        structural.push(
+            `THE PLAYER IS NOT TOLD: get_table_view().my_committed_in_pot is `
+            + `${truth.myCommittedInPot} e8s of this caller's money in the pot and no `
+            + '.committed-value is on screen. That silence is docs/SECURITY-FINDINGS.md '
+            + 'FINDING 18 and this readout is the fix for it.',
+        );
     }
 
     // ---- pot odds strip --------------------------------------------------
@@ -1496,6 +1553,115 @@ export async function assertDepositAgreement(ctx, page, opts) {
  * @param {import('playwright').Page} page
  * @param {{table:string, asPlayer:number}} opts
  */
+/**
+ * One number off one Candid record, refusing to become `NaN`.
+ *
+ * @param {any} record
+ * @param {string} field
+ * @param {string} where human-readable name of the record, for the message
+ * @param {string[]} problems appended to when the field cannot be read
+ * @returns {number|null}
+ */
+function strictNumber(record, field, where, problems) {
+    if (!record || typeof record !== 'object' || !(field in record)) {
+        const fields = record && typeof record === 'object' ? Object.keys(record).join(', ') : 'none';
+        problems.push(
+            `STRUCTURAL: ${where} has no '${field}' field, so the assertion that reads it cannot `
+            + `run. Fields present: ${fields}`,
+        );
+        return null;
+    }
+    const n = Number(record[field]);
+    if (!Number.isFinite(n)) {
+        problems.push(`STRUCTURAL: ${where}.${field} is not a finite number: ${String(record[field])}`);
+        return null;
+    }
+    return n;
+}
+
+/** The winners' total off a record that has a `winners` vec. */
+function awardedTotal(record, where, problems) {
+    if (!record || !Array.isArray(record.winners)) {
+        problems.push(`STRUCTURAL: ${where} has no 'winners' vec`);
+        return null;
+    }
+    let sum = 0;
+    for (const w of record.winners) {
+        const a = strictNumber(w, 'amount', `${where}.winners[]`, problems);
+        if (a === null) return null;
+        sum += a;
+    }
+    return sum;
+}
+
+/**
+ * ONE ARCHIVED HAND, READ FROM BOTH OF THE HISTORY CANISTER'S SHAPES.
+ *
+ * THE DEFECT THIS FUNCTION EXISTS TO END (docs/DEFECTS.md E-61). The caller used
+ * to build this record from `get_hands_by_table` alone and read `Number(r.rake)`
+ * off it. `get_hands_by_table` returns `vec HandSummary`, and `HandSummary` has
+ * no `rake` field — only `HandHistoryRecord`, from `get_hand(hand_id)`, does. So
+ * `rake` was `undefined`, `Number(undefined)` was `NaN`, `NaN !== 0` was true and
+ * `totalPot !== awarded + NaN` was true. **The one gate that asserts ClearDeck's
+ * no-rake property against the permanent archive reported a rake being taken on
+ * every hand ever archived**, which is the most reliable way there is to make an
+ * alarm ignored. It was red for a reason that had nothing to do with rake, in a
+ * function whose own comment thirty lines above says *"absence of a field is now
+ * a structural failure, never a silent NaN"* — the author fixed that in one field
+ * and left it in the adjacent one.
+ *
+ * So: every field is read through {@link strictNumber}, a missing one is a
+ * structural failure naming the field, and `rake` is read from the record that
+ * actually carries it. The two shapes are also cross-checked against each other,
+ * because the archive having two read paths that disagree is itself a finding.
+ *
+ * Pure and exported so `tools/shots/test-rake.mjs` can prove it goes red when a
+ * rake appears — the sweep it normally runs in needs a replica, and a gate whose
+ * failure mode nobody has ever seen is not a gate.
+ *
+ * @param {any} summary a `HandSummary` from `get_hands_by_table`
+ * @param {any} full a `HandHistoryRecord` from `get_hand(hand_id)`, or null
+ * @returns {{handId:number|null, totalPot:number|null, rake:number|null,
+ *            awarded:number|null, structural:string[]}}
+ */
+export function foldArchivedHand(summary, full) {
+    const structural = [];
+    const handId = strictNumber(summary, 'hand_id', 'HandSummary', structural);
+
+    if (!full) {
+        structural.push(
+            `STRUCTURAL: get_hand(${handId ?? '?'}) returned nothing, so the archived record for a `
+            + 'hand the archive itself lists cannot be read. The no-rake assertion needs '
+            + '`HandHistoryRecord.rake`, which is the only place a rake is recorded.',
+        );
+        return { handId, totalPot: null, rake: null, awarded: null, structural };
+    }
+
+    const totalPot = strictNumber(full, 'total_pot', 'HandHistoryRecord', structural);
+    const rake = strictNumber(full, 'rake', 'HandHistoryRecord', structural);
+    const awarded = awardedTotal(full, 'HandHistoryRecord', structural);
+
+    // The archive's two read paths must agree. A summary that says one pot and a
+    // full record that says another means the modal's number depends on which
+    // call the client happened to make.
+    const summaryPot = strictNumber(summary, 'total_pot', 'HandSummary', structural);
+    const summaryAwarded = awardedTotal(summary, 'HandSummary', structural);
+    if (summaryPot !== null && totalPot !== null && summaryPot !== totalPot) {
+        structural.push(
+            `the archive disagrees with itself: get_hands_by_table says total_pot=${summaryPot} `
+            + `and get_hand says total_pot=${totalPot}`,
+        );
+    }
+    if (summaryAwarded !== null && awarded !== null && summaryAwarded !== awarded) {
+        structural.push(
+            `the archive disagrees with itself: get_hands_by_table's winners sum to `
+            + `${summaryAwarded} and get_hand's sum to ${awarded}`,
+        );
+    }
+
+    return { handId, totalPot, rake, awarded, structural };
+}
+
 export async function assertHandHistoryAgreement(ctx, page, opts) {
     const tableId = ctx.tableIds[opts.table];
     const table = await tableActorFor(opts.asPlayer, tableId);
@@ -1532,23 +1698,40 @@ export async function assertHandHistoryAgreement(ctx, page, opts) {
     }
 
     // The history canister's own copy of the same hands, keyed by hand_number.
+    //
+    // TWO CALLS, NOT ONE. `get_hands_by_table` returns `vec HandSummary`, which
+    // has `total_pot` and `winners` and NO `rake` (src/declarations/history/
+    // history.did). `rake` lives only on `HandHistoryRecord`, which `get_hand`
+    // returns. See `foldArchivedHand` for what reading the wrong one cost.
+    //
+    // AND EVERY WAY OF NOT READING IT IS A FAILURE, NOT A SKIP. Both branches
+    // below used to leave `byHandNumber` empty, which made `hist` undefined for
+    // every row, which made every assertion in the loop below -- including the
+    // no-rake one -- silently not run. A scene could therefore go GREEN with the
+    // product's headline property asserted by nothing, and the only trace was an
+    // `error` key in the manifest that no code ever read. That is the same class
+    // of hole as E-61 itself, one level up: not a wrong answer, an absent one.
     const byHandNumber = new Map();
-    if (ctx.ids?.history) {
+    if (!ctx.ids?.history) {
+        structuralPre.push(
+            'STRUCTURAL: no history canister id in this run, so the archive was never read and '
+            + 'the no-rake property is asserted by nothing on this scene.',
+        );
+    } else {
         try {
             const history = await historyActor(ctx.ids.history);
             const recs = await history.get_hands_by_table(
                 Principal.fromText(tableId), BigInt(0), BigInt(20),
             );
-            for (const r of recs) {
-                byHandNumber.set(Number(r.hand_number), {
-                    handId: Number(r.hand_id),
-                    totalPot: Number(r.total_pot),
-                    rake: Number(r.rake),
-                    awarded: r.winners.reduce((n2, w) => n2 + Number(w.amount), 0),
-                });
+            for (const summary of recs) {
+                const full = optional(await history.get_hand(BigInt(summary.hand_id)));
+                byHandNumber.set(Number(summary.hand_number), foldArchivedHand(summary, full));
             }
         } catch (e) {
-            byHandNumber.set('error', String(e.message || e).split('\n')[0]);
+            structuralPre.push(
+                'STRUCTURAL: the history canister could not be read, so no archived hand was '
+                + `checked for a rake: ${String(e.message || e).split('\n')[0]}`,
+            );
         }
     }
 
@@ -1562,29 +1745,62 @@ export async function assertHandHistoryAgreement(ctx, page, opts) {
         structural.push(`history lists ${dom.found.rows} hand(s) but the canister has recorded ${hands.length}`);
     }
 
+    // NO RAKE IS A PROPERTY OF THE ARCHIVE, NOT OF THE MODAL, so it is asserted
+    // over EVERY hand the archive returned rather than inside the row loop below.
+    //
+    // The row loop walks `min(dom.rows.length, hands.length)` — at most the ten
+    // most recent hands, and only those the modal is currently showing. Asserting
+    // no-rake there means an archived hand outside that window is unchecked
+    // forever, which is a rake that only has to wait ten hands to become
+    // invisible. `rake` comes from `HandHistoryRecord` (`get_hand`), the only
+    // shape that carries it; reading it off `HandSummary` is docs/DEFECTS.md
+    // E-61.
+    for (const [handNumber, hist] of byHandNumber) {
+        if (hist.rake !== null && hist.rake !== 0) {
+            structural.push(
+                `RAKE TAKEN: hand ${handNumber} recorded rake=${hist.rake} e8s. ClearDeck `
+                + 'publishes a no-rake property; a non-zero rake contradicts it.',
+            );
+        }
+    }
+
     // Rows are newest-first in HandHistory.svelte, which is the order `hands` is
     // built in above.
     for (let i = 0; i < Math.min(dom.rows.length, hands.length); i += 1) {
         const hand = hands[i];
         const hist = byHandNumber.get(hand.handNumber);
 
-        // NO RAKE is a published property of this product, not a preference.
-        // The history record has a `rake` field, so it is asserted, per hand.
-        if (hist && hist.rake !== 0) {
+        // A hand the TABLE recorded and the ARCHIVE does not have is the archive
+        // being incomplete, which is the thing "provably fair" rests on. It is
+        // also the state in which every assertion below quietly does not run.
+        if (!hist) {
             structural.push(
-                `RAKE TAKEN: hand ${hand.handNumber} recorded rake=${hist.rake} e8s. ClearDeck `
-                + 'publishes a no-rake property; a non-zero rake contradicts it.',
+                `STRUCTURAL: hand ${hand.handNumber} is in the table canister's own record but not `
+                + 'in the history canister\'s archive, so nothing about it -- rake included -- was '
+                + 'checked.',
             );
         }
+
+        // A field the archive would not give up is reported as itself, once, and
+        // the assertions that needed it are then SKIPPED rather than run against
+        // `undefined`. Skipping is safe here only because the skip is itself a
+        // structural failure: the scene cannot go green while one is present.
+        if (hist?.structural?.length) {
+            for (const problem of hist.structural) {
+                structural.push(`hand ${hand.handNumber}: ${problem}`);
+            }
+        }
+
         // Money in equals money out, hand by hand.
-        if (hist && hist.totalPot !== hist.awarded + hist.rake) {
+        if (hist && hist.totalPot !== null && hist.awarded !== null && hist.rake !== null
+            && hist.totalPot !== hist.awarded + hist.rake) {
             structural.push(
                 `hand ${hand.handNumber}: history says total_pot=${hist.totalPot} but the winners were `
                 + `paid ${hist.awarded} with rake ${hist.rake} (difference `
                 + `${hist.totalPot - hist.awarded - hist.rake} e8s)`,
             );
         }
-        if (hist && hist.awarded !== hand.awardedByTable) {
+        if (hist && hist.awarded !== null && hist.awarded !== hand.awardedByTable) {
             structural.push(
                 `hand ${hand.handNumber}: the TABLE canister paid ${hand.awardedByTable} e8s but the `
                 + `HISTORY canister recorded ${hist.awarded} e8s paid`,
@@ -1594,9 +1810,9 @@ export async function assertHandHistoryAgreement(ctx, page, opts) {
         // What the row must equal: the history record's own pot when there is
         // one (that is the field the client renders), otherwise the amount the
         // table actually paid out.
-        const expected = hist ? hist.totalPot : hand.awardedByTable;
+        const expected = hist && hist.totalPot !== null ? hist.totalPot : hand.awardedByTable;
         figures.push(checkFigure(
-            `history row ${i + 1} pot vs ${hist ? `history total_pot (hand ${hand.handNumber})` : `sum of winners paid (hand ${hand.handNumber})`}`,
+            `history row ${i + 1} pot vs ${hist && hist.totalPot !== null ? `history total_pot (hand ${hand.handNumber})` : `sum of winners paid (hand ${hand.handNumber})`}`,
             expected, dom.rows[i].potText, { currency: truth.currency },
         ));
     }

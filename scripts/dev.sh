@@ -614,16 +614,16 @@ with_timeout() {
 cmd_test() {
   local failed=()
 
-  step "[1/5] cargo test --workspace"
+  step "[1/6] cargo test --workspace"
   cargo test --workspace || failed+=("cargo test --workspace")
 
-  step "[2/5] table_canister wasm build"
+  step "[2/6] table_canister wasm build"
   cmd_wasm || failed+=("wasm build")
 
-  step "[3/5] differential fast subset (tools/differential)"
+  step "[3/6] differential fast subset (tools/differential)"
   ( cd tools/differential && cargo test ) || failed+=("differential fast subset")
 
-  step "[4/5] money-safety fast subset + the fuzzer at its own defaults"
+  step "[4/6] money-safety fast subset + the fuzzer at its own defaults"
   announce_wasm
   (
     cd tests/money_safety
@@ -642,6 +642,15 @@ cmd_test() {
     # canister accepted 11). Two file reads, no replica, so it belongs in the fast
     # gate. Named explicitly for the deposit_replay reason above.
     cargo test --test ui_limits &&
+    # deposit_floor is the gate on THE FLOOR INVARIANT
+    # (docs/SECURITY-FINDINGS.md FINDING 27, docs/DEFECTS.md E-62: the canister
+    # accepted 20,000 e8s at its own advertised minimum and `withdraw` refused
+    # anything under 100,000, so a third auditor's deposit could never leave).
+    # It drives real deposits and withdrawals through the real canister on
+    # PocketIC: the old dead band, the sub-floor residue the pot produces that no
+    # equal-floors fix reaches, and the boundary at the ledger fee itself.
+    # Named explicitly for the deposit_replay reason above.
+    cargo test --test deposit_floor -- --test-threads=2 &&
     # admin_custody is the gate on the ADMIN CUSTODY SURFACE
     # (docs/SECURITY-FINDINGS.md FINDING 07: one controller call destroyed 100% of a
     # funded table's chips, and it survived four waves because nothing in the project
@@ -651,6 +660,28 @@ cmd_test() {
     # a NEW controller-gated method appears unaudited. Named explicitly for the
     # deposit_replay reason above.
     cargo test --test admin_custody -- --test-threads=2 &&
+    # ledger_boundary is the gate on M14 LEDGER/BOOKS COHERENCE
+    # (docs/SECURITY-FINDINGS.md FINDING 29: `deposit`, `claim_external_deposit` and
+    # `withdraw` each move real money on the ledger and settle the canister's own
+    # books afterwards, in the post-await continuation, so a continuation that does
+    # not run leaves the movement standing and the book entry undone). It is the only
+    # target that reconstructs a discarded continuation -- snapshot at the await
+    # point, let the ledger commit, restore -- and it asserts that the money is
+    # accounted for, that the OWNER can recover it with a player-only call, that
+    # recovering twice does not credit twice, and that the journal survives an
+    # upgrade. Named explicitly for the deposit_replay reason above.
+    cargo test --test ledger_boundary -- --test-threads=2 &&
+    # coherence_w8 is the gate on THE CURRENCY GUARD'S LAST TERM
+    # (docs/SECURITY-FINDINGS.md FINDING 33). `total_liability()` is the ONLY
+    # number the guard reads and it has no query, no surface and -- until this
+    # target -- no test: the only way to sample it was to attempt the destructive
+    # operation it guards. FINDING 33 was one word (`== Pull` under a comment
+    # saying `Pull` AND `Sweep`), it made the guard read ZERO on a canister
+    # holding 2 ICP of a player's, the resulting currency flip could not be
+    # undone, and THREE reviewers drove it in wave 8 without leaving a gate --
+    # which is exactly why it survived its own wave. Named explicitly for the
+    # deposit_replay reason above.
+    cargo test --test coherence_w8 -- --test-threads=2 &&
     # wave6_coherence carries probe1 (the first auditor's fund lock, reached by real
     # silence), probe4 (docs/SECURITY-FINDINGS.md FINDING 17: the fold-out winner
     # must be PAID the pot -- an OUTCOME assertion, because the totals were exact
@@ -703,11 +734,21 @@ cmd_test() {
   # leaves money-safety `invariants` at 30/30 green and `regressions` at 6/6 green,
   # and is caught here. For the whole of wave 2 this suite lived behind its own
   # `make settlement` that no default target and no CI job invoked.
-  step "[5/5] settlement oracle (tests/settlement)"
+  step "[5/6] settlement oracle (tests/settlement)"
   with_timeout 900 sh -c 'cd tests/settlement && cargo test --test settlement -- --test-threads=1' \
     || failed+=("settlement oracle")
   with_timeout 300 sh -c 'cd tests/settlement && cargo test --test disagreements -- --test-threads=1' \
     || failed+=("settlement pinned reproducers")
+
+  # THE SCREENSHOT HARNESS'S OWN GATES, WHICH NOTHING RAN.
+  #
+  # `tools/shots/package.json` has carried a `selftest` script since the pixel
+  # gate was written and no target invoked it -- in the one harness whose gates
+  # cannot run without a replica, so its self-tests are the ONLY part of it a
+  # default gate can execute. They need ~20 s and no replica. Among them is the
+  # no-rake gate's own failing case (docs/DEFECTS.md E-61).
+  step "[6/6] screenshot-harness self-tests (no replica)"
+  cmd_shots_selftest || failed+=("screenshot-harness self-tests")
 
   step "result"
   if [ ${#failed[@]} -eq 0 ]; then
@@ -819,6 +860,59 @@ Run '$0 local-up' first. This harness deliberately does not start the replica."
 }
 
 # ---------------------------------------------------------------------------
+# cmd: shots-verdict  -- the LAST RECORDED sweep's verdict, as a gate
+# ---------------------------------------------------------------------------
+#
+# docs/DEFECTS.md E-63. `cmd_shots` above already exits 1 on a red scene, and
+# that was not enough: it needs a live replica, the replica was unstartable for
+# two waves, and a real regression (8.7% of a money figure painted over by the
+# felt) therefore sat inside an artifact with NO gate anybody could run being red
+# about it. This one reads the tracked verdicts of the last sweep. No replica, no
+# browser, no canister -- so a wave that cannot re-run the sweep still has to
+# answer for what the sweep last said.
+#
+# It is also a step inside `hygiene`, because hygiene is the cheap gate every
+# wave runs and the whole failure here was reachability.
+cmd_shots_verdict() {
+  step "the last recorded screenshot verdict"
+  node tools/shots/verdict-gate.mjs
+}
+
+# ---------------------------------------------------------------------------
+# cmd: shots-selftest  -- the screenshot harness's gates, gating themselves
+# ---------------------------------------------------------------------------
+#
+# THESE EXISTED AND NOTHING RAN THEM. `tools/shots/package.json` has carried a
+# `selftest` script since the pixel gate was written, and no make target, no
+# dev.sh command and no CI job invoked it -- the same hole as `deposit_replay` in
+# wave 2 and `--test fuzz` in H-28, in the one harness whose gates cannot run
+# without a replica. They need no replica: every case is a stub page or a fixture
+# whose answer is known by construction.
+cmd_shots_selftest() {
+  step "screenshot-harness self-tests (no replica)"
+  if [ ! -d tools/shots/node_modules/playwright ]; then
+    info "installing playwright in tools/shots"
+    ( cd tools/shots && npm install --no-audit --no-fund )
+  fi
+  local failed=()
+  # the pixel gate, on overlaps whose answer is written into the fixture
+  node tools/shots/test-occlusion.mjs      || failed+=("test-occlusion")
+  # the inverted money gate: a token nothing asserts must fail a scene
+  node tools/shots/test-census.mjs         || failed+=("test-census")
+  # the display-vs-e8s parser
+  node tools/shots/test-money.mjs          || failed+=("test-money")
+  # THE NO-RAKE GATE (docs/DEFECTS.md E-61): it must go red on a rake of 1 e8,
+  # and a missing field must be a structural failure and never a silent NaN
+  node tools/shots/test-rake.mjs           || failed+=("test-rake")
+  # the action dock's containment (docs/DEFECTS.md E-63), measured against
+  # PokerTable.svelte's own stylesheet
+  node tools/shots/test-dock-overflow.mjs  || failed+=("test-dock-overflow")
+  if [ ${#failed[@]} -eq 0 ]; then ok "all screenshot-harness self-tests green"; return 0; fi
+  warn "FAILED: ${failed[*]}"
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # cmd: known-defects  -- the markers that are RED on purpose
 # ---------------------------------------------------------------------------
 #
@@ -910,24 +1004,79 @@ cmd_hygiene() {
   local bad=0
 
   step "no large or binary files added"
+  # WHAT THIS COUNTS, AND WHAT IT DELIBERATELY DOES NOT.
+  #
+  # The question is "how many bytes would a commit ADD", so a staged DELETION is
+  # excluded even though the file is still on disk. Removing the 23 MB of tracked
+  # screenshot manifests (docs/DEFECTS.md E-60) is the change that showed this up:
+  # it reduces the repo, and the old counter billed it as +23 MB and failed.
   local n bytes
-  n="$(git status --porcelain --untracked-files=all | wc -l | tr -d ' ')"
-  bytes="$(git status --porcelain --untracked-files=all | sed 's/^...//' \
-           | while read -r f; do [ -f "$f" ] && wc -c <"$f"; done | awk '{s+=$1} END {print s+0}')"
-  info "$n untracked path(s), $((bytes/1024)) KiB total"
-  if git status --porcelain --untracked-files=all | sed 's/^...//' \
+  local -a candidates=()
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    case "$line" in
+      'D '*|' D'*|'DD'*) continue ;;   # a deletion adds nothing
+    esac
+    candidates+=("${line:3}")
+  done < <(git status --porcelain --untracked-files=all)
+  n="${#candidates[@]}"
+  bytes=0
+  local f sz
+  for f in "${candidates[@]}"; do
+    [ -f "$f" ] || continue
+    sz="$(wc -c <"$f" | tr -d ' ')"
+    bytes=$((bytes + sz))
+  done
+  info "$n added/modified path(s), $((bytes/1024)) KiB total"
+  if printf '%s\n' "${candidates[@]}" \
        | grep -Eiq '\.(png|jpg|jpeg|gif|webp|webm|mp4|wasm|gz|zip|bin|pdf|tiff|bmp)$'; then
     warn "binary/media files are staged for commit:"
-    git status --porcelain --untracked-files=all | sed 's/^...//' \
+    printf '%s\n' "${candidates[@]}" \
       | grep -Ei '\.(png|jpg|jpeg|gif|webp|webm|mp4|wasm|gz|zip|bin|pdf|tiff|bmp)$' | sed 's/^/      /'
     bad=1
   else
     ok "no binary or image files would be committed"
   fi
   if [ "$bytes" -gt $((4 * 1024 * 1024)) ]; then
-    warn "untracked payload exceeds 4 MiB; check for a stray artifact directory"
+    warn "added payload exceeds 4 MiB; check for a stray artifact directory"
     bad=1
   fi
+
+  # THE CHECK THAT WOULD HAVE CAUGHT E-60 A WAVE EARLIER.
+  #
+  # The counter above only ever looked at UNTRACKED payload, so committing a
+  # 7.6 MB machine-generated file made hygiene go GREEN while making the problem
+  # permanent -- and the file then grew 10x in a single wave with nothing
+  # watching. Evidence under artifacts/ is meant to be small and readable: the
+  # verdicts, not the working-out. Anything big enough to hide in is build output
+  # and belongs beside the PNGs, not in a public history.
+  step "no tracked artifact is a machine-generated blob"
+  local cap=$((512 * 1024)) oversize=0
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    sz="$(wc -c <"$f" | tr -d ' ')"
+    if [ "$sz" -gt "$cap" ]; then
+      warn "$f is $((sz/1024)) KiB, over the $((cap/1024)) KiB cap for tracked artifacts"
+      oversize=1
+    fi
+  done < <(git ls-files -- artifacts)
+  if [ "$oversize" = "0" ]; then
+    ok "every tracked file under artifacts/ is under $((cap/1024)) KiB"
+  else
+    info "if it is a run's working-out, gitignore it and keep the verdicts (docs/DEFECTS.md E-60)"
+    bad=1
+  fi
+
+  # THE LAST RECORDED SCREENSHOT VERDICT, AS A GATE.
+  #
+  # docs/DEFECTS.md E-63: the pixel gate caught a real regression and nothing
+  # anybody could RUN was red about it, because the only instrument that sees a
+  # rendered failure needs a live replica and the replica was down for two waves.
+  # This reads the tracked verdicts of the last sweep, needs nothing, and stays
+  # red until every red is written down -- and until every acknowledgement that
+  # is no longer red is deleted.
+  step "every recorded screenshot red is acknowledged"
+  if node tools/shots/verdict-gate.mjs; then :; else bad=1; fi
 
   step "player-protection notices intact"
   local notice
@@ -1083,10 +1232,22 @@ ${B}ClearDeck dev entry point${R}   (make <target> works for all of these)
   ${B}diff-full${R}       exhaustive evaluator differential (all C(52,5) x 3 evaluators)
   ${B}shots${R}           screenshot the real UI against the real local canisters
                   (requires local-up)
+  ${B}shots-verdict${R}   the LAST RECORDED sweep's verdict, as a gate. Reads the tracked
+                  artifacts/screens/latest/verdicts.json and fails on any red that
+                  is not written down in acknowledged-reds.json under a filed
+                  defect -- and on any acknowledgement that is no longer red.
+                  No replica: this is how a wave that CANNOT run the sweep still
+                  has to answer for what it last said (docs/DEFECTS.md E-63).
+  ${B}shots-selftest${R}  the screenshot harness's own gates, on fixtures whose answer is
+                  known by construction: the pixel gate, the token census, the
+                  money parser, the NO-RAKE gate and the action dock's
+                  containment. No replica.
   ${B}known-defects${R}   run the markers that are RED on purpose; succeeds while the
                   engine defects are still present, shouts when one is fixed
-  ${B}hygiene${R}         no large/binary files added; disclaimer, 18+, jurisdiction and
-                  no-rake notices present and not weakened since ${BASELINE_COMMIT}
+  ${B}hygiene${R}         no large/binary files added, no tracked artifact blob, every
+                  recorded screenshot red acknowledged; disclaimer, 18+,
+                  jurisdiction and no-rake notices present and not weakened
+                  since ${BASELINE_COMMIT}
   ${B}selftest${R}        prove the mainnet guard refuses every hostile argument shape
 
   ${B}phe-venv${R}        install the third reference evaluator (phevaluator) locally
@@ -1112,6 +1273,8 @@ main() {
     settlement)     cmd_settlement "$@" ;;
     diff-full)      cmd_diff_full "$@" ;;
     shots)          cmd_shots "$@" ;;
+    shots-verdict)  cmd_shots_verdict ;;
+    shots-selftest) cmd_shots_selftest ;;
     known-defects)  cmd_known_defects ;;
     hygiene)        cmd_hygiene ;;
     selftest)       cmd_selftest ;;

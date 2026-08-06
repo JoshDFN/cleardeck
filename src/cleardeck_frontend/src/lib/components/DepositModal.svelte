@@ -72,11 +72,19 @@
   // the point of this block is that it stays that way by construction rather than by
   // luck. Every stated figure below is interpolated from these constants.
   //
+  // WHAT THE FLOOR NOW PROMISES (docs/SECURITY-FINDINGS.md FINDING 27). Agreeing
+  // with the deposit door was never enough: the canister accepted this amount and
+  // its WITHDRAWAL floor then refused to return it, so a player who deposited
+  // exactly the figure this modal advertises could not get it back out. The two
+  // floors are now one number per currency, and lib.rs asserts at compile time
+  // that the withdrawal floor can never rise above this one again. The number
+  // below is therefore a promise in both directions.
+  //
   // src/table_canister/src/lib.rs -- MIRRORED, keep in step:
-  //   :36   ICP_TRANSFER_FEE   10_000   (0.0001 ICP)
-  //   :40   CKBTC_TRANSFER_FEE 10       (10 sats)
-  //   :1525 `deposit()`'s own floor: `if currency == BTC { 1_000 } else { 20_000 }`
-  //         -- a local, not a named constant, so ui_limits.rs parses that line.
+  //   :36 ICP_TRANSFER_FEE       10_000  (0.0001 ICP)
+  //   :40 CKBTC_TRANSFER_FEE     10      (10 sats)
+  //   :66 ICP_MIN_DEPOSIT_AMOUNT 20_000  (0.0002 ICP)
+  //   :67 BTC_MIN_DEPOSIT_AMOUNT 1_000   (1000 sats)
   // `tests/money_safety/tests/ui_limits.rs` fails if these stop matching, and fails
   // if any surface here states the floor or the fee as a literal.
   const TRANSFER_FEE = isBTC ? 10n : 10_000n;

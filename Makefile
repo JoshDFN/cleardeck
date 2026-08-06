@@ -11,8 +11,8 @@ DEV := ./scripts/dev.sh
 
 .DEFAULT_GOAL := help
 .PHONY: help doctor local-up local-status wasm test fuzz fuzz-default diff-full \
-        diff-full-sevens settlement settlement-fast shots known-defects hygiene \
-        selftest phe-venv check
+        diff-full-sevens settlement settlement-fast shots shots-verdict \
+        shots-selftest known-defects hygiene selftest phe-venv check
 
 help:            ## show this help
 	@$(DEV) help
@@ -51,6 +51,12 @@ diff-full-sevens: ## diff-full plus all C(52,7) seven-card hands (~20 min more)
 
 shots:           ## screenshot the real UI against the real local canisters (needs local-up)
 	@$(DEV) shots $(ARGS)
+
+shots-verdict:   ## the LAST RECORDED sweep's verdict as a gate: no red may be unacknowledged. No replica.
+	@$(DEV) shots-verdict
+
+shots-selftest:  ## the screenshot harness's own gates on known-answer fixtures. No replica.
+	@$(DEV) shots-selftest
 
 known-defects:   ## run the markers that are RED on purpose; shouts when one gets fixed
 	@$(DEV) known-defects

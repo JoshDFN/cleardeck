@@ -32,6 +32,9 @@ path = "src/lib.rs"
 poker_core = { path = "../../src/poker_core" }
 settlement_oracle = { path = "../settlement", default-features = false }
 pocket-ic = "11.0.0"
+# Same version pocket-ic 11 depends on: the settings/snapshot types the fault-injection
+# tests need to talk to the management canister directly.
+ic-management-canister-types = "0.5.0"
 candid = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -76,3 +79,12 @@ path = "tests/admin_custody.rs"
 # from fighting over CPU by default; see README.md.
 [profile.test]
 opt-level = 1
+
+# THE LEDGER/ESCROW BOUNDARY UNDER FAULT (docs/SECURITY-FINDINGS.md FINDING 29).
+# Named explicitly for the reason `admin_custody` is: an auto-discovered target is
+# a target no human ever types, and this one is the only gate on the money path
+# that survives a discarded post-await continuation. If the file is renamed, this
+# line fails rather than the coverage silently going away.
+[[test]]
+name = "ledger_boundary"
+path = "tests/ledger_boundary.rs"

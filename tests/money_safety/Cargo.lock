@@ -937,6 +937,7 @@ dependencies = [
  "candid",
  "crc32fast",
  "hex",
+ "ic-management-canister-types",
  "pocket-ic",
  "poker_core",
  "serde",

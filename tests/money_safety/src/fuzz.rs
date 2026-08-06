@@ -23,9 +23,11 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 use crate::actions::{apply, Act, Op, StepResult};
+use crate::fault;
 use crate::hand_attribution::HandAttributionWatch;
 use crate::invariants::reachability;
 use crate::invariants::outcome::{check_hand_outcome, OutcomeCoverage, OutcomeWatch};
+use crate::invariants::record::{check_archived_participants, ArchiveCoverage};
 use crate::invariants::{
     check_custody_is_visible, check_hand_attribution, check_hand_payout_total, check_no_rake,
     check_no_settlement_trap, check_point_in_time, check_self_reported_inconsistency,
@@ -68,6 +70,11 @@ pub struct RunReport {
     /// M11 OUTCOME coverage over this run: how many hands had their OUTCOME
     /// checked, as opposed to their totals. Reported for the same reason.
     pub outcome: OutcomeCoverage,
+    /// M12 ARCHIVE FIDELITY coverage: how many settled hands had their PERMANENT
+    /// RECORD checked, how many of those were cross-checked against the stakes the
+    /// harness watched, and how many involved a mid-hand departure -- the shape
+    /// FINDING 30 needs. A run with zero departures has not tested it.
+    pub archive: ArchiveCoverage,
     pub transcript_tail: Vec<StepResult>,
     pub final_ledger_main: u64,
     pub final_internal_total: u64,
@@ -448,6 +455,20 @@ pub fn run_sequence(
     // one asks whether the hand ended at the right moment, which is the question
     // FINDING 17 got wrong while every money assertion in this file stayed silent.
     let mut outcome_watch = OutcomeWatch::new();
+    // Which step of THIS run gets a discarded continuation, if this run is one of
+    // the fault-injecting ones. Derived from the seed, so a failing run replays
+    // exactly, and placed past the opening steps so the table has money in it.
+    let fault_step = if ops.is_empty() {
+        usize::MAX
+    } else {
+        (ops.len() / 4).max(1) + ((seed >> 17) as usize % ops.len().max(1)) / 2
+    };
+    // M12 ARCHIVE FIDELITY, on every hand this run settles. The legs M8 and M11
+    // run ask where the money went and whether the hand ended right; this one asks
+    // whether the PERMANENT RECORD of the hand names the people who played it,
+    // which is the product's central claim and which no instrument in this project
+    // measured until docs/SECURITY-FINDINGS.md FINDING 30.
+    let mut archive_coverage = ArchiveCoverage::default();
 
     let record = |findings: &mut BTreeMap<String, Finding>,
                       all: &mut Vec<Violation>,
@@ -535,6 +556,57 @@ pub fn run_sequence(
             check_point_in_time(&after, world.uncredited_raw_deposits),
         );
 
+        // --- M14 LEDGER/BOOKS COHERENCE, per step ---------------------------
+        //
+        // One extra query per step. In ordinary play it must be silent, which is
+        // most of what running it every step buys: it is the fault runs below
+        // that make it speak, and an invariant that only ever runs in the state
+        // it was written for is an invariant nobody trusts.
+        // docs/SECURITY-FINDINGS.md FINDING 29.
+        record(
+            &mut findings,
+            &mut all,
+            &mut max_stranded,
+            i + 1,
+            Some(op),
+            fault::check_ledger_books_coherence(&world, &after),
+        );
+
+        // --- FAULT INJECTION AT THE LEDGER BOUNDARY -------------------------
+        //
+        // On one run in `FAULT_INJECTION_SEED_MODULUS`, at one deterministic step
+        // chosen from the seed, discard the post-await continuation of a real
+        // money-moving call and ask M12 about the result -- then make the OWNER
+        // recover it with a player-only call and ask again. Both readings are
+        // recorded, so a regression that makes the injected state incoherent, or
+        // that makes it unrecoverable, fails the run.
+        if fault::run_is_fault_injecting(seed) && i == fault_step {
+            let run = fault::inject_and_recover(&mut world, seed ^ (i as u64));
+            transcript.push(StepResult {
+                op: Op::CheckTimeouts { actor: 0 },
+                outcome: format!(
+                    "[FAULT INJECTION] {} | resolved: {}",
+                    run.description, run.resolution
+                ),
+            });
+            record(
+                &mut findings,
+                &mut all,
+                &mut max_stranded,
+                i + 1,
+                Some(op),
+                run.during,
+            );
+            record(
+                &mut findings,
+                &mut all,
+                &mut max_stranded,
+                i + 1,
+                Some(op),
+                run.after_recovery,
+            );
+        }
+
         // M10 CUSTODY VISIBILITY, per step. Reads the canister AS EACH PLAYER whose
         // money is in the pot and who has no ordinary way of seeing it -- a stake
         // that outlived its seat, or a hand that can no longer be moved. Costs
@@ -583,6 +655,26 @@ pub fn run_sequence(
                     Some(op),
                     check_hand_attribution(hand),
                 );
+
+                // --- M12 ARCHIVE FIDELITY, on this same settled hand ---------
+                //
+                // One more query, on the step a hand settles only. It reads the
+                // table's own copy of the permanent record -- the SAME participant
+                // list `record_hand_to_history` sends to the archive canister,
+                // cloned from one build, so the two cannot disagree -- and holds
+                // it against the stakes this harness watched being made.
+                // docs/SECURITY-FINDINGS.md FINDING 30.
+                if let Some(h) = world.hand_history(hand.hand_number) {
+                    archive_coverage.observe(hand, &h);
+                    record(
+                        &mut findings,
+                        &mut all,
+                        &mut max_stranded,
+                        i + 1,
+                        Some(op),
+                        check_archived_participants(hand, &h),
+                    );
+                }
             }
 
             // --- M11 OUTCOME, per step AND per hand -------------------------
@@ -688,6 +780,18 @@ pub fn run_sequence(
     // verdict and the final snapshot, which is taken after it and reported as
     // `final_internal_total` -- that number is now the answer to "how much could
     // not be got out", not merely "how much was left lying about".
+    // Anything the canister started for a player and did not finish is finished
+    // BY THAT PLAYER now, with a call any player may make, so the drain below
+    // measures money a player can actually reach. docs/SECURITY-FINDINGS.md
+    // FINDING 29: without this the drain would report an unfinished deposit as
+    // unreachable, which would be true of the sequence but not of the canister.
+    for line in fault::resolve_everyones_intents(&mut world) {
+        transcript.push(StepResult {
+            op: Op::CheckTimeouts { actor: 0 },
+            outcome: format!("[RESOLVE INTENTS] {line}"),
+        });
+    }
+
     let (drain_report, drain_violations) = reachability::drain_and_check(&mut world);
     let drain_summary = format!(
         "owed {} -> {} e8s after draining",
@@ -729,6 +833,7 @@ pub fn run_sequence(
             declined: attribution.declined.clone(),
         },
         outcome: outcome_watch.coverage.clone(),
+        archive: archive_coverage.clone(),
         transcript_tail: transcript[tail_start..].to_vec(),
         final_ledger_main: final_snap.ledger_main,
         final_internal_total: final_snap.internal_total(),

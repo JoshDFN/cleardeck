@@ -221,11 +221,21 @@ pub fn parse_toolchain_channel(text: &str) -> Option<String> {
 /// Public so the pin itself is testable: `invariants::classifier` inspects the
 /// command's environment overrides rather than trusting this comment.
 pub fn pinned_table_canister_build(dir: &Path) -> Command {
+    pinned_canister_build(dir, "table_canister")
+}
+
+/// The same pinned build, for any canister crate in the tree.
+///
+/// `history_canister` is built through here for the archive gate: the permanent
+/// hand record is only worth what the ARCHIVE holds, so the gate has to run
+/// against the real archive module built from this tree, for the same reason the
+/// table module is (docs/DEFECTS.md H-01).
+pub fn pinned_canister_build(dir: &Path, package: &str) -> Command {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(dir).args([
         "build",
         "-p",
-        "table_canister",
+        package,
         "--target",
         "wasm32-unknown-unknown",
         "--release",
@@ -276,6 +286,48 @@ pub fn table_canister_wasm() -> Vec<u8> {
 /// Lowercase hex sha256 of the module under test.
 pub fn table_canister_sha256() -> &'static str {
     &table_canister_module().sha256
+}
+
+/// Where `cargo build -p history_canister ...` puts the archive module.
+pub const HISTORY_WASM_REL: &str = "target/wasm32-unknown-unknown/release/history_canister.wasm";
+
+static HISTORY_MODULE: OnceLock<TableModule> = OnceLock::new();
+
+/// The ARCHIVE module, built from the checked-out source.
+///
+/// Same rule as the table module: built, never resolved from whatever happens to
+/// be on disk. A gate that reads a record out of a stale archive binary is a
+/// statement about a binary that is not in this tree.
+pub fn history_canister_module() -> &'static TableModule {
+    HISTORY_MODULE.get_or_init(|| {
+        let root = repo_root();
+        let path = root.join(HISTORY_WASM_REL);
+        let status = pinned_canister_build(&root, "history_canister")
+            .status()
+            .expect("could not run cargo to build the history canister");
+        assert!(
+            status.success(),
+            "building history_canister for wasm32-unknown-unknown FAILED, so the archive gate \
+             has nothing to run against."
+        );
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+            panic!(
+                "cargo reported success but {} could not be read: {e}",
+                path.display()
+            )
+        });
+        let sha256 = sha256_hex(&bytes);
+        announce(&format!(
+            "MONEY-SAFETY: archive wasm sha256={sha256} bytes={} path={}",
+            bytes.len(),
+            path.display()
+        ));
+        TableModule {
+            bytes,
+            sha256,
+            path,
+        }
+    })
 }
 
 /// The git ref whose table canister counts as "the previous release" for

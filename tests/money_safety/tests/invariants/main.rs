@@ -13,6 +13,11 @@ use money_safety::world::*;
 use money_safety::{assert_holds, assert_violated};
 use std::time::Duration;
 
+// M12 ARCHIVE FIDELITY. In THIS target for the reason `custody` and `outcome` are:
+// `scripts/dev.sh cmd_test` names its money-safety targets explicitly, and a
+// cargo-auto-discovered target is a target nobody runs.
+// docs/SECURITY-FINDINGS.md FINDING 30.
+mod archive;
 mod classifier;
 // M10 CUSTODY VISIBILITY. In THIS target, not a file of its own, because
 // `scripts/dev.sh cmd_test` names its money-safety targets explicitly and a

@@ -6,7 +6,9 @@ type ActionRecord = record {
   phase : text;
 };
 type Card = record { rank : Rank; suit : Suit };
+type DealtInSeat = record { "principal" : principal; seat : nat8 };
 type HandHistoryRecord = record {
+  dealt_in : opt vec DealtInSeat;
   small_blind : nat64;
   dealer_seat : nat8;
   ante : nat64;
@@ -46,6 +48,7 @@ type HandSummary = record {
   total_pot : nat64;
   timestamp : nat64;
   went_to_showdown : bool;
+  dealt_in_count : opt nat8;
   winners : vec WinnerRecord;
 };
 type PlayerAction = variant {
@@ -58,14 +61,17 @@ type PlayerAction = variant {
   Check;
 };
 type PlayerHandRecord = record {
+  dealt_in : opt bool;
   final_hand_rank : opt HandRank;
   "principal" : principal;
   seat : nat8;
   hole_cards : opt record { Card; Card };
+  left_mid_hand : opt bool;
   amount_won : nat64;
   ending_chips : nat64;
   starting_chips : nat64;
   position : text;
+  contributed : opt nat64;
 };
 type PlayerStats = record {
   biggest_pot_won : nat64;

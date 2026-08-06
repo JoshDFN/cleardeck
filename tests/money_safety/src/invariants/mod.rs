@@ -24,11 +24,13 @@ pub mod attribution;
 pub mod custody;
 pub mod outcome;
 pub mod reachability;
+pub mod record;
 pub mod relational;
 pub use attribution::*;
 pub use custody::*;
 pub use outcome::*;
 pub use reachability::*;
+pub use record::*;
 pub use relational::*;
 
 use crate::table_api::{GamePhase, TableState};
@@ -161,6 +163,25 @@ pub enum Invariant {
     /// See [`outcome`] for the three legs.
     M11Outcome,
 
+    /// M12 ARCHIVE FIDELITY. The permanent record of a hand names the people who
+    /// played it: everyone whose money was in the pot, nobody else, and how many
+    /// were dealt in.
+    ///
+    /// # Why this had to exist (docs/SECURITY-FINDINGS.md FINDING 30)
+    ///
+    /// M1..M11 are all about money. ClearDeck's central claim is not about money:
+    /// it is that a stranger can check the hand afterwards. The archive was built
+    /// from the seats as they stood at settlement, so it omitted anyone who left
+    /// mid-hand and invented anyone who sat down -- with the departed player's
+    /// starting stack, because that figure is keyed by seat. An auditor found an
+    /// archived hand naming a principal who never played it as the small blind,
+    /// and following docs/SHUFFLE-SPEC.md section 4 on another one reproduced the
+    /// WRONG BOARD, because `P` was counted from that same wrong list.
+    ///
+    /// Nothing moves. Every conservation invariant here is green on the sequence.
+    /// See [`record`] for the three legs.
+    M12ArchiveFidelity,
+
     /// M8 PRINCIPAL ATTRIBUTION. The money reached the right PERSON, not merely
     /// the right seat and the right total. See [`attribution`] and
     /// docs/SECURITY-FINDINGS.md FINDING 13: paying a departed player's stake to
@@ -168,6 +189,32 @@ pub enum Invariant {
     /// collected, and lands the right amount in the right seat, so M1..M6 and the
     /// settlement oracle's per-seat diff are all silent.
     M8PrincipalAttribution,
+
+    /// M14 LEDGER/BOOKS COHERENCE. Money that has moved on the ledger is money
+    /// the canister's own books must either HOLD or NAME. There is no third
+    /// state.
+    ///
+    ///   ledger_main + every deposit subaccount
+    ///     ==  escrow + chips + pot            (held)
+    ///       + uncredited raw transfers        (the harness's own, awaiting notify)
+    ///       + open ledger-intent journal      (named)
+    ///
+    /// # Why M1 could not see this (docs/SECURITY-FINDINGS.md FINDING 29)
+    ///
+    /// M1 is evaluated between messages, and between messages the two sides
+    /// always agreed. The gap opens *inside* one message: `deposit`,
+    /// `claim_external_deposit` and `withdraw` each perform an irreversible
+    /// ledger movement and settle the books in the post-await continuation, so a
+    /// continuation that does not run -- a trap, an instruction limit, an upgrade
+    /// that drops the callback -- leaves the movement standing and the book entry
+    /// undone. Measured, on the real ledger wasm: 3.0 ICP pulled from a player's
+    /// wallet into the canister, 0 credited, and eleven doors out of that state
+    /// all closed.
+    ///
+    /// M14 is therefore the only invariant here whose subject is a state that
+    /// ordinary play cannot produce, and it is checked with the fault injector in
+    /// [`crate::fault`], which reconstructs a discarded continuation exactly.
+    M14LedgerBooksCoherence,
 }
 
 impl Invariant {
@@ -184,6 +231,8 @@ impl Invariant {
             Invariant::M9FundReachability => "M9_FUND_REACHABILITY",
             Invariant::M10CustodyVisibility => "M10_CUSTODY_VISIBILITY",
             Invariant::M11Outcome => "M11_OUTCOME",
+            Invariant::M12ArchiveFidelity => "M12_ARCHIVE_FIDELITY",
+            Invariant::M14LedgerBooksCoherence => "M14_LEDGER_BOOKS_COHERENCE",
         }
     }
 }
@@ -271,6 +320,21 @@ pub enum Severity {
     /// arithmetic is exact and the outcome is a hand that was never played.
     /// docs/SECURITY-FINDINGS.md FINDING 17.
     WrongOutcome,
+    /// **The permanent record says something that is not true about who played.**
+    /// A player who put money in the pot is missing from it, or somebody who never
+    /// played is in it, or it does not state how many players the deal fed so the
+    /// board cannot be reproduced from the seed.
+    ///
+    /// Zero `delta_e8s`, like [`Severity::WrongOutcome`] and
+    /// [`Severity::CustodyInvisible`], and for the same reason: nothing has gone
+    /// missing. That is precisely why three independent auditors' money tests were
+    /// silent while the archive was wrong.
+    ///
+    /// Never excusable. A verifiable permanent record is the product's central
+    /// claim, and there is no magnitude at which a confident false record is
+    /// better than no record: it is the artifact a player would be pointed at to
+    /// settle a dispute. docs/SECURITY-FINDINGS.md FINDING 30.
+    FalseRecord,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -331,29 +395,195 @@ pub(crate) fn phase_of(t: &TableState) -> &GamePhase {
 // M1 / M2 -- ledger-anchored conservation
 // ---------------------------------------------------------------------------
 
+/// The only two reasons the LEDGER may say this canister holds more than its own
+/// books account for, both created by the harness and both consumed.
+///
+/// Anything outside these two is a finding. They exist because the harness can do
+/// what an external wallet does -- move money on the ledger with no message to the
+/// canister at all -- and there is a legitimate instant between the transfer and
+/// the canister being told.
+///
+/// **Both are consumed, and that is what gives them teeth.** An allowance the
+/// harness grants forever is an invariant switched off; an allowance that
+/// disappears the moment the canister is asked about the account is a deadline.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Exemptions {
+    /// Money pushed straight into the canister's MAIN account with a raw
+    /// `icrc1_transfer` (the `notify_deposit` flow), not yet credited.
+    /// Consumed by `World::note_raw_deposit_credited`.
+    pub uncredited_raw: u64,
+    /// Money pushed into a per-player DEPOSIT SUBACCOUNT that the canister has not
+    /// yet been asked to look at, **per principal**. Consumed the moment any call
+    /// makes the canister read that account (`claim_external_deposit`,
+    /// `refresh_deposit_custody`, `admin_audit_deposit_custody`).
+    /// See docs/SECURITY-FINDINGS.md FINDING 28.
+    pub unobserved_subaccount: std::collections::BTreeMap<candid::Principal, u64>,
+}
+
+impl Exemptions {
+    pub fn unobserved_total(&self) -> u64 {
+        self.unobserved_subaccount
+            .values()
+            .fold(0u64, |a, v| a.saturating_add(*v))
+    }
+
+    pub fn total(&self) -> u64 {
+        self.uncredited_raw.saturating_add(self.unobserved_total())
+    }
+
+    pub fn unobserved_for(&self, who: &candid::Principal) -> u64 {
+        self.unobserved_subaccount.get(who).copied().unwrap_or(0)
+    }
+
+    /// Everything the harness is currently excusing, read off the world.
+    pub fn of(world: &World) -> Self {
+        Self {
+            uncredited_raw: world.uncredited_raw_deposits,
+            unobserved_subaccount: world.unobserved_subaccount_deposits.clone(),
+        }
+    }
+}
+
+/// So every existing call site that passes a bare `uncredited_raw_deposits`
+/// keeps compiling and keeps meaning what it meant.
+impl From<u64> for Exemptions {
+    fn from(uncredited_raw: u64) -> Self {
+        Self {
+            uncredited_raw,
+            unobserved_subaccount: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+/// **THE LEG THE TOTALS CANNOT SEE.**
+///
+/// Everything else here compares sums. Four times this project has produced a
+/// defect whose signature is CORRECT TOTALS, WRONG RECIPIENTS, EVERY INVARIANT
+/// SILENT -- and a canister that books alice's deposit against bob's address
+/// satisfies M1, M2, the orphan check and the drain exactly. So this one compares
+/// the canister's deposit books against the ledger **one principal at a time**,
+/// in both directions:
+///
+/// * the canister may never claim MORE at an address than the ledger holds there
+///   (that is escrow minted from nothing the moment anybody sweeps);
+/// * the ledger may never hold more at an address than the canister accounts for,
+///   beyond the per-principal allowance for money the harness has moved and not
+///   yet told the canister about (that is FINDING 28: money held and invisible).
+///
+/// Both maps are over the union of the two key sets, so a claim parked on an
+/// account the harness would not otherwise scan is still compared -- see
+/// `World::snapshot`.
+pub fn check_deposit_attribution(snap: &Snapshot, exempt: &Exemptions) -> Vec<Violation> {
+    let mut out = Vec::new();
+    let mut who: Vec<candid::Principal> = snap.ledger_deposit_by_principal.keys().copied().collect();
+    for p in snap.canister_deposit_by_principal.keys() {
+        if !who.contains(p) {
+            who.push(*p);
+        }
+    }
+    for p in who {
+        let on_ledger = snap
+            .ledger_deposit_by_principal
+            .get(&p)
+            .copied()
+            .unwrap_or(0);
+        let claimed = snap
+            .canister_deposit_by_principal
+            .get(&p)
+            .copied()
+            .unwrap_or(0);
+        if claimed > on_ledger {
+            out.push(Violation::new(
+                Invariant::M8PrincipalAttribution,
+                "deposit_custody_attributed_to_the_wrong_principal",
+                Severity::FundCreation,
+                claimed as i128 - on_ledger as i128,
+                phase_of(&snap.table),
+                format!(
+                    "the canister books {claimed} e8s of deposit custody against {p}, and the \
+                     LEDGER says that principal's deposit address holds {on_ledger}. A \
+                     per-principal error that nets to zero across the table is the exact shape \
+                     this project has produced four times: correct totals, wrong recipients, \
+                     every invariant silent."
+                ),
+            ));
+        }
+        let unaccounted = on_ledger
+            .saturating_sub(claimed)
+            .saturating_sub(exempt.unobserved_for(&p));
+        if unaccounted > 0 {
+            out.push(Violation::new(
+                Invariant::M9FundReachability,
+                "deposit_address_holds_money_the_canister_does_not_account_for",
+                Severity::OrphanedCustody,
+                unaccounted as i128,
+                phase_of(&snap.table),
+                format!(
+                    "the LEDGER says {p}'s deposit address holds {on_ledger} e8s and the canister \
+                     accounts for {claimed}, with {} excused as not-yet-observed. {unaccounted} \
+                     e8s of that principal's money is inside this canister with no surface \
+                     reporting it. docs/SECURITY-FINDINGS.md FINDING 28.",
+                    exempt.unobserved_for(&p)
+                ),
+            ));
+        }
+    }
+    out
+}
+
 /// M1 CONSERVATION and M2 LEDGER REALITY, both read off the same snapshot.
-pub fn check_conservation(snap: &Snapshot, uncredited_raw_deposits: u64) -> Vec<Violation> {
+///
+/// # Anchored to EVERY account the canister owns, not to the main one
+///
+/// This used to compare `icrc1_balance_of(table, None)` against `escrow + chips +
+/// pot`. Both halves of that comparison were blind to the per-player deposit
+/// subaccounts -- the addresses `get_deposit_subaccount()` publishes -- so a
+/// canister holding 5 ICP for a player at an address it had itself published
+/// satisfied M1 exactly (docs/SECURITY-FINDINGS.md FINDING 21, FINDING 28).
+/// It now compares:
+///
+/// ```text
+///   ledger_main + ledger_deposit_subaccounts          (what the LEDGER holds)
+///     ==
+///   escrow + chips + pot + canister_unswept_deposits  (what the CANISTER claims)
+///     + uncredited_raw + unobserved_subaccount        (what the harness excuses)
+/// ```
+///
+/// `canister_unswept_deposits` is read from the canister, never computed from the
+/// ledger, so the two sides remain independent: if the canister does not know
+/// about money sitting in its own subaccount, this fires.
+pub fn check_conservation(snap: &Snapshot, exempt: impl Into<Exemptions>) -> Vec<Violation> {
+    let exempt = exempt.into();
     let mut out = Vec::new();
     let internal = snap.internal_total();
-    let expected_main = internal.saturating_add(uncredited_raw_deposits);
+    let holdings = snap.ledger_holdings();
+    let expected_main = internal.saturating_add(exempt.total());
 
     // M2 first: being short is the worst possible state.
-    if snap.ledger_main < internal {
+    if holdings < internal {
         out.push(Violation::new(
             Invariant::M2LedgerReality,
             "canister_is_short",
             Severity::FundCreation,
-            snap.ledger_main as i128 - internal as i128,
+            holdings as i128 - internal as i128,
             phase_of(&snap.table),
             format!(
-                "canister is SHORT: ledger_main={} but it owes escrow={} + chips={} + pot={} = {}",
-                snap.ledger_main, snap.escrow_total, snap.chips_total, snap.table.pot, internal
+                "canister is SHORT: it holds ledger_main={} + deposit_subaccounts={} = {} but it \
+                 owes escrow={} + chips={} + pot={} + unswept_deposits={} = {}",
+                snap.ledger_main,
+                snap.ledger_deposit_subaccounts,
+                holdings,
+                snap.escrow_total,
+                snap.chips_total,
+                snap.table.pot,
+                snap.canister_unswept_deposits,
+                internal
             ),
         ));
     }
 
-    if snap.ledger_main != expected_main {
-        let delta = snap.ledger_main as i128 - expected_main as i128;
+    if holdings != expected_main {
+        let delta = holdings as i128 - expected_main as i128;
         let severity = if delta > 0 {
             Severity::FundDestruction
         } else {
@@ -366,13 +596,18 @@ pub fn check_conservation(snap: &Snapshot, uncredited_raw_deposits: u64) -> Vec<
             delta,
             phase_of(&snap.table),
             format!(
-                "ledger_main={} != escrow({}) + chips({}) + pot({}) + uncredited_raw({}) = {}; \
-                 delta={} ({})",
+                "ledger holdings main({}) + deposit_subaccounts({}) = {} != escrow({}) + \
+                 chips({}) + pot({}) + unswept_deposits({}) + uncredited_raw({}) + \
+                 unobserved_subaccount({}) = {}; delta={} ({})",
                 snap.ledger_main,
+                snap.ledger_deposit_subaccounts,
+                holdings,
                 snap.escrow_total,
                 snap.chips_total,
                 snap.table.pot,
-                uncredited_raw_deposits,
+                snap.canister_unswept_deposits,
+                exempt.uncredited_raw,
+                exempt.unobserved_total(),
                 expected_main,
                 delta,
                 if delta > 0 {
@@ -380,6 +615,27 @@ pub fn check_conservation(snap: &Snapshot, uncredited_raw_deposits: u64) -> Vec<
                 } else {
                     "chips CREATED: the canister owes money it does not hold"
                 }
+            ),
+        ));
+    }
+
+    // THE CANISTER MAY NOT CLAIM CUSTODY IT DOES NOT HAVE. `internal_total` folds
+    // in whatever `admin_get_deposit_custody()` reports, so a canister that
+    // over-reports its subaccounts would inflate what it "owes" and mask a real
+    // shortfall. Anchored to the ledger, per the standing lesson: the number the
+    // canister supplies is never allowed to be the only witness for itself.
+    if snap.canister_unswept_deposits > snap.ledger_deposit_subaccounts {
+        out.push(Violation::new(
+            Invariant::M2LedgerReality,
+            "deposit_custody_claim_exceeds_the_ledger",
+            Severity::FundCreation,
+            snap.canister_unswept_deposits as i128 - snap.ledger_deposit_subaccounts as i128,
+            phase_of(&snap.table),
+            format!(
+                "the canister reports {} e8s sitting in its own deposit subaccounts, but the \
+                 LEDGER says those accounts hold {}. A liability record that runs ahead of the \
+                 ledger is escrow minted from nothing once anybody sweeps it.",
+                snap.canister_unswept_deposits, snap.ledger_deposit_subaccounts
             ),
         ));
     }
@@ -605,8 +861,9 @@ pub fn check_arithmetic(snap: &Snapshot) -> Vec<Violation> {
 
 /// Every invariant that can be evaluated from a single observation: M1, M1b, M2,
 /// M4. M3, M5 and M6 are relational and have their own entry points.
-pub fn check_point_in_time(snap: &Snapshot, uncredited_raw_deposits: u64) -> Vec<Violation> {
-    let mut out = check_conservation(snap, uncredited_raw_deposits);
+pub fn check_point_in_time(snap: &Snapshot, exempt: impl Into<Exemptions>) -> Vec<Violation> {
+    let exempt = exempt.into();
+    let mut out = check_conservation(snap, exempt.clone());
     out.extend(check_pot_breakdown(snap));
     out.extend(check_arithmetic(snap));
     // M9's standing half. Fires on exactly the same arithmetic condition as M1's
@@ -615,13 +872,21 @@ pub fn check_point_in_time(snap: &Snapshot, uncredited_raw_deposits: u64) -> Vec
     // it is money that belongs to nobody, and the register may never excuse it.
     out.extend(reachability::check_no_orphaned_custody(
         snap,
-        uncredited_raw_deposits,
+        exempt.clone(),
     ));
+    // The one leg above that is NOT a statement about totals.
+    out.extend(check_deposit_attribution(snap, &exempt));
     out
 }
 
+/// Every point-in-time invariant, with the harness's OWN allowances read off the
+/// world rather than passed in by hand.
+///
+/// `Exemptions::of` is the only correct source: a call site that passes just
+/// `world.uncredited_raw_deposits` silently grants zero allowance for the deposit
+/// subaccounts, which was the state of the whole harness before wave 8.
 pub fn check_world(world: &World) -> Vec<Violation> {
     let snap = world.snapshot();
-    check_point_in_time(&snap, world.uncredited_raw_deposits)
+    check_point_in_time(&snap, Exemptions::of(world))
 }
 

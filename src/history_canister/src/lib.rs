@@ -71,6 +71,15 @@ pub struct ActionRecord {
     pub phase: String, // "preflop", "flop", "turn", "river"
 }
 
+/// One person's part in one hand.
+///
+/// # A seat is not a person (docs/SECURITY-FINDINGS.md FINDING 30)
+///
+/// Two records in the same hand CAN share a `seat`: a player leaves a live hand
+/// with money in the pot and somebody else buys the empty chair before it settles.
+/// The money in the pot still belongs to the player who put it there. Anything
+/// reading this list must key on `principal`, or on `(seat, principal)`, never on
+/// `seat` alone.
 #[derive(Clone, Debug, CandidType, Deserialize)]
 pub struct PlayerHandRecord {
     pub seat: u8,
@@ -81,6 +90,42 @@ pub struct PlayerHandRecord {
     pub final_hand_rank: Option<HandRank>,
     pub amount_won: u64,
     pub position: String, // "dealer", "sb", "bb", "utg", etc.
+
+    // ------------------------------------------------------------------------
+    // FINDING 30. `opt`, and it has to be: this archive is APPEND-ONLY and holds
+    // records written before these fields existed. A bare field here would make
+    // `stable_restore` fail on every record already stored, which would reject
+    // every future upgrade of the one canister in this project that must never be
+    // reinstalled. `null` reads as "the table that wrote this record did not
+    // record that fact", which is the truth for every hand archived while
+    // FINDING 30 was live -- and is what a verifier needs to be told instead of a
+    // fabricated `false`.
+    // ------------------------------------------------------------------------
+    /// Did this person take cards from the deck? Somebody who bought the chair
+    /// after the deal did not, and must not be counted when offsetting the board.
+    #[serde(default)]
+    pub dealt_in: Option<bool>,
+    /// What this PERSON put into the pot. Over the whole record this sums to
+    /// `total_pot`, whether or not everybody is still at the table.
+    #[serde(default)]
+    pub contributed: Option<u64>,
+    /// True when they left before the hand settled. Their stake stayed in the pot.
+    #[serde(default)]
+    pub left_mid_hand: Option<bool>,
+}
+
+/// A seat the deal gave cards to, in the order the deck was consumed.
+///
+/// docs/SHUFFLE-SPEC.md section 4: with `P` players dealt in, the flop is
+/// `deck[2P+1..2P+4]`, the turn `deck[2P+5]` and the river `deck[2P+7]`, and the
+/// `k`-th entry of this list holds `deck[2k]`, `deck[2k+1]`. `P` is therefore the
+/// length of this list, stated by the record rather than counted from the players
+/// -- counting was wrong for every hand somebody left, and produced the wrong
+/// board from the right seed.
+#[derive(Clone, Copy, Debug, CandidType, Deserialize)]
+pub struct DealtInSeat {
+    pub seat: u8,
+    pub principal: Principal,
 }
 
 #[derive(Clone, Debug, CandidType, Deserialize)]
@@ -106,9 +151,19 @@ pub struct HandHistoryRecord {
     // Shuffle proof (for verification)
     pub shuffle_proof: ShuffleProofRecord,
 
-    // Players involved
+    // Players involved. EVERYONE whose money was in the hand, from the table's
+    // settlement basis -- including a player who left before it settled -- and
+    // nobody else. See `PlayerHandRecord`.
     pub players: Vec<PlayerHandRecord>,
     pub dealer_seat: u8,
+
+    /// WHO WAS DEALT IN, AND IN WHAT ORDER. The number a verifier needs to offset
+    /// the board (docs/SHUFFLE-SPEC.md section 4) is `dealt_in.len()`.
+    ///
+    /// `opt`: `null` means the record predates this field, and a verifier should
+    /// treat the hand as unverifiable rather than guess `P`.
+    #[serde(default)]
+    pub dealt_in: Option<Vec<DealtInSeat>>,
 
     // Community cards
     pub flop: Option<(Card, Card, Card)>,
@@ -145,7 +200,13 @@ pub struct HandSummary {
     pub table_id: Principal,
     pub hand_number: u64,
     pub timestamp: u64,
+    /// How many PEOPLE the hand involved -- everyone whose money was in the pot,
+    /// including anyone who left before it settled. Not the number of chairs
+    /// occupied when it ended, which is what this used to be.
     pub player_count: u8,
+    /// How many were DEALT IN: `P`, for docs/SHUFFLE-SPEC.md section 4. `null` on
+    /// records written before the archive recorded it.
+    pub dealt_in_count: Option<u8>,
     pub total_pot: u64,
     pub winners: Vec<WinnerRecord>,
     pub went_to_showdown: bool,
@@ -612,11 +673,41 @@ fn check_recorded_hand(hand_id: u64) -> Result<RecordedHandCheck, String> {
             problem,
             this_proves: ARCHIVE_PROVES.to_string(),
             this_does_not_prove: ARCHIVE_DOES_NOT_PROVE.to_string(),
-            verify_it_yourself: format!(
-                "echo -n {} | xxd -r -p | shasum -a 256    # must print {}",
-                if revealed_seed.is_empty() { "<seed>" } else { &revealed_seed },
-                if seed_hash.is_empty() { "<hash>" } else { &seed_hash },
-            ),
+            // Two commands, because the hash check is the cheap half and the
+            // second one is the verification that actually says something. The
+            // second is only printable when the record states how many players
+            // were dealt in: without `P` the dealing rule cannot be applied, and
+            // suggesting a command that would silently produce the WRONG BOARD is
+            // how a verifier ends up believing they were cheated.
+            // docs/SECURITY-FINDINGS.md FINDING 30, docs/SHUFFLE-SPEC.md section 4.
+            verify_it_yourself: match hand.dealt_in.as_ref().map(|d| d.len()) {
+                Some(p) => format!(
+                    "echo -n {} | xxd -r -p | shasum -a 256    # must print {}\n\
+                     python3 src/poker_core/tests/verify/verify_shuffle.py {} --players {} \
+                     --seed-hash {}    # {} players were dealt in, in seat order {:?}",
+                    if revealed_seed.is_empty() { "<seed>" } else { &revealed_seed },
+                    if seed_hash.is_empty() { "<hash>" } else { &seed_hash },
+                    if revealed_seed.is_empty() { "<seed>" } else { &revealed_seed },
+                    p,
+                    if seed_hash.is_empty() { "<hash>" } else { &seed_hash },
+                    p,
+                    hand.dealt_in
+                        .as_ref()
+                        .map(|d| d.iter().map(|s| s.seat).collect::<Vec<u8>>())
+                        .unwrap_or_default(),
+                ),
+                None => format!(
+                    "echo -n {} | xxd -r -p | shasum -a 256    # must print {}\n\
+                     # This record does NOT say how many players were dealt in, so the board \
+                     cannot be reproduced from it: docs/SHUFFLE-SPEC.md section 4 offsets the \
+                     board by that number and guessing it produces a different board from the \
+                     same seed. Every record written before docs/SECURITY-FINDINGS.md FINDING 30 \
+                     was fixed is in this state. The hole cards can still be checked; the board \
+                     cannot.",
+                    if revealed_seed.is_empty() { "<seed>" } else { &revealed_seed },
+                    if seed_hash.is_empty() { "<hash>" } else { &seed_hash },
+                ),
+            },
         };
 
         if revealed_seed.is_empty() {
@@ -693,6 +784,7 @@ fn to_summary(hand: &HandHistoryRecord) -> HandSummary {
         hand_number: hand.hand_number,
         timestamp: hand.timestamp,
         player_count: hand.players.len() as u8,
+        dealt_in_count: hand.dealt_in.as_ref().map(|d| d.len() as u8),
         total_pot: hand.total_pot,
         winners: hand.winners.clone(),
         went_to_showdown: hand.went_to_showdown,
@@ -858,7 +950,14 @@ mod retention_tests {
                 final_hand_rank: None,
                 amount_won: 20,
                 position: "BTN".to_string(),
+                dealt_in: Some(true),
+                contributed: Some(0),
+                left_mid_hand: Some(false),
             }],
+            dealt_in: Some(vec![DealtInSeat {
+                seat: 0,
+                principal: player(),
+            }]),
             dealer_seat: 0,
             flop: None,
             turn: None,

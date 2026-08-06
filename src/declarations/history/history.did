@@ -6,7 +6,9 @@ type ActionRecord = record {
   phase : text;
 };
 type Card = record { rank : Rank; suit : Suit };
+type DealtInSeat = record { "principal" : principal; seat : nat8 };
 type HandHistoryRecord = record {
+  dealt_in : opt vec DealtInSeat;
   small_blind : nat64;
   dealer_seat : nat8;
   ante : nat64;
@@ -46,6 +48,7 @@ type HandSummary = record {
   total_pot : nat64;
   timestamp : nat64;
   went_to_showdown : bool;
+  dealt_in_count : opt nat8;
   winners : vec WinnerRecord;
 };
 type PlayerAction = variant {
@@ -58,14 +61,17 @@ type PlayerAction = variant {
   Check;
 };
 type PlayerHandRecord = record {
+  dealt_in : opt bool;
   final_hand_rank : opt HandRank;
   "principal" : principal;
   seat : nat8;
   hole_cards : opt record { Card; Card };
+  left_mid_hand : opt bool;
   amount_won : nat64;
   ending_chips : nat64;
   starting_chips : nat64;
   position : text;
+  contributed : opt nat64;
 };
 type PlayerStats = record {
   biggest_pot_won : nat64;
@@ -91,9 +97,30 @@ type Rank = variant {
   Three;
   Queen;
 };
+type RecordedHandCheck = record {
+  computed_hash : text;
+  hand_number : nat64;
+  hand_id : nat64;
+  table_id : principal;
+  commitment_matches : bool;
+  seed_hash : text;
+  revealed_seed : text;
+  this_does_not_prove : text;
+  this_proves : text;
+  verify_it_yourself : text;
+  problem : opt text;
+};
 type Result = variant { Ok; Err : text };
-type Result_1 = variant { Ok : nat64; Err : text };
-type Result_2 = variant { Ok : bool; Err : text };
+type Result_1 = variant { Ok : RecordedHandCheck; Err : text };
+type Result_2 = variant { Ok : nat64; Err : text };
+type Result_3 = variant { Ok : bool; Err : text };
+type RetentionPolicy = record {
+  admin : opt principal;
+  max_age_before_discard : opt nat64;
+  summary : text;
+  records_are_append_only : bool;
+  records_held : nat64;
+};
 type ShuffleProofRecord = record {
   timestamp : nat64;
   seed_hash : text;
@@ -109,15 +136,28 @@ type WinnerRecord = record {
 };
 service : () -> {
   authorize_table : (principal) -> (Result);
+  check_recorded_hand : (nat64) -> (Result_1) query;
+  // Who holds the key that decides which canisters may write here.
+  // 
+  // Public on purpose. `authorize_table` is the one call that can put a record
+  // into this archive that no real table produced, so a player is entitled to
+  // see who can make it without asking anyone's permission.
+  get_admin : () -> (opt principal) query;
   get_authorized_tables : () -> (vec principal) query;
   get_hand : (nat64) -> (opt HandHistoryRecord) query;
   get_hands_by_player : (principal, nat64, nat64) -> (vec HandSummary) query;
   get_hands_by_table : (principal, nat64, nat64) -> (vec HandSummary) query;
   get_player_stats : (principal) -> (opt PlayerStats) query;
   get_recent_hands : (nat64) -> (vec HandSummary) query;
+  get_retention_policy : () -> (RetentionPolicy) query;
   get_table_hand_count : (principal) -> (nat64) query;
   get_total_hands : () -> (nat64) query;
-  record_hand : (HandHistoryRecord) -> (Result_1);
+  record_hand : (HandHistoryRecord) -> (Result_2);
   revoke_table : (principal) -> (Result);
-  verify_hand_shuffle : (nat64) -> (Result_2) query;
+  // Deprecated in favour of `check_recorded_hand`, which says WHICH check failed.
+  // 
+  // Kept so an existing caller keeps working. `Ok(false)` here still cannot
+  // distinguish "no seed revealed yet" from "the commitment is broken"; that is
+  // the reason it is deprecated, not a reason to trust it.
+  verify_hand_shuffle : (nat64) -> (Result_3) query;
 }

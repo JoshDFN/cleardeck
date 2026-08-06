@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ARTIFACTS_DIR, REPO_ROOT } from './config.mjs';
 import { assertPageHealthy } from './page-health.mjs';
+import { buildVerdicts } from './verdicts.mjs';
 
 /** Short git sha of the working tree's HEAD (used as the artifact directory). */
 export function gitShortSha() {
@@ -124,10 +125,26 @@ export async function burst(page, { dir, frames = 24, everyMs = 150 }) {
   return written;
 }
 
+/**
+ * Writes the run's two JSON artifacts.
+ *
+ * `manifest.json` is the whole working-out and is GITIGNORED (docs/DEFECTS.md
+ * E-60): it grew 10x in one wave when per-figure pixel sampling arrived, no human
+ * reads it, and a public repo should not carry megabytes of machine-generated
+ * JSON per wave. It stays on disk next to the PNGs it describes.
+ *
+ * `verdicts.json` is the small tracked projection -- one row per (scene,
+ * viewport), the verdict, and the headline of each failure. That is the evidence
+ * trail in git, and it is what `./scripts/dev.sh shots-verdict` gates on.
+ */
 export function writeManifest(shaDir, latestDir, manifest) {
-  const json = JSON.stringify(manifest, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
-  fs.writeFileSync(path.join(shaDir, 'manifest.json'), json);
-  fs.writeFileSync(path.join(latestDir, 'manifest.json'), json);
+  const stringify = (v) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x), 2);
+  const json = stringify(manifest);
+  const verdicts = stringify(buildVerdicts(manifest));
+  for (const dir of [shaDir, latestDir]) {
+    fs.writeFileSync(path.join(dir, 'manifest.json'), json);
+    fs.writeFileSync(path.join(dir, 'verdicts.json'), verdicts);
+  }
 }
 
 /** Human-readable index of the run, written next to the PNGs. */

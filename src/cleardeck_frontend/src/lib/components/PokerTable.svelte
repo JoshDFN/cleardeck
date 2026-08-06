@@ -2989,9 +2989,36 @@
      the shipped capture reads "SWithdrawLeave". The side columns are now equal
      free space around a content-sized centre, and everything inside them is
      allowed to shrink. */
+  /* THE DOCK IS SIZED BY WHAT IS IN IT, NOT BY A NUMBER (docs/DEFECTS.md E-63).
+     `height: var(--dock-h)` was a FIXED height, and the wallet panel is taller
+     than it whenever a committed stake is on show: three stacked lines plus
+     padding is ~87 px against a 36 px row on a phone. A too-tall, UNPOSITIONED
+     child of a fixed-height box does not clip the page -- it spills out of the
+     box, and the spill lands in `.stage`, which IS positioned and therefore
+     PAINTS OVER IT. The occlusion gate measured the result at 390x844:
+
+       8.7% of "0.20 ICP" (span.committed-value) covered by div.stage
+
+     ...which is the top of a money figure disappearing under the felt. The fix
+     is not a z-index -- raising the dock above the stage would let dock content
+     cover the felt, and "NO RAKE" is printed on the felt (HARD RULE 2). It is to
+     stop the overflow: `min-height` keeps the dock's presence stable at
+     `--dock-h` while letting it take the room its contents actually need, so the
+     panel stays inside its own box and paint order stops mattering.
+
+     WHAT IT COSTS, measured rather than argued. The room comes out of the stage,
+     and the stage has ~14 px of it to give before `--fw`'s height term takes
+     over from its width term and the felt starts shrinking. The committed block
+     needs 37 px, so on a mobile shot with a stake outstanding the felt goes
+     50.7% -> 46.4% of the frame, against `felt-area.mjs`'s 45% floor. That is a
+     real cost, taken deliberately: the alternative is the top of a money figure
+     sliced off under the felt. It only applies while a stake is actually
+     outstanding, which is the state this readout exists for, and
+     `tools/shots/test-dock-overflow.mjs` fails if it ever creeps closer to the
+     floor. */
   .action-dock {
     flex: 0 0 auto;
-    height: var(--dock-h);
+    min-height: var(--dock-h);
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
@@ -3578,11 +3605,14 @@
     .side-pot-label { font-size: 0.52em; }
     .side-pot-amount { font-size: 0.7em; }
 
+    /* Same change as the base rule, for the same reason: on a phone the dock is
+       two rows and the top one is only ~36 px, which is where the committed
+       readout was being squeezed out of the box and under the felt (E-63). */
     .action-dock {
       grid-template-columns: 1fr auto;
       grid-template-rows: auto auto;
       gap: 6px 8px;
-      height: var(--dock-h);
+      min-height: var(--dock-h);
       padding: 0 8px;
     }
 
@@ -3620,6 +3650,24 @@
 
     .wallet-panel { padding: 4px 8px; gap: 7px; }
     .balance-label { display: none; }
+
+    /* THE DOCK'S EXTRA ROOM COMES OUT OF THE STAGE'S SLACK, NOT OUT OF THE FELT
+       (docs/DEFECTS.md E-63). Letting the dock size to its contents fixes the
+       occlusion, and the height it takes comes from the stage. The stage has a
+       fixed amount to give: `--fw` is `min(86cqw, 55cqh)` and the WIDTH term
+       binds at 304 px, so the stage can lose 44 px before the height term takes
+       over and the felt starts shrinking -- and `felt-area.mjs` fails a mobile
+       shot under 45% of the frame, against a recorded 50.7%.
+
+       The committed block wanted 51 px. Measured with the component's own
+       stylesheet by `tools/shots/test-dock-overflow.mjs`, that overshoot cost
+       6.6 points of felt and would have swapped the occlusion red for a felt
+       red -- one gate paid with another, which is the trade this project keeps
+       finding. These three declarations take 14 px back out of padding, gap and
+       a margin that does nothing in a row, bringing it to 37 px. Nothing is
+       hidden: the label, the money figure and the whole sentence all still
+       render, and the felt does not move. */
+    .wallet-committed { margin-top: 0; padding: 3px 6px; gap: 1px; }
     .wallet-action-btn { padding: 7px 9px; font-size: 11px; }
     .sit-controls { display: none; }
 

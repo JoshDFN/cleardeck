@@ -256,6 +256,13 @@ fn never_excusable(s: Severity) -> bool {
             // that asked about totals.
             // docs/SECURITY-FINDINGS.md FINDING 17.
             | Severity::WrongOutcome
+            // A permanent record that names the wrong people. No id excuses it and
+            // no magnitude applies: it carries zero e8s by construction, which is
+            // why every money instrument in this harness was green while the
+            // archive was inventing a small blind who never played the hand. The
+            // record is what a player would be shown to settle a dispute.
+            // docs/SECURITY-FINDINGS.md FINDING 30.
+            | Severity::FalseRecord
     )
 }
 

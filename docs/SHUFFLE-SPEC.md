@@ -205,12 +205,49 @@ Burn cards are never revealed and never used. So with `P` players dealt in:
 A heads-up hand (`P = 2`) therefore uses `deck[0..4]` for hole cards, `deck[5..8]` for the flop,
 `deck[9]` for the turn and `deck[11]` for the river.
 
+### Where `P` comes from — READ IT, DO NOT COUNT IT
+
 `P` is the number of seats that were **dealt in**, which is not necessarily the number of seats
-occupied: a player who was sitting out or had no chips when the hand started took no cards. Count it
-from the hand's own record — every seat the history shows with cards, plus any that folded — or read
-it from your own client's view of the table at the moment the hand started. If you use the wrong
-`P`, your hole cards will still match (they come from the front of the deck) but the board will be
-offset, which is the one mistake a verifier is likely to make.
+occupied: a player who was sitting out or had no chips when the hand started took no cards, and a
+player can leave or arrive while the hand is still running.
+
+**The record states it.** Every hand record carries a `dealt_in` field: an ordered list of
+`{ seat; principal }`, one entry per seat the deal fed, in the order the deck was consumed. So:
+
+```
+P                              = length of dealt_in
+hole cards of dealt_in[k]      = deck[2k], deck[2k+1]
+```
+
+It is on both surfaces, and both are the same list:
+
+```
+icp canister call history  get_hand <hand_id>            # dealt_in
+icp canister call table_1  get_hand_history <hand_number> # dealt_in, and participants
+```
+
+`check_recorded_hand(hand_id)` prints the exact verifier command for the hand, with its `P` already
+filled in, in `verify_it_yourself`.
+
+> **This section used to say "count it from the hand's own record — every seat the history shows
+> with cards, plus any that folded".** That instruction was wrong, and following it produced the
+> wrong board. The player list it told you to count was built from the seats **as they stood when
+> the hand settled**, so on any hand somebody left it was short by one and on any hand somebody
+> joined it was long by one. Measured, on a four-handed hand one player left after the flop:
+> `P = 4` gives the flop `9d 4d 8c`, and `P = 3` — the seats still occupied at settlement — gives
+> `6h 5h 9d`. Both are internally consistent; only one is the hand that was played. An independent
+> auditor hit exactly this and reported the table had dealt a board that did not follow from its
+> own seed. See [DEFECTS.md E-66](DEFECTS.md#e-66) and
+> [SECURITY-FINDINGS.md FINDING 30](SECURITY-FINDINGS.md#finding-30).
+
+If a record's `dealt_in` is **null**, it was written before the canister recorded this, and its
+board cannot be reproduced. Do not guess `P`: the hole cards will still match at any `P` (they come
+from the front of the deck) while the board silently comes out wrong, which is the one mistake a
+verifier is likely to make and cannot detect. A record with a null `dealt_in` is a hand whose
+shuffle you can check only as far as the hole cards.
+
+Your own client's view of the table at the moment the hand started is an independent second source
+and is worth using when you have it.
 
 ## 5. Worked example
 
@@ -324,6 +361,8 @@ hash off your own screen.**
 | `table_canister::commitment_check_tests` (host) | that **no honest caller can get an accusation out of `check_shuffle_commitment` by making a mistake**: the documented placement, the transposed placement, upper case, surrounding whitespace, a truncated paste, a principal in the hash field, an empty field and a genuine cross-hand mismatch each get the arm that names what happened, and both matching arms still carry their own `this_does_not_prove` |
 | `history_canister::retention_tests` (host) | that a re-sent hand is stored **once**, that a hand reusing a number after `reset_table` is **still stored** (the failure mode that silently destroys proofs, [DEFECTS.md E-49](DEFECTS.md#e-49)), and that 250 consecutive writes never shrink the archive |
 | the durability run (2026-08-05) | 101 real hands on a local table: all 101 acknowledged by the archive, then the table's copy destroyed twice over — pruned to 100 by `periodic_cleanup` and then wiped entirely by `reset_table` — with hand 1 still readable from the archive and still verifying against `shasum` off-chain |
+| `tests/money_safety/tests/invariants/archive.rs` (PocketIC, real table + real archive) | **section 4 end to end on a hand somebody left.** Four players dealt in, one leaves after putting money in the pot, another buys the empty chair; the hand settles and is archived. The record must name the player who left, must not name the one who arrived, must state `P`, and the board must come back out of `deck[2P+1..]` for the `P` the record states. It also asserts that the `P` the OLD record implied gives a *different* board, so the test cannot pass vacuously |
+| M12 ARCHIVE FIDELITY in `tests/money_safety/src/invariants/record.rs`, on every hand the fuzzer settles | that the record says who played, states who was dealt in, adds up, names nobody who neither took a card nor put in a chip, and — on every hand the harness could measure independently — attributes to each person exactly what it watched them stake |
 
 ## 8. Version history
 
@@ -331,3 +370,4 @@ hash off your own screen.**
 |---|---|---|
 | v1 | 2026-08-04 | First specification. Width-independent draw plus the rejection rule; golden vectors regenerated by wasm32 execution. Supersedes the undocumented pre-`ceacc37` behaviour, which truncated the draw to 32 bits on-chain and could not be reproduced by anyone. No hand had ever been dealt on mainnet, so no history was invalidated. |
 | v1 | 2026-08-05 | **No change to the algorithm**, so every vector and every hand already dealt is unaffected. Documentation only: section 0 now claims what an outsider can check ("the whole 52-card order was fixed before the board was shown") and files the ordering claim under NOT proven; section 1's step 0 describes `check_shuffle_commitment` and why asking the canister proves nothing; section 6a states how long a proof survives and who can destroy it. |
+| v1 | 2026-08-06 | **No change to the algorithm.** Section 4's instruction for obtaining `P` was WRONG and is replaced: it told a verifier to count the players in the hand record, and that list was built from the seats at settlement, so on any hand somebody left or joined it gave the wrong `P` and therefore the wrong board from the right seed. The record now carries `dealt_in`, the deal's own ordered list, and section 4 says to read it. Records written before this carry `dealt_in = null` and their boards cannot be reproduced; section 4 says that too, rather than letting a verifier guess. [SECURITY-FINDINGS.md FINDING 30](SECURITY-FINDINGS.md#finding-30). |

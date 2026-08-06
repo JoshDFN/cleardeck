@@ -15,7 +15,7 @@ use candid::{CandidType, Deserialize, Principal, Nat};
 use ic_cdk::management_canister::raw_rand;
 use sha2::{Sha224, Sha256, Digest};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use icrc_ledger_types::icrc1::account::Account;
 use icrc_ledger_types::icrc1::transfer::{TransferArg, TransferError};
 use icrc_ledger_types::icrc2::transfer_from::{TransferFromArgs, TransferFromError};
@@ -61,13 +61,71 @@ const CKBTC_TRANSFER_FEE: u64 = 10; // 10 satoshis
 const RATE_LIMIT_WINDOW_NS: u64 = 1_000_000_000; // 1 second
 const MAX_ACTIONS_PER_WINDOW: u32 = 10;
 
+// ============================================================================
+// THE FLOOR INVARIANT  (docs/SECURITY-FINDINGS.md FINDING 27, docs/DEFECTS.md E-62)
+// ============================================================================
+//
+// THE RULE, IN WORDS: this canister must never accept an amount it will not
+// return. Concretely, for every currency:
+//
+//   1. min_withdrawal <= min_deposit
+//        -- a deposit of exactly the advertised minimum can always leave again.
+//   2. min_withdrawal > transfer_fee
+//        -- the floor is one the LEDGER can actually deliver, so the refusal in
+//           `transfer_tokens` ("amount too small to cover the fee") is never the
+//           thing a player discovers after the money is already inside.
+//
+// WHAT THIS REPLACES. The ICP deposit floor was 20_000 e8s and the ICP
+// withdrawal floor was 100_000 e8s, so every balance in [20_000, 100_000) was
+// money this canister had taken and would not give back: `withdraw` refused it
+// as below the minimum, `buy_in` refused it as below a buy-in, and
+// `get_custody_status` reported it as an ordinary, healthy balance. The third
+// auditor deposited exactly the advertised minimum and could not get it out.
+// Both doors now read ONE number per currency, and rules 1 and 2 are checked by
+// the compiler below rather than by whoever next edits one of them.
+//
+// The floors are stated as a MINIMUM REQUEST, not as the boundary of what can
+// leave. A balance below the floor is still reachable: `withdraw` lets a caller
+// sweep their WHOLE remaining balance at any size the ledger can move (see
+// "THE WHOLE-BALANCE SWEEP" in `withdraw`). That matters because escrow
+// balances are not only made of deposits -- an odd-chip split or a small loss
+// can leave any amount at all -- so a floor alone, however consistent, would
+// still strand money that arrived through the pot rather than through the door.
+
 // Withdrawal limits for ICP (in e8s - 1 ICP = 100_000_000 e8s)
 const ICP_MAX_WITHDRAWAL_PER_TX: u64 = 10_000_000_000; // 100 ICP max per withdrawal
-const ICP_MIN_WITHDRAWAL_AMOUNT: u64 = 100_000; // 0.001 ICP minimum (must cover fees)
+const ICP_MIN_WITHDRAWAL_AMOUNT: u64 = 20_000; // 0.0002 ICP == the deposit floor (2x the fee)
 
 // Withdrawal limits for BTC (in satoshis - 1 BTC = 100_000_000 satoshis)
 const BTC_MAX_WITHDRAWAL_PER_TX: u64 = 10_000_000; // 0.1 BTC max per withdrawal
 const BTC_MIN_WITHDRAWAL_AMOUNT: u64 = 11; // Just above 10 sat fee - receive at least 1 sat
+
+// Deposit floors. These used to be a bare `if currency == BTC { 1_000 } else
+// { 20_000 }` inside `deposit()`, which is why nothing could compare them
+// against the withdrawal floors.
+const ICP_MIN_DEPOSIT_AMOUNT: u64 = 20_000; // 0.0002 ICP
+const BTC_MIN_DEPOSIT_AMOUNT: u64 = 1_000; // 1000 sats
+
+// Rule 1: nothing this canister ACCEPTS is below what it will RETURN.
+const _: () = assert!(
+    ICP_MIN_WITHDRAWAL_AMOUNT <= ICP_MIN_DEPOSIT_AMOUNT,
+    "FLOOR INVARIANT BROKEN: the ICP withdrawal floor is above the ICP deposit floor, so a \
+     deposit of exactly the advertised minimum could never be withdrawn. This is FINDING 27."
+);
+const _: () = assert!(
+    BTC_MIN_WITHDRAWAL_AMOUNT <= BTC_MIN_DEPOSIT_AMOUNT,
+    "FLOOR INVARIANT BROKEN: the BTC withdrawal floor is above the BTC deposit floor."
+);
+// Rule 2: the floor is one the ledger can actually deliver.
+const _: () = assert!(
+    ICP_MIN_WITHDRAWAL_AMOUNT > ICP_TRANSFER_FEE,
+    "FLOOR INVARIANT BROKEN: the ICP withdrawal floor does not clear the ICP transfer fee, so \
+     an amount the floor admits would be refused by `transfer_tokens`."
+);
+const _: () = assert!(
+    BTC_MIN_WITHDRAWAL_AMOUNT > CKBTC_TRANSFER_FEE,
+    "FLOOR INVARIANT BROKEN: the BTC withdrawal floor does not clear the ckBTC transfer fee."
+);
 
 const WITHDRAWAL_COOLDOWN_NS: u64 = 60_000_000_000; // 60 second cooldown between withdrawals
 
@@ -123,6 +181,16 @@ impl Currency {
         match self {
             Currency::ICP => ICP_MIN_WITHDRAWAL_AMOUNT,
             Currency::BTC => BTC_MIN_WITHDRAWAL_AMOUNT,
+        }
+    }
+
+    /// The smallest amount `deposit()` will accept. See "THE FLOOR INVARIANT":
+    /// this is never below [`Currency::min_withdrawal`], so money that gets in
+    /// through this door can always get back out through that one.
+    pub fn min_deposit(&self) -> u64 {
+        match self {
+            Currency::ICP => ICP_MIN_DEPOSIT_AMOUNT,
+            Currency::BTC => BTC_MIN_DEPOSIT_AMOUNT,
         }
     }
 
@@ -425,6 +493,51 @@ pub struct HandHistory {
     pub community_cards: Vec<Card>,
     #[serde(default)] // For backwards compatibility with old state that doesn't have this field
     pub showdown_players: Vec<ShowdownPlayer>, // All players who went to showdown (not just winners)
+
+    // ------------------------------------------------------------------------
+    // WHO PLAYED THIS HAND (docs/SECURITY-FINDINGS.md FINDING 30)
+    // ------------------------------------------------------------------------
+    //
+    // The two fields below are the SAME VALUES that go to the archive canister,
+    // cloned from one build in `record_hand_to_history`. They are not a second
+    // derivation of the same idea: the local copy and the permanent copy have to
+    // agree about who was in the hand, and the only way to guarantee that is for
+    // there to be one list.
+    //
+    // `opt`, not bare. `HandHistory` is persisted inside `PersistentState`, and a
+    // non-`opt` addition to a persisted record makes `stable_restore` reject every
+    // upgrade from state written before the field existed (FINDING 14). `None`
+    // means "recorded before this canister knew how to say it", which is the
+    // honest answer for the hands that were archived while FINDING 30 was live.
+    /// Everyone whose money was in this hand, built from the settlement basis.
+    #[serde(default)]
+    pub participants: Option<Vec<HistoryPlayerHandRecord>>,
+    /// Every seat the deal gave cards to, in the order the deck was consumed.
+    /// `P` for docs/SHUFFLE-SPEC.md section 4 is the length of this list.
+    #[serde(default)]
+    pub dealt_in: Option<Vec<DealtInSeat>>,
+}
+
+/// A seat that took cards from the deck in one hand, in deal order.
+///
+/// # Why a permanent record needs this (docs/SECURITY-FINDINGS.md FINDING 30)
+///
+/// docs/SHUFFLE-SPEC.md section 4 offsets the board by `P`, the number of players
+/// DEALT IN: the flop is `deck[2P+1..2P+4]`. Get `P` wrong and you reproduce a
+/// different board from the same seed and cannot tell that from cheating. The
+/// spec used to tell a verifier to count `P` out of the hand record by looking at
+/// who held cards -- and the record was built from the seats as they stood at
+/// SETTLEMENT, so on any hand somebody left it gave the wrong number.
+///
+/// So the deal writes down what it did, once, at the moment it does it. It is not
+/// derived at settlement from anything, because by settlement the seats have
+/// moved.
+#[derive(Clone, Copy, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub struct DealtInSeat {
+    pub seat: u8,
+    /// The player who was handed those two cards. A chair can change hands
+    /// mid-hand; this does not.
+    pub principal: Principal,
 }
 
 #[derive(Clone, Debug, CandidType, Deserialize)]
@@ -524,6 +637,12 @@ thread_local! {
     static PENDING_DEPOSITS: RefCell<HashMap<u64, Principal>> = RefCell::new(HashMap::new());
     // Pending withdrawals - prevents reentrancy
     static PENDING_WITHDRAWALS: RefCell<HashMap<Principal, u64>> = RefCell::new(HashMap::new());
+    // THE LEDGER-INTENT JOURNAL. Written BEFORE any irreversible ledger movement
+    // and retired only when the canister's own books have caught up with it.
+    // Persisted. See "THE LEDGER-INTENT JOURNAL" below and
+    // docs/SECURITY-FINDINGS.md FINDING 29.
+    static LEDGER_INTENTS: RefCell<BTreeMap<u64, LedgerIntent>> = RefCell::new(BTreeMap::new());
+    static NEXT_INTENT_ID: RefCell<u64> = const { RefCell::new(1) };
     // DEPRECATED: LEDGER_ID is now derived from TABLE_CONFIG.currency
     // Kept for backwards compatibility during migration
     static LEDGER_ID: RefCell<Principal> = RefCell::new(
@@ -532,6 +651,17 @@ thread_local! {
     );
     static HISTORY_ID: RefCell<Option<Principal>> = RefCell::new(None);
     static STARTING_CHIPS: RefCell<HashMap<u8, u64>> = RefCell::new(HashMap::new());
+    /// Who the CURRENT hand was dealt to, in the order the deck was consumed.
+    ///
+    /// Written once, by the deal loop in `start_new_hand`, and read only by
+    /// `hand_participants`. It exists because every other record of "who was in
+    /// this hand" is a statement about the seats RIGHT NOW, and the seats move:
+    /// a player can leave mid-hand and somebody else can buy the chair before the
+    /// hand settles. docs/SECURITY-FINDINGS.md FINDING 30.
+    ///
+    /// Keyed by nothing: it is a list, in deal order, because the order is the
+    /// fact a verifier needs (docs/SHUFFLE-SPEC.md section 4).
+    static DEALT_IN: RefCell<Vec<DealtInSeat>> = const { RefCell::new(Vec::new()) };
     static TABLE_CONFIG: RefCell<Option<TableConfig>> = RefCell::new(None);
     // Controllers who can call admin functions
     static CONTROLLERS: RefCell<Vec<Principal>> = RefCell::new(Vec::new());
@@ -728,7 +858,10 @@ mod history_types {
 
     #[derive(Clone, Debug, CandidType, Deserialize)]
     pub struct HistoryPlayerHandRecord {
+        /// The chair the money came from. NOT an identity: two people can hold one
+        /// chair in a single hand, so two records can share a seat.
         pub seat: u8,
+        /// The person. Carried from the stake, never looked up from the chair.
         pub principal: Principal,
         pub starting_chips: u64,
         pub ending_chips: u64,
@@ -736,6 +869,25 @@ mod history_types {
         pub final_hand_rank: Option<HandRank>,
         pub amount_won: u64,
         pub position: String,
+
+        // --------------------------------------------------------------------
+        // FINDING 30. All three are `opt` because the archive is append-only and
+        // holds records written before they existed; `null` reads as "this record
+        // predates the fix", which is the truth and is what a verifier should be
+        // told rather than a fabricated `false`.
+        // --------------------------------------------------------------------
+        /// Did this person take cards from the deck in this hand? A player who
+        /// bought the chair after the deal did not, and must not be counted in `P`.
+        #[serde(default)]
+        pub dealt_in: Option<bool>,
+        /// What this PERSON put into the pot: their stake in the settlement basis.
+        /// `sum(contributed)` over the record equals `total_pot`, always.
+        #[serde(default)]
+        pub contributed: Option<u64>,
+        /// True when the seat was vacated before the hand settled. Their money
+        /// stayed in the pot and their claim on it did not.
+        #[serde(default)]
+        pub left_mid_hand: Option<bool>,
     }
 
     #[derive(Clone, Debug, CandidType, Deserialize)]
@@ -774,6 +926,19 @@ mod history_types {
         pub rake: u64,
         pub winners: Vec<HistoryWinnerRecord>,
         pub went_to_showdown: bool,
+
+        /// EVERY SEAT THE DEAL GAVE CARDS TO, IN DECK ORDER.
+        ///
+        /// `P` for docs/SHUFFLE-SPEC.md section 4 is `dealt_in.len()`, and the
+        /// `k`-th entry is the seat whose hole cards are `deck[2k]`, `deck[2k+1]`.
+        /// Without it a verifier has to guess `P` from the player list, and on any
+        /// hand somebody left or joined that guess is wrong and reproduces the
+        /// wrong board (FINDING 30).
+        ///
+        /// `opt`, and `null` means the record was written before the canister
+        /// recorded this. A verifier that sees `null` should not guess.
+        #[serde(default)]
+        pub dealt_in: Option<Vec<DealtInSeat>>,
     }
 }
 
@@ -1153,6 +1318,228 @@ fn get_display_name(principal: Principal) -> Option<String> {
     })
 }
 
+/// Who the deal put in `seat` in the hand being settled, if anybody.
+///
+/// The deal's own record, not the chair's current occupant. See [`DEALT_IN`].
+fn principal_dealt_into_seat(seat: u8) -> Option<Principal> {
+    DEALT_IN.with(|d| {
+        d.borrow()
+            .iter()
+            .find(|s| s.seat == seat)
+            .map(|s| s.principal)
+    })
+}
+
+/// One participant under construction. Keyed by `(seat, principal)` because a
+/// chair is not a person and one chair can carry two people's money in one hand.
+struct ParticipantBuild {
+    seat: u8,
+    principal: Principal,
+    /// Position in the deal order, if the deal gave this person cards.
+    deal_order: Option<usize>,
+    contributed: u64,
+    /// True when this person left the table before the hand settled.
+    left_mid_hand: bool,
+}
+
+/// THE PARTICIPANT LIST OF ONE HAND, AND THE DEAL THAT PRODUCED IT.
+///
+/// # The defect this replaces (docs/SECURITY-FINDINGS.md FINDING 30)
+///
+/// The list used to be `state.players` AS THEY STAND AT SETTLEMENT. Seats are not
+/// people and they are not even stable within one hand: a player can leave a live
+/// hand with money in the pot, and somebody else can buy the empty chair before it
+/// settles. So the permanent record OMITTED anyone who left and INVENTED anyone
+/// who arrived -- with a position, and with the departed player's starting stack,
+/// because `STARTING_CHIPS` is keyed by seat. An auditor found archived hand 4
+/// naming a principal who never played it as the small blind.
+///
+/// It is the same lesson as FINDING 13, one surface further out. The PAYOUT path
+/// was taught to carry the owner of every stake; the RECORD path was not, and the
+/// record is the artifact "provably fair" rests on.
+///
+/// # What it is built from
+///
+/// Two sources, unioned, and neither is the seat vector:
+///
+/// * [`hand_stakes`] -- THE SETTLEMENT BASIS, the same list `plan_payouts` pays
+///   out of, which carries the owner of every stake including the stakes of seats
+///   that have since been vacated. Everyone who put money in this hand is here.
+/// * [`DEALT_IN`] -- what the deal actually did, written down as it happened.
+///   Everyone who took cards is here, including a player who folded pre-flop
+///   without putting in a chip and therefore has no stake at all.
+///
+/// A principal in neither is not in the hand and does not appear, which is the
+/// whole fix.
+///
+/// # What is knowable, and what is not
+///
+/// `contributed` and `amount_won` are exact for every participant: they come from
+/// the basis the money was actually moved on, so `sum(contributed)`,
+/// `sum(amount_won)` and `total_pot` are one number, always.
+///
+/// `starting_chips`/`ending_chips` are facts about a STACK, and a stack only
+/// exists while somebody is sitting down. For a player who left, the ending stack
+/// is stated as what it would have been (`starting - contributed + won`); their
+/// actual chips went to escrow when they left. Chips cannot change mid-hand by any
+/// other route -- `reload` refuses during a hand and `buy_in` only takes an EMPTY
+/// seat -- so for everyone still seated the two agree to the e8.
+///
+/// Returns the participants and the deal order. The deal order is `None`, never an
+/// empty list, when this canister has no record of the deal (a hand that was live
+/// across an upgrade from a build older than this field). `None` tells a verifier
+/// not to guess `P`; an empty list would tell them nobody was dealt in.
+fn hand_participants(
+    state: &TableState,
+    winners: &[Winner],
+    went_to_showdown: bool,
+) -> (Vec<HistoryPlayerHandRecord>, Option<Vec<DealtInSeat>>) {
+    let dealt: Vec<DealtInSeat> = DEALT_IN.with(|d| d.borrow().clone());
+    let deal_is_known = !dealt.is_empty();
+
+    let mut build: Vec<ParticipantBuild> = Vec::new();
+    let find_or_add = |build: &mut Vec<ParticipantBuild>, seat: u8, principal: Principal| -> usize {
+        if let Some(i) = build
+            .iter()
+            .position(|b| b.seat == seat && b.principal == principal)
+        {
+            return i;
+        }
+        build.push(ParticipantBuild {
+            seat,
+            principal,
+            deal_order: None,
+            contributed: 0,
+            left_mid_hand: false,
+        });
+        build.len() - 1
+    };
+
+    // Everyone the deal dealt to, in deal order.
+    for (k, seat) in dealt.iter().enumerate() {
+        let i = find_or_add(&mut build, seat.seat, seat.principal);
+        build[i].deal_order = Some(k);
+    }
+
+    // Everyone whose money is in the pot, from the payout basis.
+    for stake in hand_stakes(state) {
+        let i = find_or_add(&mut build, stake.seat, stake.owner);
+        build[i].contributed = build[i].contributed.saturating_add(stake.amount);
+    }
+
+    // Who is gone. `departed_stakes` is the canister's own record of a seat
+    // vacated mid-hand, and it is cleared by `finish_hand`, which runs AFTER this.
+    for d in state
+        .departed_stakes()
+        .iter()
+        .filter(|d| d.hand_number == state.hand_number)
+    {
+        let i = find_or_add(&mut build, d.seat, d.principal);
+        build[i].left_mid_hand = true;
+    }
+
+    // Stable order: by seat, then by deal order, so two owners of one chair read
+    // in the order they held it.
+    build.sort_by_key(|b| (b.seat, b.deal_order.unwrap_or(usize::MAX)));
+
+    let players = build
+        .iter()
+        .map(|b| {
+            // By (seat, PRINCIPAL). `winners` is aggregated the same way, because
+            // one chair can be paid twice for two different people (FINDING 13).
+            let amount_won: u64 = winners
+                .iter()
+                .filter(|w| w.seat == b.seat && w.principal == b.principal)
+                .fold(0u64, |a, w| a.saturating_add(w.amount));
+
+            // The live seat, only when it is still THIS person's seat.
+            let seated_now = state
+                .players
+                .get(b.seat as usize)
+                .and_then(|p| p.as_ref())
+                .filter(|p| p.principal == b.principal);
+
+            let (starting_chips, ending_chips) = if b.deal_order.is_some() {
+                // Present when the hand started: their starting stack was recorded
+                // then, under a seat that was theirs at the time.
+                let starting = STARTING_CHIPS.with(|s| {
+                    s.borrow()
+                        .get(&b.seat)
+                        .copied()
+                        .unwrap_or_else(|| seated_now.map(|p| p.chips).unwrap_or(b.contributed))
+                });
+                let ending = match seated_now {
+                    Some(p) => p.chips,
+                    None => starting
+                        .saturating_sub(b.contributed)
+                        .saturating_add(amount_won),
+                };
+                (starting, ending)
+            } else {
+                // Not dealt in: they arrived after the deal. Their stack when they
+                // sat down is what is knowable, so it is what is stated.
+                let ending = seated_now.map(|p| p.chips).unwrap_or(amount_won);
+                let starting = ending
+                    .saturating_add(b.contributed)
+                    .saturating_sub(amount_won);
+                (starting, ending)
+            };
+
+            // A position is a fact about a hand, so only somebody who was IN the
+            // hand has one. The old record labelled a mid-hand arrival "SB".
+            let position = if b.deal_order.is_none() {
+                format!("Seat {} (not dealt in)", b.seat)
+            } else if b.seat == state.dealer_seat {
+                "BTN".to_string()
+            } else if b.seat == state.small_blind_seat {
+                "SB".to_string()
+            } else if b.seat == state.big_blind_seat {
+                "BB".to_string()
+            } else {
+                format!("Seat {}", b.seat)
+            };
+
+            // Cards belong to the person who was dealt them, and they are only
+            // published at a showdown. `seated_now` is filtered by principal, so a
+            // chair that changed hands can never publish one player's hole cards
+            // under another player's name (the rule `push_winner` follows).
+            let show_cards = went_to_showdown
+                && seated_now.map(|p| !p.has_folded).unwrap_or(false)
+                && b.deal_order.is_some();
+            let hole_cards = if show_cards {
+                seated_now.and_then(|p| p.hole_cards)
+            } else {
+                None
+            };
+
+            HistoryPlayerHandRecord {
+                seat: b.seat,
+                principal: b.principal,
+                starting_chips,
+                ending_chips,
+                hole_cards,
+                // `try_`, not `evaluate_hand`. This is a HISTORY FIELD. It ran
+                // last on the settlement path and it could trap the whole
+                // settlement -- rolling back a completed payout, leaving the
+                // pot unpaid and the table unmovable -- to avoid writing one
+                // `null` into an archive record. A hand the evaluator cannot
+                // describe is recorded without a description.
+                // docs/SECURITY-FINDINGS.md FINDING 15.
+                final_hand_rank: hole_cards.as_ref().and_then(|cards| {
+                    poker_core::try_evaluate_hand(cards, &state.community_cards).ok()
+                }),
+                amount_won,
+                position,
+                dealt_in: deal_is_known.then_some(b.deal_order.is_some()),
+                contributed: Some(b.contributed),
+                left_mid_hand: Some(b.left_mid_hand),
+            }
+        })
+        .collect();
+
+    (players, deal_is_known.then_some(dealt))
+}
+
 /// Record a completed hand to the history canister (fire and forget)
 fn record_hand_to_history(state: &TableState, winners: &[Winner], went_to_showdown: bool) {
     // The record is built whether or not an archive is configured. An unwired
@@ -1199,59 +1586,8 @@ fn record_hand_to_history(state: &TableState, winners: &[Winner], went_to_showdo
         }
     };
 
-    // Build player records
-    let players: Vec<HistoryPlayerHandRecord> = state.players.iter()
-        .enumerate()
-        .filter_map(|(i, p_opt)| {
-            p_opt.as_ref().map(|p| {
-                let starting = STARTING_CHIPS.with(|s| {
-                    s.borrow().get(&(i as u8)).copied().unwrap_or(p.chips)
-                });
-                let amount_won = winners.iter()
-                    .filter(|w| w.seat == i as u8)
-                    .map(|w| w.amount)
-                    .sum();
-
-                // Determine position string
-                let position = if i as u8 == state.dealer_seat {
-                    "BTN".to_string()
-                } else if i as u8 == state.small_blind_seat {
-                    "SB".to_string()
-                } else if i as u8 == state.big_blind_seat {
-                    "BB".to_string()
-                } else {
-                    format!("Seat {}", i)
-                };
-
-                // Only include hole cards if shown (at showdown or voluntarily)
-                let show_cards = went_to_showdown && !p.has_folded;
-
-                HistoryPlayerHandRecord {
-                    seat: i as u8,
-                    principal: p.principal,
-                    starting_chips: starting,
-                    ending_chips: p.chips,
-                    hole_cards: if show_cards { p.hole_cards } else { None },
-                    // `try_`, not `evaluate_hand`. This is a HISTORY FIELD. It ran
-                    // last on the settlement path and it could trap the whole
-                    // settlement -- rolling back a completed payout, leaving the
-                    // pot unpaid and the table unmovable -- to avoid writing one
-                    // `null` into an archive record. A hand the evaluator cannot
-                    // describe is recorded without a description.
-                    // docs/SECURITY-FINDINGS.md FINDING 15.
-                    final_hand_rank: if show_cards {
-                        p.hole_cards.as_ref().and_then(|cards| {
-                            poker_core::try_evaluate_hand(cards, &state.community_cards).ok()
-                        })
-                    } else {
-                        None
-                    },
-                    amount_won,
-                    position,
-                }
-            })
-        })
-        .collect();
+    // WHO PLAYED THIS HAND. From the settlement basis, not from the chairs.
+    let (players, dealt_in) = hand_participants(state, winners, went_to_showdown);
 
     // Build action records with phase info
     let actions: Vec<HistoryActionRecord> = CURRENT_ACTIONS.with(|a| {
@@ -1268,9 +1604,20 @@ fn record_hand_to_history(state: &TableState, winners: &[Winner], went_to_showdo
 
             HistoryActionRecord {
                 seat: action.seat,
-                principal: state.players.get(action.seat as usize)
-                    .and_then(|p| p.as_ref())
-                    .map(|p| p.principal)
+                // THE PERSON WHO WAS DEALT THAT SEAT, not whoever is sitting in it
+                // now. A player who folds and leaves is replaced in the chair
+                // before the hand settles, and attributing their actions to the
+                // new occupant is FINDING 30 in the action log: the auditor's
+                // report of "none of her actions recorded" is the other half of
+                // this line. A mid-hand arrival is never given the action
+                // (docs/DEFECTS.md E-36), so every action at a seat belongs to
+                // the player the deal put there.
+                principal: principal_dealt_into_seat(action.seat)
+                    .or_else(|| {
+                        state.players.get(action.seat as usize)
+                            .and_then(|p| p.as_ref())
+                            .map(|p| p.principal)
+                    })
                     .unwrap_or(Principal::anonymous()),
                 action: hist_action,
                 timestamp: action.timestamp,
@@ -1321,7 +1668,24 @@ fn record_hand_to_history(state: &TableState, winners: &[Winner], went_to_showdo
         rake: 0,
         winners: history_winners,
         went_to_showdown,
+        dealt_in: dealt_in.clone(),
     };
+
+    // THE LOCAL COPY GETS THE SAME LIST -- the SAME VALUES, cloned, not a second
+    // derivation. `get_hand_history` had the identical omission the archive did
+    // (FINDING 30), so the client showed the same false record; the way to make
+    // sure the two can never disagree again is for there to be one list.
+    HAND_HISTORY.with(|h| {
+        let mut history = h.borrow_mut();
+        if let Some(entry) = history
+            .iter_mut()
+            .rev()
+            .find(|e| e.hand_number == record.hand_number)
+        {
+            entry.participants = Some(record.players.clone());
+            entry.dealt_in = dealt_in;
+        }
+    });
 
     // Async, because a settled hand must not wait on an archive. NOT
     // fire-and-forget: every outcome is counted, and a record the archive did
@@ -1376,42 +1740,19 @@ fn canister_id() -> Principal {
     ic_cdk::api::canister_self()
 }
 
-/// Transfer tokens (ICP or ckBTC) from canister to a player (for withdrawals/payouts)
-/// Uses the table's configured currency
-async fn transfer_tokens(to: Principal, amount: u64) -> Result<u64, String> {
-    use icrc_ledger_types::icrc1::transfer::{TransferArg, TransferError};
-
-    let currency = get_table_currency();
-    let fee = currency.transfer_fee();
-
-    if amount <= fee {
-        return Err(format!("Amount too small to cover {} transfer fee", currency.symbol()));
-    }
-
-    let ledger_id = currency.ledger_canister();
-
-    let transfer_args = TransferArg {
-        from_subaccount: None,
-        to: Account {
-            owner: to,
-            subaccount: None,
-        },
-        fee: None, // Use default fee
-        created_at_time: None,
-        memo: None,
-        amount: Nat::from(amount - fee), // Deduct fee from amount
-    };
-
-    // Use ic_cdk::call which handles Candid encoding/decoding properly
-    let result: Result<(Result<Nat, TransferError>,), _> =
-        ic_cdk::call(ledger_id, "icrc1_transfer", (transfer_args,)).await;
-
-    match result {
-        Ok((Ok(block_index),)) => Ok(block_index.0.try_into().unwrap_or(0)),
-        Ok((Err(e),)) => Err(format!("{} transfer failed: {:?}", currency.symbol(), e)),
-        Err((code, msg)) => Err(format!("Call to {} ledger failed: {:?} - {}", currency.symbol(), code, msg)),
-    }
-}
+// `transfer_tokens(to, amount)` USED TO LIVE HERE and has been deleted, not left
+// unused. docs/SECURITY-FINDINGS.md FINDING 29.
+//
+// It sent `created_at_time: None` and `memo: None`, which is a transaction the
+// ledger CANNOT deduplicate. Any retry of it is a second, real payment, so the
+// only safe thing to do after one of them went unanswered was nothing -- which
+// is exactly the state the finding is about. Every outbound movement now goes
+// through `attempt_intent`, which carries the journal entry's memo and
+// created_at_time and is therefore replayable.
+//
+// It is deleted rather than kept for convenience because a fund canister with an
+// un-deduplicable transfer helper sitting in it is one call site away from having
+// the defect back.
 
 // ============================================================================
 // DEPOSIT ANTI-REPLAY  (docs/DEFECTS.md E-02, docs/SECURITY-FINDINGS.md FINDING 10)
@@ -1576,6 +1917,747 @@ fn get_deposit_replay_state() -> (u64, u64) {
         deposit_watermark(),
         VERIFIED_DEPOSITS.with(|v| v.borrow().len() as u64),
     )
+}
+
+// ============================================================================
+// THE LEDGER-INTENT JOURNAL  (docs/SECURITY-FINDINGS.md FINDING 29)
+// ============================================================================
+//
+// THE DEFECT THIS EXISTS FOR, IN ONE PICTURE
+//
+//   An IC message is atomic only UP TO EACH AWAIT. `deposit()` runs as two
+//   separate executions:
+//
+//     execution A   entry .. ic0.call_perform(icrc2_transfer_from) .. Pending
+//                   ^ everything A wrote is COMMITTED here
+//     -- the ledger executes. REAL MONEY MOVES. This cannot be undone. --
+//     execution B   the reply callback: claim the block, credit BALANCES
+//                   ^ if B traps, exactly B's writes are discarded. A's stand.
+//
+//   Before this change, A wrote NOTHING. So a discarded B left money inside the
+//   canister that nothing in the canister accounted for, belonging to somebody
+//   whose name had never been written down. Measured, on the real ledger wasm:
+//   3.0 ICP pulled, 0 credited, and every one of the eleven doors out of that
+//   state -- including `notify_deposit`, whose refusal says the money "was
+//   credited to your balance when the pull happened" -- returns nothing.
+//   `tests/money_safety/tests/ledger_boundary.rs`.
+//
+// THE RULE THIS CODE ENFORCES
+//
+//   Nothing in this canister may perform an irreversible ledger movement unless
+//   an entry naming the OWNER, the AMOUNT and the exact WIRE ARGUMENTS of that
+//   movement has already been committed to stable state.
+//
+// WHY A JOURNAL ALONE IS NOT ENOUGH, AND WHAT MAKES THE RETRY SAFE
+//
+//   A journal that says "a pull of 3 ICP for alice may or may not have happened"
+//   is only useful if somebody can find out which, and finish the job. Asking the
+//   ledger "did block N exist" does not work, because a discarded continuation
+//   never learned N. So the journal does not ask. It RE-ISSUES the identical
+//   transaction, and lets the LEDGER answer:
+//
+//     * ICRC-1 and ICRC-2 deduplicate on the whole transaction, including
+//       `memo` and `created_at_time`, for the duration of the ledger's
+//       transaction window (24h on the ICP ledger).
+//     * So a retry of a movement that already happened comes back
+//       `Duplicate { duplicate_of }` -- which is a POSITIVE answer carrying the
+//       block index the first attempt never got to see.
+//     * And a retry of a movement that never happened simply performs it.
+//
+//   Exactly-once, decided by the ledger, not by our bookkeeping. The intent
+//   therefore stores `memo` and `created_at_time` and every retry reproduces them
+//   byte for byte; change either and the retry becomes a SECOND movement.
+//
+// WHAT RETIRES AN ENTRY
+//
+//   Removing the entry and updating BALANCES happen in the SAME message with no
+//   await between them, exactly like `claim_deposit_block`. The entry is the
+//   once-only token: whoever takes it out of the map is the one who credits, and
+//   there is only one of it.
+//
+// CONCURRENCY, AND THE THING A LEASE MUST NOT DO
+//
+//   Two callers must not both re-issue the same transaction -- not because the
+//   ledger would double-move it (it would not; it deduplicates) but because both
+//   would then see a positive answer and race to credit. So driving an entry
+//   takes a LEASE, written before the await.
+//
+//   A lease that never expires would be the original bug wearing a hat: if the
+//   continuation that holds it is discarded, the lease is stuck and the money is
+//   stuck behind it. So the lease EXPIRES (`INTENT_LEASE_NS`), and an expired
+//   lease may be taken over by anybody entitled to the entry.
+//
+// ACROSS AN UPGRADE
+//
+//   The journal is in `PersistentState` as `opt` (docs/SECURITY-FINDINGS.md
+//   FINDING 14: a non-`opt` addition to that record makes every upgrade from
+//   older state fail). `None` means state written before the journal existed,
+//   which restores as an empty journal -- correct, because no intent had been
+//   opened.
+//
+// BOUNDED, FOR THE REASON `VERIFIED_DEPOSITS` IS BOUNDED
+//
+//   An unbounded map eventually makes `pre_upgrade` fail to serialise, and a
+//   fund-holding canister that cannot be upgraded is bricked with the funds
+//   inside. So the journal is capped, per principal and globally, and the cap is
+//   enforced by REFUSING TO START a new movement -- never by dropping an entry.
+//   Dropping an entry is exactly the forgetting that FINDING 29 is about.
+//
+// THE HONEST LIMIT
+//
+//   Automatic resolution only works while the ledger still deduplicates, i.e.
+//   inside its transaction window. Past `retry_deadline_ns` the canister REFUSES
+//   to re-issue, because a re-issue outside the window would move the money a
+//   second time. The entry stays, visible, naming the owner and the amount. That
+//   is a worse outcome than automatic recovery and a much better one than the
+//   state before this change, in which there was no record at all.
+
+/// A message may hold the right to drive one intent for this long. After that
+/// anybody entitled to the entry may take it over -- which is what makes a
+/// discarded continuation recoverable rather than a permanent lock.
+///
+/// **The lease is not what makes this safe, and it must not be made long enough
+/// to look like it is.** Two callers driving the same entry at once cannot
+/// double-move the money (the ledger deduplicates the identical transaction) and
+/// cannot double-credit it (`take_ledger_intent` is an atomic remove, so exactly
+/// one of them gets the entry and only the holder of the entry credits). The
+/// lease exists to stop two callers paying for the same ledger round trip. It is
+/// therefore set just above a normal cross-subnet round trip and no longer: a
+/// long lease would be a second lock for a discarded continuation to get stuck
+/// behind, which is the defect this file exists to remove.
+const INTENT_LEASE_NS: u64 = 30_000_000_000; // 30 seconds
+
+/// How long after opening an intent a retry is still SAFE.
+///
+/// The ICP ledger's `transaction_window` is 24h; ckBTC's ICRC-1 ledger uses the
+/// same 24h default. Outside it the ledger stops deduplicating and a re-issue
+/// would be a second, real movement. 20h leaves four hours of margin for clock
+/// skew and for the operator to notice.
+const INTENT_RETRY_WINDOW_NS: u64 = 20 * 60 * 60 * 1_000_000_000;
+
+/// Open intents one principal may have at once.
+const MAX_OPEN_INTENTS_PER_PRINCIPAL: usize = 4;
+
+/// Open intents in the whole canister.
+const MAX_OPEN_INTENTS: usize = 512;
+
+/// Which irreversible movement an intent stands for.
+#[derive(Clone, Copy, Debug, CandidType, Deserialize, PartialEq, Eq)]
+enum LedgerIntentKind {
+    /// `deposit()`: pull from the owner's wallet into this canister's main
+    /// account. Value ARRIVING; escrow is credited when it lands.
+    Pull,
+    /// `claim_external_deposit()`: sweep the owner's deposit subaccount into this
+    /// canister's main account. Value ARRIVING.
+    Sweep,
+    /// `withdraw()`: send from this canister's main account to the owner. Value
+    /// LEAVING; escrow was already debited before the movement.
+    Payout,
+}
+
+impl LedgerIntentKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            LedgerIntentKind::Pull => "pull",
+            LedgerIntentKind::Sweep => "sweep",
+            LedgerIntentKind::Payout => "payout",
+        }
+    }
+
+    /// Does settling this intent ADD to the owner's escrow?
+    fn credits_on_success(self) -> bool {
+        matches!(self, LedgerIntentKind::Pull | LedgerIntentKind::Sweep)
+    }
+}
+
+/// One irreversible ledger movement this canister has committed to, written down
+/// before it was attempted.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+struct LedgerIntent {
+    id: u64,
+    who: Principal,
+    kind: LedgerIntentKind,
+    /// e8s (or satoshis) the movement is FOR. For `Pull` this is what the ledger
+    /// is asked to move and what escrow gets. For `Sweep` it is the amount net of
+    /// the sweep fee. For `Payout` it is the gross amount debited from escrow.
+    amount: u64,
+    /// The exact `memo` on the wire. Half of the ledger's deduplication key.
+    memo: u64,
+    /// The exact `created_at_time` on the wire. The other half.
+    created_at_time: u64,
+    opened_at_ns: u64,
+    /// A retry after this instant would be a SECOND movement, because the ledger
+    /// no longer deduplicates. Set once, at open, and never extended.
+    retry_deadline_ns: u64,
+    /// Somebody is driving this entry until then. `0` means nobody is.
+    leased_until_ns: u64,
+    attempts: u32,
+}
+
+/// The journal as a caller sees it. Flat, so no field of it can be silently
+/// dropped by Candid, and no inner record can drift.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct LedgerIntentView {
+    pub id: u64,
+    pub who: Principal,
+    pub kind: String,
+    pub amount: u64,
+    pub opened_at_ns: u64,
+    pub attempts: u32,
+    pub leased_until_ns: Option<u64>,
+    pub retry_deadline_ns: u64,
+}
+
+impl LedgerIntent {
+    fn view(&self) -> LedgerIntentView {
+        LedgerIntentView {
+            id: self.id,
+            who: self.who,
+            kind: self.kind.as_str().to_string(),
+            amount: self.amount,
+            opened_at_ns: self.opened_at_ns,
+            attempts: self.attempts,
+            leased_until_ns: (self.leased_until_ns > 0).then_some(self.leased_until_ns),
+            retry_deadline_ns: self.retry_deadline_ns,
+        }
+    }
+}
+
+/// Open an intent and COMMIT it before the caller performs the movement.
+///
+/// The returned value is a copy; the map holds the authoritative entry. The
+/// caller must not await between calling this and issuing the ledger call, and
+/// must settle the entry with [`settle_intent`] on every path.
+fn open_ledger_intent(
+    who: Principal,
+    kind: LedgerIntentKind,
+    amount: u64,
+    now: u64,
+) -> Result<LedgerIntent, String> {
+    // THE CAP, enforced by refusing to start -- never by forgetting.
+    let (total_open, mine_open) = LEDGER_INTENTS.with(|j| {
+        let j = j.borrow();
+        (j.len(), j.values().filter(|i| i.who == who).count())
+    });
+    if mine_open >= MAX_OPEN_INTENTS_PER_PRINCIPAL {
+        return Err(format!(
+            "You have {} unresolved ledger operations on this table and the limit is {}. \
+             Call resolve_my_ledger_intents() to finish them -- it is safe to call at any \
+             time and it will credit or refund whatever the ledger actually did. \
+             get_my_ledger_intents() lists them.",
+            mine_open, MAX_OPEN_INTENTS_PER_PRINCIPAL
+        ));
+    }
+    if total_open >= MAX_OPEN_INTENTS {
+        return Err(format!(
+            "This table has {} unresolved ledger operations, which is its limit. No new \
+             deposit or withdrawal can start until some are resolved. This is deliberate: \
+             the alternative is forgetting one, and a forgotten movement is money nobody \
+             can find. Existing owners can call resolve_my_ledger_intents().",
+            total_open
+        ));
+    }
+
+    let id = NEXT_INTENT_ID.with(|n| {
+        let mut n = n.borrow_mut();
+        let id = *n;
+        *n = n.saturating_add(1);
+        id
+    });
+    let intent = LedgerIntent {
+        id,
+        who,
+        kind,
+        amount,
+        // The memo is the intent id. Unique per movement for the life of the
+        // canister, which is what makes the ledger's deduplication key unique.
+        memo: id,
+        created_at_time: now,
+        opened_at_ns: now,
+        retry_deadline_ns: now.saturating_add(INTENT_RETRY_WINDOW_NS),
+        leased_until_ns: now.saturating_add(INTENT_LEASE_NS),
+        attempts: 1,
+    };
+    LEDGER_INTENTS.with(|j| j.borrow_mut().insert(id, intent.clone()));
+    ic_cdk::println!(
+        "ledger intent {} OPENED: {} {} e8s for {} (deadline {})",
+        id,
+        kind.as_str(),
+        amount,
+        who,
+        intent.retry_deadline_ns
+    );
+    Ok(intent)
+}
+
+/// What the ledger, or the retry, finally said about an intent.
+enum IntentOutcome {
+    /// The movement HAPPENED. `block` is its index, from the ledger.
+    Moved(u64),
+    /// The movement definitively did NOT happen and never will under these
+    /// arguments. Safe to close.
+    Refused(String),
+    /// Nobody knows. The intent stays open, its lease is released, and the
+    /// resume path can take it over.
+    Unknown(String),
+}
+
+/// Take an intent OUT of the journal, atomically. `None` means somebody else
+/// already settled it -- which is exactly the double-credit this design exists to
+/// prevent, so the caller must treat `None` as "do nothing".
+///
+/// There must be NO await between this returning `Some` and the balance change.
+fn take_ledger_intent(id: u64) -> Option<LedgerIntent> {
+    LEDGER_INTENTS.with(|j| j.borrow_mut().remove(&id))
+}
+
+/// Release the lease without closing the entry: "I do not know what happened,
+/// somebody else may try".
+fn release_ledger_intent(id: u64, why: &str) {
+    LEDGER_INTENTS.with(|j| {
+        if let Some(entry) = j.borrow_mut().get_mut(&id) {
+            entry.leased_until_ns = 0;
+        }
+    });
+    ic_cdk::println!("ledger intent {} LEFT OPEN, lease released: {}", id, why);
+}
+
+/// Settle an intent against what the ledger said, and move the books.
+///
+/// Returns the owner's escrow balance after settling for an arriving movement,
+/// or the ledger block index for a payout.
+fn settle_intent(id: u64, outcome: IntentOutcome, now: u64) -> Result<u64, String> {
+    match outcome {
+        IntentOutcome::Moved(block) => {
+            // ONE-SHOT. Whoever removes the entry is the one who credits.
+            let Some(intent) = take_ledger_intent(id) else {
+                // Already settled by a concurrent resume. Report the truth
+                // rather than crediting twice.
+                let who = ic_cdk::api::msg_caller();
+                let current = BALANCES.with(|b| b.borrow().get(&who).copied().unwrap_or(0));
+                ic_cdk::println!(
+                    "ledger intent {} was already settled; no second credit applied.",
+                    id
+                );
+                return Ok(current);
+            };
+
+            if intent.kind.credits_on_success() {
+                // The anti-replay record still governs, and it is still the only
+                // writer of "this block index has been consumed". A block that is
+                // refused here has already been credited to this same principal
+                // (only the block's `from` can claim it), so not crediting is
+                // right and reporting the real balance is right.
+                if let Err(reason) = claim_deposit_block(block, intent.who) {
+                    let current =
+                        BALANCES.with(|b| b.borrow().get(&intent.who).copied().unwrap_or(0));
+                    ic_cdk::println!(
+                        "ledger intent {} settled against block {} which was already claimed \
+                         ({}); balance for {} remains {}.",
+                        id,
+                        block,
+                        reason,
+                        intent.who,
+                        current
+                    );
+                    return Ok(current);
+                }
+                let new_balance = BALANCES.with(|b| {
+                    let mut balances = b.borrow_mut();
+                    let current = balances.get(&intent.who).copied().unwrap_or(0);
+                    let new_balance = current.saturating_add(intent.amount);
+                    balances.insert(intent.who, new_balance);
+                    new_balance
+                });
+                if intent.kind == LedgerIntentKind::Sweep {
+                    // The money has left the deposit subaccount for good. Replace
+                    // the observation taken before the sweep, so the cache is true
+                    // again whether this ran in the original continuation or in a
+                    // later `resolve_my_ledger_intents()`.
+                    record_deposit_observation(
+                        intent.who,
+                        get_table_currency().ledger_canister(),
+                        0,
+                        now,
+                    );
+                }
+                ic_cdk::println!(
+                    "ledger intent {} SETTLED: {} of {} e8s credited to {} at block {} \
+                     (balance {})",
+                    id,
+                    intent.kind.as_str(),
+                    intent.amount,
+                    intent.who,
+                    block,
+                    new_balance
+                );
+                Ok(new_balance)
+            } else {
+                // A payout that really left. The escrow debit already happened
+                // before the movement, so settling is: stop calling it pending,
+                // and start the cooldown.
+                PENDING_WITHDRAWALS.with(|p| {
+                    p.borrow_mut().remove(&intent.who);
+                });
+                LAST_WITHDRAWAL.with(|l| {
+                    l.borrow_mut().insert(intent.who, now);
+                });
+                ic_cdk::println!(
+                    "ledger intent {} SETTLED: payout of {} e8s to {} at block {}",
+                    id,
+                    intent.amount,
+                    intent.who,
+                    block
+                );
+                Ok(block)
+            }
+        }
+        IntentOutcome::Refused(reason) => {
+            let Some(intent) = take_ledger_intent(id) else {
+                return Err(reason);
+            };
+            if !intent.kind.credits_on_success() {
+                // The money never left, so give the escrow back. This is the
+                // refund that used to live only in a continuation that could be
+                // discarded; it is now reachable from the resume path as well.
+                PENDING_WITHDRAWALS.with(|p| {
+                    p.borrow_mut().remove(&intent.who);
+                });
+                BALANCES.with(|b| {
+                    let mut balances = b.borrow_mut();
+                    let current = balances.get(&intent.who).copied().unwrap_or(0);
+                    balances.insert(intent.who, current.saturating_add(intent.amount));
+                });
+                ic_cdk::println!(
+                    "ledger intent {} CLOSED unmoved: {} e8s refunded to {} ({})",
+                    id,
+                    intent.amount,
+                    intent.who,
+                    reason
+                );
+            } else {
+                ic_cdk::println!(
+                    "ledger intent {} CLOSED unmoved: nothing was pulled for {} ({})",
+                    id,
+                    intent.who,
+                    reason
+                );
+            }
+            Err(reason)
+        }
+        IntentOutcome::Unknown(reason) => {
+            release_ledger_intent(id, &reason);
+            Err(format!(
+                "{reason}\n\nThe ledger call did not come back with an answer, so this table \
+                 does NOT know whether the money moved. It has written the operation down \
+                 (intent {id}) and nothing has been lost. Call resolve_my_ledger_intents() -- \
+                 it re-issues the identical transaction, which the ledger either performs or \
+                 reports as a duplicate, and settles your balance either way."
+            ))
+        }
+    }
+}
+
+/// Read an ICRC-1 `TransferError` as an [`IntentOutcome`].
+///
+/// `Duplicate` is the whole point: it is the ledger telling us the movement
+/// already happened and handing over the block index the lost continuation never
+/// saw. Everything else on this list is the ledger declining to move anything.
+fn classify_transfer_error(e: &TransferError) -> IntentOutcome {
+    match e {
+        TransferError::Duplicate { duplicate_of } => {
+            IntentOutcome::Moved(nat_to_u64_saturating(duplicate_of))
+        }
+        other => IntentOutcome::Refused(format!("{other:?}")),
+    }
+}
+
+fn classify_transfer_from_error(e: &TransferFromError) -> IntentOutcome {
+    match e {
+        TransferFromError::Duplicate { duplicate_of } => {
+            IntentOutcome::Moved(nat_to_u64_saturating(duplicate_of))
+        }
+        other => IntentOutcome::Refused(format!("{other:?}")),
+    }
+}
+
+fn nat_to_u64_saturating(n: &Nat) -> u64 {
+    u64::try_from(n.0.clone()).unwrap_or(u64::MAX)
+}
+
+/// The exact wire arguments for a `Pull`, reproduced byte for byte on every
+/// attempt so the ledger's deduplication can recognise a retry.
+fn pull_args(intent: &LedgerIntent, canister: Principal, fee: u64) -> TransferFromArgs {
+    TransferFromArgs {
+        spender_subaccount: None,
+        from: Account {
+            owner: intent.who,
+            subaccount: None,
+        },
+        to: Account {
+            owner: canister,
+            subaccount: None,
+        },
+        amount: Nat::from(intent.amount),
+        fee: Some(Nat::from(fee)),
+        memo: Some(intent.memo.to_be_bytes().to_vec().into()),
+        created_at_time: Some(intent.created_at_time),
+    }
+}
+
+/// The exact wire arguments for a `Sweep`.
+fn sweep_args(intent: &LedgerIntent, canister: Principal, fee: u64) -> TransferArg {
+    TransferArg {
+        from_subaccount: Some(compute_deposit_subaccount(&intent.who)),
+        to: Account {
+            owner: canister,
+            subaccount: None,
+        },
+        amount: Nat::from(intent.amount),
+        fee: Some(Nat::from(fee)),
+        memo: Some(intent.memo.to_be_bytes().to_vec().into()),
+        created_at_time: Some(intent.created_at_time),
+    }
+}
+
+/// The exact wire arguments for a `Payout`.
+///
+/// The player receives `amount - fee`, which is what `transfer_tokens` has always
+/// done; the difference here is only that the transaction carries a deduplication
+/// key, so re-issuing it cannot pay twice.
+fn payout_args(intent: &LedgerIntent, fee: u64) -> TransferArg {
+    TransferArg {
+        from_subaccount: None,
+        to: Account {
+            owner: intent.who,
+            subaccount: None,
+        },
+        fee: Some(Nat::from(fee)),
+        created_at_time: Some(intent.created_at_time),
+        memo: Some(intent.memo.to_be_bytes().to_vec().into()),
+        amount: Nat::from(intent.amount.saturating_sub(fee)),
+    }
+}
+
+/// Issue (or RE-issue) the ledger movement one intent stands for, and say what
+/// happened. Never touches BALANCES; that is [`settle_intent`]'s job.
+async fn attempt_intent(intent: &LedgerIntent) -> IntentOutcome {
+    let currency = get_table_currency();
+    let ledger_id = currency.ledger_canister();
+    let fee = currency.transfer_fee();
+    let canister = canister_id();
+
+    match intent.kind {
+        LedgerIntentKind::Pull => {
+            let args = pull_args(intent, canister, fee);
+            let out: Result<(Result<Nat, TransferFromError>,), _> =
+                ic_cdk::call(ledger_id, "icrc2_transfer_from", (args,)).await;
+            match out {
+                Ok((Ok(block),)) => IntentOutcome::Moved(nat_to_u64_saturating(&block)),
+                Ok((Err(e),)) => classify_transfer_from_error(&e),
+                Err((code, msg)) => {
+                    IntentOutcome::Unknown(format!("Failed to call ledger: {code:?} - {msg}"))
+                }
+            }
+        }
+        LedgerIntentKind::Sweep => {
+            let args = sweep_args(intent, canister, fee);
+            let out: Result<(Result<Nat, TransferError>,), _> =
+                ic_cdk::call(ledger_id, "icrc1_transfer", (args,)).await;
+            match out {
+                Ok((Ok(block),)) => IntentOutcome::Moved(nat_to_u64_saturating(&block)),
+                Ok((Err(e),)) => classify_transfer_error(&e),
+                Err((code, msg)) => {
+                    IntentOutcome::Unknown(format!("Failed to sweep deposit: {code:?} - {msg}"))
+                }
+            }
+        }
+        LedgerIntentKind::Payout => {
+            let args = payout_args(intent, fee);
+            let out: Result<(Result<Nat, TransferError>,), _> =
+                ic_cdk::call(ledger_id, "icrc1_transfer", (args,)).await;
+            match out {
+                Ok((Ok(block),)) => IntentOutcome::Moved(nat_to_u64_saturating(&block)),
+                Ok((Err(e),)) => classify_transfer_error(&e),
+                Err((code, msg)) => IntentOutcome::Unknown(format!(
+                    "Call to {} ledger failed: {code:?} - {msg}",
+                    currency.symbol()
+                )),
+            }
+        }
+    }
+}
+
+/// Take the lease on an open intent, if it is takeable, and return a copy to
+/// drive. Written BEFORE the await, so a concurrent caller sees it.
+fn lease_ledger_intent(id: u64, who: Principal, now: u64) -> Result<LedgerIntent, String> {
+    LEDGER_INTENTS.with(|j| {
+        let mut j = j.borrow_mut();
+        let Some(entry) = j.get_mut(&id) else {
+            return Err(format!("There is no open ledger operation with id {id}."));
+        };
+        if entry.who != who && !is_controller() {
+            return Err("That ledger operation belongs to somebody else.".to_string());
+        }
+        if entry.leased_until_ns > now {
+            return Err(format!(
+                "Ledger operation {id} is already being driven by another call; it will be \
+                 free again in {} seconds.",
+                (entry.leased_until_ns - now) / 1_000_000_000
+            ));
+        }
+        if now > entry.retry_deadline_ns {
+            return Err(format!(
+                "Ledger operation {id} ({} of {} e8s for {}) is past the ledger's \
+                 deduplication window, so this canister CANNOT safely re-issue it: a re-issue \
+                 now would be a second, real movement. The record is kept and is visible from \
+                 get_my_ledger_intents(). Resolving it needs an operator to reconcile against \
+                 the ledger. Nothing has been forgotten.",
+                entry.kind.as_str(),
+                entry.amount,
+                entry.who
+            ));
+        }
+        entry.leased_until_ns = now.saturating_add(INTENT_LEASE_NS);
+        entry.attempts = entry.attempts.saturating_add(1);
+        Ok(entry.clone())
+    })
+}
+
+/// Finish one ledger operation this canister started and lost track of.
+///
+/// Safe to call at any time, by the owner or by a controller. It re-issues the
+/// IDENTICAL transaction; the ledger either performs it or answers
+/// `Duplicate`, and either answer settles the books exactly once.
+#[ic_cdk::update]
+async fn resolve_ledger_intent(id: u64) -> Result<String, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot resolve ledger operations".to_string());
+    }
+    let now = ic_cdk::api::time();
+    let intent = lease_ledger_intent(id, caller, now)?;
+    let kind = intent.kind;
+    let amount = intent.amount;
+    let outcome = attempt_intent(&intent).await;
+    let described = match &outcome {
+        IntentOutcome::Moved(b) => format!("the ledger confirms it happened, at block {b}"),
+        IntentOutcome::Refused(r) => format!("the ledger says it did not happen: {r}"),
+        IntentOutcome::Unknown(r) => format!("still unknown: {r}"),
+    };
+    match settle_intent(id, outcome, now) {
+        Ok(value) => Ok(format!(
+            "ledger operation {id} ({} of {amount} e8s) resolved -- {described}; \
+             your balance is now {value}.",
+            kind.as_str()
+        )),
+        Err(e) => Err(e),
+    }
+}
+
+/// Finish every ledger operation of the caller's that is waiting to be finished.
+///
+/// One entry per call to the ledger, so this is deliberately capped: it drives at
+/// most `MAX_OPEN_INTENTS_PER_PRINCIPAL` entries, which is also the most a
+/// principal can have.
+#[ic_cdk::update]
+async fn resolve_my_ledger_intents() -> Result<Vec<String>, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot resolve ledger operations".to_string());
+    }
+    let mine: Vec<u64> = LEDGER_INTENTS.with(|j| {
+        j.borrow()
+            .values()
+            .filter(|i| i.who == caller)
+            .map(|i| i.id)
+            .take(MAX_OPEN_INTENTS_PER_PRINCIPAL)
+            .collect()
+    });
+    if mine.is_empty() {
+        return Ok(vec![
+            "You have no unresolved ledger operations on this table.".to_string(),
+        ]);
+    }
+    let mut report = Vec::new();
+    for id in mine {
+        // Each iteration re-reads state after its own await, which is the point:
+        // an entry another message settled in the meantime is simply gone and its
+        // lease attempt fails harmlessly.
+        let now = ic_cdk::api::time();
+        match lease_ledger_intent(id, caller, now) {
+            Ok(intent) => {
+                let outcome = attempt_intent(&intent).await;
+                let now = ic_cdk::api::time();
+                match settle_intent(id, outcome, now) {
+                    Ok(v) => report.push(format!(
+                        "ledger operation {id} ({} of {} e8s) resolved; balance/block {v}.",
+                        intent.kind.as_str(),
+                        intent.amount
+                    )),
+                    Err(e) => report.push(format!("ledger operation {id}: {e}")),
+                }
+            }
+            Err(e) => report.push(format!("ledger operation {id}: {e}")),
+        }
+    }
+    Ok(report)
+}
+
+/// Every ledger operation of yours this canister has written down and not yet
+/// finished. Empty is the normal state.
+#[ic_cdk::query]
+fn get_my_ledger_intents() -> Vec<LedgerIntentView> {
+    let caller = ic_cdk::api::msg_caller();
+    LEDGER_INTENTS.with(|j| {
+        j.borrow()
+            .values()
+            .filter(|i| i.who == caller)
+            .map(|i| i.view())
+            .collect()
+    })
+}
+
+/// The whole journal for a controller; the caller's own entries for anybody else.
+///
+/// It is not access control that makes this safe to expose -- the entries name
+/// amounts and principals, which the escrow surfaces already do -- it is that
+/// money the canister is holding must never be invisible. That was the whole of
+/// FINDING 18 and half of FINDING 21.
+#[ic_cdk::query]
+fn get_all_ledger_intents() -> Vec<LedgerIntentView> {
+    if is_controller() {
+        LEDGER_INTENTS.with(|j| j.borrow().values().map(|i| i.view()).collect())
+    } else {
+        get_my_ledger_intents()
+    }
+}
+
+/// Money named by open ARRIVING intents: on the ledger, not yet in the books, and
+/// accounted for. Read by [`get_custody_status`] and by the money-safety harness's
+/// M10 invariant.
+fn journalled_incoming_total() -> u64 {
+    // `Pull` AND `Sweep`, and no double count: `observed_deposit_total()` nets an
+    // open sweep OUT of the deposit-subaccount figure, so the sweep is counted
+    // here instead of there, exactly once, and the sum of the two terms is
+    // unchanged by the movement being in flight. A `payout` is money leaving,
+    // already debited from escrow, so it is in neither.
+    //
+    // THIS FILTER IS `credits_on_success()` AND NOT `== Pull`, and that one word
+    // is docs/SECURITY-FINDINGS.md FINDING 33. The comment above shipped
+    // describing the correct behaviour over code that did not implement it: with
+    // `== Pull`, an open `Sweep` was subtracted by `observed_deposit_total()` and
+    // added by NOTHING, so `total_liability()` read ZERO on a canister holding 2
+    // ICP of a player's money and `admin_update_config` accepted a flip to BTC
+    // that could not be undone. Three reviewers drove it independently. The one
+    // predicate is `credits_on_success()` -- the same one `unfinished_ledger_ops_for`
+    // uses -- so the guard and the player-facing surface cannot disagree again.
+    LEDGER_INTENTS.with(|j| {
+        j.borrow()
+            .values()
+            .filter(|i| i.kind.credits_on_success())
+            .fold(0u64, |acc, i| acc.saturating_add(i.amount))
+    })
 }
 
 /// Verify and credit a deposit by checking the ledger transaction
@@ -1814,9 +2896,36 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
         // pulls made before that recording existed.
         let own_account = compute_account_identifier(&canister, None);
         if transfer.spender.as_deref() == Some(&own_account[..]) {
+            // THE SENTENCE THAT USED TO BE A LIE (docs/SECURITY-FINDINGS.md
+            // FINDING 29). "It was credited when the pull happened" is true only
+            // if the pull's continuation ran. When it did not, this was the last
+            // thing the canister ever said to somebody whose money it was
+            // holding. The journal is what tells the two apart, so it is read
+            // here before anybody is told their money is already theirs.
+            let unfinished = LEDGER_INTENTS.with(|j| {
+                j.borrow()
+                    .values()
+                    .filter(|i| i.who == caller && i.kind == LedgerIntentKind::Pull)
+                    .map(|i| format!("#{} for {} e8s", i.id, i.amount))
+                    .collect::<Vec<_>>()
+            });
+            if !unfinished.is_empty() {
+                return Err(format!(
+                    "This block is an ICRC-2 pull this canister performed on your behalf (the \
+                     deposit() flow), so notify_deposit is not the right door for it -- but \
+                     you are right that it has not been credited: this table has {} \
+                     unfinished pull(s) of yours on record ({}). Call \
+                     resolve_my_ledger_intents() and it will finish them.",
+                    unfinished.len(),
+                    unfinished.join(", ")
+                ));
+            }
             return Err("This block is an ICRC-2 pull performed by this canister on your \
                         behalf (the deposit() flow). It was credited to your balance when the \
-                        pull happened and cannot be credited again.".to_string());
+                        pull happened and cannot be credited again. If your balance does not \
+                        show it, call get_my_ledger_intents(): an unfinished pull would be \
+                        listed there, and resolve_my_ledger_intents() completes it."
+                .to_string());
         }
 
         let amount = transfer.amount.e8s;
@@ -1885,8 +2994,13 @@ async fn deposit(amount: u64) -> Result<u64, String> {
         return Err("Amount must be greater than 0".to_string());
     }
 
-    // Minimum deposit to cover potential fees (currency-aware)
-    let min_deposit = if currency == Currency::BTC { 1_000 } else { 20_000 }; // 1000 sats or 0.0002 ICP
+    // Minimum deposit to cover potential fees (currency-aware).
+    //
+    // ONE NUMBER, SHARED WITH `withdraw`. See "THE FLOOR INVARIANT" at the top of
+    // this file: `min_deposit` is compile-time asserted to be at or above
+    // `min_withdrawal`, so this door cannot start accepting an amount the other
+    // door would refuse to hand back.
+    let min_deposit = currency.min_deposit();
     if amount < min_deposit {
         return Err(format!(
             "Minimum deposit is {}",
@@ -1896,108 +3010,70 @@ async fn deposit(amount: u64) -> Result<u64, String> {
 
     let ledger_id = currency.ledger_canister();
     let transfer_fee = currency.transfer_fee();
+    let now = ic_cdk::api::time();
 
-    // Use the standard ICRC-2 types from icrc_ledger_types crate
-    let transfer_from_args = TransferFromArgs {
-        spender_subaccount: None,
-        from: Account {
-            owner: caller,
-            subaccount: None,
-        },
-        to: Account {
-            owner: canister,
-            subaccount: None,
-        },
-        amount: Nat::from(amount),
-        fee: Some(Nat::from(transfer_fee)),
-        memo: None,
-        created_at_time: None,
-    };
+    // ------------------------------------------------------------------------
+    // WRITE THE INTENT BEFORE THE IRREVERSIBLE CALL
+    // (docs/SECURITY-FINDINGS.md FINDING 29, and the "THE LEDGER-INTENT JOURNAL"
+    //  section above)
+    //
+    // This write is COMMITTED at the await below, because an IC message is atomic
+    // only up to each await. So if the continuation never runs -- a trap, an
+    // instruction limit, an upgrade that drops the callback -- this entry
+    // survives, it names WHOSE money it is and HOW MUCH, and
+    // `resolve_my_ledger_intents()` can finish the job.
+    //
+    // Everything from here on must reach `settle_intent`, on every path.
+    // ------------------------------------------------------------------------
+    let intent = open_ledger_intent(caller, LedgerIntentKind::Pull, amount, now)?;
+    let transfer_from_args = pull_args(&intent, canister, transfer_fee);
 
     // Use ic_cdk::call which properly handles Candid encoding/decoding
     let transfer_result: Result<(Result<Nat, TransferFromError>,), _> =
         ic_cdk::call(ledger_id, "icrc2_transfer_from", (transfer_from_args,)).await;
 
-    let transfer_result = match transfer_result {
-        Ok((result,)) => result,
-        Err((code, msg)) => return Err(format!("Failed to call ledger: {:?} - {}", code, msg)),
+    // -- everything below here is the CONTINUATION. It may never run. Anything
+    //    it needs to be true must already be written down. --
+
+    let outcome = match transfer_result {
+        // Both ledgers type block indices as 64-bit, so the conversion cannot
+        // lose information in practice.
+        Ok((Ok(block_index),)) => IntentOutcome::Moved(nat_to_u64_saturating(&block_index)),
+        // `Duplicate` means an earlier attempt of THIS intent already moved the
+        // money and the ledger is handing over the block index it wrote; every
+        // other ledger error means nothing moved. `classify_` is the one place
+        // that distinction is made, for all three doors.
+        Ok((Err(e),)) => {
+            let symbol = currency.symbol();
+            match classify_transfer_from_error(&e) {
+                IntentOutcome::Moved(b) => IntentOutcome::Moved(b),
+                _ => IntentOutcome::Refused(match e {
+                    TransferFromError::InsufficientAllowance { allowance } => {
+                        let allowance_u64: u64 = allowance.0.try_into().unwrap_or(0);
+                        format!("Insufficient allowance. You approved {} but tried to deposit {}. Please approve more {} first.",
+                            currency.format_amount(allowance_u64),
+                            currency.format_amount(amount),
+                            symbol)
+                    }
+                    TransferFromError::InsufficientFunds { balance } => {
+                        let balance_u64: u64 = balance.0.try_into().unwrap_or(0);
+                        format!("Insufficient {} in your wallet. Balance: {}", symbol, currency.format_amount(balance_u64))
+                    }
+                    other => format!("{} transfer failed: {:?}", symbol, other),
+                }),
+            }
+        }
+        // THE BRANCH THAT USED TO LOSE MONEY. A call-level error is not evidence
+        // that nothing happened -- the ledger may well have executed the pull and
+        // the reply been lost or undecodable -- so the intent stays OPEN rather
+        // than being thrown away with a tidy-looking error message.
+        Err((code, msg)) => IntentOutcome::Unknown(format!(
+            "Failed to call ledger: {:?} - {}",
+            code, msg
+        )),
     };
 
-    match transfer_result {
-        Ok(block_index) => {
-            // Record the block this pull just wrote, BEFORE crediting. Without
-            // this, the block satisfied every check `notify_deposit` performs
-            // (its `from` is the caller, its `to` is this canister) and the same
-            // movement could be credited a second time -- withdrawable ICP
-            // created from nothing (docs/DEFECTS.md E-02, the FUND-THEFT entry).
-            // Both ledgers type block indices as 64-bit, so the conversion below
-            // cannot lose information in practice.
-            let block: u64 = block_index.0.clone().try_into().unwrap_or(u64::MAX);
-            if let Err(reason) = claim_deposit_block(block, caller) {
-                // The pull SUCCEEDED, so real money has already moved. Which of
-                // the two refusals this is decides whether crediting here would
-                // double-credit or whether NOT crediting here would strand the
-                // money, so the two are handled separately rather than lumped.
-                let already_recorded =
-                    VERIFIED_DEPOSITS.with(|v| v.borrow().contains_key(&block));
-                if already_recorded {
-                    // Something already claimed this exact block. The only
-                    // principal that can claim it is the block's `from`, which is
-                    // this caller, so the caller already holds the credit. Report
-                    // the balance they really have and do NOT credit twice.
-                    let current =
-                        BALANCES.with(|b| b.borrow().get(&caller).copied().unwrap_or(0));
-                    ic_cdk::println!(
-                        "deposit(): block {} was already claimed ({}); no second credit \
-                         applied for {}. Balance remains {}.",
-                        block, reason, caller, current
-                    );
-                    return Ok(current);
-                }
-                // Refused but NOT recorded, which can only be the watermark. That
-                // is unreachable by construction -- `bound_verified_deposits`
-                // never raises the watermark above the newest recorded index, and
-                // this block is newer than every recorded index -- but if it ever
-                // happens, money has been pulled that nothing will ever credit.
-                // Credit it here and shout. This cannot double-credit: a
-                // below-watermark block is refused to every other claimant.
-                ic_cdk::println!(
-                    "CRITICAL: deposit(): the block {} this pull just wrote was refused by \
-                     the deposit watermark ({}): {}. Crediting anyway rather than stranding \
-                     the caller's transfer. This means bound_verified_deposits has a bug.",
-                    block, deposit_watermark(), reason
-                );
-            }
-
-            // Credit the player's escrow balance
-            let new_balance = BALANCES.with(|b| {
-                let mut balances = b.borrow_mut();
-                let current = balances.get(&caller).copied().unwrap_or(0);
-                let new_balance = current.saturating_add(amount);
-                balances.insert(caller, new_balance);
-                new_balance
-            });
-
-            Ok(new_balance)
-        }
-        Err(e) => {
-            let symbol = currency.symbol();
-            match e {
-                TransferFromError::InsufficientAllowance { allowance } => {
-                    let allowance_u64: u64 = allowance.0.try_into().unwrap_or(0);
-                    Err(format!("Insufficient allowance. You approved {} but tried to deposit {}. Please approve more {} first.",
-                        currency.format_amount(allowance_u64),
-                        currency.format_amount(amount),
-                        symbol))
-                }
-                TransferFromError::InsufficientFunds { balance } => {
-                    let balance_u64: u64 = balance.0.try_into().unwrap_or(0);
-                    Err(format!("Insufficient {} in your wallet. Balance: {}", symbol, currency.format_amount(balance_u64)))
-                }
-                _ => Err(format!("{} transfer failed: {:?}", symbol, e))
-            }
-        }
-    }
+    settle_intent(intent.id, outcome, now)
 }
 
 /// Deposit from an external wallet using subaccount-based deposit address
@@ -2018,66 +3094,103 @@ async fn claim_external_deposit() -> Result<u64, String> {
     // Compute the caller's unique deposit subaccount: sha256(principal)
     let subaccount = compute_deposit_subaccount(&caller);
 
-    // Query the balance at the caller's deposit subaccount
-    let balance_result: Result<(Nat,), _> = ic_cdk::call(
-        ledger_id,
-        "icrc1_balance_of",
-        (Account {
-            owner: canister,
-            subaccount: Some(subaccount),
-        },),
-    ).await;
+    // Query the balance at the caller's deposit subaccount.
+    let balance = query_deposit_subaccount_balance(caller, ledger_id).await?;
 
-    let balance: u64 = match balance_result {
-        Ok((bal,)) => bal.0.try_into().unwrap_or(0),
-        Err((code, msg)) => return Err(format!("Failed to query balance: {:?} - {}", code, msg)),
-    };
+    // WRITE IT DOWN BEFORE DECIDING ANYTHING. The canister has just learned the
+    // one fact no query of its own can discover, and FINDING 28 is what happened
+    // when it threw that fact away on the refusal path: it went on telling the
+    // player they had nothing while holding their money at the address it had
+    // published to them. Recording a zero is equally load-bearing -- see
+    // `record_deposit_observation`.
+    record_deposit_observation(caller, ledger_id, balance, ic_cdk::api::time());
 
     if balance <= transfer_fee {
-        return Err(format!(
-            "No claimable balance. Send {} to your deposit address first. Use get_deposit_subaccount() to get your address.",
-            currency.symbol()
-        ));
+        // THE REFUSAL MUST BE TRUE. It used to read "No claimable balance. Send
+        // ICP to your deposit address first" for BOTH of the cases below, which
+        // instructed a player holding dust at that address to send more money to
+        // it and told a player holding money that they had none.
+        // AND "EMPTY" HAS TWO OPPOSITE MEANINGS (FINDING 29). An empty deposit
+        // address means "you have not sent anything" -- or it means "we already
+        // swept it and the continuation that was going to credit you never ran".
+        // The journal is the only thing that tells them apart, so it is read
+        // before anybody is told to go and send some money.
+        let unfinished = LEDGER_INTENTS.with(|j| {
+            j.borrow()
+                .values()
+                .filter(|i| i.who == caller && i.kind == LedgerIntentKind::Sweep)
+                .map(|i| format!("#{} for {}", i.id, currency.format_amount(i.amount)))
+                .collect::<Vec<_>>()
+        });
+        if balance == 0 && !unfinished.is_empty() {
+            return Err(format!(
+                "Your deposit address is empty because this table has ALREADY SWEPT it and has \
+                 not finished crediting you: {}. Nothing is lost. Call \
+                 resolve_my_ledger_intents() -- it asks the ledger what really happened and \
+                 credits you.",
+                unfinished.join(", ")
+            ));
+        }
+        return Err(if balance == 0 {
+            format!(
+                "Your deposit address is empty: this canister asked the {} ledger just now and \
+                 it holds 0. Send {} to (canister {}, subaccount get_deposit_subaccount()) and \
+                 call this again.",
+                currency.symbol(),
+                currency.symbol(),
+                canister,
+            )
+        } else {
+            format!(
+                "Nothing was swept, and you are NOT empty-handed. {}",
+                deposit_custody_sentence(balance, currency)
+            )
+        });
     }
 
     // Sweep: transfer from the deposit subaccount to the canister's main account
     let sweep_amount = balance - transfer_fee; // Deduct fee for the internal transfer
+    let now = ic_cdk::api::time();
 
-    let transfer_args = TransferArg {
-        from_subaccount: Some(subaccount),
-        to: Account {
-            owner: canister,
-            subaccount: None,
-        },
-        amount: Nat::from(sweep_amount),
-        fee: Some(Nat::from(transfer_fee)),
-        memo: None,
-        created_at_time: None,
-    };
+    // WRITE THE INTENT BEFORE THE IRREVERSIBLE CALL (FINDING 29). The balance
+    // query above is reversible -- it moves nothing -- so this is the first point
+    // at which there is anything to write down, and it is committed at the await
+    // below. `subaccount` is not passed: `sweep_args` derives it from the intent's
+    // owner, so the retry cannot address a different account from the original.
+    let _ = subaccount;
+    let intent = open_ledger_intent(caller, LedgerIntentKind::Sweep, sweep_amount, now)?;
+    let transfer_args = sweep_args(&intent, canister, transfer_fee);
 
     let transfer_result: Result<(Result<Nat, TransferError>,), _> =
         ic_cdk::call(ledger_id, "icrc1_transfer", (transfer_args,)).await;
 
-    let transfer_result = match transfer_result {
-        Ok((result,)) => result,
-        Err((code, msg)) => return Err(format!("Failed to sweep deposit: {:?} - {}", code, msg)),
+    // -- CONTINUATION. May never run; the intent above is what makes that
+    //    survivable. Everything below must reach `settle_intent`. --
+
+    let outcome = match transfer_result {
+        Ok((Ok(block),)) => IntentOutcome::Moved(nat_to_u64_saturating(&block)),
+        // `Duplicate` means an earlier attempt of THIS intent already swept, and
+        // the ledger is handing over the block index that attempt never saw.
+        Ok((Err(e),)) => match classify_transfer_error(&e) {
+            IntentOutcome::Moved(b) => IntentOutcome::Moved(b),
+            _ => IntentOutcome::Refused(format!(
+                "Sweep transfer failed: {:?}. Your {} is still at your deposit address and this \
+                 canister is still accounting for it -- see get_deposit_custody().",
+                e,
+                currency.format_amount(balance)
+            )),
+        },
+        // The sweep may or may not have happened. Leave the intent open rather
+        // than throwing it away with a tidy-looking error message.
+        Err((code, msg)) => {
+            IntentOutcome::Unknown(format!("Failed to sweep deposit: {:?} - {}", code, msg))
+        }
     };
 
-    match transfer_result {
-        Ok(_block_index) => {
-            // Credit the caller's escrow balance
-            let new_balance = BALANCES.with(|b| {
-                let mut balances = b.borrow_mut();
-                let current = balances.get(&caller).copied().unwrap_or(0);
-                let new_balance = current.saturating_add(sweep_amount);
-                balances.insert(caller, new_balance);
-                new_balance
-            });
-
-            Ok(new_balance)
-        }
-        Err(e) => Err(format!("Sweep transfer failed: {:?}", e)),
-    }
+    // The observation reset is `settle_intent`'s job, not this function's: doing
+    // it here would mean a discarded continuation never does it, which is the
+    // whole defect. See the `Sweep` branch there.
+    settle_intent(intent.id, outcome, now)
 }
 
 /// Get the caller's unique deposit subaccount address for external wallet deposits
@@ -2094,6 +3207,427 @@ fn compute_deposit_subaccount(principal: &Principal) -> [u8; 32] {
     hasher.update(b"cleardeck-deposit:");
     hasher.update(principal.as_slice());
     hasher.finalize().into()
+}
+
+// ============================================================================
+// THE ACCOUNT CENSUS -- EVERY ACCOUNT THIS CANISTER CAN HOLD VALUE IN
+// (docs/SECURITY-FINDINGS.md FINDING 21, FINDING 28, FINDING 11;
+//  docs/DEFECTS.md E-12)
+// ============================================================================
+//
+// READ THIS BEFORE ADDING A MONEY INSTRUMENT, A BALANCE SURFACE OR AN INVARIANT.
+// The rule is one sentence: **an instrument that measures fewer than all of these
+// accounts is not measuring this canister's custody.**
+//
+// This list exists because every money instrument in the project was anchored to
+// exactly ONE of them. `total_liability()` was `escrow + chips + pot`; the
+// harness's M1, its orphan check and its drain were all anchored to
+// `icrc1_balance_of(table, None)`; and all four balance surfaces read `BALANCES`.
+// Two independent reviewers reached the same hole from opposite directions in
+// wave 7: a controller could re-denominate a table holding 5 ICP because the
+// guard read a liability of zero (FINDING 21), and a player was told
+// "No claimable balance. Send ICP to your deposit address first" while the
+// canister held their ICP at exactly that address (FINDING 28).
+//
+//   1. ICP LEDGER (`ryjl3-tyaaa-aaaaa-aaaba-cai`), MAIN ACCOUNT
+//        `(this canister, None)`
+//      Every credited escrow balance, every chip and the pot are backed here.
+//      `deposit()` pulls into it, `withdraw()` pays out of it,
+//      `notify_deposit()` credits transfers already sitting in it.
+//      MEASURED BY: `escrow_total()` + table custody, i.e. `total_liability()`;
+//      harness M1/M2, `check_no_orphaned_custody`, `DrainReport`.
+//
+//   2. ICP LEDGER, ONE DEPOSIT SUBACCOUNT PER PRINCIPAL
+//        `(this canister, sha256("cleardeck-deposit:" || principal))`
+//        -- see `compute_deposit_subaccount`, published by
+//           `get_deposit_subaccount()` and shown by DepositModal.svelte.
+//      Money arrives here from external wallets (OISY, NNS) with no message to
+//      this canister at all: **the ledger changes and the canister is not told.**
+//      A query cannot read another canister, so the ONLY way this canister can
+//      know about it is to ask the ledger from an update
+//      (`claim_external_deposit`, `refresh_deposit_custody`,
+//      `admin_audit_deposit_custody`) and write the answer down. That written-down
+//      answer is `DEPOSIT_CUSTODY` below, and it is what every surface reports.
+//      MEASURED BY: `observed_deposit_total()`, folded into `total_liability()`;
+//      `get_custody_status.unswept_deposit`; `get_deposit_custody()`;
+//      `admin_get_deposit_custody()`; harness `Snapshot::ledger_deposit_subaccounts`.
+//
+//   3. ckBTC LEDGER (`mxzaz-hqaaa-aaaar-qaada-cai`), MAIN ACCOUNT
+//        `(this canister, None)`
+//      The same role as (1) on a `Currency::BTC` table. `Currency::ledger_canister()`
+//      is what selects between (1) and (3), which is why a currency flip is a
+//      custody change and not a config change (FINDING 20).
+//
+//   4. ckBTC LEDGER, ONE DEPOSIT SUBACCOUNT PER PRINCIPAL
+//        `(this canister, sha256("cleardeck-deposit:" || principal))`
+//      The same derivation as (2). `claim_external_deposit` picks its ledger from
+//      `get_table_currency()`, so the SAME subaccount bytes name a different
+//      account on each ledger, and a table that has ever been ICP and is now BTC
+//      can hold value in both (2) and (4) at once. `DepositObservation::ledger`
+//      records which ledger an observation was taken on for exactly that reason.
+//
+//   5. NATIVE BITCOIN, via the ckBTC minter -- NOT AN ACCOUNT OF THIS CANISTER.
+//      `get_btc_deposit_address()` calls the minter with `owner: Some(caller)`,
+//      so the BTC address, and the ckBTC `update_btc_balance()` mints, belong to
+//      the PLAYER, not to this canister. The player then funds the table through
+//      (3) or (4) like any other ckBTC holder. Listed here so the next reader does
+//      not have to re-derive that it is out of scope; if that `owner` ever becomes
+//      `Some(canister)`, it moves into scope and needs an entry above.
+//
+//   6. CYCLES. Not player money and not on any ledger. `get_cycle_status()` owns
+//      it; see FINDING 19 / FINDING 26.
+//
+// THE ENUMERABILITY LIMIT, STATED PLAINLY. A deposit subaccount is a pure
+// function of a principal, so the set of accounts in (2) and (4) is as large as
+// the set of principals: this canister cannot enumerate it. What it CAN enumerate
+// is `deposit_account_census()` -- every principal it has ever held escrow for,
+// seated, or already observed. A principal who derives the address off-chain and
+// funds it without ever calling this canister is outside that set until they call
+// `refresh_deposit_custody()` or `claim_external_deposit()` once. That is why the
+// derivation is written down above rather than left in the code: an operator
+// auditing a table can compute the address for any principal and check it.
+
+/// One reading of one deposit subaccount, taken by asking the ledger.
+///
+/// The amount is **as of `observed_at_ns`**, not now. Nothing in a query can be
+/// fresher than this, and every surface that reports it also reports when it was
+/// taken, because a stale figure presented as current is the same lie in a
+/// different font.
+#[derive(Clone, Debug, PartialEq, Eq, CandidType, Deserialize)]
+pub struct DepositObservation {
+    /// `icrc1_balance_of((this canister, deposit subaccount of the principal))`.
+    pub amount: u64,
+    /// `ic_cdk::api::time()` when the ledger answered.
+    pub observed_at_ns: u64,
+    /// WHICH ledger was asked. A table that changed currency can hold value at the
+    /// same subaccount bytes on two different ledgers.
+    pub ledger: Principal,
+}
+
+thread_local! {
+    /// What the ledger last said about each deposit subaccount this canister owns.
+    ///
+    /// PERSISTED (`PersistentState::deposit_custody`). It is a liability record:
+    /// losing it across an upgrade would put every surface back to reporting zero
+    /// on money the canister is still holding.
+    ///
+    /// An entry with `amount == 0` is not noise -- it is the record that the
+    /// account HAS been looked at, which is what
+    /// [`unaudited_deposit_accounts`] and the currency guard read.
+    static DEPOSIT_CUSTODY: RefCell<HashMap<Principal, DepositObservation>> =
+        RefCell::new(HashMap::new());
+}
+
+/// How many deposit subaccounts one `admin_audit_deposit_custody()` call will
+/// query. Each one is an inter-canister call; the cap keeps a single message
+/// inside its instruction budget on a table with many past players. The method
+/// reports how many are still unaudited so the operator knows to call again.
+const MAX_DEPOSIT_AUDIT_PER_CALL: usize = 50;
+
+/// Write down what the ledger just said about one deposit subaccount.
+///
+/// Called from every path that asks. Recording a **zero** matters as much as
+/// recording a balance: it is the difference between "this account is empty" and
+/// "nobody has ever looked at this account", and the currency guard refuses on
+/// the second.
+fn record_deposit_observation(who: Principal, ledger: Principal, amount: u64, now: u64) {
+    DEPOSIT_CUSTODY.with(|d| {
+        d.borrow_mut().insert(
+            who,
+            DepositObservation {
+                amount,
+                observed_at_ns: now,
+                ledger,
+            },
+        );
+    });
+}
+
+/// The last observed balance of one principal's deposit subaccount, with its age.
+fn observed_deposit_entry(who: &Principal) -> Option<DepositObservation> {
+    DEPOSIT_CUSTODY.with(|d| d.borrow().get(who).cloned())
+}
+
+/// Everything this canister has seen sitting in its own deposit subaccounts and
+/// has not swept in yet. **This is a liability**: the money is on the ledger under
+/// this canister's ownership and it belongs to the principal the subaccount was
+/// derived from.
+///
+/// # An observation can only be STALE LOW, never stale high, and that matters
+///
+/// A deposit subaccount balance goes UP without this canister being told -- an
+/// external wallet transfers to it and no message arrives. It can only go DOWN by
+/// a transfer out of that subaccount, and this canister is the only principal that
+/// can sign one; there is exactly one such path (`claim_external_deposit`) and it
+/// rewrites the observation in the same message. So for every account,
+///
+/// ```text
+///   observed <= what the ledger actually holds
+/// ```
+///
+/// and therefore this figure never OVER-states the liability. That is the safe
+/// direction for `total_liability()` and for every guard reading it: the worst a
+/// stale record can do is make the canister refuse something it could have
+/// allowed, never allow something it should have refused. The harness asserts the
+/// inequality directly, in both directions and per principal
+/// (`check_deposit_attribution`), rather than leaving it as an argument.
+fn observed_deposit_total() -> u64 {
+    let observed = DEPOSIT_CUSTODY.with(|d| {
+        d.borrow()
+            .values()
+            .fold(0u64, |acc, o| acc.saturating_add(o.amount))
+    });
+    // NET OF WHAT IS ALREADY ON ITS WAY OUT (docs/SECURITY-FINDINGS.md FINDING 29).
+    //
+    // A `sweep` intent is money moving from a deposit subaccount into the main
+    // account -- BETWEEN two accounts this canister already owns. The observation
+    // above was taken before that movement started and the reset lives in the
+    // continuation, so while a sweep is open the observation is stale by exactly
+    // the amount in flight. Summing both would count the same e8s twice, and a
+    // canister that overstates what it holds is a canister whose books stop
+    // agreeing with the chain.
+    observed.saturating_sub(open_sweep_total())
+}
+
+/// Money named by open `sweep` intents: seen at a deposit subaccount, already on
+/// its way to the main account.
+///
+/// **Gross, not net.** A sweep of `amount` debits the deposit subaccount by
+/// `amount + fee`: the recipient gets `amount` and the ledger burns the fee out
+/// of the same account. The observation has to be reduced by everything that
+/// leaves, or the netted figure keeps claiming a fee that no longer exists
+/// anywhere.
+fn open_sweep_total() -> u64 {
+    let fee = get_table_currency().transfer_fee();
+    LEDGER_INTENTS.with(|j| {
+        j.borrow()
+            .values()
+            .filter(|i| i.kind == LedgerIntentKind::Sweep)
+            .fold(0u64, |acc, i| acc.saturating_add(i.amount.saturating_add(fee)))
+    })
+}
+
+/// The same netting for one principal.
+fn open_sweep_for(who: Principal) -> u64 {
+    let fee = get_table_currency().transfer_fee();
+    LEDGER_INTENTS.with(|j| {
+        j.borrow()
+            .values()
+            .filter(|i| i.who == who && i.kind == LedgerIntentKind::Sweep)
+            .fold(0u64, |acc, i| acc.saturating_add(i.amount.saturating_add(fee)))
+    })
+}
+
+/// Every principal whose deposit subaccount this canister is able to enumerate:
+/// anyone it holds escrow for, anyone sitting at the table, and anyone it has
+/// already observed. See "THE ENUMERABILITY LIMIT" above for what this cannot
+/// cover and why that is written down rather than hidden.
+fn deposit_account_census() -> Vec<Principal> {
+    let mut out: Vec<Principal> = Vec::new();
+    let push = |p: Principal, out: &mut Vec<Principal>| {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    };
+    BALANCES.with(|b| {
+        for k in b.borrow().keys() {
+            push(*k, &mut out);
+        }
+    });
+    TABLE.with(|t| {
+        if let Some(state) = t.borrow().as_ref() {
+            for p in state.players.iter().flatten() {
+                push(p.principal, &mut out);
+            }
+        }
+    });
+    DEPOSIT_CUSTODY.with(|d| {
+        for k in d.borrow().keys() {
+            push(*k, &mut out);
+        }
+    });
+    out
+}
+
+/// Enumerable deposit accounts this canister has never actually looked at.
+///
+/// Not "accounts with money in them" -- accounts whose balance is UNKNOWN. A
+/// guard that has to be sure the canister is holding nothing has to treat unknown
+/// as non-zero, because that is exactly what FINDING 21 walked through: the guard
+/// read zero and the account held 5 ICP.
+fn unaudited_deposit_accounts() -> Vec<Principal> {
+    let known: Vec<Principal> = DEPOSIT_CUSTODY.with(|d| d.borrow().keys().copied().collect());
+    deposit_account_census()
+        .into_iter()
+        .filter(|p| !known.contains(p))
+        .collect()
+}
+
+/// What the canister is holding for one principal at the deposit address it
+/// published to them, and what they can do about it.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct DepositAddressCustody {
+    /// The subaccount bytes, i.e. the second half of the address this canister
+    /// published. Repeated here so one call answers "where is it" and "how much".
+    pub subaccount: Vec<u8>,
+    /// The ledger the amount below was read from.
+    pub ledger: Principal,
+    /// The amount the ledger reported at `observed_at_ns`. Zero with
+    /// `observed_at_ns = null` means NOBODY HAS LOOKED, not "there is nothing".
+    pub observed_amount: u64,
+    /// When the ledger was asked. `null` means never.
+    pub observed_at_ns: Option<u64>,
+    /// The ledger's transfer fee. An amount at or below it cannot move on its own.
+    pub transfer_fee: u64,
+    /// True when `claim_external_deposit()` would sweep this amount right now.
+    pub sweepable: bool,
+    /// The plain-language answer, including the dust case. Never empty when
+    /// `observed_amount > 0`.
+    pub note: String,
+}
+
+/// The one place the "money at your deposit address" sentence is written.
+///
+/// Shared by [`get_custody_status`], [`get_deposit_custody`],
+/// [`refresh_deposit_custody`] and `claim_external_deposit`'s refusal, so the four
+/// can never say different things about the same account. FINDING 28 is what
+/// happens when one of them makes up its own sentence: the refusal said
+/// "No claimable balance. Send ICP to your deposit address first" about an account
+/// holding the player's 10,000 e8s.
+fn deposit_custody_sentence(amount: u64, currency: Currency) -> String {
+    let fee = currency.transfer_fee();
+    if amount == 0 {
+        return String::new();
+    }
+    let formatted = format!("{} ({} e8s)", currency.format_amount(amount), amount);
+    if amount > fee {
+        format!(
+            "{formatted} of yours is at the deposit address this canister published for you. It \
+             is held by this canister and it is NOT withdrawable until it is swept into your \
+             balance: call claim_external_deposit(), which moves it and credits you \
+             {} (the {} ledger charges {} e8s for the sweep).",
+            currency.format_amount(amount.saturating_sub(fee)),
+            currency.symbol(),
+            fee,
+        )
+    } else {
+        let top_up = fee.saturating_add(1).saturating_sub(amount);
+        format!(
+            "{formatted} of yours is at the deposit address this canister published for you. It \
+             is held by this canister and it is at or below the {} ledger's transfer fee ({} \
+             e8s), so no transfer can move it on its own -- a sweep would cost more than the \
+             amount. IT IS NOT LOST AND IT IS NOT FORGOTTEN: it is counted in everything this \
+             canister reports it holds for you, and sending {} e8s or more to the SAME address \
+             makes the whole balance claimable with claim_external_deposit(). Until you do, treat \
+             it as unrecoverable dust. docs/SECURITY-FINDINGS.md FINDING 11 / FINDING 28.",
+            currency.symbol(),
+            fee,
+            top_up,
+        )
+    }
+}
+
+/// The sentence for an account NOBODY HAS LOOKED AT.
+///
+/// Kept out of [`deposit_custody_sentence`] and out of
+/// `get_custody_status().advice` on purpose. Every player who has never used the
+/// external-wallet flow is in this state permanently, and a warning that is on
+/// screen for everybody all the time is a warning everybody learns to skip -- the
+/// project has already lost a wave to a gate nobody read. It belongs where a
+/// reader is asking about this exact account, which is
+/// [`DepositAddressCustody::note`]; the machine-readable form,
+/// `CustodyStatus::unswept_deposit_observed_at_ns == null`, is on the general
+/// surface and is documented to mean "never asked", not "empty".
+fn deposit_unknown_sentence(currency: Currency) -> String {
+    format!(
+        "This canister has not asked the {} ledger what is at your deposit address, so it cannot \
+         tell you whether anything is sitting there. That is NOT a statement that the address is \
+         empty. Call refresh_deposit_custody(), which asks and writes the answer down, or \
+         claim_external_deposit(), which asks and then sweeps.",
+        currency.symbol()
+    )
+}
+
+/// Build the caller-facing record from whatever the canister currently knows.
+fn deposit_custody_of(who: Principal) -> DepositAddressCustody {
+    let currency = get_table_currency();
+    let fee = currency.transfer_fee();
+    let entry = observed_deposit_entry(&who);
+    let observed_amount = entry.as_ref().map(|o| o.amount).unwrap_or(0);
+    let observed_at_ns = entry.as_ref().map(|o| o.observed_at_ns);
+    DepositAddressCustody {
+        subaccount: compute_deposit_subaccount(&who).to_vec(),
+        ledger: entry
+            .as_ref()
+            .map(|o| o.ledger)
+            .unwrap_or_else(|| currency.ledger_canister()),
+        observed_amount,
+        observed_at_ns,
+        transfer_fee: fee,
+        sweepable: observed_amount > fee,
+        note: if entry.is_some() {
+            deposit_custody_sentence(observed_amount, currency)
+        } else {
+            deposit_unknown_sentence(currency)
+        },
+    }
+}
+
+/// What this canister last saw at YOUR deposit address, and what to do about it.
+///
+/// A QUERY, so it is free and it answers when every update is being refused. It
+/// reports the LAST OBSERVATION, with its timestamp, because a query on the IC
+/// cannot call another canister and the balance lives on the ledger. Use
+/// [`refresh_deposit_custody`] to take a new reading.
+#[ic_cdk::query]
+fn get_deposit_custody() -> DepositAddressCustody {
+    deposit_custody_of(ic_cdk::api::msg_caller())
+}
+
+/// Ask the ledger what is at the caller's deposit address right now, write the
+/// answer into this canister's books, and return it.
+///
+/// This is the call that makes every other surface true. Any principal may call
+/// it for themselves; it moves no money, so there is nothing to gain by calling
+/// it and nothing to lose by anyone else calling theirs.
+#[ic_cdk::update]
+async fn refresh_deposit_custody() -> Result<DepositAddressCustody, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers have no deposit address".to_string());
+    }
+    let currency = get_table_currency();
+    let ledger_id = currency.ledger_canister();
+    let amount = query_deposit_subaccount_balance(caller, ledger_id).await?;
+    record_deposit_observation(caller, ledger_id, amount, ic_cdk::api::time());
+    Ok(deposit_custody_of(caller))
+}
+
+/// `icrc1_balance_of((this canister, deposit subaccount of `who`))` on `ledger`.
+///
+/// Split out so `claim_external_deposit`, `refresh_deposit_custody` and the admin
+/// audit all read the account the same way. There is exactly one derivation of
+/// this address in the canister ([`compute_deposit_subaccount`]) and exactly one
+/// reader of it, which is the property FINDING 28 needed and did not have.
+async fn query_deposit_subaccount_balance(
+    who: Principal,
+    ledger_id: Principal,
+) -> Result<u64, String> {
+    let account = Account {
+        owner: canister_id(),
+        subaccount: Some(compute_deposit_subaccount(&who)),
+    };
+    let balance_result: Result<(Nat,), _> =
+        ic_cdk::call(ledger_id, "icrc1_balance_of", (account,)).await;
+    match balance_result {
+        Ok((bal,)) => Ok(bal.0.try_into().unwrap_or(0)),
+        Err((code, msg)) => Err(format!(
+            "Could not ask the {} ledger what is at your deposit address: {:?} - {}. \
+             Nothing has been moved and nothing has been written down; the address still holds \
+             whatever it held.",
+            ledger_id, code, msg
+        )),
+    }
 }
 
 /// Verify a ckBTC deposit using ICRC-3 get_transactions API
@@ -2267,10 +3801,35 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
     let min_withdrawal = currency.min_withdrawal();
     let max_withdrawal = currency.max_withdrawal();
 
-    if amount < min_withdrawal {
+    // THE WHOLE-BALANCE SWEEP  (docs/SECURITY-FINDINGS.md FINDING 27)
+    //
+    // A floor is a statement about the smallest REQUEST worth making. It must
+    // never become a statement about the smallest balance that can leave, because
+    // escrow balances are not only made of deposits: an odd-chip split, a small
+    // loss, or a `claim_external_deposit` sweep that paid the ledger fee out of
+    // the amount can each leave a balance below the floor, and every one of those
+    // is money this canister took custody of.
+    //
+    // So the floor is waived for the one request that cannot be a mistake: "send
+    // me everything I have left". The only remaining bound is physics -- the
+    // ledger cannot deliver an amount at or below its own transfer fee -- and
+    // that bound is stated out loud in the refusal rather than discovered later
+    // in `transfer_tokens`.
+    //
+    // Reading BALANCES here is consistent with the authoritative read in the
+    // atomic section below: there is no `.await` between the two, so no other
+    // message can run in between.
+    let balance_now = BALANCES.with(|b| b.borrow().get(&caller).copied().unwrap_or(0));
+    let sweeping_whole_balance = amount == balance_now && amount > currency.transfer_fee();
+
+    if amount < min_withdrawal && !sweeping_whole_balance {
         return Err(format!(
-            "Minimum withdrawal is {}",
-            currency.format_amount(min_withdrawal)
+            "Minimum withdrawal is {}. Your whole remaining balance can always be withdrawn in \
+             one call whatever its size, as long as it is more than the {} network fee -- you \
+             have {}.",
+            currency.format_amount(min_withdrawal),
+            currency.format_amount(currency.transfer_fee()),
+            currency.format_amount(balance_now)
         ));
     }
     if amount > max_withdrawal {
@@ -2292,11 +3851,47 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
     }
 
     // Check if player already has a pending withdrawal (prevent reentrancy)
-    let has_pending = PENDING_WITHDRAWALS.with(|p| {
-        p.borrow().contains_key(&caller)
-    });
+    //
+    // THE FLAG MUST NOT OUTLIVE THE OPERATION IT GUARDS
+    // (docs/SECURITY-FINDINGS.md FINDING 29). `PENDING_WITHDRAWALS` is written
+    // before the transfer and cleared in the continuation, so a continuation that
+    // never ran used to leave it set forever -- measured: one hour later, "A
+    // withdrawal is already in progress", and `withdraw` is the ONLY door from
+    // escrow to the ledger, so that is a permanent fund lock (M9).
+    //
+    // The durable record of a withdrawal in flight is the JOURNAL, not this map.
+    // So: a pending flag with a matching open payout intent is a real
+    // in-progress withdrawal and is refused, and one WITHOUT is stale and is
+    // cleared here rather than being believed.
+    let has_pending = PENDING_WITHDRAWALS.with(|p| p.borrow().contains_key(&caller));
     if has_pending {
-        return Err("A withdrawal is already in progress".to_string());
+        let open_payout = LEDGER_INTENTS.with(|j| {
+            j.borrow()
+                .values()
+                .find(|i| i.who == caller && i.kind == LedgerIntentKind::Payout)
+                .map(|i| (i.id, i.amount))
+        });
+        match open_payout {
+            Some((id, amount)) => {
+                return Err(format!(
+                    "A withdrawal is already in progress: ledger operation #{id} for {}. \
+                     If it is stuck, call resolve_my_ledger_intents() -- it asks the ledger \
+                     what really happened and either completes the payout or refunds your \
+                     escrow. You are not locked out.",
+                    currency.format_amount(amount)
+                ));
+            }
+            None => {
+                ic_cdk::println!(
+                    "withdraw(): clearing a STALE pending-withdrawal flag for {} -- no open \
+                     payout intent corresponds to it (FINDING 29).",
+                    caller
+                );
+                PENDING_WITHDRAWALS.with(|p| {
+                    p.borrow_mut().remove(&caller);
+                });
+            }
+        }
     }
 
     // Check if player is in a hand (can't withdraw during play)
@@ -2311,7 +3906,7 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
     let in_hand = TABLE.with(|t| {
         let table = t.borrow();
         if let Some(state) = table.as_ref() {
-            if hand_is_stuck(state, now) {
+            if hand_is_stuck_now(state, now) {
                 return false;
             }
             if state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete {
@@ -2339,13 +3934,32 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
         match table.as_ref() {
             Some(state) => (
                 committed_stake_of(state, caller),
-                hand_is_stuck(state, now),
+                hand_is_stuck_now(state, now),
                 state.hand_number,
             ),
             None => (0, false, 0),
         }
     });
     let committed_note = committed_stake_sentence(committed, committed_is_stuck, committed_hand);
+
+    // AND WHAT THIS CALLER HAS AT THE ADDRESS THIS CANISTER PUBLISHED TO THEM.
+    //
+    // docs/SECURITY-FINDINGS.md FINDING 28, which is FINDING 18 in a second ledger
+    // account: a player asking for money that is not in their escrow because it is
+    // sitting, unswept, at their own deposit subaccount was told "Insufficient
+    // balance. Have: 0.0000 ICP" with no mention of it. Same rule as above -- the
+    // sentence is written once, in `deposit_custody_sentence`, and every refusal
+    // carries it.
+    let deposit_note = {
+        let observed = observed_deposit_entry(&caller);
+        deposit_custody_sentence(observed.as_ref().map(|o| o.amount).unwrap_or(0), currency)
+    };
+    let committed_note = [committed_note, deposit_note]
+        .iter()
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .collect::<Vec<String>>()
+        .join(" ");
 
     if in_hand {
         return Err(if committed_note.is_empty() {
@@ -2388,32 +4002,39 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
         Ok(())
     })?;
 
-    // Transfer to player's wallet
-    let result = transfer_tokens(caller, amount).await;
-
-    // Clear pending state regardless of outcome
-    PENDING_WITHDRAWALS.with(|p| {
-        p.borrow_mut().remove(&caller);
-    });
-
-    match result {
-        Ok(block) => {
-            // Record successful withdrawal time for cooldown
-            LAST_WITHDRAWAL.with(|l| {
-                l.borrow_mut().insert(caller, now);
-            });
-            Ok(block)
-        }
+    // WRITE THE INTENT BEFORE THE IRREVERSIBLE CALL. The escrow debit above is
+    // already committed at the await below, so without this the refund -- the
+    // only thing that makes the debit safe -- lives entirely inside a
+    // continuation that can be discarded. FINDING 29.
+    //
+    // The transfer now carries a memo and a created_at_time, so a re-issue from
+    // `resolve_my_ledger_intents()` is deduplicated BY THE LEDGER and cannot pay
+    // the player twice. That is what makes retrying a payout safe at all.
+    let intent = match open_ledger_intent(caller, LedgerIntentKind::Payout, amount, now) {
+        Ok(i) => i,
         Err(e) => {
-            // Refund the escrow if transfer failed (with overflow protection)
+            // The debit and the pending flag are still uncommitted at this point
+            // (no await has happened yet), but returning Err from an update rolls
+            // nothing back: an `Err` return is a normal reply. Undo them by hand.
             BALANCES.with(|b| {
                 let mut balances = b.borrow_mut();
                 let current = balances.get(&caller).copied().unwrap_or(0);
                 balances.insert(caller, current.saturating_add(amount));
             });
-            Err(e)
+            PENDING_WITHDRAWALS.with(|p| {
+                p.borrow_mut().remove(&caller);
+            });
+            return Err(e);
         }
-    }
+    };
+
+    // Transfer to player's wallet
+    let outcome = attempt_intent(&intent).await;
+
+    // -- CONTINUATION. `settle_intent` clears the pending flag, sets the cooldown
+    //    on success and refunds on a definite failure; and if this never runs,
+    //    `resolve_my_ledger_intents()` does the same thing later. --
+    settle_intent(intent.id, outcome, now)
 }
 
 /// Your WITHDRAWABLE escrow balance, and nothing else.
@@ -2428,10 +4049,19 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
 /// move). The number was right. It was not the answer to the question being
 /// asked.
 ///
+/// **It also excludes money sitting at the deposit address this canister
+/// published to you** -- account (2)/(4) of "THE ACCOUNT CENSUS", the third place
+/// this figure is right and unhelpful (FINDING 28). That money is yours and this
+/// canister is holding it, but it is one `claim_external_deposit()` away from
+/// being withdrawable, exactly as chips at the table are one `cash_out()` away,
+/// and this method is the WITHDRAWABLE figure. Reporting it here would offer a
+/// client a "withdraw everything" amount that `withdraw` must then refuse.
+/// [`get_custody_status`] carries it, in its own field and in `total`.
+///
 /// Widening this reply is not possible without breaking every client that
 /// decodes a `nat64`, so the whole answer lives at [`get_custody_status`], which
-/// returns this figure plus the two it omits, and `withdraw`'s refusals now carry
-/// the same sentence. **A client showing a balance should call
+/// returns this figure plus the three it omits, and `withdraw`'s refusals now
+/// carry the same sentence. **A client showing a balance should call
 /// `get_custody_status`.**
 #[ic_cdk::query]
 fn get_balance() -> u64 {
@@ -2657,70 +4287,90 @@ fn reload(amount: u64) -> Result<u64, String> {
 /// seat, so the stake comes back into the stack and leaves with its owner. See
 /// [`settle_unmovable_hand`] for why that is not a new power and cannot shut this
 /// door.
+///
+/// # EVERY REFUSAL IS DECIDED BEFORE ANYTHING MOVES
+///
+/// docs/DEFECTS.md E-59. The settle used to run at the top of this function,
+/// before the seat was looked up, and an `Err` reply from an ic-cdk update is an
+/// ordinary reply and not a rollback -- so a principal who had never sat at this
+/// table could void a live hand and be told `Err("Not at table")`. Measured: phase
+/// PreFlop -> HandComplete, pot 3,000,000 -> 0, reply `Err`. The order below is
+/// therefore load-bearing and not stylistic: **the seat lookup and the in-a-hand
+/// refusal come first, and nothing above them mutates.**
 #[ic_cdk::update]
 fn cash_out() -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
     let now = ic_cdk::api::time();
-
-    // A hand nobody can move is a hand nobody can win. Settle it FIRST, so what
-    // follows is an ordinary cash-out from a finished hand and the stake this
-    // caller has in the middle goes home with them instead of staying behind
-    // as an invisible claim on an empty table.
-    TABLE.with(|t| {
-        let mut table = t.borrow_mut();
-        if let Some(state) = table.as_mut() {
-            if hand_is_stuck(state, now) {
-                settle_unmovable_hand(state, now, UnmovableReason::AnExitDoorFoundItUnmovable);
-            }
-        }
-    });
-
-    // Check if player is in a hand
-    //
-    // ONLY WHILE THE HAND CAN ACTUALLY PROGRESS -- see the note on the same guard
-    // in `withdraw`, and docs/SECURITY-FINDINGS.md FINDING 15.
-    //
-    // This comment used to end: "Cashing out of a stuck hand does not take the
-    // stake with it: `record_departed_stake` below keeps every chip this player
-    // has already put in inside the payout basis, so the only thing that leaves is
-    // the stack behind, which was never contested." Every clause of that was true
-    // and the conclusion a reader drew from it -- that the player was therefore
-    // fine -- was not: the stake stayed in a pot NOBODY COULD WIN, on a table they
-    // had just left, and no surface said so. That is FINDING 18, and the settle
-    // above is the answer. **The stake now leaves with its owner.** The
-    // `hand_is_stuck` arm below is reached only when the settle declined a plan
-    // that does not conserve, and then the departed-stake record is what keeps the
-    // money in the basis.
-    let in_hand = TABLE.with(|t| {
-        let table = t.borrow();
-        if let Some(state) = table.as_ref() {
-            if hand_is_stuck(state, now) {
-                return false;
-            }
-            if state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete {
-                // The same predicate `withdraw` uses, and the same one the rest
-                // of the engine uses: see the "WHO IS IN THE HAND" section.
-                return state.players.iter().flatten()
-                    .any(|p| p.principal == caller && is_in_hand(p));
-            }
-        }
-        false
-    });
-
-    if in_hand {
-        return Err("Cannot cash out while in a hand".to_string());
-    }
 
     // Find player and get their chips
     let result = TABLE.with(|t| {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
 
+        // ---- REFUSALS FIRST. Nothing above this line has changed the table. ----
+
         let seat = state
             .players
             .iter()
             .position(|p| p.as_ref().map(|p| p.principal == caller).unwrap_or(false))
             .ok_or("Not at table")?;
+
+        // Is this hand one no message can move? THE one predicate -- the same one
+        // the on-chain clock acts on, so the two can no longer reach different
+        // conclusions about the same hand (docs/SECURITY-FINDINGS.md FINDING 25).
+        let unmovable = hand_is_stuck_now(state, now);
+
+        // Check if player is in a hand
+        //
+        // ONLY WHILE THE HAND CAN ACTUALLY PROGRESS -- see the note on the same
+        // guard in `withdraw`, and docs/SECURITY-FINDINGS.md FINDING 15.
+        //
+        // This comment used to end: "Cashing out of a stuck hand does not take the
+        // stake with it: `record_departed_stake` below keeps every chip this player
+        // has already put in inside the payout basis, so the only thing that leaves
+        // is the stack behind, which was never contested." Every clause of that was
+        // true and the conclusion a reader drew from it -- that the player was
+        // therefore fine -- was not: the stake stayed in a pot NOBODY COULD WIN, on
+        // a table they had just left, and no surface said so. That is FINDING 18,
+        // and the settle below is the answer. **The stake leaves with its owner.**
+        let in_hand = !unmovable
+            && hand_in_progress(state)
+            && state
+                .players
+                .iter()
+                .flatten()
+                .any(|p| p.principal == caller && is_in_hand(p));
+        if in_hand {
+            // AND IT SAYS WHAT IS STILL YOURS, in the same words `withdraw` and
+            // `get_custody_status` use. docs/SECURITY-FINDINGS.md FINDING 18 is
+            // that a player is never told they have nothing while the canister
+            // holds their money, and this refusal is now one of the moments that
+            // used to happen at: the old code lifted the guard entirely on a stuck
+            // hand, so the refusal never had to speak. It has to speak now, because
+            // after docs/DEFECTS.md E-59 a hand in a stall is refused here rather
+            // than settled -- correctly, the clock is about to play it out -- and
+            // the caller is entitled to know what is in the middle while they wait.
+            let note = committed_stake_sentence(
+                committed_stake_of(state, caller),
+                false,
+                state.hand_number,
+            );
+            return Err(if note.is_empty() {
+                "Cannot cash out while in a hand".to_string()
+            } else {
+                format!("Cannot cash out while in a hand. {note}")
+            });
+        }
+
+        // ---- FROM HERE ON NOTHING RETURNS `Err`, so nothing can commit one. ----
+
+        // A hand nobody can move is a hand nobody can win. Settle it before the
+        // seat is vacated, so the stake this caller has in the middle goes home
+        // with them instead of staying behind as an invisible claim on an empty
+        // table.
+        if unmovable {
+            settle_unmovable_hand(state, now, UnmovableReason::AnExitDoorFoundItUnmovable);
+        }
 
         // The guard above only refuses players who have NOT folded, so a folded
         // player -- including one folded by the action timer without ever calling
@@ -2756,10 +4406,11 @@ fn cash_out() -> Result<u64, String> {
     // retires its action clock and starts the auto-deal clock, and vacating the
     // last seat ends the hand outright.
     //
-    // UNCONDITIONALLY, not `if result.is_ok()`: the settle at the top of this
-    // function runs before the seat is looked up, so the deadline can move even on
-    // the call that goes on to return "Not at table". Costs one comparison when
-    // nothing moved (`schedule_next_wake` re-arms only on a changed deadline).
+    // UNCONDITIONALLY, not `if result.is_ok()`, and kept that way after E-59 moved
+    // every refusal above the first mutation: `schedule_next_wake` re-arms only on
+    // a changed deadline, so on a refusing call it costs one comparison and reads
+    // as what it is -- a statement that this entry point never leaves the wake
+    // aimed at a clock that no longer exists, whatever it replies.
     schedule_next_wake();
     let chips = result?;
 
@@ -2903,8 +4554,16 @@ fn admin_update_config(new_config: TableConfig) -> Result<TableConfig, String> {
     })
 }
 
-/// Admin: Check balance for a specific player
-/// Controller only
+/// Admin: Check a specific player's WITHDRAWABLE ESCROW. Controller only.
+///
+/// # Scope, stated because a partial figure read as a total is FINDING 28
+///
+/// `BALANCES` is ledger account (1) of "THE ACCOUNT CENSUS" and nothing else.
+/// This reply does not include the player's chips (`admin_get_table_chips`),
+/// their stake in a live pot (`get_table_state`), or their money at the deposit
+/// address this canister published to them
+/// ([`admin_get_deposit_custody`]). **Zero here is not "this canister holds
+/// nothing for this player".**
 #[ic_cdk::query]
 fn admin_get_balance(player: Principal) -> Result<u64, String> {
     require_controller()?;
@@ -2919,9 +4578,18 @@ fn admin_get_balance(player: Principal) -> Result<u64, String> {
 // A compromised controller key could mint arbitrary balances and withdraw real funds.
 // If balance recovery is needed, redeploy with a migration in post_upgrade.
 
-/// Admin: Get all balances (for auditing/recovery)
-/// Returns (total_assigned, list of (principal, balance))
-/// Controller only
+/// Admin: every WITHDRAWABLE ESCROW balance. Controller only.
+///
+/// Returns `(total_assigned, list of (principal, balance))`.
+///
+/// # This is one of the canister's ledger accounts, not all of them
+///
+/// The tuple shape is load-bearing for existing readers (`tests/money_safety`,
+/// `tests/settlement`), and Candid will not let it grow an element without
+/// breaking them, so the deposit-subaccount half of this canister's custody lives
+/// at [`admin_get_deposit_custody`] instead. **An audit that reads only this
+/// method is the audit FINDING 21 walked past**: it returned a clean zero on a
+/// canister holding 5 ICP at its own published deposit addresses.
 #[ic_cdk::query]
 fn admin_get_all_balances() -> Result<(u64, Vec<(Principal, u64)>), String> {
     require_controller()?;
@@ -2954,6 +4622,93 @@ fn admin_get_table_chips() -> Result<u64, String> {
             None => Ok(0)
         }
     })
+}
+
+/// Admin: the deposit-subaccount half of this canister's custody, which
+/// `admin_get_balance` and `admin_get_all_balances` do not and cannot see.
+///
+/// Returns `(total observed, per-principal (amount, observed_at_ns), accounts
+/// never read)`. The third element is the one that matters: a principal in it is
+/// an address this canister published and has never looked at, so its balance is
+/// UNKNOWN, not zero. `admin_get_all_balances` reporting a clean total while this
+/// list is non-empty is not an all-clear.
+///
+/// Controller only, and read-only: it reports the last observations, it does not
+/// take new ones. `admin_audit_deposit_custody()` is the update that does.
+#[ic_cdk::query]
+fn admin_get_deposit_custody() -> Result<(u64, Vec<(Principal, u64, u64)>, Vec<Principal>), String> {
+    require_controller()?;
+    let list: Vec<(Principal, u64, u64)> = DEPOSIT_CUSTODY.with(|d| {
+        d.borrow()
+            .iter()
+            .map(|(p, o)| (*p, o.amount, o.observed_at_ns))
+            .collect()
+    });
+    Ok((
+        observed_deposit_total(),
+        list,
+        unaudited_deposit_accounts(),
+    ))
+}
+
+/// Admin: ask the ledger about every deposit subaccount this canister can
+/// enumerate, and write down the answers.
+///
+/// `also` is the answer to "THE ENUMERABILITY LIMIT": a deposit subaccount is a
+/// pure function of a principal, so a principal who derived their address
+/// off-chain and funded it without ever calling this canister is in NO list this
+/// canister can build. An operator who knows such a principal -- from a support
+/// ticket, from the ledger's own transaction log -- names it here, and from then
+/// on it is in the census like any other, because reading it writes an entry.
+///
+/// Returns `(accounts read this call, total observed across ALL accounts,
+/// accounts still never read)`. Capped at [`MAX_DEPOSIT_AUDIT_PER_CALL`] ledger
+/// calls per message; a non-zero third element means call it again.
+///
+/// **It moves no money.** It is a measurement, and it is the one an operator has
+/// to be able to take before believing a table is empty -- see
+/// `refuse_currency_change_while_funded`, which refuses while the third element
+/// would be non-zero.
+#[ic_cdk::update]
+async fn admin_audit_deposit_custody(also: Vec<Principal>) -> Result<(u64, u64, u64), String> {
+    require_controller()?;
+    let ledger_id = get_table_currency().ledger_canister();
+    // Read the never-read accounts first: they are the ones whose balance is
+    // unknown, and an unknown balance is what the guards have to treat as money.
+    let mut targets = unaudited_deposit_accounts();
+    for p in also.into_iter().chain(deposit_account_census()) {
+        if p != Principal::anonymous() && !targets.contains(&p) {
+            targets.push(p);
+        }
+    }
+    targets.truncate(MAX_DEPOSIT_AUDIT_PER_CALL);
+
+    let mut read = 0u64;
+    let mut failures: Vec<String> = Vec::new();
+    for who in targets {
+        match query_deposit_subaccount_balance(who, ledger_id).await {
+            Ok(amount) => {
+                record_deposit_observation(who, ledger_id, amount, ic_cdk::api::time());
+                read = read.saturating_add(1);
+            }
+            // A ledger that will not answer is not evidence of an empty account, so
+            // the entry is deliberately NOT written: the principal stays in the
+            // unaudited list and the guard stays closed.
+            Err(e) => failures.push(format!("{who}: {e}")),
+        }
+    }
+    if !failures.is_empty() {
+        ic_cdk::println!(
+            "admin_audit_deposit_custody: {} account(s) could not be read: {}",
+            failures.len(),
+            failures.join("; ")
+        );
+    }
+    Ok((
+        read,
+        observed_deposit_total(),
+        unaudited_deposit_accounts().len() as u64,
+    ))
 }
 
 /// Admin: return every chip at the table to the escrow of the player who owns it,
@@ -3153,7 +4908,24 @@ fn escrow_total() -> u64 {
     })
 }
 
-/// Everything this canister owes anybody: escrow + seated chips + the pot.
+/// Everything this canister owes anybody: escrow + seated chips + the pot + every
+/// e8 it has seen sitting in one of its own deposit subaccounts + every
+/// unfinished ledger operation.
+///
+/// **The deposit-subaccount term is the whole point of the "THE ACCOUNT CENSUS"
+/// section.** This function was `escrow + chips + pot`, which is the money in
+/// ledger account (1) only. Money in accounts (2) and (4) -- the addresses
+/// `get_deposit_subaccount()` publishes -- was in no term, so the guard below read
+/// a liability of ZERO on a table holding 5 ICP of a player's money and permitted
+/// the currency flip it exists to refuse (docs/SECURITY-FINDINGS.md FINDING 21).
+///
+/// **The journal term is FINDING 29, and it is here rather than only in the
+/// surfaces that display it because this function is what the GUARDS read.** An
+/// open `pull` intent names a movement that will be re-issued against
+/// `Currency::ledger_canister()`, so a currency flip while one is open would send
+/// the retry to a ledger where the original transaction does not exist: the
+/// deduplication would not fire and it would move money a second time, on the
+/// wrong chain. A table with unfinished ledger operations is a funded table.
 fn total_liability() -> u64 {
     let table = TABLE.with(|t| {
         t.borrow()
@@ -3164,7 +4936,10 @@ fn total_liability() -> u64 {
             })
             .unwrap_or(0)
     });
-    escrow_total().saturating_add(table)
+    escrow_total()
+        .saturating_add(table)
+        .saturating_add(observed_deposit_total())
+        .saturating_add(journalled_incoming_total())
 }
 
 /// Refuse a config whose `currency` differs from the live one while the canister
@@ -3188,18 +4963,42 @@ fn refuse_currency_change_while_funded(new_config: &TableConfig) -> Result<(), S
     }
     let owed = total_liability();
     if owed == 0 {
-        return Ok(());
+        // UNKNOWN IS NOT ZERO. `owed` now includes every deposit subaccount this
+        // canister has LOOKED AT. An account it has never looked at contributes
+        // nothing to that sum and could be holding anything, which is precisely
+        // the state FINDING 21 flipped the currency in. Refuse until every
+        // enumerable deposit account has a reading.
+        let unaudited = unaudited_deposit_accounts();
+        if unaudited.is_empty() {
+            return Ok(());
+        }
+        return Err(format!(
+            "Refusing to change this table's currency from {} to {}: {} deposit address(es) this \
+             canister published have never been read, so it cannot say they are empty. The \
+             currency selects the LEDGER, and money sitting at a deposit subaccount on the OLD \
+             ledger becomes unreachable the moment claim_external_deposit() starts looking on the \
+             new one -- that is docs/SECURITY-FINDINGS.md FINDING 21, measured at 5 ICP. Call \
+             admin_audit_deposit_custody() until it reports 0 unaudited and 0 held, then change \
+             the currency. Unread: {:?}",
+            current.symbol(),
+            new_config.currency.symbol(),
+            unaudited.len(),
+            unaudited,
+        ));
     }
     Err(format!(
         "Refusing to change this table's currency from {} to {} while it still owes players {}. \
          The currency selects the LEDGER every withdrawal is paid from, so changing it now would \
          point every player's withdrawal at a ledger this canister holds nothing on -- every \
          balance would become unpayable without a single one of them changing. Drain the table to \
-         zero first (every player withdraws), then change the currency. \
-         See docs/SECURITY-FINDINGS.md FINDING 20.",
+         zero first -- every player withdraws, AND every deposit subaccount is swept in or \
+         emptied ({} of the total above is sitting at deposit addresses this canister published) \
+         -- then change the currency. \
+         See docs/SECURITY-FINDINGS.md FINDING 20 and FINDING 21.",
         current.symbol(),
         new_config.currency.symbol(),
         current.format_amount(owed),
+        current.format_amount(observed_deposit_total()),
     ))
 }
 
@@ -3681,7 +5480,15 @@ async fn start_new_hand() -> Result<ShuffleProof, String> {
         // is the only thing that decides who is in this hand. See
         // [`deals_in_this_hand`] for why it does NOT ask for chips: the blinds have
         // already been posted above and can have left a seat all-in at zero.
-        for player in state.players.iter_mut().flatten() {
+        //
+        // It is therefore also the only place that can state, truthfully, WHO WAS
+        // DEALT IN AND IN WHAT ORDER -- the fact docs/SHUFFLE-SPEC.md section 4
+        // needs to offset the board, and the fact the permanent record was
+        // guessing at from the seats at settlement (FINDING 30). It is written
+        // down here, as it happens, and never re-derived.
+        DEALT_IN.with(|d| d.borrow_mut().clear());
+        for (seat, player) in state.players.iter_mut().enumerate() {
+            let Some(player) = player.as_mut() else { continue };
             if deals_in_this_hand(player) {
                 // Check we have enough cards (need 2 cards, so index+2 must be <= len)
                 if state.deck_index + 2 <= state.deck.len() {
@@ -3689,6 +5496,12 @@ async fn start_new_hand() -> Result<ShuffleProof, String> {
                     let card2 = state.deck[state.deck_index + 1];
                     player.hole_cards = Some((card1, card2));
                     state.deck_index += 2;
+                    DEALT_IN.with(|d| {
+                        d.borrow_mut().push(DealtInSeat {
+                            seat: seat as u8,
+                            principal: player.principal,
+                        })
+                    });
                 }
             }
         }
@@ -3726,6 +5539,22 @@ async fn start_new_hand() -> Result<ShuffleProof, String> {
             winners: Vec::new(),
             community_cards: Vec::new(),
             showdown_players: Vec::new(),
+            // Filled at settlement, from the settlement basis, by
+            // `record_hand_to_history` -- the ONE place that decides who played a
+            // hand. Until then the hand has no participants because it has no
+            // result: nobody has left, nobody has been paid.
+            participants: None,
+            // The deal has just happened, so this one is knowable now and is
+            // written from the deal's own record rather than re-derived later.
+            //
+            // `None` rather than `Some([])` if the deal somehow fed nobody: the
+            // two are different claims. `Some([])` says "zero players were dealt
+            // in", which a verifier would act on; `None` says "this record does
+            // not know", which is the only safe thing to say when it does not.
+            dealt_in: {
+                let d = DEALT_IN.with(|d| d.borrow().clone());
+                (!d.is_empty()).then_some(d)
+            },
         });
     });
 
@@ -4109,6 +5938,13 @@ fn join_table(seat: u8) -> Result<(), String> {
 /// If mid-hand this acts as a fold: the money already in the pot stays there, but
 /// the RECORD of who put it there is kept in `state.departed_stakes` so it stays
 /// part of the payout basis. See docs/DEFECTS.md E-05 for what happened before.
+///
+/// # EVERY REFUSAL IS DECIDED BEFORE ANYTHING MOVES
+///
+/// docs/DEFECTS.md E-59, and the identical correction to the one in `cash_out`:
+/// the settle used to run before the seat lookup, so a principal who had never sat
+/// here could void a live hand and be told `Err("Not at table")`. The seat lookup
+/// is now first and nothing above it mutates.
 #[ic_cdk::update]
 fn leave_table() -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
@@ -4118,21 +5954,31 @@ fn leave_table() -> Result<u64, String> {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
 
-        // The same first move as `cash_out`, for the same reason and with the same
-        // effect: a hand no message can move is settled before the seat is
-        // vacated, so this caller's stake leaves with them instead of becoming an
-        // invisible claim on a table they are no longer at.
-        // docs/SECURITY-FINDINGS.md FINDING 18.
-        if hand_is_stuck(state, now) {
-            settle_unmovable_hand(state, now, UnmovableReason::AnExitDoorFoundItUnmovable);
-        }
+        // ---- REFUSALS FIRST. Nothing above this line has changed the table. ----
 
         // Find the player's seat
         let seat = state.players.iter()
             .position(|p| p.as_ref().map(|p| p.principal == caller).unwrap_or(false))
             .ok_or("Not at table")?;
 
-        let player = state.players[seat].as_ref().ok_or("Player not found")?;
+        // ---- FROM HERE ON NOTHING RETURNS `Err`, so nothing can commit one. ----
+
+        // The same first move as `cash_out`, for the same reason, off THE SAME ONE
+        // PREDICATE the on-chain clock uses: a hand no message can move is settled
+        // before the seat is vacated, so this caller's stake leaves with them
+        // instead of becoming an invisible claim on a table they are no longer at.
+        // docs/SECURITY-FINDINGS.md FINDING 18, FINDING 25.
+        if hand_is_stuck_now(state, now) {
+            settle_unmovable_hand(state, now, UnmovableReason::AnExitDoorFoundItUnmovable);
+        }
+
+        let Some(player) = state.players[seat].as_ref() else {
+            // Unreachable: `seat` came from a `position` over occupied seats in
+            // this same borrow, and the settle above cannot vacate a chair. Handled
+            // rather than unwrapped because an `Err` here would now be an Err after
+            // a mutation, which is the defect this ordering exists to remove.
+            return Ok(0);
+        };
         let hand_is_live = state.phase != GamePhase::WaitingForPlayers
             && state.phase != GamePhase::HandComplete;
         // ASKED OF THE ONE PREDICATE. This used to be `!player.has_folded &&
@@ -5974,73 +7820,240 @@ pub fn determine_winners(state: &mut TableState, now: u64) {
 // actually progress, so `withdraw` and `cash_out` stop giving it once the hand is
 // provably stuck, and say what to call instead.
 
-/// How long past its own expiry an action clock may sit before the hand it
-/// belongs to is treated as stuck.
+// ----------------------------------------------------------------------------
+// ONE BELIEF (docs/DEFECTS.md E-59, docs/SECURITY-FINDINGS.md FINDING 25)
+// ----------------------------------------------------------------------------
+//
+// There used to be TWO predicates here. `hand_is_stuck` read the wall clock and
+// answered five surfaces -- `abandon_stuck_hand`, `cash_out`, `leave_table`,
+// `get_custody_status` and `TableView.hand_is_unmovable`. `clock_should_abandon`
+// answered the on-chain timer, and it had been taught something `hand_is_stuck`
+// had not:
+//
+//     "past its grace" is a claim about the WALL CLOCK.
+//     "nothing can move this hand" is a claim about ATTEMPTS.
+//     They are the same thing only while the canister is executing.
+//
+// So after any stall in which the canister does not run -- a subnet halt, a
+// canister frozen for want of cycles and then topped up, a controller stopping it
+// to upgrade -- the two disagreed. Measured on one state: the clock alone, with
+// zero ingress, folded the seat that did not act and paid `alice +0, bob
+// +4,000,000`. `abandon_stuck_hand(alice)` from the IDENTICAL state paid
+// `alice +2,000,000, bob +2,000,000`. Both conserve exactly, so every invariant in
+// the money-safety suite stayed silent -- correct totals, wrong recipients, which
+// is the signature all four cross-agent defects in this project have had. And the
+// canister's own `get_custody_status` advice told the seat that was about to be
+// folded out to press the button.
+//
+// The answer is ATTEMPTS, and it is applied here to EVERY surface. There is now
+// one predicate, [`hand_is_stuck`], and it is a statement about what this canister
+// has actually watched fail:
+//
+//     a hand is stuck when this canister, WHILE EXECUTING, has handed it to the
+//     ordinary resolution path in at least STUCK_HAND_MIN_OPPORTUNITIES separate
+//     committed messages spanning at least STUCK_HAND_GRACE_NS, and the hand has
+//     not moved.
+//
+// An hour of stall therefore buys no credit toward abandonment on ANY door, which
+// is the whole of E-59. `clock_should_abandon` is deleted: the automatic door and
+// the manual door are now the same door, so they cannot drift again.
+
+/// How long a hand must be watched failing to move before it counts as stuck.
 ///
 /// Well clear of any legitimate delay: the longest configured `action_timeout_secs`
-/// on any table is 60 s and the time bank adds 30 s, so a hand that has not moved
-/// for five minutes past a clock that has already run out is not slow, it is
-/// broken. Short enough that a player is not left waiting on a support ticket.
+/// on any table is 60 s and the time bank adds 30 s, so a hand this canister has
+/// spent five minutes failing to advance is not slow, it is broken. Short enough
+/// that a player is not left waiting on a support ticket.
+///
+/// **Measured from the first sighting, not from `expires_at`.** That is the
+/// difference between this and the predicate it replaces.
 const STUCK_HAND_GRACE_NS: u64 = 300 * 1_000_000_000;
 
-/// Is this table holding a hand that no message can move?
+/// How many separate COMMITTED messages must have handed the hand to the ordinary
+/// resolution path, and watched it fail, before the hand counts as stuck.
 ///
-/// Two ways for that to be true, and they are facts about the state rather than
-/// guesses about the cause:
+/// Time alone is not evidence -- that is the defect. Three sightings in three
+/// different messages is: with the 30 s watchdog a matured stall has had about
+/// ten, and a canister whose timer is dead reaches three through three
+/// `check_timeouts` calls, which anybody may send. The floor is what stops a
+/// single message from manufacturing the state it then acts on.
+const STUCK_HAND_MIN_OPPORTUNITIES: u32 = 3;
+
+/// The identity of a stall: which hand, and which clock it is waiting on.
 ///
-/// * **the clock ran out and nothing resolved it.** `check_timeouts` and
-///   `player_action` both resolve an expired timer, so a timer that is still
-///   expired [`STUCK_HAND_GRACE_NS`] later means every attempt to resolve it has
-///   failed -- which, on this path, means every attempt has TRAPPED;
-/// * **there is no clock at all** while a hand is live. `resolve_expired_action_timer`
-///   is the only thing that moves a hand nobody is acting on, and it does nothing
-///   without a timer, so this state is immovable by construction, immediately and
-///   not after any grace period.
-///
-/// Deliberately says nothing about WHY. A predicate that had to recognise the
-/// specific defect would have to be updated for the next one.
-pub fn hand_is_stuck(state: &TableState, now: u64) -> bool {
-    let live =
-        state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete;
-    if !live {
-        return false;
-    }
-    match state.action_timer {
-        Some(ref t) => now > t.expires_at.saturating_add(STUCK_HAND_GRACE_NS),
-        None => true,
+/// Any change to this pair means the hand MOVED -- a new hand, a player acting
+/// (which replaces the action timer), the time bank extending it, or the hand
+/// ending. So the witness clears itself and no code has to remember to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StallKey {
+    hand_number: u64,
+    action_clock: Option<u64>,
+}
+
+/// A stall this canister has WITNESSED, from inside messages it actually ran.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StallWitness {
+    key: StallKey,
+    /// The first moment, in a message this canister executed, that it saw this
+    /// hand unable to move.
+    first_seen: u64,
+    /// How many committed messages have since handed this hand to the ordinary
+    /// resolution path without it moving. Counted BEFORE the attempt on the timer
+    /// path, in a message that does nothing that can trap, so an attempt that
+    /// traps still counts -- see [`on_clock_tick`].
+    opportunities: u32,
+}
+
+thread_local! {
+    /// The one witness. Deliberately NOT persisted across upgrades: an upgrade is
+    /// exactly a period in which the canister was not executing, so its evidence
+    /// does not survive it. `post_upgrade` restarts the clock, the first tick
+    /// re-seeds the sighting, and the door opens a grace period later.
+    static STALL_WITNESS: RefCell<Option<StallWitness>> = const { RefCell::new(None) };
+}
+
+/// Is a hand live at all?
+fn hand_in_progress(state: &TableState) -> bool {
+    state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete
+}
+
+fn stall_key(state: &TableState) -> StallKey {
+    StallKey {
+        hand_number: state.hand_number,
+        action_clock: state.action_timer.as_ref().map(|t| t.expires_at),
     }
 }
 
-/// The one branch of [`hand_is_stuck`] the CLOCK is allowed to act on by itself.
+/// Can anything move this hand in THIS message?
 ///
-/// # Why this is narrower, and why the difference is deliberate
+/// No, in exactly two shapes, and they are facts about the state:
 ///
-/// `hand_is_stuck` has two arms. This has one.
+/// * the action clock has run out, so no player action is accepted and only the
+///   timeout path can act;
+/// * there is no clock at all while a hand is live -- `resolve_expired_action_timer`
+///   is the only thing that moves a hand nobody is acting on and it does nothing
+///   without a timer.
 ///
-/// * **expired clock + [`STUCK_HAND_GRACE_NS`]** -- kept. Five minutes after a
-///   clock that has already run out, with `advance_table_clock` having had every
-///   opportunity in between, there is no reading of this state in which the hand
-///   is merely slow. Refunding it is right whether a human asks or nobody does.
-/// * **a live hand with NO clock at all** -- NOT acted on automatically. It is a
-///   real stuck state and `abandon_stuck_hand` still refunds it on request, but it
-///   is a state the engine also *believes* impossible, and a belief this project
-///   has disproved repeatedly. A clock that fires every 30 s on a predicate whose
-///   truth conditions are not fully understood would convert one unknown
-///   legitimate no-clock moment into an automatic refund of a hand that should
-///   have been played, on every table, forever, with nobody in the loop.
-///   A human calling `abandon_stuck_hand` is a decision; a timer doing it is a
-///   policy, and this branch has not earned one.
+/// Being true is NOT being stuck. It is the necessary condition, evaluated once
+/// per message; [`hand_is_stuck`] is what happens when it keeps being true across
+/// messages that gave the resolution path its chance.
+fn hand_cannot_move_right_now(state: &TableState, now: u64) -> bool {
+    hand_in_progress(state)
+        && match state.action_timer {
+            Some(ref t) => now > t.expires_at,
+            None => true,
+        }
+}
+
+/// **THE PREDICATE.** Every surface in this file that asks "is this hand dead?"
+/// asks this, and nothing else.
 ///
-/// So the automatic door is the arm whose meaning is unambiguous, and the manual
-/// door stays wider. If the no-clock arm is ever proven unreachable in legitimate
-/// play, this is the one predicate to widen.
-fn clock_should_abandon(state: &TableState, now: u64) -> bool {
-    let live =
-        state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete;
-    live && match state.action_timer {
-        Some(ref t) => now > t.expires_at.saturating_add(STUCK_HAND_GRACE_NS),
-        None => false,
+/// Pure, with the witness passed in, so it can be pinned by unit tests without a
+/// canister. [`hand_is_stuck_now`] is the one-line reader that supplies the
+/// canister's own witness.
+pub fn hand_is_stuck(state: &TableState, now: u64, witness: Option<StallWitness>) -> bool {
+    if !hand_in_progress(state) {
+        return false;
     }
+    let Some(w) = witness else {
+        // Never witnessed. The canister has no evidence that anything is wrong
+        // with this hand, and "the wall clock says a while has passed" is not
+        // evidence -- that was E-59.
+        return false;
+    };
+    w.key == stall_key(state)
+        && w.opportunities >= STUCK_HAND_MIN_OPPORTUNITIES
+        && now > w.first_seen.saturating_add(STUCK_HAND_GRACE_NS)
+}
+
+/// The witness as it stands, or `None`.
+fn stall_witness() -> Option<StallWitness> {
+    STALL_WITNESS
+        .try_with(|w| w.try_borrow().ok().and_then(|w| *w))
+        .ok()
+        .flatten()
+}
+
+/// [`hand_is_stuck`] against this canister's own witness. THE reader; every
+/// update path and every query goes through it.
+fn hand_is_stuck_now(state: &TableState, now: u64) -> bool {
+    hand_is_stuck(state, now, stall_witness())
+}
+
+/// The earliest instant at which this hand could POSSIBLY become abandonable,
+/// as a duration from `now`. `None` when it already is, or when no hand is live.
+///
+/// A lower bound and documented as one: the door needs
+/// [`STUCK_HAND_MIN_OPPORTUNITIES`] sightings as well as the elapsed grace, and
+/// how soon those arrive depends on the canister actually running. A client can
+/// use it to say "not before HH:MM", which is the honest version of the sentence
+/// it used to be able to say.
+fn abandonable_no_earlier_than(state: &TableState, now: u64) -> Option<u64> {
+    if !hand_in_progress(state) || hand_is_stuck_now(state, now) {
+        return None;
+    }
+    let from = match stall_witness() {
+        // Already being watched: the grace is running from the first sighting.
+        Some(w) if w.key == stall_key(state) => w.first_seen,
+        // Not yet: the clock has to run out first, and the watching starts there.
+        _ => match state.action_timer {
+            Some(ref t) => t.expires_at.max(now),
+            None => now,
+        },
+    };
+    Some(
+        from.saturating_add(STUCK_HAND_GRACE_NS)
+            .saturating_sub(now),
+    )
+}
+
+/// Record what THIS message can see about the hand, and count the opportunity the
+/// resolution path has just had (or is about to have, on the timer path).
+///
+/// The two callers are the only two things that run the ordinary resolution path:
+/// [`on_clock_tick`], which calls this in a message that cannot trap and then
+/// dispatches the attempt in a message of its own, and `check_timeouts`, which
+/// calls it immediately after `advance_table_clock` returns. If the hand moved,
+/// [`stall_key`] changed and the witness restarts from zero; if it did not, the
+/// count goes up.
+///
+/// Must not trap: on the timer path everything depends on this message
+/// committing even when the work it schedules does not.
+fn note_stall_opportunity(now: u64) {
+    let observed = TABLE
+        .try_with(|t| {
+            t.try_borrow().ok().and_then(|table| {
+                table
+                    .as_ref()
+                    .map(|s| (hand_cannot_move_right_now(s, now), stall_key(s)))
+            })
+        })
+        .ok()
+        .flatten();
+
+    let _ = STALL_WITNESS.try_with(|w| {
+        let Ok(mut slot) = w.try_borrow_mut() else {
+            return;
+        };
+        match observed {
+            Some((true, key)) => {
+                let restart = !matches!(*slot, Some(ref existing) if existing.key == key);
+                if restart {
+                    *slot = Some(StallWitness {
+                        key,
+                        first_seen: now,
+                        opportunities: 0,
+                    });
+                } else if let Some(ref mut existing) = *slot {
+                    existing.opportunities = existing.opportunities.saturating_add(1);
+                }
+            }
+            // The hand is moving, or there is no hand, or the table could not be
+            // read. Forget everything: a later stall starts its grace from
+            // scratch.
+            _ => *slot = None,
+        }
+    });
 }
 
 /// What a client needs to tell a player why the table is not moving, and what
@@ -6052,8 +8065,14 @@ pub struct StuckHandStatus {
     pub is_stuck: bool,
     /// True while a hand is live at all.
     pub hand_in_progress: bool,
-    /// Nanoseconds until this hand becomes abandonable. `null` when it already is,
-    /// or when no hand is live.
+    /// Nanoseconds before which this hand CANNOT become abandonable. `null` when
+    /// it already is, or when no hand is live.
+    ///
+    /// A lower bound since docs/DEFECTS.md E-59, and the wording is the change:
+    /// abandonment needs the canister to have WATCHED the hand fail to move, not
+    /// merely for a wall-clock interval to have elapsed, so nothing can promise
+    /// the exact instant. "Not before" is a sentence a client can show; "at" was a
+    /// sentence the canister could not keep.
     pub abandonable_in_ns: Option<u64>,
     /// Chips that would be handed back if it were abandoned now.
     pub refundable_pot: u64,
@@ -6077,13 +8096,8 @@ fn get_stuck_hand_status() -> StuckHandStatus {
         };
         let live = state.phase != GamePhase::WaitingForPlayers
             && state.phase != GamePhase::HandComplete;
-        let is_stuck = hand_is_stuck(state, now);
-        let abandonable_in_ns = match (live, is_stuck, state.action_timer.as_ref()) {
-            (true, false, Some(t)) => {
-                Some(t.expires_at.saturating_add(STUCK_HAND_GRACE_NS).saturating_sub(now))
-            }
-            _ => None,
-        };
+        let is_stuck = hand_is_stuck_now(state, now);
+        let abandonable_in_ns = abandonable_no_earlier_than(state, now);
         StuckHandStatus {
             is_stuck,
             hand_in_progress: live,
@@ -6128,8 +8142,31 @@ pub struct CustodyStatus {
     /// Nanoseconds until the hand becomes abandonable. `null` when it already is,
     /// or when nothing of yours is committed.
     pub abandonable_in_ns: Option<u64>,
-    /// `escrow + chips_at_table + committed_in_pot`: everything the canister is
-    /// holding that belongs to you.
+    /// **Your money at the deposit address this canister published to you**, as
+    /// of `unswept_deposit_observed_at_ns`. Held by this canister, in a ledger
+    /// account only this canister can move, and not withdrawable until
+    /// `claim_external_deposit()` sweeps it into `escrow`.
+    ///
+    /// This field is docs/SECURITY-FINDINGS.md FINDING 28. Without it this record
+    /// answered `total = 0` for a player whose 10,000 e8s were sitting at the
+    /// address in the line above, and the claim path told them to send more.
+    pub unswept_deposit: u64,
+    /// When the ledger was last asked about that address. **`null` means it has
+    /// never been asked**, which is not the same as "the address is empty" -- see
+    /// `advice`, and call `refresh_deposit_custody()`.
+    pub unswept_deposit_observed_at_ns: Option<u64>,
+    /// **Money of yours this canister has MOVED ON THE LEDGER and not yet finished
+    /// booking**, because the call it made did not come back.
+    ///
+    /// docs/SECURITY-FINDINGS.md FINDING 29. This is the fourth place a player's
+    /// money can be and it used to be the only one NO surface could see, which is
+    /// what made an interrupted deposit indistinguishable from a deposit that
+    /// never happened. `resolve_my_ledger_intents()` finishes them;
+    /// `get_my_ledger_intents()` lists them.
+    pub unfinished_ledger_ops: u64,
+    /// `escrow + chips_at_table + committed_in_pot + unswept_deposit +
+    /// unfinished_ledger_ops`: everything the canister is holding that belongs to
+    /// you, across every account it owns and every movement it has begun.
     pub total: u64,
     /// What to do next, in words, NAMING the method when a method is needed. A
     /// recovery path a player has to read the interface definition to find is not
@@ -6158,11 +8195,18 @@ fn committed_stake_sentence(committed: u64, stuck: bool, hand_number: u64) -> St
              yours, into your withdrawable balance."
         )
     } else {
+        // WHAT THIS SENTENCE USED TO SAY, and why it is the defect and not a
+        // wording nit: "...once the action clock has been expired for 5 minutes."
+        // That is a claim about the WALL CLOCK, and after any stall it was true
+        // while the hand was still perfectly playable -- so the canister told the
+        // seat that was about to be folded out to void the hand and take its stake
+        // back. docs/DEFECTS.md E-59, docs/SECURITY-FINDINGS.md FINDING 25.
         format!(
             "{amount} of yours is committed to hand {hand_number}, which is still in play: it is \
-             contested and will be paid out when the hand settles. If the table stops moving, \
-             abandon_stuck_hand() refunds every stake once the action clock has been expired for \
-             5 minutes."
+             contested and will be paid out when the hand settles. A hand only becomes \
+             refundable once this canister has watched it fail to move for 5 minutes, and if \
+             that happens the canister refunds every stake by itself -- abandon_stuck_hand() is \
+             the same door, open to anyone, not a faster one."
         )
     }
 }
@@ -6175,6 +8219,29 @@ fn get_custody_status() -> CustodyStatus {
     let now = ic_cdk::api::time();
     let escrow = BALANCES.with(|b| b.borrow().get(&caller).copied().unwrap_or(0));
 
+    // ACCOUNT (2)/(4) OF "THE ACCOUNT CENSUS". Money at the deposit address this
+    // canister published to this caller. It is the caller's, this canister is
+    // holding it, and until FINDING 28 was fixed no field of this record -- the
+    // record whose entire job is "what is this canister holding for me" -- could
+    // express it.
+    let deposit = observed_deposit_entry(&caller);
+    // Netted by the same rule as `observed_deposit_total`: a sweep already in
+    // flight has left this account as far as the books are concerned, and it is
+    // reported by `unfinished_ledger_ops` below instead. FINDING 29.
+    let unswept_deposit = deposit
+        .as_ref()
+        .map(|o| o.amount)
+        .unwrap_or(0)
+        .saturating_sub(open_sweep_for(caller));
+    let unswept_deposit_observed_at_ns = deposit.as_ref().map(|o| o.observed_at_ns);
+    let deposit_advice =
+        deposit_custody_sentence(unswept_deposit, get_table_currency());
+
+    // FINDING 29: money mid-flight at the ledger boundary is money the canister is
+    // holding for this caller, so it belongs in the one surface that claims to say
+    // where all of a player's money is.
+    let (unfinished_ledger_ops, unfinished_sentence) = unfinished_ledger_ops_for(caller);
+
     TABLE.with(|t| {
         let table = t.borrow();
         let Some(state) = table.as_ref() else {
@@ -6184,8 +8251,18 @@ fn get_custody_status() -> CustodyStatus {
                 committed_in_pot: 0,
                 committed_is_stuck: false,
                 abandonable_in_ns: None,
-                total: escrow,
-                advice: String::new(),
+                unswept_deposit,
+                unswept_deposit_observed_at_ns,
+                unfinished_ledger_ops,
+                total: escrow
+                    .saturating_add(unswept_deposit)
+                    .saturating_add(unfinished_ledger_ops),
+                advice: [deposit_advice, unfinished_sentence.clone()]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .cloned()
+                    .collect::<Vec<String>>()
+                    .join(" "),
             };
         };
 
@@ -6197,16 +8274,33 @@ fn get_custody_status() -> CustodyStatus {
             .map(|p| p.chips)
             .fold(0, u64::saturating_add);
         let committed_in_pot = committed_stake_of(state, caller);
-        let committed_is_stuck = committed_in_pot > 0 && hand_is_stuck(state, now);
-        let abandonable_in_ns = match (committed_in_pot, committed_is_stuck, &state.action_timer) {
-            (c, false, Some(timer)) if c > 0 => Some(
-                timer
-                    .expires_at
-                    .saturating_add(STUCK_HAND_GRACE_NS)
-                    .saturating_sub(now),
-            ),
-            _ => None,
+        // THE ONE PREDICATE, the same one `cash_out`, `leave_table`,
+        // `abandon_stuck_hand` and the on-chain clock act on. This field derived
+        // from the raw wall clock until docs/DEFECTS.md E-59, which is how the
+        // advice below came to instruct a losing player to void a live hand.
+        let committed_is_stuck = committed_in_pot > 0 && hand_is_stuck_now(state, now);
+        let abandonable_in_ns = if committed_in_pot > 0 {
+            abandonable_no_earlier_than(state, now)
+        } else {
+            None
         };
+
+        // ALL THREE sentences, in the order a player needs them: the contested
+        // money first, then the money sitting at their own deposit address, then
+        // any movement this canister began and did not finish. Joining them rather
+        // than picking one is deliberate -- a surface that can only report one kind
+        // of stranded money at a time is how the second kind stays invisible, and
+        // that is how FINDING 28 and FINDING 29 each stayed invisible in turn.
+        let advice = [
+            committed_stake_sentence(committed_in_pot, committed_is_stuck, state.hand_number),
+            deposit_advice.clone(),
+            unfinished_sentence.clone(),
+        ]
+        .iter()
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .collect::<Vec<String>>()
+        .join(" ");
 
         CustodyStatus {
             escrow,
@@ -6214,16 +8308,66 @@ fn get_custody_status() -> CustodyStatus {
             committed_in_pot,
             committed_is_stuck,
             abandonable_in_ns,
+            unswept_deposit,
+            unswept_deposit_observed_at_ns,
+            unfinished_ledger_ops,
             total: escrow
                 .saturating_add(chips_at_table)
-                .saturating_add(committed_in_pot),
-            advice: committed_stake_sentence(
-                committed_in_pot,
-                committed_is_stuck,
-                state.hand_number,
-            ),
+                .saturating_add(committed_in_pot)
+                .saturating_add(unswept_deposit)
+                .saturating_add(unfinished_ledger_ops),
+            advice,
         }
     })
+}
+
+/// `(amount, the sentence to show)` for the caller's unfinished ledger
+/// operations. docs/SECURITY-FINDINGS.md FINDING 29.
+///
+/// Only ARRIVING money is counted into the amount. A `payout` intent is money
+/// already debited from escrow and on its way out; adding it back to `total`
+/// would tell the player they still have money they have asked to be rid of. The
+/// sentence still names it, because a payout that has not settled is exactly the
+/// thing a player needs to be told to finish.
+fn unfinished_ledger_ops_for(who: Principal) -> (u64, String) {
+    let mine: Vec<LedgerIntent> = LEDGER_INTENTS.with(|j| {
+        j.borrow()
+            .values()
+            .filter(|i| i.who == who)
+            .cloned()
+            .collect()
+    });
+    if mine.is_empty() {
+        return (0, String::new());
+    }
+    let currency = get_table_currency();
+    let incoming = mine
+        .iter()
+        .filter(|i| i.kind.credits_on_success())
+        .fold(0u64, |a, i| a.saturating_add(i.amount));
+    let listed = mine
+        .iter()
+        .map(|i| {
+            format!(
+                "#{} {} of {} ({} e8s)",
+                i.id,
+                i.kind.as_str(),
+                currency.format_amount(i.amount),
+                i.amount
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    (
+        incoming,
+        format!(
+            "This table started {} ledger operation(s) for you and did not finish booking \
+             them: {listed}. Nothing is lost and nothing is stuck: call \
+             resolve_my_ledger_intents() and it will ask the ledger what really happened and \
+             credit or refund you accordingly.",
+            mine.len()
+        ),
+    )
 }
 
 /// Abandon a hand that no message can move, and give every stake back.
@@ -6233,13 +8377,24 @@ fn get_custody_status() -> CustodyStatus {
 /// support queue, and the players whose money is stuck are the ones with the
 /// incentive to use it. It cannot be used as a weapon, because
 ///
-/// * it refuses unless [`hand_is_stuck`] -- five minutes past a clock that has
-///   already expired, or a live hand with no clock at all. A hand that is merely
-///   slow is not abandonable, and any ordinary call (`check_timeouts`,
-///   `player_action`) resets the clock and takes it further out of reach;
+/// * it refuses unless [`hand_is_stuck`] -- which is now a statement about what
+///   this canister has WATCHED fail, not about the wall clock, and is the same
+///   predicate the on-chain timer acts on. A hand that is merely slow, or a hand
+///   nobody has looked at since a stall, is not abandonable, and any ordinary call
+///   (`check_timeouts`, `player_action`) that moves it takes it out of reach;
 /// * the only outcome it can produce is [`refund_every_stake`]: each player gets
-///   back exactly what they put into this hand. There is nothing to win by calling
-///   it, whatever cards you were holding.
+///   back exactly what they put into this hand.
+///
+/// # "There is nothing to win by calling it" -- how that claim was FALSE
+///
+/// It used to read *"There is nothing to win by calling it, whatever cards you
+/// were holding."* Measured, at the moment the wall-clock predicate opened this
+/// door after a stall: 2,000,000 e8s, to the seat that the on-chain clock was
+/// about to fold out. The clause was true of the OUTCOME (a refund pays nobody a
+/// pot) and false of the ALTERNATIVE (the hand would have been played out and
+/// lost). It is true again only because this door and the clock now open on the
+/// identical predicate, so there is no state in which pressing it beats leaving it
+/// alone. docs/DEFECTS.md E-59, docs/SECURITY-FINDINGS.md FINDING 25.
 ///
 /// Returns the number of e8s handed back.
 #[ic_cdk::update]
@@ -6261,19 +8416,23 @@ fn abandon_stuck_hand() -> Result<u64, String> {
 /// the manual one would be the worst possible outcome, because the manual one is
 /// what every document describes.
 ///
-/// The clock reaches this through [`clock_should_abandon`], which is STRICTLY
-/// NARROWER than [`hand_is_stuck`] -- see that function for why.
+/// The clock reaches this through the SAME predicate, [`hand_is_stuck`]. There
+/// used to be a second, narrower one for the clock (`clock_should_abandon`), and
+/// the gap between the two is docs/DEFECTS.md E-59: after a stall the manual door
+/// stood open on a hand the clock went on to play out. One predicate now, so the
+/// automatic and manual doors cannot reach different conclusions about one hand.
 fn try_abandon_stuck_hand(now: u64) -> Result<u64, String> {
     TABLE.with(|t| {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
 
-        if !hand_is_stuck(state, now) {
-            let live = state.phase != GamePhase::WaitingForPlayers
-                && state.phase != GamePhase::HandComplete;
+        if !hand_is_stuck_now(state, now) {
+            let live = hand_in_progress(state);
             return Err(if live {
                 "This hand can still progress. Call check_timeouts, or take your action. A hand \
-                 is only abandonable once its action clock has been expired for 5 minutes."
+                 is only abandonable once this canister has watched it fail to move for 5 \
+                 minutes -- a stall in which the canister was not running does not count, \
+                 because nothing was tried during it."
                     .to_string()
             } else {
                 "No hand in progress".to_string()
@@ -6297,9 +8456,10 @@ fn try_abandon_stuck_hand(now: u64) -> Result<u64, String> {
 /// Why a hand is being closed with no winner and every stake handed back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnmovableReason {
-    /// [`hand_is_stuck`]: the action clock has been expired for
-    /// [`STUCK_HAND_GRACE_NS`], or a live hand has no clock at all. Nothing any
-    /// player sends can advance it.
+    /// [`hand_is_stuck`]: this canister has watched the ordinary resolution path
+    /// fail on this hand across [`STUCK_HAND_GRACE_NS`] and at least
+    /// [`STUCK_HAND_MIN_OPPORTUNITIES`] separate messages. Nothing any player
+    /// sends can advance it.
     NoMessageCanMoveIt,
     /// The same condition, found by an EXIT DOOR: somebody called `cash_out` or
     /// `leave_table` on a hand that could not be moved. Distinguished from
@@ -6497,7 +8657,24 @@ pub enum TimeoutCheckResult {
 /// paths cannot drift.
 #[ic_cdk::update]
 fn check_timeouts() -> TimeoutCheckResult {
-    let result = advance_table_clock(ic_cdk::api::time());
+    let now = ic_cdk::api::time();
+    let result = advance_table_clock(now);
+    // THE OTHER HALF OF THE STALL WITNESS, and the reason the escape hatch cannot
+    // be locked shut by a dead timer.
+    //
+    // `advance_table_clock` has just had its chance at whatever is on the table. If
+    // the hand moved, `note_stall_opportunity` sees a new `stall_key` and clears
+    // the witness; if it did not, this counts as one opportunity given and failed.
+    // Called AFTER the attempt, so on this path the count means "attempts that
+    // returned without moving it" -- an attempt that TRAPS takes this whole message
+    // with it, which is what the two-message timer path exists to cover.
+    //
+    // `check_timeouts` is permissionless, so a canister whose timer never re-armed
+    // after an upgrade still has a route to abandonment that any player can drive:
+    // three of these across a grace period. That is what keeps
+    // docs/SECURITY-FINDINGS.md FINDING 15's fund lock from being rebuilt by tying
+    // the manual door to timer state.
+    note_stall_opportunity(now);
     // Whatever this call just changed may have moved the next deadline. Re-point
     // the precise wake at it; without this the watchdog interval is the only
     // thing that would notice, up to CLOCK_WATCHDOG_SECS late.
@@ -6863,12 +9040,12 @@ thread_local! {
     /// MEASURED between this and [`CYCLES_LATEST`], not computed from a price list
     /// that could be wrong or out of date.
     static CYCLES_ORIGIN: RefCell<(u64, u128)> = const { RefCell::new((0, 0)) };
-    /// `(hand_number, when the CLOCK first saw this hand sitting on an expired
-    /// action timer)`.
-    ///
-    /// The stuck-hand grace is measured from HERE, not from the timer's own
-    /// `expires_at`, and the difference is the whole point. See [`on_clock_tick`].
-    static CLOCK_STUCK_SINCE: RefCell<Option<(u64, u64)>> = const { RefCell::new(None) };
+    // `CLOCK_STUCK_SINCE` used to live here: `(hand_number, when the CLOCK first
+    // saw this hand sitting on an expired action timer)`, read by
+    // `clock_should_abandon` and by nothing else. It has been replaced by
+    // `STALL_WITNESS` in the FUND REACHABILITY section, which every door reads.
+    // A first-sighting record that only the timer consults is how the canister
+    // came to hold two beliefs about one hand (docs/DEFECTS.md E-59).
     /// `(time, cycle balance)` at the most recent tick.
     ///
     /// # Why both samples are taken in the SAME context, and why that is not fussy
@@ -6941,11 +9118,18 @@ fn start_clock() {
 /// convicted the first version of this on its second seed; see the comment in
 /// [`advance_table_clock`] and docs/DEFECTS.md E-56.
 ///
-/// So the grace is measured from **when this canister first saw the clock overdue**
-/// ([`CLOCK_STUCK_SINCE`]), not from the timer's own `expires_at`. An hour-long
+/// So the grace is measured from **when this canister first saw the hand unable to
+/// move** ([`STALL_WITNESS`]), not from the timer's own `expires_at`. An hour-long
 /// stall therefore buys no credit toward abandonment: the first tick after it
 /// starts the grace and hands the hand to the ordinary timeout path, which folds
 /// the seat that did not act and plays on.
+///
+/// **That rule is no longer only this function's.** It used to be applied here and
+/// nowhere else, so `abandon_stuck_hand`, `cash_out`, `leave_table` and two
+/// player-facing queries went on reading the raw wall clock and disagreed with
+/// this tick about the same hand -- docs/DEFECTS.md E-59. The witness is now
+/// written by [`note_stall_opportunity`], read by [`hand_is_stuck`], and every one
+/// of those surfaces asks it.
 ///
 /// The sighting is written in THIS message, which does nothing that can trap, and
 /// the work runs in a message of its own. That is what makes the escalation
@@ -6982,80 +9166,62 @@ fn on_clock_tick() {
     });
     CYCLES_LATEST.with(|c| *c.borrow_mut() = (now, balance));
 
+    // WRITE THE SIGHTING FIRST, in this message, which does nothing that can trap.
+    // `note_stall_opportunity` is the ONE place a stall is recorded, shared with
+    // `check_timeouts`, and it clears itself the moment the hand moves.
+    note_stall_opportunity(now);
+
     // Read-only, and it must not trap: everything below depends on THIS message
     // committing even when the work it schedules does not.
-    let overdue = TABLE
+    let verdict = TABLE
         .try_with(|t| {
             t.try_borrow().ok().and_then(|table| {
-                table.as_ref().map(|s| {
-                    let live = s.phase != GamePhase::WaitingForPlayers
-                        && s.phase != GamePhase::HandComplete;
-                    let expired = s
-                        .action_timer
-                        .as_ref()
-                        .map(|t| now > t.expires_at)
-                        .unwrap_or(false);
-                    (live && expired, s.hand_number)
-                })
+                table
+                    .as_ref()
+                    .map(|s| (hand_cannot_move_right_now(s, now), hand_is_stuck_now(s, now)))
             })
         })
         .ok()
         .flatten();
 
-    let Some((overdue, hand_number)) = overdue else {
-        CLOCK_STUCK_SINCE.with(|s| *s.borrow_mut() = None);
+    let Some((overdue, stuck)) = verdict else {
         let _ = advance_table_clock(now);
         schedule_next_wake();
         return;
     };
 
     if !overdue {
-        // The hand is moving, or there is no hand. Forget any earlier observation
-        // so a later stall on the same hand starts its grace from scratch.
-        CLOCK_STUCK_SINCE.with(|s| *s.borrow_mut() = None);
+        // The hand is moving, or there is no hand.
         let _ = advance_table_clock(now);
         schedule_next_wake();
         return;
     }
 
-    // A clock has run out. Record WHEN THIS CANISTER FIRST SAW IT, if it has not
-    // already, and read back the first-sighting time.
-    let since = CLOCK_STUCK_SINCE.with(|s| {
-        let mut slot = s.borrow_mut();
-        match *slot {
-            Some((h, t)) if h == hand_number => t,
-            _ => {
-                *slot = Some((hand_number, now));
-                now
-            }
-        }
-    });
-
-    // This message does nothing that can trap, so the sighting above is COMMITTED
-    // whatever happens next. The work goes in a message of its own, which is the
-    // entire mechanism: a timeout path that traps rolls back alone and leaves the
-    // sighting standing, so the grace period keeps running and the refund below
-    // eventually fires. Two messages instead of one, and only while a clock is
-    // actually overdue -- an idle table never reaches this branch, so the burn
-    // measured in the section header is unaffected.
-    if now > since.saturating_add(STUCK_HAND_GRACE_NS) {
-        // The ordinary timeout path has had every tick of a full grace period, in
+    // The sighting above is COMMITTED whatever happens next. The work goes in a
+    // message of its own, which is the entire mechanism: a timeout path that traps
+    // rolls back alone and leaves the sighting standing, so the grace period keeps
+    // running and the refund below eventually fires. Two messages instead of one,
+    // and only while a clock is actually overdue -- an idle table never reaches
+    // this branch, so the burn measured in the section header is unaffected.
+    if stuck {
+        // The ordinary timeout path has had a full grace period of ticks, in
         // messages of its own, and this hand has still not moved. It is not slow.
         // Refund every stake, through the same body `abandon_stuck_hand` runs --
         // which grants nobody any authority they did not already have, because that
         // method is deliberately permissionless.
-        CLOCK_STUCK_SINCE.with(|s| *s.borrow_mut() = None);
         ic_cdk_timers::set_timer(std::time::Duration::ZERO, async {
             let now = ic_cdk::api::time();
-            // Re-checked at the MOMENT OF ACTION, in the message that acts. The
-            // decision above was made in an earlier message and the table may have
-            // moved since. This is also the guard that keeps the automatic door
-            // strictly narrower than the manual one: `clock_should_abandon` refuses
-            // the live-hand-with-no-clock branch that `hand_is_stuck` accepts.
+            // Re-checked at the MOMENT OF ACTION, in the message that acts, against
+            // THE SAME PREDICATE every other door uses. The decision above was made
+            // in an earlier message and the table may have moved since.
+            //
+            // This used to call `clock_should_abandon`, a second, narrower
+            // predicate that existed only here. The gap between it and the one the
+            // player-facing doors read is docs/DEFECTS.md E-59.
             let still_unmovable = TABLE.with(|t| {
                 t.borrow()
                     .as_ref()
-                    .map(|s| clock_should_abandon(s, now))
+                    .map(|s| hand_is_stuck_now(s, now))
                     .unwrap_or(false)
             });
             if still_unmovable {
@@ -7160,7 +9326,7 @@ fn schedule_next_wake() {
 /// canister, that it TRAPPED. Aiming the one-shot at it would retry once a second
 /// forever, at ~15.4M cycles a go, for as long as the trap persists. The watchdog
 /// retries it every `CLOCK_WATCHDOG_SECS` instead, which is the right pacing for a
-/// retry, and [`clock_should_abandon`] refunds the hand outright once the grace
+/// retry, and [`hand_is_stuck`] refunds the hand outright once the grace
 /// period is up. Pinned by
 /// `clock_schedule_tests::an_already_missed_deadline_is_left_to_the_watchdog_rather_than_spun_on`.
 ///
@@ -7497,8 +9663,10 @@ mod clock_schedule_tests {
     /// attempt to resolve it did not commit -- on this canister, that means it
     /// TRAPPED. Re-arming at the one-second floor would retry it once a second
     /// forever at ~15.4M cycles a go. The watchdog retries it every 30 s instead,
-    /// which is the right pacing for a retry, and `clock_should_abandon` refunds
-    /// the hand once the grace period is up.
+    /// which is the right pacing for a retry, and the stuck-hand refund fires once
+    /// the grace period is up. The deadline aimed at here is a LOWER BOUND on that
+    /// moment -- the grace runs from the canister's first sighting, which is never
+    /// earlier than the expiry -- and the 30 s watchdog covers the remainder.
     #[test]
     fn an_already_missed_deadline_is_left_to_the_watchdog_rather_than_spun_on() {
         let mut st = bare_table(GamePhase::PreFlop);
@@ -7516,23 +9684,46 @@ mod clock_schedule_tests {
         );
     }
 
-    /// The clock's automatic refund is strictly narrower than the manual one.
+    /// A witness that has already earned its opportunities, first seen at
+    /// `first_seen`. The only way to make [`hand_is_stuck`] true.
+    fn matured(st: &TableState, first_seen: u64) -> Option<StallWitness> {
+        Some(StallWitness {
+            key: stall_key(st),
+            first_seen,
+            opportunities: STUCK_HAND_MIN_OPPORTUNITIES,
+        })
+    }
+
+    /// **THE DELETED PREDICATE.** There used to be a test here called
+    /// `the_clock_refuses_the_no_clock_branch_that_abandon_stuck_hand_accepts`,
+    /// which pinned the DIVERGENCE between the automatic and manual doors as a
+    /// feature. It is replaced rather than deleted quietly, because the divergence
+    /// it pinned is docs/DEFECTS.md E-59 and a test that pins a defect is how the
+    /// defect survives a wave.
+    ///
+    /// One predicate now, and both doors read it.
     #[test]
-    fn the_clock_refuses_the_no_clock_branch_that_abandon_stuck_hand_accepts() {
-        let st = bare_table(GamePhase::Flop); // live hand, no action timer at all
+    fn the_clock_and_the_manual_door_open_on_exactly_the_same_states() {
+        // Live hand with no action timer at all: unmovable in shape, but NOT
+        // abandonable until this canister has actually watched it.
+        let st = bare_table(GamePhase::Flop);
         assert!(
-            hand_is_stuck(&st, NOW),
-            "the manual door stays open for a live hand with no clock"
+            hand_cannot_move_right_now(&st, NOW),
+            "a live hand with no clock cannot move in this message"
         );
         assert!(
-            !clock_should_abandon(&st, NOW),
-            "the automatic door must NOT act on the branch whose truth conditions are not \
-             fully understood; see clock_should_abandon"
+            !hand_is_stuck(&st, NOW, None),
+            "and it is still not STUCK: nothing has watched it fail. An unwitnessed hand was \
+             abandonable the instant anybody looked, which is E-59"
+        );
+        assert!(
+            hand_is_stuck(&st, NOW + STUCK_HAND_GRACE_NS + 1, matured(&st, NOW)),
+            "once watched across the grace, it is stuck -- for the clock and the caller alike"
         );
     }
 
     #[test]
-    fn the_clock_takes_the_expired_clock_branch_after_the_grace_period() {
+    fn the_grace_runs_from_the_first_sighting_and_not_from_expires_at() {
         let mut st = bare_table(GamePhase::Turn);
         st.action_timer = Some(ActionTimer {
             player_seat: 0,
@@ -7540,12 +9731,79 @@ mod clock_schedule_tests {
             expires_at: NOW,
             using_time_bank: false,
         });
-        assert!(!clock_should_abandon(&st, NOW + STUCK_HAND_GRACE_NS));
-        assert!(clock_should_abandon(&st, NOW + STUCK_HAND_GRACE_NS + 1));
+
+        // An hour past the expiry, with nothing ever having seen it: NOT stuck.
+        // This is the exact state a subnet halt or a frozen canister leaves, and
+        // the wall-clock predicate called it abandonable.
+        let long_after = NOW + 3600 * SEC;
+        assert!(
+            !hand_is_stuck(&st, long_after, None),
+            "a stall is not a stuck hand"
+        );
+
+        // First seen at `long_after`. The grace starts THERE.
+        let w = matured(&st, long_after);
+        assert!(!hand_is_stuck(&st, long_after + STUCK_HAND_GRACE_NS, w));
+        assert!(hand_is_stuck(&st, long_after + STUCK_HAND_GRACE_NS + 1, w));
     }
 
     #[test]
-    fn a_finished_hand_is_never_abandonable_by_the_clock() {
+    fn a_witness_short_of_its_opportunities_does_not_open_the_door() {
+        let mut st = bare_table(GamePhase::Turn);
+        st.action_timer = Some(ActionTimer {
+            player_seat: 0,
+            started_at: 0,
+            expires_at: NOW,
+            using_time_bank: false,
+        });
+        let thin = Some(StallWitness {
+            key: stall_key(&st),
+            first_seen: NOW,
+            opportunities: STUCK_HAND_MIN_OPPORTUNITIES - 1,
+        });
+        assert!(
+            !hand_is_stuck(&st, NOW + STUCK_HAND_GRACE_NS + 1, thin),
+            "elapsed time is not evidence on its own: the resolution path has to have been \
+             given the hand and failed"
+        );
+    }
+
+    /// The witness is about ONE hand waiting on ONE clock. Anything else means the
+    /// hand moved, and a witness for a state that no longer exists must not open
+    /// the door on the state that replaced it.
+    #[test]
+    fn a_witness_for_another_hand_or_another_clock_is_worthless() {
+        let mut st = bare_table(GamePhase::Turn);
+        st.hand_number = 7;
+        st.action_timer = Some(ActionTimer {
+            player_seat: 0,
+            started_at: 0,
+            expires_at: NOW,
+            using_time_bank: false,
+        });
+        let good = matured(&st, NOW);
+        let at = NOW + STUCK_HAND_GRACE_NS + 1;
+        assert!(hand_is_stuck(&st, at, good));
+
+        let mut other_hand = st.clone();
+        other_hand.hand_number = 8;
+        assert!(!hand_is_stuck(&other_hand, at, good));
+
+        let mut other_clock = st.clone();
+        other_clock.action_timer = Some(ActionTimer {
+            player_seat: 0,
+            started_at: 0,
+            expires_at: NOW + SEC,
+            using_time_bank: false,
+        });
+        assert!(
+            !hand_is_stuck(&other_clock, at, good),
+            "a player acting REPLACES the action timer, which is the hand moving"
+        );
+    }
+
+    #[test]
+    fn a_finished_hand_is_never_abandonable_by_anybody() {
         for phase in [GamePhase::WaitingForPlayers, GamePhase::HandComplete] {
             let mut st = bare_table(phase);
             st.action_timer = Some(ActionTimer {
@@ -7554,7 +9812,9 @@ mod clock_schedule_tests {
                 expires_at: 0,
                 using_time_bank: false,
             });
-            assert!(!clock_should_abandon(&st, u64::MAX));
+            let w = matured(&st, 0);
+            assert!(!hand_is_stuck(&st, u64::MAX, w));
+            assert!(!hand_is_stuck(&st, u64::MAX, None));
         }
     }
 }
@@ -8006,7 +10266,11 @@ fn get_table_view() -> Option<TableView> {
             // who has left still has a stake in the hand and no seat at all, and
             // that is precisely the case every other field here goes blank for.
             my_committed_in_pot: committed_stake_of(state, caller),
-            hand_is_unmovable: hand_is_stuck(state, now),
+            // THE ONE PREDICATE (docs/DEFECTS.md E-59). This flag is what a client
+            // paints "this hand is dead, recover your money" from, and it read the
+            // raw wall clock while the on-chain clock was about to play the hand
+            // out.
+            hand_is_unmovable: hand_is_stuck_now(state, now),
         })
     })
 }
@@ -8510,6 +10774,20 @@ struct PersistentState {
     hand_history: Vec<HandHistory>,
     current_actions: Vec<ActionRecord>,
     starting_chips: Vec<(u8, u64)>,
+    /// Who the LIVE hand was dealt to, in deal order.
+    ///
+    /// `opt` for the reason every addition to this record has to be: Candid does
+    /// not honour serde defaults, and a bare `vec` here makes `stable_restore`
+    /// fail for state written before the field existed, which rejects the whole
+    /// upgrade (see `deposit_watermark` above).
+    ///
+    /// Persisted because it is the only record of what the deal did, and an
+    /// upgrade in the middle of a hand would otherwise leave that hand
+    /// unverifiable: the archive would have to say "I do not know how many
+    /// players were dealt in", which is honest but useless.
+    /// docs/SECURITY-FINDINGS.md FINDING 30.
+    #[serde(default)]
+    dealt_in: Option<Vec<DealtInSeat>>,
     rate_limits: Vec<(Principal, (u64, u32))>,
     shown_cards: Vec<(u64, Vec<u8>)>, // hand_number -> seats that showed
     #[serde(default)]
@@ -8556,6 +10834,51 @@ struct PersistentState {
     table_pot_at_save: Option<u64>,
     #[serde(default)]
     table_seated_chips_at_save: Option<u64>,
+
+    // ------------------------------------------------------------------------
+    // THE LEDGER-INTENT JOURNAL  (docs/SECURITY-FINDINGS.md FINDING 29)
+    // ------------------------------------------------------------------------
+    //
+    // A journal an upgrade can lose is the same bug it exists to fix: the moment
+    // the record disappears, money that moved on the ledger is money nobody can
+    // find. And an upgrade is one of the events that DROPS a canister's
+    // outstanding callbacks, so it is exactly when these entries are created.
+    //
+    // `opt`, and it must stay `opt`, for the reason `deposit_watermark` had to
+    // become `opt` (FINDING 14): a bare field added to this record makes
+    // `stable_restore` reject EVERY upgrade from state written before it existed,
+    // which for a fund-holding canister means it cannot be upgraded at all.
+    // `None` means state predating the journal, which restores as empty -- the
+    // correct reading, because no intent had been opened.
+    //
+    // `next_intent_id` is saved separately and restored MONOTONICALLY. An id is
+    // the ledger `memo`, and the memo is half of the ledger's deduplication key:
+    // reusing an id after an upgrade would make two different movements look like
+    // one transaction to the ledger, which is the deduplication working correctly
+    // against us.
+    #[serde(default)]
+    ledger_intents: Option<Vec<LedgerIntent>>,
+    #[serde(default)]
+    next_intent_id: Option<u64>,
+
+    /// `DEPOSIT_CUSTODY`: what the ledger last said about each deposit subaccount
+    /// this canister owns, as `(principal, amount, observed_at_ns, ledger)`.
+    ///
+    /// **A LIABILITY RECORD, and therefore persisted.** Dropping it across an
+    /// upgrade would put `total_liability()`, `get_custody_status` and the
+    /// currency guard straight back to reporting zero on money the canister is
+    /// still holding at accounts (2) and (4) of "THE ACCOUNT CENSUS" -- i.e. it
+    /// would re-open FINDING 21 and FINDING 28 once per upgrade.
+    ///
+    /// `opt` at the TOP LEVEL of this record, and flat tuples inside it, for the
+    /// reason `deposit_watermark` above documents at length: Candid does not
+    /// honour serde defaults, and a bare `vec` here would make `stable_restore`
+    /// fail for every upgrade from state written before this field existed.
+    /// `None` means exactly that, and restores as "nothing observed yet", which
+    /// leaves every enumerable account in `unaudited_deposit_accounts()` -- the
+    /// safe reading, because the guard then refuses until somebody looks.
+    #[serde(default)]
+    deposit_custody: Option<Vec<(Principal, u64, u64, Principal)>>,
 }
 
 /// `(pot, sum of seated players' chips)` for the live table, if there is one.
@@ -8612,6 +10935,7 @@ fn pre_upgrade() {
         hand_history: HAND_HISTORY.with(|h| h.borrow().clone()),
         current_actions: CURRENT_ACTIONS.with(|a| a.borrow().clone()),
         starting_chips: STARTING_CHIPS.with(|s| s.borrow().iter().map(|(k, v)| (*k, *v)).collect()),
+        dealt_in: Some(DEALT_IN.with(|d| d.borrow().clone())),
         rate_limits: RATE_LIMITS.with(|r| r.borrow().iter().map(|(k, v)| (*k, *v)).collect()),
         shown_cards: SHOWN_CARDS.with(|s| s.borrow().iter().map(|(k, v)| (*k, v.clone())).collect()),
         current_seed: CURRENT_SEED.with(|s| s.borrow().clone()), // Save seed for mid-hand upgrades
@@ -8620,6 +10944,16 @@ fn pre_upgrade() {
         table_was_present: Some(digest.is_some()),
         table_pot_at_save: Some(digest.map(|(pot, _)| pot).unwrap_or(0)),
         table_seated_chips_at_save: Some(digest.map(|(_, chips)| chips).unwrap_or(0)),
+        deposit_custody: Some(DEPOSIT_CUSTODY.with(|d| {
+            d.borrow()
+                .iter()
+                .map(|(p, o)| (*p, o.amount, o.observed_at_ns, o.ledger))
+                .collect()
+        })),
+        // FINDING 29: an unfinished ledger movement must survive the upgrade that
+        // interrupted it. See the field comments.
+        ledger_intents: Some(LEDGER_INTENTS.with(|j| j.borrow().values().cloned().collect())),
+        next_intent_id: Some(NEXT_INTENT_ID.with(|n| *n.borrow())),
     };
 
     let escrow_at_save = state
@@ -8686,6 +11020,68 @@ fn post_upgrade() {
         let mut deposits = v.borrow_mut();
         for (k, val) in state.verified_deposits {
             deposits.insert(k, val);
+        }
+    });
+
+    // Deposit-subaccount custody. `None` (state written before the field existed)
+    // restores as "nothing observed", which is the safe reading: every enumerable
+    // account is then unaudited, and the currency guard refuses until one is taken.
+    DEPOSIT_CUSTODY.with(|d| {
+        let mut custody = d.borrow_mut();
+        for (who, amount, observed_at_ns, ledger) in state.deposit_custody.unwrap_or_default() {
+            custody.insert(
+                who,
+                DepositObservation {
+                    amount,
+                    observed_at_ns,
+                    ledger,
+                },
+            );
+        }
+    });
+
+    // Restore the ledger-intent journal (docs/SECURITY-FINDINGS.md FINDING 29).
+    //
+    // An upgrade is one of the things that can discard a post-await continuation
+    // -- it drops the canister's outstanding callbacks -- so it is exactly the
+    // event after which these entries matter most. Losing them here would
+    // reintroduce the defect at the one moment it is most likely to fire.
+    //
+    // Leases are dropped on the way in: whoever held one was a message in the old
+    // module that no longer exists, so holding the entry for it would lock the
+    // money behind a caller that can never come back.
+    let restored_intents = state.ledger_intents.unwrap_or_default();
+    let mut highest_restored_id = 0u64;
+    LEDGER_INTENTS.with(|j| {
+        let mut j = j.borrow_mut();
+        for mut intent in restored_intents {
+            highest_restored_id = highest_restored_id.max(intent.id);
+            intent.leased_until_ns = 0;
+            j.insert(intent.id, intent);
+        }
+        if !j.is_empty() {
+            ic_cdk::println!(
+                "post_upgrade: {} unfinished ledger operation(s) restored, totalling {} e8s \
+                 of arriving money. Their owners can finish them with \
+                 resolve_my_ledger_intents().",
+                j.len(),
+                j.values()
+                    .filter(|i| i.kind.credits_on_success())
+                    .fold(0u64, |a, i| a.saturating_add(i.amount))
+            );
+        }
+    });
+    // MONOTONIC. An id is the ledger memo, and a reused memo makes two different
+    // movements look like one transaction to the ledger's deduplication.
+    let restored_next = state
+        .next_intent_id
+        .unwrap_or(0)
+        .max(highest_restored_id.saturating_add(1))
+        .max(1);
+    NEXT_INTENT_ID.with(|n| {
+        let mut n = n.borrow_mut();
+        if restored_next > *n {
+            *n = restored_next;
         }
     });
 
@@ -8775,6 +11171,15 @@ fn post_upgrade() {
             chips.insert(k, v);
         }
     });
+
+    // Restore what the deal did. `None` is state written before this canister
+    // recorded it, and it stays empty rather than being guessed at from the seats
+    // -- guessing is FINDING 30. A hand live across such an upgrade is archived
+    // saying it does not know how many players were dealt in, which is the one
+    // answer a verifier can act on.
+    if let Some(dealt) = state.dealt_in {
+        DEALT_IN.with(|d| *d.borrow_mut() = dealt);
+    }
 
     // Restore rate limits
     RATE_LIMITS.with(|r| {
@@ -10160,47 +12565,87 @@ mod stuck_hand_tests {
         })
     }
 
+    /// A witness that has already earned its opportunities.
+    fn watched_since(st: &TableState, first_seen: u64) -> Option<StallWitness> {
+        Some(StallWitness {
+            key: stall_key(st),
+            first_seen,
+            opportunities: STUCK_HAND_MIN_OPPORTUNITIES,
+        })
+    }
+
     /// A hand that is merely slow is NOT abandonable. This is the property that
     /// keeps `abandon_stuck_hand` from being a weapon, so it is pinned first.
     #[test]
     fn a_running_clock_is_not_a_stuck_hand() {
         let st = table_at(GamePhase::PreFlop, timer_expiring_at(30 * SEC));
-        assert!(!hand_is_stuck(&st, 1 * SEC), "clock still running");
-        assert!(!hand_is_stuck(&st, 31 * SEC), "just expired: check_timeouts's job");
+        let w = watched_since(&st, 30 * SEC);
+        assert!(!hand_is_stuck(&st, 1 * SEC, w), "clock still running");
         assert!(
-            !hand_is_stuck(&st, 30 * SEC + STUCK_HAND_GRACE_NS),
+            !hand_is_stuck(&st, 31 * SEC, w),
+            "just expired: check_timeouts's job"
+        );
+        assert!(
+            !hand_is_stuck(&st, 30 * SEC + STUCK_HAND_GRACE_NS, w),
             "the grace period is exclusive at its own boundary"
         );
     }
 
+    /// **WHAT CHANGED, AND WHY THIS TEST WAS REWRITTEN.**
+    ///
+    /// It used to read `assert!(hand_is_stuck(&st, 30*SEC + GRACE + 1))` -- elapsed
+    /// wall clock, and nothing else, as the whole of the evidence. That is
+    /// docs/DEFECTS.md E-59: after a stall in which the canister did not execute,
+    /// the clause was satisfied by a hand that was perfectly playable, and the door
+    /// stood open for whoever was losing it. The grace is now the SECOND condition;
+    /// the first is that this canister watched the hand fail to move.
     #[test]
-    fn a_clock_expired_past_the_grace_period_is_a_stuck_hand() {
+    fn a_hand_watched_failing_past_the_grace_period_is_a_stuck_hand() {
         let st = table_at(GamePhase::PreFlop, timer_expiring_at(30 * SEC));
-        assert!(hand_is_stuck(&st, 30 * SEC + STUCK_HAND_GRACE_NS + 1));
+        let at = 30 * SEC + STUCK_HAND_GRACE_NS + 1;
+        assert!(
+            !hand_is_stuck(&st, at, None),
+            "the same instant, with nothing having watched it: NOT stuck"
+        );
+        assert!(hand_is_stuck(&st, at, watched_since(&st, 30 * SEC)));
     }
 
     /// A live hand with no clock at all cannot be advanced by anything:
     /// `resolve_expired_action_timer` is the only thing that moves a hand nobody
-    /// is acting on, and it does nothing without a timer. So this is stuck
-    /// immediately, with no grace period, and that is a fact about the code rather
-    /// than a tolerance.
+    /// is acting on, and it does nothing without a timer.
+    ///
+    /// It used to be **stuck immediately, with no grace period**. It is not any
+    /// more, and the change is deliberate: "immediately" made a state the engine
+    /// believes impossible into an instantly-abandonable one, on a predicate five
+    /// surfaces read, with no evidence that anything had tried. The same evidence
+    /// standard now applies to both arms -- which is also what lets the on-chain
+    /// clock act on this arm at all, something it was previously forbidden to do.
     #[test]
-    fn a_live_hand_with_no_clock_is_stuck_immediately() {
-        assert!(hand_is_stuck(&table_at(GamePhase::Flop, None), 0));
-        assert!(hand_is_stuck(&table_at(GamePhase::River, None), 0));
+    fn a_live_hand_with_no_clock_is_stuck_once_it_has_been_watched() {
+        for phase in [GamePhase::Flop, GamePhase::River] {
+            let st = table_at(phase, None);
+            assert!(hand_cannot_move_right_now(&st, 0), "nothing can move it");
+            assert!(!hand_is_stuck(&st, 0, None), "but nothing has watched it");
+            assert!(hand_is_stuck(
+                &st,
+                STUCK_HAND_GRACE_NS + 1,
+                watched_since(&st, 0)
+            ));
+        }
     }
 
-    /// An idle table is never stuck, whatever the clock says. Otherwise every
-    /// finished hand would look abandonable and `withdraw`'s guard would be
-    /// permanently off.
+    /// An idle table is never stuck, whatever the clock says and whatever anybody
+    /// witnessed. Otherwise every finished hand would look abandonable and
+    /// `withdraw`'s guard would be permanently off.
     #[test]
     fn an_idle_table_is_never_stuck() {
         for phase in [GamePhase::WaitingForPlayers, GamePhase::HandComplete] {
-            assert!(!hand_is_stuck(&table_at(phase.clone(), None), u64::MAX));
-            assert!(!hand_is_stuck(
-                &table_at(phase, timer_expiring_at(0)),
-                u64::MAX
-            ));
+            let a = table_at(phase.clone(), None);
+            assert!(!hand_is_stuck(&a, u64::MAX, watched_since(&a, 0)));
+            assert!(!hand_is_stuck(&a, u64::MAX, None));
+            let b = table_at(phase, timer_expiring_at(0));
+            assert!(!hand_is_stuck(&b, u64::MAX, watched_since(&b, 0)));
+            assert!(!hand_is_stuck(&b, u64::MAX, None));
         }
     }
 

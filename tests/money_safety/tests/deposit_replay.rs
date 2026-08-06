@@ -558,7 +558,7 @@ fn dr02_the_icrc2_deposit_block_cannot_be_replayed_through_notify_deposit() {
 /// left must credit nothing.
 #[test]
 fn dr03_a_subaccount_arrival_is_swept_and_credited_exactly_once() {
-    let world = World::new(TableConfig::six_max_icp(), &["alice", "bob"]);
+    let mut world = World::new(TableConfig::six_max_icp(), &["alice", "bob"]);
     let alice = world.actor("alice");
     let sent = 4 * ICP;
 
@@ -636,7 +636,7 @@ fn dr04_concurrent_notify_deposit_for_one_block_credits_once() {
 /// second must not credit a sweep that moved nothing.
 #[test]
 fn dr05_concurrent_claim_external_deposit_credits_one_arrival_once() {
-    let world = World::new(TableConfig::six_max_icp(), &["alice", "bob"]);
+    let mut world = World::new(TableConfig::six_max_icp(), &["alice", "bob"]);
     let alice = world.actor("alice");
     let sent = 4 * ICP;
     world
@@ -654,6 +654,13 @@ fn dr05_concurrent_claim_external_deposit_credits_one_arrival_once() {
     let ra = world.pic.await_call(a);
     let rb = world.pic.await_call(b);
     println!("DR-05 concurrent claim: a={} b={}", show(&ra), show(&rb));
+
+    // Both claims ran, so the canister has read alice's deposit address and the
+    // harness's "it has not been told yet" allowance is spent. These two calls go
+    // through `pic.submit_call` rather than `World::claim_external_deposit`, so
+    // nothing spends it automatically -- and an allowance left standing here would
+    // excuse exactly the discrepancy M1 is being asserted about.
+    world.note_deposit_address_observed(alice);
 
     let escrow = world.get_balance(alice);
     let moved = sent - FEE;
