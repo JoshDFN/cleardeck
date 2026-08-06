@@ -475,6 +475,24 @@ impl World {
         self.update_result(who, "show_cards", Encode!().unwrap())
     }
 
+    /// The escape hatch. Any principal may call it; it refuses unless the hand is
+    /// provably immovable. docs/SECURITY-FINDINGS.md FINDING 15.
+    pub fn abandon_stuck_hand(&self, who: Principal) -> Outcome<u64> {
+        self.update_result(who, "abandon_stuck_hand", Encode!().unwrap())
+    }
+
+    /// A QUERY, deliberately: it has to answer when every update fails.
+    pub fn stuck_hand_status(&self) -> StuckHandStatus {
+        let bytes = self
+            .query_raw(
+                Principal::anonymous(),
+                "get_stuck_hand_status",
+                Encode!().unwrap(),
+            )
+            .expect("get_stuck_hand_status must not be rejected");
+        decode_one::<StuckHandStatus>(&bytes).expect("get_stuck_hand_status reply decode")
+    }
+
     // -----------------------------------------------------------------------
     // observation
     // -----------------------------------------------------------------------

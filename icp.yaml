@@ -9,12 +9,19 @@
 #     backend with `--mode upgrade` (see scripts/deploy-mainnet.sh) and NEVER
 #     `reinstall` — reinstall wipes stable state, including user balances.
 #
-# Recipe versions are pinned and independent of the CLI version. Both are the
-# versions in active mainnet use across the fleet (ForumIC / slack-clone use
-# @dfinity/asset-canister@v2.1.0; control-panel / auto-deploy-fix use
-# @dfinity/rust@v3.x). The asset recipe is on v2.2.1: icp-cli 1.0.2 removed the
-# `assets` sync step type that v2.1.0 emitted, so v2.1.0 now fails to render at
-# all (every `icp` command in this project errored, not just deploys).
+# Recipe versions are pinned and independent of the CLI version. The asset
+# recipe is on v2.2.1: icp-cli 1.0.2 removed the `assets` sync step type that
+# v2.1.0 emitted, so v2.1.0 now fails to render at all (every `icp` command in
+# this project errored, not just deploys).
+#
+# The Rust canisters do NOT use a registry recipe. They use the vendored
+# recipes/rust-reproducible.hbs, a fork of @dfinity/rust@v3.2.0 that makes the
+# module hash byte-reproducible and path-independent and that publishes the git
+# revision as canister metadata. The build procedure is part of what a verifier
+# checks, so it lives in this tree under the same review as the source: a
+# registry tag can be re-pointed after the fact, a file at a commit cannot.
+# Read recipes/rust-reproducible.hbs for the list of differences and why each
+# one exists. Verify with `./scripts/verify-build.sh --local`.
 
 # The default gateway port 8000 is regularly taken by another local icp-cli
 # project on a shared dev machine, and `icp network start` refuses to share it.
@@ -30,7 +37,7 @@ canisters:
   # --- Table registry -------------------------------------------------------
   - name: lobby
     recipe:
-      type: "@dfinity/rust@v3.2.0"
+      type: "file://recipes/rust-reproducible.hbs"
       configuration:
         package: lobby_canister
         candid: src/lobby_canister/lobby_canister.did
@@ -39,7 +46,7 @@ canisters:
   # --- Permanent hand history (provably-fair shuffle records) ---------------
   - name: history
     recipe:
-      type: "@dfinity/rust@v3.2.0"
+      type: "file://recipes/rust-reproducible.hbs"
       configuration:
         package: history_canister
         candid: src/history_canister/history_canister.did
@@ -48,7 +55,7 @@ canisters:
   # --- Poker tables (one Rust package, distinct init args per instance) ------
   - name: table_1 # Heads-Up, 0.01/0.02 ICP
     recipe:
-      type: "@dfinity/rust@v3.2.0"
+      type: "file://recipes/rust-reproducible.hbs"
       configuration:
         package: table_canister
         candid: src/table_canister/table_canister.did
@@ -58,7 +65,7 @@ canisters:
 
   - name: table_2 # 6-max, 0.05/0.10 ICP
     recipe:
-      type: "@dfinity/rust@v3.2.0"
+      type: "file://recipes/rust-reproducible.hbs"
       configuration:
         package: table_canister
         candid: src/table_canister/table_canister.did
@@ -68,7 +75,7 @@ canisters:
 
   - name: table_3 # 9-max, 0.10/0.20 ICP
     recipe:
-      type: "@dfinity/rust@v3.2.0"
+      type: "file://recipes/rust-reproducible.hbs"
       configuration:
         package: table_canister
         candid: src/table_canister/table_canister.did
@@ -78,7 +85,7 @@ canisters:
 
   - name: btc_table_1 # Heads-Up, 100/200 sats (ckBTC)
     recipe:
-      type: "@dfinity/rust@v3.2.0"
+      type: "file://recipes/rust-reproducible.hbs"
       configuration:
         package: table_canister
         candid: src/table_canister/table_canister.did

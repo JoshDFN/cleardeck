@@ -34,6 +34,31 @@ picked up by `cargo test --workspace`.
 | **M4** | NO NEGATIVE / NO OVERFLOW | Nothing wraps; `saturating_*` never hides a real deficit; hostile amounts are rejected, not clamped. |
 | **M5** | UPGRADE DURABILITY | A real `--mode upgrade` preserves every balance, every chip stack and the in-progress hand. |
 | **M6** | NO DOUBLE PAY | A pot is awarded once; a withdrawal is paid at most once; a deposit block or allowance is credited at most once. |
+| **M8** | PRINCIPAL ATTRIBUTION | The money reached the right PERSON, not merely the right seat and the right total. |
+| **M9** | FUND REACHABILITY | For any state a sequence of legal calls can reach, there is a sequence of legal calls by each funded player that returns that player's balance to the ledger. |
+
+**M9 is the odd one out and it is the reason the list needed a ninth entry.** M1 to
+M8 all ask whether the arithmetic is right. None of them asks whether the player
+can still get the money out, and a table can satisfy every one of them while being
+permanently frozen with funded seats. That is not hypothetical: an independent
+auditor reached exactly that state in ordinary play, over about 420 ICP, and this
+harness was silent — correctly, because not one chip had gone missing. **Chips
+conserved inside a canister nobody can withdraw from is not safety.**
+docs/SECURITY-FINDINGS.md FINDING 15. M9 is checked two ways
+(`src/invariants/reachability.rs`):
+
+* `check_no_settlement_trap`, on every fuzz step at zero extra message cost — no
+  update on the settlement path may TRAP while the table holds money, because a
+  trap rolls the message back, so that door is shut for that state permanently,
+  and `check_timeouts` / `player_action` / `leave_table` all run settlement while
+  `withdraw` / `cash_out` refuse during a hand. One trap closes all five;
+* `drain`, at the end of every fuzz run and inside each reproducer — actually take
+  every player's money out with player-only calls and check it lands on the
+  ledger. `final_internal_total` in the fuzz report is now the answer to *"how
+  much could not be got out"*.
+
+Its severity, `FundsUnreachable`, is the one severity with a **zero delta**:
+nothing has gone missing, which is precisely why everything else is quiet.
 
 The anchor is the **ledger**, not the canister's own bookkeeping.
 `icrc1_balance_of(table)` is a fact about the outside world; the escrow map and the
@@ -156,7 +181,13 @@ so it is recorded rather than quietly fixed.
 
 Worth stating plainly, because a green run is easy to over-read.
 
-M1 through M6 are conservation and settlement properties. They are blind to a pure
+M1 through M6 are conservation and settlement properties. **They were also blind to
+a table that cannot be emptied**, which is what M9 exists for and what this section
+said nothing about until an outsider locked 420 ICP and every one of them stayed
+green. Read the rest of this section with that in mind: the list of things a green
+run does not mean has been wrong before, in the direction of being too short.
+
+M1 through M6 are blind to a pure
 **redistribution** between players: if the engine pays the wrong player, the total
 is unchanged and every invariant here still holds. That is exactly the shape of
 FINDING 05 and FINDING 08 (a vacated seat's stake moving from the pot the short

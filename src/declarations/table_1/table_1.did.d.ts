@@ -235,6 +235,53 @@ export interface Winner {
   'seat' : number,
   'amount' : bigint,
 }
+export interface CommitmentMatch {
+  'committed_hash' : string,
+  'revealed_seed' : string,
+  'computed_hash' : string,
+  'this_proves' : string,
+  'this_does_not_prove' : string,
+}
+export type CommitmentCheck = { 'Match' : CommitmentMatch } |
+  { 'FieldsSwapped' : CommitmentMatch } |
+  {
+    'NoMatch' : {
+      'seed_hash_field' : string,
+      'revealed_seed_field' : string,
+      'computed_from_revealed_seed' : string,
+      'computed_from_seed_hash' : string,
+      'meaning' : string,
+    }
+  } |
+  {
+    'Malformed' : {
+      'field' : string,
+      'reason' : string,
+      'character_length' : bigint,
+    }
+  };
+export interface CommitmentCheckArgs {
+  'seed_hash' : string,
+  'revealed_seed' : string,
+}
+export interface FairnessRetention {
+  'table_keeps_last_n_hands' : bigint,
+  'table_copy_is_destructible_by_controller' : boolean,
+  'archive_canister' : [] | [Principal],
+  'summary' : string,
+}
+export interface HistoryStatus {
+  'history_canister' : [] | [Principal],
+  'recorded_ok_since_start' : bigint,
+  'failed_since_start' : bigint,
+  'in_flight' : bigint,
+  'unrecorded_backlog' : bigint,
+  'unrecorded_dropped' : bigint,
+  'last_recorded_hand' : [] | [bigint],
+  'last_error' : [] | [string],
+  'local_history_cap' : bigint,
+  'local_history_len' : bigint,
+}
 export interface _SERVICE {
   /**
    * Add a controller (controller only)
@@ -446,6 +493,10 @@ export interface _SERVICE {
    * Returns remaining time bank seconds
    */
   'use_time_bank' : ActorMethod<[], Result_1>,
+  'check_shuffle_commitment' : ActorMethod<[CommitmentCheckArgs], CommitmentCheck>,
+  'get_fairness_retention' : ActorMethod<[], FairnessRetention>,
+  'get_history_status' : ActorMethod<[], HistoryStatus>,
+  'flush_unrecorded_hands' : ActorMethod<[], Result_1>,
   'verify_shuffle' : ActorMethod<[string, string], boolean>,
   /**
    * Withdraw your balance from the table

@@ -274,6 +274,11 @@ fn never_excusable(s: Severity) -> bool {
             | Severity::RakeTaken
             | Severity::SelfReportedFailure
             | Severity::Misattribution
+            // Money nobody can withdraw. There is no tolerance for this and no
+            // defect id that excuses it: a table that cannot be emptied is not a
+            // documented defect, it is a custody failure.
+            // docs/SECURITY-FINDINGS.md FINDING 15.
+            | Severity::FundsUnreachable
     )
 }
 

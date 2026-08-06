@@ -69,9 +69,37 @@ ClearDeck is a fully decentralized Texas Hold'em poker application running entir
 
 ### Provably Fair
 Every shuffle uses a commit-reveal scheme:
-1. Before dealing: Seed hash is committed publicly
-2. After hand: Full seed is revealed
-3. Anyone can verify: Recalculate the shuffle yourself
+1. `SHA256(seed)` is on screen from the moment the first card is dealt
+2. After the hand: the full seed is revealed
+3. Anyone can verify: recalculate all 52 cards yourself, on your own machine
+
+**What that proves, stated exactly.** The whole 52-card order was fixed before the board was shown.
+Copy the commitment while a hand is running and only the flop exists, then predict the turn and the
+river from the seed revealed at the end — an independent auditor did this from
+[docs/SHUFFLE-SPEC.md](docs/SHUFFLE-SPEC.md) alone, with a verifier of its own, and got every card
+right including a folded seat's hole cards the canister never published.
+
+It does **not** prove that the commitment existed before the cards did: `start_new_hand` commits and
+deals in one message, so no outsider can observe the commitment before cards exist. You can still
+witness the ordering yourself, by copying the hash off your screen mid-hand and checking it against
+the one shown after the reveal.
+
+**How long the proof survives.** The table keeps the **last 100 hands** — under an hour of heads-up
+play — and any controller of the table can erase all of them with a single `reset_table` call. Every
+settled hand is also written to the `history` archive canister, which has no method that deletes,
+prunes or edits a record; a hand recorded there is permanent for the life of that canister, and what
+can still take it away is a controller of the archive reinstalling or deleting the canister itself.
+Both canisters will tell you this themselves:
+
+```bash
+icp canister call table_1 get_fairness_retention   # the table's cap, and who can wipe it
+icp canister call history get_retention_policy     # the archive's rule, and its admin
+icp canister call table_1 get_history_status       # is archiving working RIGHT NOW?
+```
+
+If `get_history_status` reports `history_canister = null` or a non-zero `unrecorded_backlog`,
+nothing durable is being written and you should copy the seed hash off your own screen. Through wave
+5 that was exactly the situation and nothing said so ([docs/DEFECTS.md T-34](docs/DEFECTS.md#t-34)).
 
 ### Dual Currency Support
 - **ICP Tables**: Play with Internet Computer tokens
@@ -95,33 +123,223 @@ Every shuffle uses a commit-reveal scheme:
 
 ## Verify the Code (Reproducible Builds)
 
-You can verify that the deployed canisters match this source code:
+The claim on this page is that the code running in these canisters is the code in this
+repository. This section is how you check that claim yourself, without trusting us. It is
+written for someone who has never seen this project before.
 
-### Quick Verification
+**Read this first, because the previous version of this section was false.** An independent
+auditor followed it and could not match the deployed module hash to *any* commit in this
+repository. Three separate things were wrong: the Dockerfile it pointed at did not compile,
+the build was not reproducible (the same source at two different directories produced two
+different hashes), and there was no way to ask a canister which commit it was. All three are
+fixed below, and CI now fails if any of them regresses.
+
+> ### ⚠️ The mainnet canisters do not satisfy this yet
+>
+> The build pipeline described here is new. **The modules currently deployed to the mainnet
+> canister IDs listed above were built before it existed**, on a developer's laptop, with the
+> old non-reproducible recipe. Concretely, if you run the procedure below against mainnet
+> today you should expect:
+>
+> - `icp canister metadata … git:revision` to fail or return nothing, because the deployed
+>   modules carry no such metadata; and
+> - the hashes to **not** match, and the script to print `NOT VERIFIED`.
+>
+> That is the honest current state, not a bug in these instructions. It becomes a real match
+> the first time the fleet is redeployed with a module built by this image
+> (`./scripts/verify-build.sh --emit <dir>` produces exactly those bytes). Until that happens,
+> treat the deployed mainnet code as **unverified**, which, given the disclaimer above about
+> unaudited alpha software and funds not being safe, is one more reason not to deposit.
+>
+> Everything else in this section is checkable right now: the build is reproducible today
+> (`--two-paths`), and the metadata mechanism has been demonstrated end to end on a local
+> replica, including a non-controller identity reading `git:revision` off a running canister.
+
+### What you need
+
+- **Docker**, running. Nothing else. You do not need Rust, Node or a controller key.
+- About 15 minutes for the first build. On Apple Silicon it is slower, because the image is
+  pinned to `linux/amd64` and runs under emulation. See *Why the platform is pinned*, below.
+
+### Step 1. Pick the commit and build it
 
 ```bash
-# Check the deployed WASM hash (controller-only)
-icp canister status kpfcd-kyaaa-aaaaj-qor3a-cai -e ic
-
-# Build locally and compare
-docker build -t cleardeck-verify .
-docker run --rm cleardeck-verify
+git clone https://github.com/JoshDFN/cleardeck.git
+cd cleardeck
+./scripts/verify-build.sh --mainnet
 ```
 
-### Manual Verification Steps
+That is the whole procedure. The script builds every canister inside a digest-pinned Docker
+image, reads the module hash the Internet Computer reports for each live canister, and diffs
+them. Expected output, ending in:
 
-1. **Get the deployed hash:**
-   ```bash
-   icp canister status <canister-id> -e ic | grep -i "module hash"
-   ```
+```
+==> module hashes reported by the ic network
+  CANISTER       RESULT   DETAIL
+  lobby          MATCH    <64 hex characters>
+                          claims <40-char commit sha> (clean)
+  history        MATCH    <64 hex characters>
+  table_1        MATCH    <64 hex characters>
+  table_2        MATCH    <64 hex characters>
+  table_3        MATCH    <64 hex characters>
+  btc_table_1    MATCH    <64 hex characters>
 
-2. **Build from source in Docker:**
-   ```bash
-   docker build -t cleardeck-verify .
-   docker run --rm cleardeck-verify
-   ```
+VERIFIED every deployed module is byte-identical to a build of this source.
+```
 
-3. **Compare the hashes** - they should match exactly.
+Any line that is not `MATCH` means stop and read the explanation the script prints.
+
+**No real hash is printed anywhere in this document, on purpose.** Every hash changes with
+every commit, so a hash written in documentation is worthless at best. At worst it trains you
+to compare your build against a number we wrote down, which verifies nothing about what is
+deployed. The only two numbers that count are the one your build produces and the one the
+Internet Computer reports, and you must read both yourself.
+
+### Step 2. Do it by hand, if you would rather not run our script
+
+```bash
+# Ask a live canister which commit it claims to be. This is PUBLIC canister
+# metadata: it was verified on a running canister that an identity which is
+# not a controller reads it fine.
+icp canister metadata lfkaz-iiaaa-aaaaj-qor4a-cai git:revision -e ic
+# ->  a 40-character commit sha
+icp canister metadata lfkaz-iiaaa-aaaaj-qor4a-cai git:dirty -e ic
+# ->  clean
+
+# Check out exactly that commit and build it.
+git checkout <the sha it printed>
+docker build --build-arg GIT_REVISION=$(git rev-parse HEAD) \
+             --build-arg GIT_DIRTY=clean \
+             -t cleardeck-verify .
+docker run --rm cleardeck-verify
+# ->  cleardeck reproducible build
+#     git:revision  <the same sha you checked out>
+#     git:dirty     clean
+#     cargo 1.90.0 (840b83a10 2025-07-30)
+#     ic-wasm       ic-wasm 0.9.9
+#     icp-cli       icp 1.0.2
+#
+#     MODULE HASHES (sha256 of the installed wasm)
+#     btc_table_1    <64 hex characters>
+#     history        <64 hex characters>
+#     lobby          <64 hex characters>
+#     table_1        <64 hex characters>   same as btc_table_1 and table_2/3
+#     table_2        <64 hex characters>
+#     table_3        <64 hex characters>
+
+# Read what is actually deployed and compare the two by eye.
+icp canister status lfkaz-iiaaa-aaaaj-qor4a-cai -e ic | grep -i 'module hash'
+# ->    Module hash: 0x<the same 64 hex characters the image printed for table_2>
+```
+
+`icp canister status` asks the management canister, and on mainnet that call is
+**controller-only**. If it refuses you, the module hash is still public. Read it off the
+dashboard, which needs no key and no tools:
+
+```
+https://dashboard.internetcomputer.org/canister/lfkaz-iiaaa-aaaaj-qor4a-cai
+```
+
+Do not let anyone tell you the hash instead of showing you where to read it yourself.
+
+`table_1`, `table_2`, `table_3` and `btc_table_1` are four instances of the same Rust package
+with different init arguments, so they share one module hash. That is expected, not a bug.
+
+### What `git:revision` proves, and what it does not
+
+Every module carries the commit it was built from as **public** canister metadata, so a
+stranger can ask a running canister which commit it claims to be.
+
+**A canister can lie about this.** The value is a string stamped in at build time by whoever
+ran the build; nothing on the Internet Computer checks that it corresponds to any real
+commit. If we wanted to deploy something else and label it `1f0c9d4`, we could.
+
+It is still worth having, because of what it converts the problem into. Before, a verifier
+faced an open search: *which of the thousands of trees this project has ever had produced
+this module?* The auditor rebuilt five candidate commits and matched none of them, and had no
+way to tell whether that meant fraud or a bad guess. Now the canister names one commit, and
+the verifier has a closed question: *does this claim hold?* Build that commit; if the hash
+matches, the claim was true and you have verified the code. If it does not match, the claim
+was false, and a false claim is a much louder signal than an unexplained mismatch. The lie is
+detectable in one build. That is the entire value, and it is real.
+
+`git:dirty` says whether the tree had uncommitted changes when the module was built. A
+published deployment should read `clean`. If it reads `dirty`, nobody outside the machine
+that built it can reproduce that module at all, and you should treat the canister as
+unverifiable no matter what revision it names.
+
+### Why the platform is pinned, and what is not reproducible
+
+Reproducibility here is a measured property, not a hope. Three facts, each established by
+building the same source and comparing bytes:
+
+| Change what? | Same module hash? |
+|---|---|
+| The absolute directory you build in | **Yes.** Fixed in this wave; it used to differ. |
+| The Linux image, the path inside it, the CPU count | **Yes.** |
+| x86_64 host vs aarch64 host, same rustc, same target | **No.** |
+| macOS host vs Linux host, same rustc, same target | **No.** |
+
+The last two are properties of rustc, not of this project: identical source and an identical
+compiler version still emit different wasm depending on the architecture and OS doing the
+compiling. If the verification image were multi-arch, an x86 verifier and an Apple Silicon
+verifier would compute two different "correct" hashes for the same commit and each would
+conclude the other was looking at a forgery. So `Dockerfile` pins `--platform=linux/amd64`
+and that container is the reference environment. Everyone gets one answer.
+
+The corollary matters: **a native `cargo build` on your laptop will not produce the deployed
+hash, and is not supposed to.** Use the container.
+
+### Check that the build is reproducible at all
+
+You do not have to take the table above on faith either:
+
+```bash
+./scripts/verify-build.sh --two-paths
+```
+
+This builds the identical source at two very different absolute paths inside the image and
+compares every byte:
+
+```
+==> building the same source at two different absolute paths
+  ok       btc_table_1    <64 hex characters>
+  ok       history        <64 hex characters>
+  ok       lobby          <64 hex characters>
+  ok       table_1        <64 hex characters>
+  ok       table_2        <64 hex characters>
+  ok       table_3        <64 hex characters>
+==> reproducible: identical bytes from two different build directories
+```
+
+It exits non-zero on any mismatch, so you can put it in a script.
+
+The same comparison runs in CI on every pull request (`reproducible-build` in
+[.github/workflows/ci.yml](.github/workflows/ci.yml)), along with a check that the
+verification image still compiles and still emits six hashes (`docker-verification`). Those
+two jobs exist because both of those things were silently broken for months.
+
+### How the build was made reproducible
+
+For the details and the reasoning behind each change, read
+[recipes/rust-reproducible.hbs](recipes/rust-reproducible.hbs). It is the actual build
+recipe, vendored into this repository rather than pulled from a registry tag, precisely so
+that the procedure you verify is fixed by the commit you verify. In short:
+
+- **The wasm `name` section is stripped** (`-Cstrip=symbols`). It was ~274 KB of debug symbol
+  names that survived the shrink step, and 88 of them carried an LLVM disambiguator derived
+  from the absolute build path. That is what made the same source at two directories hash
+  differently. Stripping removes the cause rather than papering over it, and removes 12% of a
+  module the replica never executes. The alternative, pinning a build path with
+  `--remap-path-prefix`, would have left every verifier needing to pass the same magic prefix
+  and getting a false fraud signal when they forgot.
+- **Absolute paths are remapped** (`--remap-path-prefix` on `$CARGO_HOME` and the workspace
+  root). Panic-location strings from dependency crates were baking the builder's home
+  directory into the wasm data section, 58 of them in `table_canister`, so no two machines
+  could ever have agreed.
+- **`--locked`** so the build cannot quietly update `Cargo.lock`.
+- **Base images pinned by digest** and the toolchain pinned three ways
+  (`rust-toolchain.toml`, the base image, and the `ic-wasm` and `icp-cli` versions).
 
 ---
 
@@ -217,22 +435,29 @@ cleardeck/
 The shuffle uses IC's VRF + commit-reveal:
 
 ```
-BEFORE DEALING:
+IN ONE MESSAGE (start_new_hand):
 1. IC VRF generates 32 random bytes (threshold BLS)
 2. seed_hash = SHA256(random_bytes)
-3. Commit seed_hash publicly
+3. Publish seed_hash    <- visible from the moment cards exist, not before
 4. Shuffle deck using Fisher-Yates with SHA256 chain
 5. Deal cards
 
 AFTER HAND:
 6. Reveal original random_bytes
-7. Store in history canister
+7. Write the hand to the history archive canister
 8. Anyone can verify: SHA256(seed) == committed_hash
 9. And, the part that actually matters: anyone can re-derive the 52 cards
 ```
 
-Step 8 on its own proves only that we can hash. The real check is step 9, reproducing the
-**cards**, and the full normative algorithm is written down in
+Steps 3 and 5 are the same message, so nobody outside the canister can watch the commitment appear
+before the cards do. What is provable, and what an outsider has proved, is that the **whole 52-card
+order was fixed before the board was shown**: the turn and the river are predictable from a
+commitment recorded while only the flop existed.
+
+Step 8 on its own proves only that we can hash — and asking the canister to do step 8 for you proves
+nothing at all, which is why `check_shuffle_commitment` says so in its own reply. The real check is
+step 9, reproducing the **cards** on your machine, and the full normative algorithm is written down
+in
 **[docs/SHUFFLE-SPEC.md](docs/SHUFFLE-SPEC.md)** — deck order, hash chain, byte extraction, the
 rejection rule, the dealing order, and a worked example with a fixed seed and the resulting 52
 cards.
@@ -393,6 +618,9 @@ update_btc_balance : () -> (variant { Ok : vec UtxoStatus; Err : text });
 
 ### History Canister
 
+The durable copy of every shuffle proof. Append-only: nothing in this interface deletes, prunes or
+edits a record.
+
 ```candid
 // Get specific hand
 get_hand : (hand_id: nat64) -> (opt HandHistoryRecord) query;
@@ -401,8 +629,46 @@ get_hand : (hand_id: nat64) -> (opt HandHistoryRecord) query;
 get_hands_by_player : (principal, offset: nat64, limit: nat64)
   -> (vec HandSummary) query;
 
-// Verify shuffle
-verify_hand_shuffle : (hand_id: nat64) -> (Result<bool, text>);
+// Check a recorded hand's commitment, and say WHICH check failed.
+// Every reply carries `this_proves` and `this_does_not_prove`, because an
+// archive re-hashing its own record is not a fairness proof.
+check_recorded_hand : (hand_id: nat64) -> (variant { Ok : RecordedHandCheck; Err : text }) query;
+
+// How long a record survives and who can destroy it, stated by the archive.
+get_retention_policy : () -> (RetentionPolicy) query;
+
+// Who can admit a new writer with authorize_table. They cannot remove records.
+get_admin : () -> (opt principal) query;
+
+// DEPRECATED: Ok(false) cannot distinguish "no seed revealed yet" from
+// "the commitment is broken". Use check_recorded_hand.
+verify_hand_shuffle : (hand_id: nat64) -> (variant { Ok : bool; Err : text }) query;
+```
+
+### Fairness endpoints on a table
+
+```candid
+// Check a commit-reveal pair. A RECORD, so there is no argument order to get
+// wrong, and a variant answer that names the fault: Match / FieldsSwapped /
+// NoMatch / Malformed.
+check_shuffle_commitment : (record { seed_hash : text; revealed_seed : text })
+  -> (CommitmentCheck) query;
+
+// Is the fairness record for this table reaching the archive right now?
+get_history_status : () -> (HistoryStatus) query;
+
+// How long a proof survives here, and who can destroy it.
+get_fairness_retention : () -> (FairnessRetention) query;
+
+// Re-send every settled hand the archive has not acknowledged. Any
+// non-anonymous caller: the player has the strongest interest in this working.
+flush_unrecorded_hands : () -> (variant { Ok : nat64; Err : text });
+
+// DEPRECATED: two unnamed hex strings and a bare bool, so "you called it
+// backwards" and "you were cheated" used to be the same answer. It now answers
+// in either order so it cannot manufacture an accusation, but it still cannot
+// tell a malformed argument from a broken proof. Use check_shuffle_commitment.
+verify_shuffle : (text, text) -> (bool) query;
 ```
 
 ---
@@ -446,7 +712,12 @@ table's account with `icp token transfer` (or your wallet).
 
 ## Known Issues
 
-- Hand history may be lost during canister upgrades (stable memory limitations)
+- A table keeps only its **last 100 hands**, and one controller call (`reset_table`) erases them.
+  The durable copy is the `history` archive canister; check `get_history_status` on the table before
+  relying on it, because through wave 5 no table was wired to the archive and nothing said so
+  ([docs/DEFECTS.md T-34](docs/DEFECTS.md#t-34))
+- A controller of the archive canister can still destroy every proof by reinstalling or deleting it.
+  No application code can prevent that
 - BTC deposits require 6 confirmations (~1 hour)
 - Large pots may have rounding issues (e8s precision)
 - UI may lag on slow connections (polling-based updates)

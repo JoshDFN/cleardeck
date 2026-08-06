@@ -8,6 +8,14 @@ has a single queue to work from.
 
 - Anything with fund impact also has a full write-up in **[SECURITY-FINDINGS.md](SECURITY-FINDINGS.md)**.
   This file is the index and the priority order; that file is the evidence.
+
+> **WAVE 6, 2026-08-05.** A second independent auditor, run AFTER wave 6's fixes, still says
+> **"NO — I would not tell a friend their money is safe here."** The full accounting, both
+> auditors' verdicts quoted, every gate's verdict and the shortest path to a different answer are
+> in **[WAVE-06.md](WAVE-06.md)**. The four open fund-safety blockers are
+> [FINDING 07](SECURITY-FINDINGS.md#finding-07) (critical: one controller call destroys a table's
+> chips), [FINDING 18](SECURITY-FINDINGS.md#finding-18), [FINDING 19](SECURITY-FINDINGS.md#finding-19)
+> and [FINDING 17](SECURITY-FINDINGS.md#finding-17).
 - Nothing here has been patched. Wave 1 deliberately froze engine behaviour so ground truth
   could be established first. **Do not fix a defect without a test that fails before the fix.**
 - Reproduce anything with `make test` (fast) or the exact command on each entry.
@@ -31,7 +39,7 @@ or **fixed-in-wave-1**.
 
 | # | sev | status | where | one line |
 |---|---|---|---|---|
-| [E-42](#e-42) | **critical** | **OPEN** — executed by an independent auditor on a funded local table | `record_hand_to_history` → `evaluate_hand` (`src/table_canister/src/lib.rs:871`) | **a funded table was locked with about 420 ICP unreachable through every path a player has.** One player stopped heartbeating pre-flop; every state-advancing call then trapped, and `withdraw`/`cash_out` refused because a hand was in progress. The one unguarded settlement-path call to a trapping evaluator. [FINDING 15](SECURITY-FINDINGS.md) |
+| [E-42](#e-42) | **critical** | **FIXED 2026-08-05** — reproduced live on the deployed module, root-caused, gated by M9 | `plan_payouts` → `rank_claims` (NOT `record_hand_to_history`, which the first triage named); cause in `count_active_players` vs `live_claims` | **a funded table was locked with about 420 ICP unreachable through every path a player has.** One player stopped heartbeating pre-flop; every state-advancing call then trapped, and `withdraw`/`cash_out` refused because a hand was in progress. The cause was a hand ending as a fold-out with two live claims and no board; the trap was the messenger. [FINDING 15](SECURITY-FINDINGS.md) |
 | [T-33](#t-33) | **critical** | **OPEN** — executed by an independent auditor | `Dockerfile`, `scripts/verify-build.sh`, `README.md` §Verify the Code, `icp.yaml` `shrink` | **nobody can check what code is running.** The deployed module hash matches no commit here; the build is not path-independent; the published Docker verification cannot compile (`COPY` omits `src/poker_core`); and the procedure the README gives a reader is controller-only. The auditor proved this is not paperwork: the deployed binary locked a funded table and the source in this repo settled the identical state correctly |
 | [E-01](#e-01) | **critical** | **FIXED-IN-WAVE-2** (with E-03 and E-05) | `determine_winners` / `advance_to_next_street` | every showdown after post-flop betting paid only the pre-flop pot and destroyed the rest permanently; the payout basis is now rebuilt from the players' contributions at payout time |
 | [E-02](#e-02) | **fund-theft** | **FIXED-IN-WAVE-2** (demonstrated as theft first) | `periodic_cleanup`, `deposit`, `notify_deposit`, `VERIFIED_DEPOSITS` | one real ledger transfer credited twice and the excess WITHDRAWN as real ICP; closed by a monotonic watermark plus a bounded record with one writer |
@@ -62,7 +70,7 @@ or **fixed-in-wave-1**.
 | [E-03](#e-03) | high | **FIXED-IN-WAVE-2** (with E-01 and E-05) | `calculate_side_pots` → `poker_core::side_pots` | `state.pot` overrode the players' actual contributions in both directions, minting in one and destroying in the other through an `f64` ratio; it can no longer move a chip |
 | [E-04](#e-04) | high | **FIXED-IN-WAVE-2** (with E-02, in that order) | `notify_deposit` | could never credit a deposit (two independent decode bugs) and the ICP sent was stranded forever |
 | [E-05](#e-05) | high | **FIXED-IN-WAVE-2** (with E-01 and E-03) | `leave_table`, `cash_out`, `check_timeouts` | a seat vacated mid-hand orphaned its stake, moving contested money into the deepest stack's exclusive pot; the stake is now recorded independently of seat occupancy |
-| [E-06](#e-06) | high | executed | `check_timeouts` + `count_players_can_act` | on `table_1`/`btc_table_1` the disconnect and action timeouts are both 30 s, so one lull runs the whole board out and settles |
+| [E-06](#e-06) | high | **FIXED IN WAVE 5** (same fix as E-32) | `check_timeouts` + `count_players_can_act` | on `table_1`/`btc_table_1` the disconnect and action timeouts were both 30 s, so one lull ran the whole board out and settled. Participation no longer reads `status`, and the two thresholds can no longer race: `reg09` now leaves the hand IN PROGRESS |
 | [E-07](#e-07) | high | executed | `admin_reinit_table` | the documented recovery tool strands every seated player's chips |
 | [T-01](#t-01) | — | **FIXED-IN-WAVE-2** | `src/cleardeck_frontend` build, root `.env` | the build now refuses to run without an explicit target network, loads the repo-root `.env` only for `-e ic`, and aborts if a local build resolves a mainnet id |
 | [H-01](#h-01) | — | **FIXED-IN-WAVE-2** | `tests/money_safety/src/wasms.rs` | the stale-artifact path is gone: the harness always builds, prints the sha256 as the first line of every run, and verifies the installed module hash |
@@ -88,11 +96,13 @@ or **fixed-in-wave-1**.
 | [E-16](#e-16) | — | **fixed-in-wave-2** | `poker_core::shuffle` (was `lib.rs:2314`) | `(draw as usize) % (i+1)` truncated to 32 bits on wasm32, so NO third party could reproduce a deal from the revealed seed |
 | [E-30](#e-30) | high | **FIXED-IN-WAVE-2, CORRECTED IN COHERENCE PASS** | `player_action`, the `AllIn` arm | an all-in that raises by less than a full min-raise reopened the betting. The first fix implemented "closed if facing anything at all", which is not the rule and is a regression on CUMULATIVE short all-ins (TDA 47-A). Now `amount_owed < min_raise`; pinned by `coherence_regressions.rs` |
 | [E-31](#e-31) | high | **FIXED-IN-WAVE-2, CORRECTED IN COHERENCE PASS** | `player_action` timer check | an expired action timer was refused but never resolved, so the table wedged. Resolving it before the whose-turn check then let a message composed on the flop be APPLIED on the turn; such an action is now refused while the table still unwedges |
-| [E-32](#e-32) | high | executed | `is_betting_round_complete` + `check_timeouts` | a `Disconnected` seat is skipped by the betting round yet stays live in the hand: a free showdown for money already in |
+| [E-32](#e-32) | high | **FIXED IN WAVE 5** (reproduced on the running canisters first, then fixed) | `is_betting_round_complete` + `count_active_players` + `count_players_can_act` + `find_next_active_seat` + `sit_out` | a `Disconnected` (or mid-hand `sit_out`) seat was skipped by the betting round yet stayed eligible for the pot: a free showdown for money already in, measured at **0.98 big blinds a hand**. Participation is now the SAME predicate as eligibility |
 | [E-33](#e-33) | medium | code-read | `join_table` / `start_new_hand` | no post-or-wait-for-the-big-blind rule, so a player can cycle in and out taking free non-blind hands |
 | [E-34](#e-34) | medium | code-read | `start_new_hand` blind assignment | no dead-button rule: when a seat between the button and the blinds empties, a player is skipped for the big blind |
 | [E-35](#e-35) | medium | **FIXED-IN-WAVE-2** | `determine_winners` odd-chip rule | a chopped pot gave its WHOLE remainder to one seat; with three or more winners the rules give one chip each, clockwise from the button. Found by the settlement oracle (D-04) |
-| [E-36](#e-36) | medium | executed | `join_table` + `sit_in` + `apply_player_action` | a player who takes an empty chair MID-HAND and calls `sit_in()` is given the action and can bet into a hand they hold no cards in. They can never win that money |
+| [E-36](#e-36) | **high** (was medium; **RAISED IN WAVE 6**) | executed | `join_table` + `sit_in` + `is_in_hand` + `count_active_players` | a player who takes an empty chair MID-HAND and calls `sit_in()` is given the action and can bet into a hand they hold no cards in. **In wave 6 it grew a third-party victim:** that cardless seat is counted by `count_active_players`, so when the last card-holder is folded by its own clock the engine settles a "fold-out" with no live claim at all and refunds every stake -- **the hand is un-played and the fold-out WINNER loses the pot they won.** Measured on `5e07edf6`: a 52,000,000 e8 pot, three seats, all three back on exactly their buy-in |
+| [E-52](#e-52) | **high** | executed | `.toast` vs `.alpha-warning-banner` in `src/cleardeck_frontend` | the app's own error toast is `position: fixed; z-index: 100` and 534 px tall. At 390x844 it covers the whole alpha-warning banner: the no-rake property is **9 of 9 sample points covered**, and the four protection notices 3 of 9. HARD RULE 2 says all four must be ON SCREEN at any viewport on any view. No screenshot scene raises a toast, so the repo's own occlusion gate has never seen it |
+| [E-53](#e-53) | medium | executed | `tools/shots/lib/config.mjs` `FUNDER_IDENTITIES` / `CONTROLLER_IDENTITY` | wave 6 taught `scripts/dev.sh` to resolve the controller from `canister status`; `tools/shots` still hardcodes `cd-local-deployer`. On this machine the tables are controlled by `cyclepay-hotwallet`, so **the whole screenshot sweep aborts** with `No local icp identity controls 46el7-…`, and with it the pixel gate and the protected-notice gate |
 | [T-02](#t-02) | — | **FIXED-IN-WAVE-2** | "Verify Code" panel | the copy payload now comes from the same config as the wiring; each mainnet id appears exactly once in the bundle, as display text |
 | [T-05](#t-05) | low | code-read | every deploy path | `btc_table_1` is never registered in the lobby |
 | [T-06](#t-06) | low | executed | `canister_ids.json` vs `.icp/data/mappings/ic.ids.json` | two mainnet id lists that can drift |
@@ -181,7 +191,7 @@ every time**, and `state.side_pots` is display-only state that no payout reads.
 |---|---|---|
 | settlement oracle, 17 deliberate hands | 6 disagreements in 4 classes, 240 chips destroyed on the headline hand | **0 disagreements, 0 destroyed, 0 misdirected** |
 | the FINDING 01 hand (blinds 1M/2M, 30M flop bet and call, checks to showdown) | winner paid 4,000,000 of a 64,000,000 pot; 60,000,000 destroyed | winner paid **64,000,000**; destroyed **0** |
-| `reg09` forced settlement by one timeout | 200,000,000 destroyed | 0 destroyed (E-06 itself is still live: the hand is still ended early) |
+| `reg09` forced settlement by one timeout | 200,000,000 destroyed | 0 destroyed, and since wave 5 the hand is **not ended early either**: [E-06](#e-06) is closed. In wave 6 `reg09` was inverted from pinning that defect to gating its fix, and renamed `reg09_one_timeout_folds_only_the_seat_on_the_clock` |
 
 **Reproduce (the fix)**
 ```
@@ -505,7 +515,52 @@ leaves while holding an uncovered bet takes it with them instead of leaving it i
 no longer win.
 
 <a id="e-06"></a>
-### E-06 — high — one action timeout ends the hand for everybody
+### E-06 — **FIXED IN WAVE 5** — high — one action timeout ends the hand for everybody
+
+**Fixed by the [E-32](#e-32) fix**, which is the same mistake: participation in the betting round
+was gated on `status == Active` while eligibility for the pot was not. E-06 is what that looks
+like on a table whose disconnect threshold and action clock coincide; E-32 is what it looks like
+where they do not. Both are closed by the one change.
+
+Two things now stop it. Participation is decided by `is_in_hand` / `can_still_act`, so marking a
+seat `Disconnected` removes it from nothing; and `DISCONNECT_TIMEOUT_SECS` is 90, which is longer
+than every deployed action clock (30 / 45 / 60), so the two thresholds cannot race at all any
+more -- the ACTION clock is always first, on every table.
+
+`reg09` in `tests/money_safety/tests/regressions.rs` pinned the broken behaviour and, from wave 5
+until the wave-6 coherence pass, FAILED — which is exactly what its own comment asked for:
+
+```
+assertion `left == right` failed: ONE timeout ended the hand for everybody. Live players
+before: 3. If this now leaves the hand in progress the interaction has been fixed
+  left: Turn            <- the hand is still in progress. E-06 is closed.
+ right: HandComplete
+```
+
+> **WAVE 6: THAT IS DONE. `reg09` NOW GATES THE FIX INSTEAD OF PINNING THE DEFECT.**
+>
+> It was red for a whole wave, and `./scripts/dev.sh test` was red with it, which is the worst
+> possible state for a gate: a suite everybody has learned to expect one failure from cannot
+> convict the second. It is renamed `reg09_one_timeout_folds_only_the_seat_on_the_clock` and now
+> asserts, on the identical sequence, that
+>
+> 1. exactly ONE seat is folded and it is the one on the clock (`PlayerTimedOut(_)`),
+> 2. the hand is still in progress with two live seats,
+> 3. the board is 4 cards, not 5 — the remaining board is NOT dealt in one message,
+> 4. nobody is marked `Disconnected` by a 31 s lull at all (the 90 s threshold),
+> 5. nothing is destroyed, and
+> 6. once every clock has expired the last seat standing wins by FOLD-OUT on the short board,
+>    paid the whole 206,000,000 e8s it collected, with no manufactured showdown.
+>
+> **It goes RED with the defect restored.** Verified by reverting both halves in a `cp -Rc` copy
+> (`DISCONNECT_TIMEOUT_SECS` 90 → 30 and `is_in_hand` back to `!p.has_folded && p.status ==
+> PlayerStatus::Active`): `PINNED FIX (E-06): one timeout must not end the hand for everybody.
+> Live players before: 3, phase after: HandComplete`. [SECURITY-FINDINGS.md](SECURITY-FINDINGS.md)
+> FINDING 12 was updated in the same change, as `reg09` instructed.
+
+The original finding follows.
+
+#### As found
 
 **Where** `check_timeouts` + `count_players_can_act` + `advance_to_next_street`.
 [SECURITY-FINDINGS.md](SECURITY-FINDINGS.md) FINDING 12.
@@ -868,17 +923,135 @@ the quiet player for the assertion to keep meaning what it says.
 refuse-only behaviour turns 5 of the 24 red. Behaviour preservation at the canister level was
 checked against the real wasm on PocketIC: `reg08_a_timed_out_player_can_cash_out_mid_hand_and_
 orphan_their_stake` and `reg09_one_timeout_with_no_heartbeats_runs_the_whole_board_out_and_settles`
-both still pass, i.e. the extraction did not change what `check_timeouts` does.
+both still pass, i.e. the extraction did not change what `check_timeouts` does. (`reg09` fails as of
+wave 5 -- not because of the E-31 extraction, but because [E-06](#e-06)/[E-32](#e-32) were fixed and
+the hand it pins is no longer ended early.)
 
 <a id="e-32"></a>
-### E-32 — high — a `Disconnected` seat is skipped by the betting round yet stays live in the hand
+### E-32 — **FIXED IN WAVE 5** — high — a `Disconnected` seat is skipped by the betting round yet stays live in the hand
+
+**Status: reproduced on the running canisters, quantified, then fixed.**
+
+**THE CLASS.** PARTICIPATION -- whose turn is it (`find_next_active_seat`), is anybody left to play
+for the pot (`count_active_players`), can anybody still put money in (`count_players_can_act`), does
+the street close (`is_betting_round_complete`) -- was decided by `status == PlayerStatus::Active`.
+ELIGIBILITY -- who may WIN the pot (`live_claims`) -- is decided by "seated, holds cards, has not
+folded", and says nothing about `status`. Every gap between those two sets is a way to be paid for a
+pot you did not pay into, or to be charged for one you cannot win.
+
+**Every door into the gap, and what each is now.**
+
+| door | what it did | now |
+|---|---|---|
+| `check_timeouts` marks a seat `Disconnected` after a lull | dropped it from the betting round, kept it eligible | `Disconnected` decides nothing; the seat is still offered the action |
+| `sit_out()` mid-hand | set `SittingOut` with **no phase check** -- the same exploit with no wait at all | deferred to the end of the hand (`is_sitting_out_next_hand`), which is what real rooms do |
+| `find_next_active_seat` | never offered the action to a non-`Active` seat | offers it to any seat that `can_still_act` |
+| `count_active_players` | could reach 1 while TWO seats held cards, so `end_hand_single_winner` gave the pot away | counts every seat `is_in_hand` |
+| `count_players_can_act` | dropped below 2 and ran the board out (that is [E-06](#e-06)) | counts every seat that `can_still_act` |
+| `is_betting_round_complete` | closed the street with a live seat owing money | a street cannot close while a seat that can win the pot owes anything |
+
+Checked and left alone: every other `status == Active` test in the file is a BETWEEN-HANDS question
+(`start_new_hand`'s player count, the blind and button walk, ante posting, who gets dealt cards, the
+auto-deal counters, the auto-kick, `reload`). Deciding who is in the NEXT hand from `status` is
+correct; deciding who is in THIS one from it was not. `check_timeouts`'s broke-player sit-out cannot
+reach a live claim either: `broke_at` is only ever set in `finish_hand`, and a 0-chip seat is
+auto-sat-out before the next deal.
+
+**WHAT IT WAS WORTH.** Measured by
+`the_free_showdown_was_worth_about_a_big_blind_a_hand`, which runs the engine's own `plan_payouts`
+over 20,000 real deals in the situation below -- three-handed, 20 each in, a 200 bet on the flop:
+
+```
+E-32 measured over 20000 deals: the skipped seat collected the 60 main pot on 6911 of them
+(34.6%), worth 19.64 chips a hand = 0.98 big blinds a hand, against a certain -20 for folding.
+```
+
+Playing by the rules costs you 20 with certainty. Not heartbeating costs you 20 only when you lose,
+and pays 40 when you win. It is a **free roll**, it is strictly better than folding in every hand it
+applies to, and 0.98 BB/hand is roughly twenty times a good player's whole edge.
+
+**REPRODUCED ON THE RUNNING LOCAL CANISTERS** (`table_2`, 45 s clock, before the fix):
+
+```
+hand 3   ONE action recorded for the entire hand -- seat 3 Fold, forced by the clock -- and a
+         complete five-card board dealt. Seats 2 and 4 were both carried to a showdown having
+         put in nothing but their blinds and having acted not at all. Seat 2 collected.
+         (This is the auditor's evidence shape, reproduced.)
+hand 2   seat 4 stopped heartbeating, was marked Disconnected with 10,000,000 e8s in the pot and
+         has_folded = false, and the pot was then handed to seat 0 by end_hand_single_winner --
+         no showdown -- while seat 4 still held cards that could have won it. The SAME defect
+         robbing the honest player.
+hand 5   seat 4 called sit_out() on the flop. Instant, one message, no 30-second wait. Never
+         asked to match a 2 ICP bet, kept its stack, still has_folded = false with cards at the
+         showdown.
+```
+
+**THE RULE, AND THE SOURCE.** Poker gives a player facing a bet three options -- call, raise, fold
+-- and no fourth. Robert's Rules of Poker (Ciaffone), the source the wave-4 audit already recorded
+against this defect: a player called upon to act who fails to act has a folded hand. Every online
+room implements exactly that -- your clock runs whether or not your client is connected, and the
+hand is folded when it expires. The all-in-style "disconnect protection" a few rooms offered in the
+early 2000s, which capped a dropped player at what they had already contributed while they kept the
+rest of their stack, was withdrawn because players triggered it deliberately. That cap is precisely
+what this engine was handing out by accident, to anyone who closed their laptop lid.
+
+**WHY NOT SIMPLY FOLD A DISCONNECTED PLAYER.** Because that punishes the honest one, and the brief
+asks about them. The rule implemented is the room rule and it is strictly gentler: a dropped
+connection costs **nothing at all** until the player's own action clock expires. The street cannot
+close behind their back, so a pot they have chips in cannot be given away while they are still in
+it; they get the full `action_timeout_secs` plus their time bank to come back; and if they do come
+back inside it they play the hand out with their equity intact. Only the clock folds them -- the
+same clock that folds a player who is sitting right there and says nothing.
+
+The heartbeat threshold itself, which is all a flaky connection trips, went from 30 s to 90 s and
+now governs only the "disconnected" badge, exclusion from the NEXT deal, and the start of the
+120 s auto-kick clock: 3.5 minutes before a seat is given away, not 2.5.
+
+**COST TO THE TABLE.** A dead client now holds the table up for one action clock per hand instead of
+being silently skipped. That is what a real room does, and `MAX_TIMEOUTS_BEFORE_SITOUT` already
+bounds it: the first timeout folds them, the second sits them out.
+
+**VERIFIED ON THE RUNNING CANISTER AFTER THE FIX** (`table_1`, redeployed):
+
+```
+sit_out() called on the flop  ->  status stayed Active, seat stayed in the hand,
+                                  and the sit-out took effect at the START OF THE NEXT HAND
+seat 0 marked Disconnected    ->  seat 1 bets 1 ICP
+                                  phase STAYS Flop, action_on = 0. The street did not close.
+seat 0's clock then expires   ->  has_folded = true, board still 3 cards, uncalled bet returned,
+                                  seat 1 wins by fold-out. No free run-out, no free showdown.
+```
+
+**Tests** `src/table_canister/tests/betting_rules.rs` sections 4 and 5. All five go RED with the
+fix reverted and the 25 pre-existing tests stay green:
+
+```
+cargo test -p table_canister --test betting_rules
+  a_seat_that_stops_responding_cannot_win_a_pot_it_declined_to_match
+  a_seat_that_sits_out_mid_hand_does_not_leave_the_betting_round_it_is_in
+  a_pot_is_not_given_away_while_a_seat_that_stopped_responding_still_holds_cards
+  a_seat_that_comes_back_inside_its_own_clock_plays_the_hand_out
+  every_seat_the_engine_waits_for_is_a_seat_that_can_win_the_pot
+  the_free_showdown_was_worth_about_a_big_blind_a_hand
+```
+
+and at the canister level, `reg09` -- which pinned the broken behaviour -- now fails with
+`left: Turn, right: HandComplete`. See [E-06](#e-06).
+
+**STILL OWED, in files this agent does not own:** `reg09` and
+[SECURITY-FINDINGS.md](SECURITY-FINDINGS.md) FINDING 12 must be updated together, as `reg09`'s own
+comment instructs; and this belongs in SECURITY-FINDINGS.md as a way to take another player's money.
+
+#### As found
 
 **Where** `is_betting_round_complete`, `count_active_players` and `find_next_active_seat` (all
 require `status == PlayerStatus::Active`) versus `determine_winners` (evaluates every player with
 `!has_folded`). Set up by the hardcoded 30 s `DISCONNECT_TIMEOUT_NS` in `check_timeouts`.
 
-**Status: characterised, NOT fixed.** Fixing it decides who is eligible for which pot, which is the
-payout path another agent owns in this wave.
+**Status when found: characterised, NOT fixed** ("fixing it decides who is eligible for which pot,
+which is the payout path another agent owns in this wave"). It is fixed now, without touching the
+payout path: the payout path was always right, and it is the BETTING path that was asking a
+different question.
 
 **What is wrong** A player marked `Disconnected` mid-street blocks nothing and is offered nothing:
 the betting round closes without them ever being asked to call. But they are **not folded**, so at
@@ -909,17 +1082,16 @@ E-06 instead. So E-06 and E-32 are complementary: **every deployed table has one
 **The rule** Robert's Rules of Poker, Section 1 #12: a player called upon to act who fails to act
 has a folded hand. There is no "skip the player but keep them live" state in poker.
 
-**Reproduce**
-```
-cargo test -p table_canister --test betting_rules -- \
-  characterises_a_disconnected_player_being_skipped_yet_left_live_in_the_hand
-```
-That test asserts TODAY'S wrong answer, so the behaviour cannot change silently. It goes red the
-moment the defect is fixed, and its body says what the correct state is.
+**Reproduce (historical)** `characterises_a_disconnected_player_being_skipped_yet_left_live_in_the_hand`
+asserted TODAY'S wrong answer so it could not change silently. It has been REPLACED by the six tests
+listed above, which assert the right answer and go red the moment the fix is reverted. Note that the
+old characterisation would NOT have caught the fix on its own: it built its quiet seat with
+`hole_cards: None`, a state no deal can produce, and such a seat is correctly not in the hand. That
+is the standing lesson again -- the marker for a defect was blind to the defect being fixed.
 
 **Also worth an entry in [SECURITY-FINDINGS.md](SECURITY-FINDINGS.md)** — it is a way to take
-another player's money, not the canister's. Not written there by the finding agent because that
-file was open in another agent's working set at the time.
+another player's money, not the canister's. STILL NOT WRITTEN THERE: that file was outside this
+agent's ownership in this wave too.
 
 <a id="e-33"></a>
 ### E-33 — medium — no post-or-wait-for-the-big-blind rule, so free hands can be farmed
@@ -970,7 +1142,7 @@ big blind a hand early having just held the button. Both are EV transfers.
 ### Smaller audit notes, no entry of their own
 
 * **`advance_to_next_street` picks the post-flop first actor with `find_next_active_seat`, which
-  requires `status == Active`.** Heads-up this is right (the button is the small blind, so the big
+  used to require `status == Active` (no longer -- see [E-32](#e-32)).** Heads-up this is right (the button is the small blind, so the big
   blind acts first post-flop, exactly as the rules require) and multiway it is right (first live
   seat left of the button). But it is also the mechanism behind E-32: a `Disconnected` live seat is
   never given the action.
@@ -1046,7 +1218,60 @@ chopped layer is more than one chip clear of another. `golden_d04*` are unchange
 record of what the defect was.
 
 <a id="e-36"></a>
-### E-36 — medium — a mid-hand arrival can bet into a hand it holds no cards in
+### E-36 — **high (raised from medium in wave 6)** — a mid-hand arrival can bet into a hand it holds no cards in, AND can un-play the hand for everybody else
+
+> ## WAVE 6: THIS DEFECT NOW HAS A THIRD-PARTY VICTIM
+>
+> The wave-6 write-ups say participation is now "asked of THE SAME PREDICATE as eligibility",
+> and `is_in_hand`'s own doc comment says of the cardless seat that *"including it changes
+> nothing; it holds no cards, so `live_claims` still refuses to pay it."* **Both sentences are
+> false, and the second one is why nobody looked.** Participation is
+>
+> ```rust
+> pub fn is_in_hand(p: &Player) -> bool {
+>     !p.has_folded && (p.hole_cards.is_some() || p.status == PlayerStatus::Active)
+> }
+> ```
+>
+> and eligibility is `live_claims`, which requires `hole_cards.is_some()`. A cardless `Active`
+> seat is in one set and not the other. That is exactly the disagreement E-32 was closed to
+> remove, still open at a fifth site.
+>
+> It matters now because `count_active_players(state) == 1` triggers `end_hand_single_winner`,
+> and the ONE seat it counts can be the cardless one. `live_claims` is then empty, so
+> `plan_payouts` takes its wave-6 "nobody can win ANY of this money" branch and hands **every
+> stake back to its funder, including the players who folded.**
+>
+> **Measured on the wave-6 module `5e07edf6…`** (`tests/money_safety/tests/wave6_coherence.rs::probe4`),
+> and note that nothing in this sequence is hostile or even unusual:
+>
+> ```
+> pot = 52,000,000 e8s, alice v bob heads-up
+> carol calls join_table(2) mid-hand  -> Ok
+> carol calls sit_in()                -> Ok
+> alice folds                         -> ordinary poker; bob has WON by fold-out
+> bob's client drops; his own action clock expires
+> check_timeouts -> PlayerTimedOut(1)
+>
+> FINAL phase=HandComplete pot=0
+>   seat0 chips=200000000  (its exact buy-in)
+>   seat1 chips=200000000  (its exact buy-in -- the fold-out winner)
+>   seat2 chips=200000000  (its exact buy-in)
+> ```
+>
+> No trap. No `CRITICAL:` line. Conservation exact. M1 through M9 silent, the drain clean.
+> **The hand was un-played: the player who folded got their blind back and the player who won
+> got nothing.** Before wave 6 the same state destroyed the money instead (`plan_payouts`
+> returned early and the next `start_new_hand` zeroed the pot), so this is strictly an
+> improvement, but the property the wave claims -- that the table can no longer be wedged into
+> a state the rules cannot describe -- is **not** established for the states that settle
+> quietly. It is established only for the states that TRAP.
+>
+> **Not fixed in wave 6 either**, and deliberately so: the one-line change (drop the
+> `|| p.status == PlayerStatus::Active` disjunct) is a behaviour change to the seating path
+> during a wave with three other agents in the file, and it must be landed together with the
+> register entry and the tolerated self-report below, in ONE change. It is the shortest item on
+> docs/WAVE-06.md's path-to-yes.
 
 **Status** **executed**, found 2026-08-04 by the money-safety fuzzer at 600 steps (seed
 `0xc1ea2dec0003`, 6-max with an ante) while validating the E-01/E-03/E-05 payout fix. **Not
@@ -4277,10 +4502,10 @@ The second is this pass's own walk of the app: every view, both viewports, on th
 | [E-42](#e-42) | **critical** | executed by the auditor on a funded local table; call site confirmed by code read | `record_hand_to_history` → `poker_core::evaluate_hand` (`src/table_canister/src/lib.rs:871`) | **a funded table was bricked with ~420 ICP unreachable through every path a player has.** One player stopped heartbeating pre-flop; from then on `check_timeouts`, `player_action` and `leave_table` all trapped (`IMPOSSIBLE HAND: … got 0 community cards`), while `withdraw` and `cash_out` refused with *"Cannot withdraw while in a hand"*. The one unguarded settlement-path call to a trapping evaluator. [FINDING 15](SECURITY-FINDINGS.md) |
 | [T-33](#t-33) | **critical** | executed by the auditor | `Dockerfile`, `scripts/verify-build.sh`, `README.md` §Verify the Code, `icp.yaml` `shrink` | **nobody can check what code is running.** The deployed module hash matches no commit in the repository; the build is not path-independent (a 274 KB `name` section survives `shrink`); the published Docker verification cannot compile because its `COPY` list omits `src/poker_core`, which `table_canister` depends on; and the hash-reading procedure the README tells a reader to run is controller-only |
 | [E-43](#e-43) | **high** | code-read confirmed; exploited by the auditor in play | `count_players_can_act`, `count_active_players`, `is_betting_round_complete`, `check_timeouts` | a seated player who stops heartbeating is dropped from the betting round and **stays fully eligible for the pot**. Client-controlled, so it is an exploit: call the flop, stop heartbeating, get the turn and river free with full pot equity and immunity from any further bet |
-| [E-44](#e-44) | **high** | executed | `verify_shuffle : (text, text) -> (bool) query` | the one on-chain call a non-technical player would reach for to check they were not cheated **answers "false" for a genuine proof** when the two hex strings are passed in the order a reader would pick. No parameter names in the Candid, `bool` return, so *"you called it backwards"* and *"you were cheated"* are the same answer |
+| [E-44](#e-44) | **high** | **FIXED IN THIS PASS** (both orders re-called on the running replica) | `verify_shuffle : (text, text) -> (bool) query` | the one on-chain call a non-technical player would reach for to check they were not cheated **answers "false" for a genuine proof** when the two hex strings are passed in the order a reader would pick. No parameter names in the Candid, `bool` return, so *"you called it backwards"* and *"you were cheated"* are the same answer |
 | [T-36](#t-36) | **high** | **FIXED IN THIS PASS** (measured red first, on the rendered page) | `+page.svelte`, `DepositModal.svelte`, `WithdrawModal.svelte`, `HowItWorks.svelte` | **HARD RULE 2 was live-broken across the whole desktop app.** The canonical sentence *"No rake is taken from any pot on any table"* was on screen on **4 of the 15 (surface, viewport) pairs** a player can reach, and on **1 of the 7 desktop ones**. Desktop lobby, desktop table, desktop table behind Deposit, desktop table behind Verify Fair: **4 of 5**. Portrait with FULL TERMS open, portrait behind Deposit: **4 of 5** |
 | [H-40](#h-40) | **high** | **FIXED IN THIS PASS** | `tools/shots/run.mjs`, new `tools/shots/lib/felt-area.mjs` | wave 5 built a pixel-level notice gate and never wired it in: `protected-notices.mjs` was imported by **two** scenarios and by nothing else. Flipping one declaration, `.banner-strip { display: block }` → `display: none`: re-commits wave 4's exact crime with **every gate in the repo green**. Both halves now run centrally, for every scene at every viewport |
-| [T-34](#t-34) | medium | executed | history canister `4xhad-gd777-77775-aaacq-cai`; `MAX_HAND_HISTORY_ENTRIES = 100`; `reset_table` | the "permanent hand history" canister is deployed, **authorised for no tables, holding zero records**, and no table is wired to it (`get_history_canister() = null` on `table_2`). Proofs live only in the table, capped at 100 hands, pruned, and wiped by one admin call |
+| [T-34](#t-34) | medium | **FIXED IN THIS PASS** (101 hands archived, then the table's copy destroyed twice over) | history canister `4xhad-gd777-77775-aaacq-cai`; `MAX_HAND_HISTORY_ENTRIES = 100`; `reset_table` | the "permanent hand history" canister is deployed, **authorised for no tables, holding zero records**, and no table is wired to it (`get_history_canister() = null` on `table_2`). Proofs live only in the table, capped at 100 hands, pruned, and wiped by one admin call |
 | [E-45](#e-45) | medium | code-read | `notify_deposit` (archived-block branch) | a deposit made by plain transfer can only be credited while its block is still resident in the ledger canister. Once archived it can **never** be claimed, and `admin_restore_balance` was deliberately removed, so nothing can credit that user afterwards. The README documents this path |
 | [E-46](#e-46) | medium | executed | `icrc1_balance_of` vs `admin_get_all_balances` + `admin_get_table_chips` + `get_pot` | no endpoint reconciles **funds held** against **liabilities recorded**. `table_2` holds 734,105,000,000 e8s against ~42,000,000,000 of recorded liabilities. Nothing is under-collateralised, but *"held by the canister and attributed to nobody"* is exactly what a lost deposit looks like and there is no view that tells the two apart |
 | [T-32](#t-32) | medium | executed (new, this pass) | `PokerTable.svelte:313` `max_players ?? 9` | **every table entry first paints a NINE-seat ring.** At a 6-max table on a phone the felt is 45.3%→50.7% of the frame for **336 ms** and then jumps to 60.6%; on desktop 33.2% for **304 ms** and then 31.7%. Wave 5's headline 60.6% is the settled state and was never distinguished from the first paint |
@@ -4291,7 +4516,9 @@ The second is this pass's own walk of the app: every view, both viewports, on th
 | [H-42](#h-42) | **high** | executed (new, this pass) | `scripts/dev.sh` `cmd_test` step 4 | **`./scripts/dev.sh test`, the repo's primary gate, hung for 33 minutes** with zero CPU on both the test binary and its own PocketIC. The money-safety targets have NO time bound; the settlement targets one step later have two. Every leg is green when run directly (`invariants` 45/0 in 63 s single-threaded) |
 | [H-41](#h-41) | medium | **FIXED IN THIS PASS** | `chain-agreement.mjs`, `token-census.mjs`, `token-allowlist.mjs` | both `deposit` shots were filed UNVERIFIED on every run: the `18` of a player-protection notice read as an unasserted money figure, and T-30's new `0.0004` wallet requirement asserted by nothing. The money figure is asserted now, not allowlisted |
 | [H-43](#h-43) | medium | executed (new, this pass) | `capture.mjs` `writeManifest` / `writeIndex` | a partial screenshot run **overwrites the full run's `INDEX.md` and `manifest.json`** with only the scenes it ran, in both `<sha>/` and `latest/`. The PNGs survive; the record of what they prove does not, and nothing warns |
-| [D-06](#d-06) | medium | executed | `README.md` lines 95-125, `docs/SHUFFLE-SPEC.md` | two claims a stranger reads as stronger than they are: *"the commitment is published before the deal"* (true only inside a single message, `start_new_hand` commits and deals atomically, so no outsider can observe the commitment before cards exist), and *"You can verify that the deployed canisters match this source code"* (addressed to people who by construction cannot run the procedure) |
+| [D-06](#d-06) | medium | item 1 **FIXED IN THIS PASS** in README/spec/`ShuffleProof.svelte`; still open in `Lobby.svelte` and `HowItWorks.svelte`. Item 2 is [T-33](#t-33) | `README.md` lines 95-125, `docs/SHUFFLE-SPEC.md` | two claims a stranger reads as stronger than they are: *"the commitment is published before the deal"* (true only inside a single message, `start_new_hand` commits and deals atomically, so no outsider can observe the commitment before cards exist), and *"You can verify that the deployed canisters match this source code"* (addressed to people who by construction cannot run the procedure) |
+| [E-49](#e-49) | **high** | **FOUND AND FIXED INSIDE THIS PASS**, measured on the replica | `history_canister` de-duplication key | the first idempotency key was `(table_id, hand_number)`. `reset_table` restarts hand numbering at zero, so after a reset four genuinely new hands were **silently discarded as duplicates** while the table was told `Ok` four times: `get_total_hands` moved 4 -> 5. Now keyed on the seed hash too |
+| [E-50](#e-50) | medium | **FIXED for the archive wiring, OPEN for the lobby wiring** | `scripts/dev.sh` `up_wire` | `icp canister call` **exits 0 when the method returns `variant { Err }`**, and every controller-only call in the script relied on the exit code. That, plus `$CONTROLLER` not actually being the controller, is why T-34 held for a whole wave with the script printing success |
 
 ### What the auditor confirmed, unprompted
 
@@ -4308,11 +4535,49 @@ them were:
   mucked cards stay hidden, and the dev faucet really is dead.
 
 <a id="e-42"></a>
-### E-42, critical, one unguarded evaluator call bricks a funded table
+### E-42, critical, one unguarded evaluator call bricks a funded table — **REPRODUCED, ROOT-CAUSED, FIXED, GATED**
+
+> **UPDATE 2026-08-05.** Reproduced end to end on the running local replica against the byte-exact
+> deployed module (an isolated canister, `5tkpr-7d777-77775-aaaeq-cai`, so no other agent's fixture
+> was touched): every door shut at once, exactly as reported.
+>
+> **The call site named below is the WRONG ONE.** It was picked by reading the source for the one
+> unguarded `evaluate_hand`. The canister's own log names the real one, and it is on the
+> **fold-out** path, not the showdown path:
+>
+> ```text
+> poker_core::hand::evaluate_hand
+> table_canister::plan_payouts          <-- rank_claims, not record_hand_to_history
+> table_canister::settle_hand
+> table_canister::end_hand_single_winner
+> canister_update leave_table
+> ```
+>
+> **The cause is not the evaluator.** The engine ended a hand as "everybody else folded" while two
+> seats still held live claims and there was no board to rank them by, because
+> `count_active_players` (which ends the hand) filtered on `status == Active` while `live_claims`
+> (which decides who may win) filters on `has_folded`. That is [E-32](#e-32)/[E-06](#e-06), fixed
+> in this wave by the "WHO IS IN THE HAND" change: 762 of 4,000 randomised endpoint sequences
+> reached the impossible state before it, 0 of 4,000 after.
+>
+> **A guard alone would not have been a fix.** With the board-length guard and without the cause
+> fix, the same state settles by refunding *every* funder including the players who folded — the
+> hand is silently un-played, conservation is exact, and M1–M8 are all silent. Measured.
+>
+> **Also landed here:** all three settlement-path evaluator calls now use `try_evaluate_hand` and
+> `evaluate_hand` is not imported into `table_canister` at all (greppable rule, asserted every
+> run); `abandon_stuck_hand()` gives any caller a door that does not depend on the settlement path;
+> `withdraw`/`cash_out` stop refusing once the hand is provably stuck; and `apply_payouts`'s false
+> claim that trapping there is "recoverable" is corrected. Gated by **M9 FUND REACHABILITY**
+> (`tests/money_safety/tests/fund_reachability.rs`), which goes 5-of-6 RED when the fix is
+> reverted. Full write-up: [FINDING 15](SECURITY-FINDINGS.md).
+>
+> **Not fixed by this:** [T-33](#t-33). The module holding money is still not the source.
 
 **Status: executed by the independent auditor on local `table_2`
-(`4zfnl-5t777-77775-aaadq-cai`), deployed module `0x5298915c…`. The call site is confirmed by code
-read in the current source. Full write-up: [FINDING 15](SECURITY-FINDINGS.md).**
+(`4zfnl-5t777-77775-aaadq-cai`), deployed module `0x5298915c…`. The call site named below was
+confirmed by code read in the current source and was WRONG; see the update above. Full write-up:
+[FINDING 15](SECURITY-FINDINGS.md).**
 
 What the auditor did was play a normal hand. One seated player's client stopped sending heartbeats
 for thirty seconds while a pre-flop hand was live. From that moment:
@@ -4438,9 +4703,55 @@ It is client-controlled, which is what makes it an exploit rather than a bug. Th
 as [E-06](#e-06) (one lull runs the whole board out) seen from the attacker's side.
 
 <a id="e-44"></a>
-### E-44, high, the fairness endpoint answers "false" for a valid proof
+### E-44, high, the fairness endpoint answers "false" for a valid proof, FIXED
 
-**Status: executed.** Confirmed here by reading both sides:
+**Status: FIXED. Verified on the running local replica, both ways round, against a hand the
+canister itself dealt.** The fix is `check_shuffle_commitment`, which takes a **record** — Candid
+keys record fields by hashed name, so there is no argument order left to get wrong — and answers a
+**variant that names the fault**. `verify_shuffle` is kept, deprecated, and made order-insensitive
+so an existing caller cannot be handed a false accusation by it.
+
+`table_1`, hand 1, seed hash `41779ced…c9a8`, revealed seed `2b8a1a4a…235a` (independently confirmed
+with `shasum`, not with the canister):
+
+```
+$ icp canister call table_1 verify_shuffle '("<seed>", "<hash>")' --query   # natural order
+(true)                                    # before this pass: (false)
+$ icp canister call table_1 verify_shuffle '("<hash>", "<seed>")' --query   # documented order
+(true)
+
+$ icp canister call table_1 check_shuffle_commitment \
+    '(record { seed_hash = "<hash>"; revealed_seed = "<seed>" })' --query
+(variant { Match = record { computed_hash = "41779ced…"; …
+   this_does_not_prove = "Nothing about fairness. This is the table checking its own homework…" } })
+
+$ … '(record { seed_hash = "<seed>"; revealed_seed = "<hash>" })'   # values transposed
+(variant { FieldsSwapped = record { … } })                          # NOT a failed proof, and says so
+
+$ … seed_hash from hand 1, revealed_seed from hand 2
+(variant { NoMatch = record { computed_from_revealed_seed = "b97effde…";
+   computed_from_seed_hash = "1cb71ac8…"; meaning = "Neither value hashes to the other…" } })
+
+$ … revealed_seed = "2b8a1a4ab2910e494"           # truncated paste
+(variant { Malformed = record { field = "revealed_seed"; character_length = 17;
+   reason = "an odd number of hex characters…" } })
+
+$ … seed_hash = "4fbx2-kt777-77775-aaabq-cai"     # a principal in the hash field
+(variant { Malformed = record { field = "seed_hash";
+   reason = "not hexadecimal. Expected only the characters 0-9 and a-f…" } })
+```
+
+The pre-fix arithmetic, for the record: the old body compared `SHA256(bytes(arg2))` with `arg1`, so
+the natural reading gave `SHA256(hash) = 1cb71ac8…` against `seed = 2b8a1a4a…` — **false, for a
+genuine proof**.
+
+Every arm carries `this_proves` and `this_does_not_prove` in plain text, because the deeper half of
+the finding is that the endpoint is close to meaningless whatever it returns: the honest
+verification is the one that runs on the player's machine. The fairness panel's own use of it is
+labelled the same way and now shows **both** orders side by side, so the trap is visible rather
+than merely absent.
+
+The original evidence, unchanged:
 
 ```
 src/table_canister/table_canister.did:322   verify_shuffle : (text, text) -> (bool) query;
@@ -4562,6 +4873,120 @@ prunes them and the controller's `reset_table` wipes them.
 The auditor's framing is the right one: *"A fairness guarantee you cannot re-check tomorrow is not
 a fairness guarantee."* Under an hour of heads-up play is enough to lose the record of the hand you
 want to check.
+
+**Status: FIXED, and the root cause was not the one the symptom suggested.**
+
+The wiring code existed and had existed for waves. What was wrong was three separate things, each
+invisible on its own:
+
+1. **`up_wire` only ever made one of the two calls.** `set_history_canister` tells the table where to
+   send; `authorize_table` tells the archive to accept. Only the first was in the script, so even a
+   working table would have been refused.
+2. **It made that call as an identity that is not a controller.** `$CONTROLLER` is
+   `cd-local-deployer`; the backend on this machine was deployed by the default identity,
+   `cyclepay-hotwallet`. `icp canister call` **exits 0 when the method returns `variant { Err }`** —
+   a Candid `Result` is a value, not a transport failure — and the old line was
+   `icp_local canister call … >/dev/null`, so `Err("Unauthorized: controller access required")` was
+   discarded and the script printed `table_1 -> history <id>` and returned success.
+3. **The table decoded the archive's reply with the wrong Candid shape.**
+   `Response::candid::<R>()` is `decode_one`, and the code asked it for
+   `(Result<u64, String>,)` — a one-field *record* wrapping the variant, which `record_hand` never
+   sends. So **every** write, including ones the archive accepted and stored, came back as a decode
+   failure. Measured on the replica mid-fix: 3 hands played, `get_table_hand_count` on the archive
+   said 3, the table said `recorded_ok = 0, failed = 3`. Under the old code that was one
+   `ic_cdk::println!` per hand and nothing else.
+
+Fixes, all four measured on the running replica:
+
+- `scripts/dev.sh` resolves the controller from `icp canister status` instead of asserting it,
+  routes every controller-only call through `call_or_die` (which reads the reply and treats an
+  `Err` as fatal), makes **both** wiring calls, and then **reads the wiring back off both
+  canisters** as a postcondition. That postcondition is what found fault 2.
+- `dispatch_hand_to_history` counts every outcome, keeps the last error verbatim, and **keeps the
+  record** — bounded at 64 — instead of dropping it. `get_history_status` publishes all of it to
+  anybody, unauthenticated. A table with no archive configured now buffers rather than returning
+  early, so wiring the archive later recovers the hands.
+- `flush_unrecorded_hands` re-sends the backlog and is callable by **any non-anonymous principal**,
+  because the party with the strongest interest in the proof surviving is the player.
+- `record_hand` on the archive is idempotent on `(table_id, hand_number, seed_hash)`, so retries
+  cannot double-count `player_stats`.
+
+Measured, end to end (`$SCRATCH/cap-and-destroy.mjs`, 101 real hands on `table_1`):
+
+```
+played 101 hands in 93s
+  recorded_ok_since_start = 101   failed_since_start = 0   unrecorded_backlog = 0
+
+=== forcing the 100-hand cap (periodic_cleanup) ===
+local_history_len before cleanup: 101   after cleanup: 100
+table  get_hand_history(1)          -> (null)          # hand 1 is GONE from the table
+archive get_table_hand_count        -> (101 : nat64)
+archive check_recorded_hand(10)     -> commitment_matches = true, seed intact
+
+=== the admin key: reset_table ===
+table  local_history_len            -> 0               # every local proof erased, one call
+table  get_hand_history(1)          -> (null)
+archive get_table_hand_count        -> (101 : nat64)   # untouched
+archive still verifies hand 1: commitment_matches = true, seed present
+```
+
+And the archived hand 1 verified **without the canister**, which is the only check that counts:
+
+```
+$ echo -n 631a9dbb…9bb2 | xxd -r -p | shasum -a 256
+284f60dda8751173b833b479c6391e61980f670c13e915bbef6abe35aa1172bd   # == the archived seed_hash
+```
+
+The recovery path was reproduced deliberately (`$SCRATCH/backlog-recovery.mjs`): archive switched
+off by the controller, 3 hands played into the void (`backlog=3, failed=3`, `last_error` naming the
+missing archive), wiring repaired, then **`cd-alice`, who is not a controller**, called
+`flush_unrecorded_hands` and got `(variant { Ok = 3 })` — archive count 0 → 3, backlog 0. An
+anonymous caller is refused.
+
+**What is still true and is now SAID, in the UI and the README rather than only here:** the table
+keeps 100 hands and one controller call erases them; the archive has no delete but a controller of
+the archive can reinstall or delete the canister; and `authorize_table` can admit a writer that is
+not a real table. `get_fairness_retention` (table), `get_retention_policy` (archive) and
+`get_history_status` (table) state all of it from the canisters themselves, so the sentences on
+screen are checkable rather than believable.
+
+<a id="e-49"></a>
+### E-49, high, an idempotency key that silently discarded four real hands, CAUGHT DURING THIS PASS
+
+Recorded because it was **mine**, it was introduced and removed inside one wave, and the shape of it
+is the interesting part.
+
+The first version of the archive's de-duplication keyed on `(table_id, hand_number)`. That is wrong,
+and wrong in the direction that loses evidence: `reset_table` restarts a table's hand numbering at
+zero, so after any reset the next N hands collide with N older ones. Measured before the key was
+widened — 4 hands played on `table_2`, the table received `Ok` **four times** because the archive
+returns the existing id for a duplicate, and `get_total_hands` went **4 → 5**. One record stored,
+three shuffle proofs silently gone, with a green status on both sides.
+
+The key is now `(table_id, hand_number, seed_hash)`. The seed is 32 bytes of `raw_rand` per hand, so
+two genuinely different hands never collide and a genuine retry always does. Re-measured: 4 hands,
+`5 → 9`, `recorded_ok` +4, backlog 0.
+
+The lesson generalises past this bug: **an idempotency key that is also a success signal turns
+silent data loss into a green light.** Nothing in either canister would have reported this; it was
+visible only because `get_total_hands` was being read on both sides of the same run.
+
+<a id="e-50"></a>
+### E-50, medium, `icp canister call` exits 0 on `variant { Err }`, and the deploy script relies on the exit code
+
+**Status: FIXED for the archive wiring, OPEN for the lobby wiring, in the same function.**
+
+A Candid `Result` is a *value*. `icp canister call c m '(…)' >/dev/null || die "…"` cannot see
+`Err`, so every controller-only call in `scripts/dev.sh` that used that pattern reported success
+whatever the canister said. That is fault 2 of [T-34](#t-34), and it is not confined to the history
+wiring: `up_wire` still calls `lobby set_admin` and `lobby init_microstakes_tables` as
+`--identity "$CONTROLLER"` with `|| warn "… (already set?)"`, which reads a refusal as an
+idempotent no-op. The lobby is another agent's file this wave, so the pattern was left in place and
+commented rather than changed silently.
+
+`call_or_die` in `scripts/dev.sh` is the fix shape: run the call, read the reply, treat
+`variant { Err` in the output as fatal, and print what the canister actually said. Anywhere in this
+repo that pipes a controller-only `canister call` to `/dev/null` should be routed through it.
 
 <a id="e-45"></a>
 ### E-45, medium, a deposit whose block has been archived can never be claimed
@@ -4715,6 +5140,18 @@ still arrived at both caveats unprompted.
    whole 52-card order was fixed before the board was shown. The hand replayer's wave-5 rewrite
    already says the honest version ("the deck was already fixed at the moment you looked"); the
    README and the shuffle spec should match it.
+
+   **Status: FIXED in `README.md`, `docs/SHUFFLE-SPEC.md` and `ShuffleProof.svelte`.** The spec's
+   "what is proven" table now leads with *"the whole 52-card order was fixed before the board was
+   shown"* and files the ordering claim under **NOT proven** with the reason; the README says the
+   same and marks steps 3 and 5 of its own diagram as one message; the fairness panel's rung 1 is
+   now *"The whole deck was fixed before the board came out"* instead of *"Before the deal, the
+   table locked in a hash"*. Measured on the rendered page at 1440x900 and 390x844.
+
+   **Still open elsewhere, and not this pass's files to edit:** `Lobby.svelte:1080` (*"The deck is
+   committed before the deal and revealed after it"*), `Lobby.svelte:1112` (*"The shuffle-seed hash
+   is published before a card moves"*) and `HowItWorks.svelte:125` (*"before any cards are dealt"*)
+   all still assert the ordering. Same one-line change, three files.
 2. **"You can verify that the deployed canisters match this source code."** Addressed to readers
    who by construction cannot run the procedure ([T-33](#t-33)).
 
@@ -4880,3 +5317,99 @@ manifest, which is the only machine-readable record of every gate's verdict.
 rather than replacing the file, or, at minimum, write partial runs to
 `manifest-partial-<scenes>.json` and leave the full one alone. Either is a small change in
 `capture.mjs`.
+
+---
+
+<a id="e-52"></a>
+### E-52, high, the app's own error toast paints over the player-protection notices at portrait
+
+**Status: executed in wave 6, at both viewports, deterministically.** HARD RULE 2 says the
+unaudited-alpha disclaimer, the 18+ notice, the jurisdiction warning and the no-rake property must
+be **on screen, not merely in the DOM, at any viewport and on any view**. They are not, whenever the
+app is showing an error.
+
+`.toast` is `position: fixed; z-index: 100`. The alpha-warning banner is `z-index: 100` too, and
+comes first in paint order, so the toast wins. Measured with every agent call failed at the network
+layer, so the toast is raised by the app's OWN error path and not injected:
+
+```
+### portrait 390x844  toasts=1
+   toast toast.error rect=[-117, 80, 624, 534] z=100 pos=fixed "Failed to fetch HTTP request: …"
+   COVERED  "Unaudited code with known bugs"            p.banner-warning at y=16  toastHits=3/9
+   COVERED  "your funds are NOT safe"                   p.banner-warning at y=16  toastHits=3/9
+   COVERED  "illegal in many jurisdictions"             p.banner-warning at y=16  toastHits=3/9
+   COVERED  "18+ only"                                  p.banner-warning at y=16  toastHits=3/9
+   COVERED  "No rake is taken from any pot on any table" strong at y=135          toastHits=9/9
+                                                        (the only other carrier is offscreen)
+
+### desktop 1440x900  toasts=1
+   toast toast.error rect=[360, 75, 720, 534] z=100 pos=fixed
+   readable  … all five: the banner is 1440 px wide, so the 720 px toast leaves the text clear,
+             and the no-rake property has two more carriers at y=700 and y=843
+```
+
+At 390 px the toast is **624 px wide starting at x = −117**: it overflows the viewport on both
+sides, so there is no clear column at all. Its top edge is y = 80 and the no-rake line is at
+y = 135, so **any** toast taller than 55 px covers it; 534 px is merely what a long error message
+produces.
+
+**Why no gate saw it.** `tools/shots/lib/protected-notices.mjs` is a good probe and hit-tests each
+phrase on its own pixels — but no scene in `tools/shots/scenarios` raises a toast, and
+`lib/occlusion.mjs` is written against `.modal-backdrop`. `make hygiene` greps the source. The
+phrases are present, unoccluded and legible in every state the harness puts the app into; the app
+just has a state the harness never puts it into. This is the wave-4 lesson recurring one layer out:
+the notices were measured on the rendered page, and the *set of rendered pages* was the blind spot.
+
+**Reproduce**
+```
+node $SCRATCH/toast2.mjs http://<frontend-canister-id>.localhost:8077
+```
+(aborts `**/api/v2/**` and `**/api/v3/**`, clicks the app's own dev sign-in, waits 4 s, then
+hit-tests all five phrases against `.toast` at both viewports.)
+
+**Fix:** give the alpha-warning banner a higher stacking context than `.toast`, or move the toast
+container below the banner and cap its width at the viewport. The narrower change is a z-index; the
+durable change is a shots scenario that raises a toast on every view, so the notice gate covers the
+error states too.
+
+---
+
+<a id="e-53"></a>
+### E-53, medium, the screenshot harness hardcodes a controller identity that does not control anything here
+
+**Status: executed in wave 6.** `./scripts/dev.sh shots` aborts:
+
+```
+FATAL: No local icp identity controls 46el7-ql777-77775-aaada-cai.
+  controllers on the canister: nsp5q-aelxk-xax2u-3sqxb-xeod6-fduhf-zmoir-qxpp3-xusb4-nez2q-5ae
+  identities tried: cd-local-deployer=sg3sw-…, cd-alice=…, cd-bob=…, cd-carol=…, (default)=…
+Controller-only calls (reset_table) cannot be made, so scenes cannot be reset.
+```
+
+`nsp5q-…` is `cyclepay-hotwallet`, which is not in `FUNDER_IDENTITIES`. This is the SAME defect the
+wave-6 history-wiring agent found and fixed in `scripts/dev.sh` — `resolve_controller_identity` now
+reads the controller off `canister status` instead of assuming `cd-local-deployer` — applied to a
+second harness that was not looked at. The consequence is not cosmetic: **the pixel gate, the
+occlusion gate and the protected-notice gate all live behind `shots`, so a stale identity list
+disables three fund-adjacent gates at once and reports it as a fatal setup error rather than a red
+gate.**
+
+The lobby half of the same class also survived the wave-6 dev.sh fix: after the documented bring-up
+`get_tables` returned `(vec {})`, and the wave-6 reconciler had to call
+`init_microstakes_tables` by hand as `cyclepay-hotwallet` before any table view could be reached at
+all. `icp canister call` exits 0 on a Candid `Err`, so `up_wire`'s `|| warn` never fires.
+
+**And an aborted run destroys the artifact index before it captures anything.** `run.mjs` wipes
+`artifacts/screens/latest/` up front on a full run — correct, because *"a verified PNG left over
+from an earlier commit is exactly the artifact a reader would trust"* — but it wipes it in step
+`[6/6]`'s preamble, BEFORE the first scene, and the identity check that kills the run fires inside
+the scenes. So a run that produces nothing still deletes `INDEX.md`, `manifest.json` and every PNG
+of the previous run. The wave-6 reconciler hit this and rebuilt `latest/` by hand from
+`artifacts/screens/fe72d46/` (the last full run) with `artifacts/screens/fcfa4e8/` (a later partial)
+layered on top. This is the same class as the wave-5 note on partial runs clobbering the manifest,
+one step worse: there, a partial run leaves a misleading index; here, a failed run leaves none.
+
+**Fix:** port `resolve_controller_identity` from `scripts/dev.sh` into `tools/shots/lib/ids.mjs`
+(its doc comment already says the hardcode "is an assumption"), make `up_wire` fail rather than
+warn when `get_tables` comes back empty, and move the `latest/` wipe to AFTER the first scene
+verifies, or write into a temporary directory and swap it in on success.

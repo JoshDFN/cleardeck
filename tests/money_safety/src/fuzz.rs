@@ -24,9 +24,10 @@ use std::collections::BTreeMap;
 
 use crate::actions::{apply, Act, Op, StepResult};
 use crate::hand_attribution::HandAttributionWatch;
+use crate::invariants::reachability;
 use crate::invariants::{
-    check_hand_attribution, check_hand_payout_total, check_no_rake, check_point_in_time,
-    check_self_reported_inconsistency, check_upgrade_durability, Violation,
+    check_hand_attribution, check_hand_payout_total, check_no_rake, check_no_settlement_trap,
+    check_point_in_time, check_self_reported_inconsistency, check_upgrade_durability, Violation,
 };
 use crate::rng::Rng;
 use crate::table_api::{GamePhase, TableConfig};
@@ -484,9 +485,24 @@ pub fn run_sequence(
 
         let result = apply(&mut world, op);
         executed += 1;
-        transcript.push(result);
 
         let after = world.snapshot();
+
+        // --- M9 FUND REACHABILITY, in the per-step loop --------------------
+        //
+        // Costs zero extra messages: it reads the outcome of the op that just ran.
+        // The property is that no update on the settlement path may TRAP while the
+        // canister is holding money, because a trap rolls the message back and the
+        // door stays shut for that state. docs/SECURITY-FINDINGS.md FINDING 15.
+        record(
+            &mut findings,
+            &mut all,
+            &mut max_stranded,
+            i + 1,
+            Some(op),
+            check_no_settlement_trap(&result, after.internal_total(), &after.table.phase),
+        );
+        transcript.push(result);
 
         if let Some(before) = before {
             record(
@@ -611,6 +627,37 @@ pub fn run_sequence(
             watch.seat_churn = false;
         }
     }
+
+    // --- M9 FUND REACHABILITY, the constructive half ------------------------
+    //
+    // The sequence is over; whatever state 600 hostile steps left the table in is
+    // the state a real player would be sitting in. Now take everybody's money out
+    // for real, using only calls a player can make, and check it reaches the
+    // ledger. A structural check can only fail on the failure modes somebody
+    // imagined. This one fails on any of them.
+    //
+    // Runs LAST on purpose: it is destructive (it ends hands and empties seats),
+    // so nothing else may observe the world afterwards except the drain's own
+    // verdict and the final snapshot, which is taken after it and reported as
+    // `final_internal_total` -- that number is now the answer to "how much could
+    // not be got out", not merely "how much was left lying about".
+    let (drain_report, drain_violations) = reachability::drain_and_check(&mut world);
+    let drain_summary = format!(
+        "owed {} -> {} e8s after draining",
+        drain_report.owed_before, drain_report.owed_after
+    );
+    transcript.push(StepResult {
+        op: Op::CheckTimeouts { actor: 0 },
+        outcome: format!("[M9 DRAIN] {drain_summary}"),
+    });
+    record(
+        &mut findings,
+        &mut all,
+        &mut max_stranded,
+        executed + 1,
+        None,
+        drain_violations,
+    );
 
     let final_snap = world.snapshot();
     let (blocking, documented): (Vec<Finding>, Vec<Finding>) = findings

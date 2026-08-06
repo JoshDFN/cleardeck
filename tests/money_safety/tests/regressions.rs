@@ -600,35 +600,49 @@ fn reg08_a_timed_out_player_can_cash_out_mid_hand_and_orphan_their_stake() {
 }
 
 // ---------------------------------------------------------------------------
-// REG-09 -- one timeout ends everyone's hand, because the disconnect timeout and
-//           the action timeout are both 30 seconds
+// REG-09 -- one timeout used to end everyone's hand. It now folds exactly the
+//           one seat whose own clock ran out. THIS TEST GATES THE FIX.
 // ---------------------------------------------------------------------------
 
-/// `check_timeouts` marks every player whose `last_seen` is older than
-/// `DISCONNECT_TIMEOUT_NS` (30 s, hardcoded) as `Disconnected` BEFORE it looks at
-/// the action timer. `count_players_can_act` requires `status == Active`. The
-/// deployed tables use `action_timeout_secs = 30` (`table_1`, `btc_table_1`) or 45
-/// and 60 (`table_2`, `table_3`), so on the 30 s tables the two thresholds are
-/// EQUAL: by the time anybody times out, every player who has not sent a heartbeat
-/// in the last 30 seconds is already `Disconnected`, fewer than two players "can
-/// act", and `advance_to_next_street` runs the entire remaining board out to a
-/// showdown in one message.
+/// **This test was inverted in wave 6, on its own written instructions.**
 ///
-/// Nobody folded, nobody was all-in, and nobody chose to check down. The turn and
-/// the river are simply dealt and the hand is settled.
+/// It used to PIN [E-06](../../../docs/DEFECTS.md): `check_timeouts` marked every
+/// player whose `last_seen` was older than `DISCONNECT_TIMEOUT_NS` (then 30 s) as
+/// `Disconnected` BEFORE looking at the action timer, and `count_players_can_act`
+/// required `status == Active`. On a table whose `action_timeout_secs` is also
+/// 30 s the two thresholds were EQUAL, so one lull dropped "players who can act"
+/// below two and `advance_to_next_street` dealt the whole remaining board and
+/// settled the hand in a single message. Nobody folded, nobody was all-in, nobody
+/// chose to check down.
 ///
-/// E-06 -- the forced settlement -- is STILL LIVE and this test still pins it. What
-/// changed is the cost: the settlement used to come out of the stale pre-flop
-/// `side_pots` breakdown (FINDING 01 / E-01), so a 30-second lull with a failing
-/// heartbeat both removed the remaining betting rounds AND destroyed everything
-/// already wagered post-flop. Since the E-01 fix it destroys nothing, and the tail
-/// of this test asserts that. Losing the rest of the hand's betting to a
-/// disconnection is still wrong, and still E-06.
+/// Wave 6 closed it twice over, and the closure is structural rather than a
+/// tuned constant:
 ///
-/// The harness found this while building REG-08: the first version of that test
-/// used a 30 s timeout and the hand ended before the folded player could cash out.
+/// * participation is now the SAME predicate as eligibility (`is_in_hand`), so a
+///   `Disconnected` seat is no longer skipped by the betting round at all; and
+/// * the heartbeat threshold went 30 s -> 90 s, which is longer than every
+///   deployed action clock (30/45/60 s), so the two thresholds can no longer race.
+///
+/// The old assertions failed at `left: Turn, right: HandComplete`. That is the
+/// message the old body itself asked for -- *"If this now leaves the hand in
+/// progress the interaction has been fixed -- update docs/SECURITY-FINDINGS.md and
+/// this test together"* -- so both were updated together: see
+/// [FINDING 12](../../../docs/SECURITY-FINDINGS.md) and docs/WAVE-06.md.
+///
+/// What is asserted now, on the identical sequence:
+///
+/// 1. one 30 s lull folds EXACTLY ONE seat -- the one on the clock;
+/// 2. the hand is still in progress, with two live seats;
+/// 3. the board did NOT run out: it is still one street on from where it was;
+/// 4. nobody was marked `Disconnected` by a 31 s lull at all;
+/// 5. nothing is destroyed, then or when the hand finally ends;
+/// 6. and the hand that eventually ends does so by fold-out on a SHORT board,
+///    paying the last player standing the whole pot -- not by a manufactured
+///    five-card showdown nobody bet into.
+///
+/// Reverting either half of the wave-6 fix turns 1-4 red.
 #[test]
-fn reg09_one_timeout_with_no_heartbeats_runs_the_whole_board_out_and_settles() {
+fn reg09_one_timeout_folds_only_the_seat_on_the_clock() {
     // Exactly the deployed table_1 timeout.
     let config = TableConfig {
         action_timeout_secs: 30,
@@ -684,52 +698,101 @@ fn reg09_one_timeout_with_no_heartbeats_runs_the_whole_board_out_and_settles() {
     println!("REG-09 check_timeouts -> {outcome:?}");
 
     let after = world.snapshot();
-    assert_eq!(
-        after.table.phase,
-        GamePhase::HandComplete,
-        "ONE timeout ended the hand for everybody. Live players before: {live_before}. \
-         If this now leaves the hand in progress the interaction has been fixed -- update \
-         docs/SECURITY-FINDINGS.md and this test together."
+
+    // 1. EXACTLY ONE seat was folded, and it is the one that was on the clock.
+    assert!(
+        matches!(outcome, TimeoutCheckResult::PlayerTimedOut(_)),
+        "one lull past a 30 s action clock must time out the seat on the clock, got {outcome:?}"
     );
+    let folded_after = after.table.seated().filter(|p| p.has_folded).count();
+    assert_eq!(
+        folded_after, 1,
+        "PINNED FIX (E-06): one 30 s lull must fold exactly the ONE seat whose own clock \
+         expired. Folded seats: {:?}",
+        after.table.seated().filter(|p| p.has_folded).map(|p| p.seat).collect::<Vec<_>>()
+    );
+
+    // 2. The hand is STILL IN PROGRESS, with two live seats.
+    assert!(
+        after.table.phase != GamePhase::HandComplete,
+        "PINNED FIX (E-06): one timeout must not end the hand for everybody. Live players \
+         before: {live_before}, phase after: {:?}",
+        after.table.phase
+    );
+    assert_eq!(
+        after.table.seated().filter(|p| !p.has_folded && !p.is_all_in).count(),
+        2,
+        "two seats must still be live in the hand after one seat is folded by its clock"
+    );
+
+    // 3. The board did NOT run out. One street advanced because the flop betting
+    //    round genuinely closed; the turn and the river were not both dealt.
     assert_eq!(
         after.table.community_cards.len(),
-        5,
-        "the turn and the river were dealt without anybody acting on them"
+        4,
+        "PINNED FIX (E-06): the whole remaining board must NOT be dealt in one message. \
+         Board before: {}, after: {}",
+        before.table.community_cards.len(),
+        after.table.community_cards.len()
     );
+
+    // 4. A 31 s lull no longer marks ANYBODY Disconnected. This is the structural
+    //    half of the fix: the heartbeat threshold (90 s) is now longer than every
+    //    deployed action clock (30/45/60 s), so the two can never race again.
     assert!(
-        after
-            .table
-            .seated()
-            .all(|p| p.status == PlayerStatus::Disconnected || p.status == PlayerStatus::SittingOut),
-        "every player was marked Disconnected before the timer was even looked at: {:?}",
+        after.table.seated().all(|p| p.status != PlayerStatus::Disconnected),
+        "PINNED FIX (E-06): a 31 s lull must not mark anybody Disconnected now that the \
+         heartbeat threshold is 90 s: {:?}",
         after.table.seated().map(|p| (p.seat, p.status.clone())).collect::<Vec<_>>()
     );
 
+    // 5. Nothing destroyed by the timeout itself (this is the E-01 pin).
     let destroyed = total_before as i128 - after.internal_total() as i128;
-    println!(
-        "REG-09: pot was {pot_before}, {destroyed} e8s destroyed by the forced settlement"
-    );
-    // E-06 -- the forced settlement itself -- is STILL LIVE: one 30-second lull
-    // still deals the turn and the river and settles the hand for everybody. What
-    // changed with the E-01 fix is what that costs. The settlement used to pay out
-    // of the frozen pre-flop breakdown, so the whole post-flop pot was destroyed;
-    // this run used to report 200,000,000 e8s gone.
+    println!("REG-09: pot was {pot_before}, {destroyed} e8s destroyed by the timeout");
     assert_eq!(
         destroyed, 0,
-        "PINNED FIX (E-01): a forced settlement must still pay out every e8 it \
-         collected. before {total_before}, after {}, pot was {pot_before}",
+        "PINNED FIX (E-01): a timeout must not destroy a chip. before {total_before}, \
+         after {}, pot was {pot_before}",
         after.internal_total()
     );
+
+    // 6. Nobody ever comes back. Every clock expires in turn, the last seat
+    //    standing takes the pot by FOLD-OUT on the short board it actually
+    //    reached, and every e8 collected is paid out.
+    for _ in 0..8 {
+        if !world.table_state().phase.hand_in_progress() {
+            break;
+        }
+        world.advance(Duration::from_secs(31));
+        world.check_timeouts(seats[0]).expect("check_timeouts");
+    }
+    let end = world.snapshot();
+    assert_eq!(
+        end.table.phase,
+        GamePhase::HandComplete,
+        "a hand nobody answers must still finish once every clock has expired"
+    );
+    assert_eq!(
+        end.table.community_cards.len(),
+        4,
+        "PINNED FIX (E-06): the hand ended by FOLD-OUT on the board it reached; no extra \
+         street may be manufactured to hold a showdown nobody bet into"
+    );
+    assert_eq!(
+        total_before as i128 - end.internal_total() as i128,
+        0,
+        "nothing may be destroyed by the whole sequence"
+    );
     let history = world
-        .hand_history(after.table.hand_number)
-        .expect("the forced hand is in the history");
+        .hand_history(end.table.hand_number)
+        .expect("the hand is in the history");
     let awarded: u64 = history
         .winners
         .iter()
         .fold(0u64, |a, w| a.saturating_add(w.amount));
     assert_eq!(
         awarded, pot_before,
-        "the forced showdown must award the whole pot it collected. winners={:?}",
+        "the fold-out must award the whole pot it collected. winners={:?}",
         history.winners
     );
 }

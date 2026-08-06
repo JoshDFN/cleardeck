@@ -21,8 +21,10 @@
 use serde::Serialize;
 
 pub mod attribution;
+pub mod reachability;
 pub mod relational;
 pub use attribution::*;
+pub use reachability::*;
 pub use relational::*;
 
 use crate::table_api::{GamePhase, TableState};
@@ -71,6 +73,34 @@ pub enum Invariant {
     /// once; a deposit block or allowance is credited at most once.
     M6NoDoublePay,
 
+    /// M9 FUND REACHABILITY. For any state a sequence of legal calls can reach,
+    /// there is a sequence of legal calls by each funded player that returns that
+    /// player's balance to the ledger.
+    ///
+    /// # Why this had to exist (docs/SECURITY-FINDINGS.md FINDING 15)
+    ///
+    /// M1..M8 all ask whether the arithmetic is right. **None of them asks whether
+    /// the player can still get the money out.** An independent auditor reached a
+    /// state, in ordinary play, where `check_timeouts`, `player_action` and
+    /// `leave_table` all trapped in the hand evaluator while `withdraw` and
+    /// `cash_out` refused with "Cannot withdraw while in a hand" -- about 420 ICP
+    /// with no door open at all -- and every invariant in this harness was silent,
+    /// correctly, because not one chip had gone missing. Chips conserved inside a
+    /// canister nobody can withdraw from is not safety.
+    ///
+    /// Checked two ways, because either one alone is a hole:
+    ///
+    /// * [`reachability::check_no_settlement_trap`], on EVERY step: no update on
+    ///   the settlement path may trap while the table holds money. A trap rolls
+    ///   the message back, so the state that caused it is still there and the next
+    ///   call takes the identical path -- a trap here is not a failed call, it is
+    ///   a closed door, permanently.
+    /// * [`reachability::drain`], at the end of every run: actually take every
+    ///   player's money out to the ledger and check it arrives. A structural check
+    ///   can only fail on the failure modes somebody imagined; the drain fails on
+    ///   any of them.
+    M9FundReachability,
+
     /// M8 PRINCIPAL ATTRIBUTION. The money reached the right PERSON, not merely
     /// the right seat and the right total. See [`attribution`] and
     /// docs/SECURITY-FINDINGS.md FINDING 13: paying a departed player's stake to
@@ -91,6 +121,7 @@ impl Invariant {
             Invariant::M5UpgradeDurability => "M5_UPGRADE_DURABILITY",
             Invariant::M6NoDoublePay => "M6_NO_DOUBLE_PAY",
             Invariant::M8PrincipalAttribution => "M8_PRINCIPAL_ATTRIBUTION",
+            Invariant::M9FundReachability => "M9_FUND_REACHABILITY",
         }
     }
 }
@@ -134,6 +165,12 @@ pub enum Severity {
     /// -- the loser's side of it looks like a shortfall and the winner's like a
     /// windfall, and they are the same defect.
     Misattribution,
+    /// Money the canister accounts for perfectly and no player can withdraw. The
+    /// arithmetic is right and the door is shut. Never excusable, and note that it
+    /// is the ONE severity here with a zero `delta_e8s`: nothing has gone missing,
+    /// which is exactly why every other invariant is silent about it.
+    /// docs/SECURITY-FINDINGS.md FINDING 15.
+    FundsUnreachable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

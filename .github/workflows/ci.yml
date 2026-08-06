@@ -127,7 +127,7 @@ jobs:
       - name: Extract candid from wasm and diff committed .did
         # WARN-ONLY for now: the committed .did may differ cosmetically from
         # candid-extractor output. Reconcile the committed .did once, then change
-        # the final line to `exit $fail` to HARD-FAIL on real interface drift —
+        # the final line to `exit $fail` to HARD-FAIL on real interface drift:
         # candid drift can trap a fund-holding canister at runtime.
         run: |
           cargo build --locked --release --target wasm32-unknown-unknown
@@ -140,12 +140,159 @@ jobs:
           for crate in "${!MAP[@]}"; do
             candid-extractor "target/wasm32-unknown-unknown/release/$crate.wasm" > "/tmp/$crate.did"
             if ! diff -u "${MAP[$crate]}" "/tmp/$crate.did"; then
-              echo "::warning::Candid drift in $crate — committed .did differs from exported interface"
+              echo "::warning::Candid drift in $crate -- committed .did differs from exported interface"
               fail=1
             fi
           done
           echo "candid drift status: $fail (0 = clean)"
           exit 0   # TODO: change to `exit $fail` after one-time reconciliation
+
+  reproducible-build:
+    name: Reproducible build (two paths, byte-identical)
+    runs-on: ubuntu-latest
+    # WHY THIS JOB EXISTS
+    #
+    # An independent auditor could not match the deployed module hash to ANY
+    # commit in this repository, and found that the SAME SOURCE built at two
+    # different directories produced two different module hashes. The cause was
+    # a ~274 KB wasm `name` section that survived the shrink step carrying LLVM
+    # disambiguators derived from the absolute build path. For an application
+    # whose entire pitch is verifiable code, that is disqualifying on its own:
+    # if the build is not reproducible, "compare the hash yourself" is theatre.
+    #
+    # This job is the guard. It builds every canister twice, at two deliberately
+    # different absolute paths, and fails if a single byte differs. It runs the
+    # real recipes/rust-reproducible.hbs through the real `icp build`, not a
+    # re-implementation, so it also catches a change to the recipe that quietly
+    # reintroduces path dependence.
+    #
+    # It does NOT use Docker: the point here is to test the build itself, fast,
+    # on every PR. The docker-verification job below tests the image a stranger
+    # actually runs.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install the pinned build tools
+        run: |
+          set -euo pipefail
+          # libdbus is a runtime dependency of the icp-cli binary.
+          sudo apt-get update -qq && sudo apt-get install -y -qq libdbus-1-3
+          cargo install ic-wasm --version "$IC_WASM_VERSION" --locked
+          npm i -g --no-fund --no-audit "@icp-sdk/icp-cli@$ICP_CLI_VERSION"
+          icp --version && ic-wasm --version && cargo --version
+        env:
+          IC_WASM_VERSION: '0.9.9'
+          ICP_CLI_VERSION: '1.0.2'
+      - name: Build the same source at two different absolute paths
+        run: |
+          set -euo pipefail
+          # The revision must be identical in both builds: it is embedded as
+          # git:revision metadata, so it is part of the bytes being compared.
+          export CLEARDECK_GIT_REVISION="${GITHUB_SHA}"
+          export CLEARDECK_GIT_DIRTY=clean
+
+          A="${RUNNER_TEMP}/p1"
+          B="${RUNNER_TEMP}/a-deliberately-much-longer-absolute-path/for/the/very/same/source"
+          mkdir -p "$A" "$B"
+          for d in "$A" "$B"; do
+            cp -R icp.yaml Cargo.toml Cargo.lock rust-toolchain.toml recipes "$d"/
+            mkdir -p "$d/src"
+            cp -R src/poker_core src/table_canister src/lobby_canister src/history_canister "$d/src"/
+          done
+          for d in "$A" "$B"; do (cd "$d" && icp build lobby history table_1 table_2 table_3 btc_table_1); done
+
+          fail=0
+          compared=0
+          for n in btc_table_1 history lobby table_1 table_2 table_3; do
+            # An artifact that is missing or trivially small means the build
+            # quietly produced nothing and every hash below would agree on it.
+            for f in "$A/.icp/cache/artifacts/$n" "$B/.icp/cache/artifacts/$n"; do
+              test -s "$f" || { echo "::error::$f is missing or empty"; exit 1; }
+              sz=$(wc -c < "$f")
+              [ "$sz" -gt 100000 ] || { echo "::error::$f is only $sz bytes, that is not a canister"; exit 1; }
+            done
+            ha=$(sha256sum "$A/.icp/cache/artifacts/$n" | cut -d' ' -f1)
+            hb=$(sha256sum "$B/.icp/cache/artifacts/$n" | cut -d' ' -f1)
+            compared=$((compared + 1))
+            if [ "$ha" = "$hb" ]; then
+              printf 'ok        %-14s %s\n' "$n" "$ha"
+            else
+              printf '::error::%s is not reproducible: %s at %s, %s at %s\n' "$n" "$ha" "$A" "$hb" "$B"
+              fail=1
+            fi
+          done
+          [ "$compared" -eq 6 ] || { echo "::error::compared $compared canisters, expected 6"; exit 1; }
+          exit $fail
+      - name: Prove the guard is not vacuous
+        # A reproducibility check that silently compares nothing is the failure
+        # mode to fear, and this project has been bitten by exactly that before.
+        # Two ways this guard could be blind, both checked here:
+        #   1. A and B are secretly the same directory, so every comparison is
+        #      a file against itself. Appending to B would then change A too and
+        #      the hashes would still match, which this step reports as failure.
+        #   2. sha256sum output is being mangled so every hash is the empty
+        #      string and everything "matches".
+        run: |
+          set -euo pipefail
+          A="${RUNNER_TEMP}/p1/.icp/cache/artifacts/table_2"
+          B="${RUNNER_TEMP}/a-deliberately-much-longer-absolute-path/for/the/very/same/source/.icp/cache/artifacts/table_2"
+          test -f "$A" && test -f "$B"
+          ha=$(sha256sum "$A" | cut -d' ' -f1)
+          [ "${#ha}" -eq 64 ] || { echo "::error::hash is '$ha', not 64 hex characters"; exit 1; }
+          printf '\0' >> "$B"
+          if [ "$ha" = "$(sha256sum "$B" | cut -d' ' -f1)" ]; then
+            echo "::error::the two build directories are the same directory, or the comparison is broken"
+            exit 1
+          fi
+          echo "ok: the comparison distinguishes two genuinely different files"
+
+  docker-verification:
+    name: The verification image a stranger actually runs
+    runs-on: ubuntu-latest
+    # WHY THIS JOB EXISTS
+    #
+    # The Dockerfile the README pointed a stranger at could not compile. Its
+    # COPY list omitted the poker_core crate, its base image shipped the wrong
+    # rustc, and the icp binary in it aborted on a missing libdbus-1.so.3.
+    # Nobody noticed because nothing ever built it. Now something does, on
+    # every PR, and the job fails if the image stops producing hashes.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build the verification image and read its hashes
+        run: |
+          set -euo pipefail
+          docker build \
+            --build-arg "GIT_REVISION=${GITHUB_SHA}" \
+            --build-arg GIT_DIRTY=clean \
+            -t cleardeck-verify .
+          out=$(docker run --rm cleardeck-verify)
+          echo "$out"
+          # Six canisters, each with a 64-hex hash, or the image is not doing
+          # its job however cleanly it exited.
+          n=$(echo "$out" | grep -cE '^(lobby|history|table_1|table_2|table_3|btc_table_1)[[:space:]]+[0-9a-f]{64}$')
+          [ "$n" -eq 6 ] || { echo "::error::expected 6 module hashes, got $n"; exit 1; }
+          echo "$out" | grep -q "git:revision  ${GITHUB_SHA}" \
+            || { echo "::error::the image did not stamp the revision it was told to build"; exit 1; }
+      - name: The image must be byte-identical when built twice
+        run: |
+          set -euo pipefail
+          first=$(docker run --rm cleardeck-verify)
+          docker build --no-cache-filter=stage-1 \
+            --build-arg "GIT_REVISION=${GITHUB_SHA}" \
+            --build-arg GIT_DIRTY=clean \
+            -t cleardeck-verify-again .
+          second=$(docker run --rm cleardeck-verify-again)
+          diff <(echo "$first" | grep -E '^[a-z_0-9]+ +[0-9a-f]{64}$') \
+               <(echo "$second" | grep -E '^[a-z_0-9]+ +[0-9a-f]{64}$') \
+            || { echo "::error::two builds of the same image produced different modules"; exit 1; }
+          echo "ok: rebuilt from scratch, identical modules"
 
   build-frontend:
     name: Build frontend

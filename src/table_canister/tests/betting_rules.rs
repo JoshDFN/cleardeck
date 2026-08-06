@@ -26,8 +26,9 @@
 
 use candid::Principal;
 use table_canister::{
-    apply_player_action, is_betting_round_complete, resolve_expired_action_timer, ActionTimer,
-    Currency, GamePhase, Player, PlayerAction, PlayerStatus, TableConfig, TableState,
+    apply_player_action, can_still_act, is_betting_round_complete, is_in_hand, plan_payouts,
+    resolve_expired_action_timer, ActionTimer, Card, Currency, GamePhase, Player, PlayerAction,
+    PlayerStatus, Rank, Suit, TableConfig, TableState,
 };
 
 // =============================================================================
@@ -178,6 +179,39 @@ fn act(state: &mut TableState, seat: u8, now: u64, action: PlayerAction) -> Resu
 
 fn seat(state: &TableState, s: u8) -> &Player {
     state.players[s as usize].as_ref().expect("seat occupied")
+}
+
+fn card(rank: Rank, suit: Suit) -> Card {
+    Card { rank, suit }
+}
+
+/// Put a known hand in front of a seat.
+///
+/// The section-4 and -5 tests need real hole cards, because the PAYOUT side of the
+/// engine -- `live_claims`, and therefore `plan_payouts` -- will not pay a seat
+/// that holds none. That asymmetry is the whole subject of those tests: the money
+/// question and the whose-turn question have to be asked of the same seats.
+fn deal(state: &mut TableState, s: u8, hand: (Card, Card)) {
+    state.players[s as usize]
+        .as_mut()
+        .expect("seat occupied")
+        .hole_cards = Some(hand);
+}
+
+/// Put a fixed five-card board out and move the hand to the river, so
+/// `plan_payouts` can be asked, on a real showdown, who is eligible for what.
+///
+/// `A♠ K♠ 7♦ 2♣ 9♥`: no pair, no flush and no straight on board, so the winner is
+/// decided entirely by the hole cards the test dealt.
+fn board_to_the_river(state: &mut TableState) {
+    state.community_cards = vec![
+        card(Rank::Ace, Suit::Spades),
+        card(Rank::King, Suit::Spades),
+        card(Rank::Seven, Suit::Diamonds),
+        card(Rank::Two, Suit::Clubs),
+        card(Rank::Nine, Suit::Hearts),
+    ];
+    state.phase = GamePhase::River;
 }
 
 // =============================================================================
@@ -755,72 +789,372 @@ fn no_action_is_legal_once_the_hand_is_complete() {
 }
 
 // =============================================================================
-// 4. CHARACTERISATION: A DEFECT FOUND BY THE AUDIT AND NOT FIXED HERE
+// 4. A SEAT THAT STOPS RESPONDING IS STILL IN THE HAND -- AND MUST PAY FOR IT
 //
-// Same convention as `tools/differential/tests/fast_subset.rs`: assert TODAY'S
-// wrong answer so it cannot change silently, and describe what the rules require.
-// Fixing this one changes which hands reach showdown and who is eligible for
-// which pot, i.e. it lands in the payout path another agent owns.
+// THE DEFECT (docs/DEFECTS.md E-32, and E-06 which is the same mistake on a table
+// whose two thresholds coincide). `check_timeouts` marks a seat `Disconnected`
+// after a lull with no heartbeat. Every count that drove the betting round --
+// `find_next_active_seat`, `count_active_players`, `count_players_can_act` and
+// `is_betting_round_complete` -- then filtered on `status == PlayerStatus::Active`,
+// so that seat was never offered the action and never blocked the street. But
+// ELIGIBILITY for the pot is decided by `live_claims`: seated, holds cards, has
+// not folded, and nothing about `status`. The seat therefore kept the chips it
+// would have had to call AND its claim on every pot layer it had already paid
+// into.
+//
+// It is client-controlled -- stop sending heartbeats -- and it is worth roughly a
+// big blind a hand, in a game whose entire edge is a fraction of one. It cut the
+// other way too: with a `Disconnected` seat still holding cards,
+// `count_active_players` could reach 1 while TWO seats still had a claim, and the
+// pot was handed over without the showdown the other seat had paid for.
+//
+// REPRODUCED ON THE RUNNING LOCAL `table_2` BEFORE IT WAS FIXED:
+//   hand 3: exactly ONE action for the whole hand (seat 3, a forced Fold), a full
+//           five-card board dealt, and two non-responding seats carried to a
+//           showdown neither had acted in;
+//   hand 5: a seat called `sit_out()` on the flop -- the same defect with no wait
+//           at all -- was never asked to match a 2 ICP bet, kept its stack, and
+//           was still `has_folded = false` holding cards at the showdown.
+//
+// THE RULE, AND THE SOURCE. Poker gives a player facing a bet three options --
+// call, raise, fold -- and no fourth; there is no "skip me but keep my claim".
+// Robert's Rules of Poker (Ciaffone) is the source the wave-4 audit already
+// recorded against E-32: a player called upon to act who fails to act has a folded
+// hand. Every online room implements exactly that -- your clock runs whether or
+// not your client is connected, and the hand is folded when it expires -- and the
+// "disconnect protection" a few rooms offered in the early 2000s, which capped a
+// dropped player at what they had already put in while they kept the rest of their
+// stack, was withdrawn because players triggered it on purpose. That cap is
+// precisely what this engine was handing out by accident.
+//
+// THE FIX. Participation is now asked of the SAME predicate as eligibility
+// (`is_in_hand` / `can_still_act`). A seat that has stopped responding is offered
+// the action like anybody else, its own clock runs, and
+// `resolve_expired_action_timer` folds it when the clock expires. `Disconnected`
+// no longer moves money.
+//
+// WHAT THAT DOES TO AN HONEST DISCONNECTION: nothing at all until their clock
+// expires, and the street can no longer close behind their back, so a pot they
+// have chips in cannot be given away while they are still in it
+// (`a_pot_is_not_given_away_while_a_seat_that_stopped_responding_still_holds_cards`).
+// They get the full `action_timeout_secs` -- 30 s on `table_1`, 45 on `table_2`,
+// 60 on `table_3` -- and can act the moment they reconnect inside it
+// (`a_seat_that_comes_back_inside_its_own_clock_plays_the_hand_out`). The
+// heartbeat threshold itself, which is all a flaky connection trips, was raised
+// from 30 s to 90 s and now decides nothing but the badge and the auto-kick clock.
 // =============================================================================
 
-/// **DEFECT (docs/DEFECTS.md E-32), characterised not fixed.** A player marked
-/// `Disconnected` mid-street is skipped by the betting round but is NOT folded, so
-/// the street closes without them ever calling -- and they keep both their chips
-/// and their eligibility for every pot they had already paid into.
+/// **THE EXPLOIT, and the money it moved.** Three-handed on the flop, everybody in
+/// for 20, pot 60. Seat 0 leads for 200. Seat 2 stops heartbeating -- which is all
+/// it takes; `check_timeouts` marks them `Disconnected` and no message from them
+/// is ever needed again -- and seat 1 calls.
 ///
-/// `is_betting_round_complete`, `count_active_players` and `find_next_active_seat`
-/// all require `status == Active`, so a `Disconnected` seat blocks nothing and is
-/// offered nothing. But `determine_winners` evaluates every player with
-/// `!has_folded`. Under the rules a player who does not act must be folded and
-/// forfeit what they have in; here they get a free ride to showdown.
+/// Seat 2 holds `A♥ A♦`, so on the `A♠ K♠ 7♦ 2♣ 9♥` board they have the nuts and
+/// WILL be paid anything they are eligible for.
 ///
-/// Reachable on `table_2` (45 s) and `table_3` (60 s), where the hardcoded 30 s
-/// disconnect threshold in `check_timeouts` fires BEFORE the action clock, and
-/// only for a player who is not the one on the clock. On `table_1` /
-/// `btc_table_1` the two thresholds are equal, which is E-06 instead.
+/// BEFORE THE FIX: the flop closed with seat 2 never asked to call. Phase `Turn`,
+/// seat 2 `has_folded = false`, stack still 5,000, and `plan_payouts` handed them
+/// the whole 60 main pot -- 40 of it other players' money -- for a hand they had
+/// declined to put another chip into.
 ///
-/// THE RULE. Robert's Rules of Poker, Section 1 #12: a player called upon to act
-/// who fails to act has a folded hand. There is no "skip the player and keep them
-/// live" state in poker.
+/// AFTER THE FIX: the flop does NOT close. Seat 2 is on the clock owing 200, and
+/// when the clock runs out they are folded and paid nothing.
 #[test]
-fn characterises_a_disconnected_player_being_skipped_yet_left_live_in_the_hand() {
+fn a_seat_that_stops_responding_cannot_win_a_pot_it_declined_to_match() {
     let now = 1_000 * SEC;
     let mut state = flop_table(&[5_000, 5_000, 5_000], now);
-    // Everyone paid 20 pre-flop, so seat 2 has money in the main pot.
-    for s in 0..3usize {
-        let p = state.players[s].as_mut().unwrap();
+    for s in 0..3u8 {
+        let p = state.players[s as usize].as_mut().unwrap();
         p.total_bet_this_hand = 20;
     }
     state.pot = 60;
+    deal(&mut state, 0, (card(Rank::Six, Suit::Clubs), card(Rank::Four, Suit::Hearts)));
+    deal(&mut state, 1, (card(Rank::Six, Suit::Diamonds), card(Rank::Four, Suit::Spades)));
+    // The quiet seat has the best hand, so eligibility is the only thing between
+    // them and the money.
+    deal(&mut state, 2, (card(Rank::Ace, Suit::Hearts), card(Rank::Ace, Suit::Diamonds)));
 
     act(&mut state, 0, now, PlayerAction::Bet(200)).expect("seat 0 leads the flop");
 
-    // Seat 2 stops heartbeating. This is exactly what `check_timeouts` does after
-    // 30 s of silence, and it does it to a player who is not on the clock.
+    // The whole attack. No message from seat 2 is required, then or later.
     state.players[2].as_mut().unwrap().status = PlayerStatus::Disconnected;
 
     act(&mut state, 1, now, PlayerAction::Call).expect("seat 1 calls 200");
 
-    // TODAY'S ANSWER, asserted so it cannot drift.
+    // THE RULES ASSERTION. Before the fix this was `GamePhase::Turn`: the street
+    // closed with a live seat never asked for the 200.
     assert_eq!(
         state.phase,
-        GamePhase::Turn,
-        "the flop closed without seat 2 ever being asked to act"
+        GamePhase::Flop,
+        "the flop cannot close while a seat that can still win the pot owes 200"
     );
-    let quiet = seat(&state, 2);
     assert!(
-        !quiet.has_folded,
-        "seat 2 is still live in the hand despite never calling the 200"
+        !is_betting_round_complete(&state),
+        "seat 2 has not acted and has not matched the bet"
     );
-    assert_eq!(quiet.chips, 5_000, "and kept every chip they should have had to call");
-    assert_eq!(
-        quiet.total_bet_this_hand, 20,
-        "while still holding 20 in the pot, which keeps them eligible for the main pot"
-    );
-    assert_eq!(state.pot, 60 + 400);
+    assert_eq!(state.action_on, 2, "the action is OFFERED to the quiet seat");
+    assert_eq!(seat(&state, 2).current_bet, 0, "and they still owe the whole 200");
 
-    // What the rules require instead:
-    //   quiet.has_folded == true, and the 20 forfeited.
+    // THE MONEY ASSERTION, part one. Even in the state the exploit used to reach --
+    // a showdown with the quiet seat unfolded -- being unfolded is now the ONLY way
+    // to be eligible, and they are not going to stay unfolded.
+    let quiet = seat_principal(2);
+    let mut showdown = state.clone();
+    board_to_the_river(&mut showdown);
+    assert_eq!(
+        plan_payouts(&showdown).amount_for_principal(quiet),
+        60,
+        "sanity: an UNFOLDED seat with the nuts is eligible for the 60 it paid \
+         into -- which is exactly the 60 the exploit used to collect"
+    );
+
+    // THE MONEY ASSERTION, part two. Their clock runs out, as it must for a seat
+    // that will not act, and folds them.
+    let folded_seat = resolve_expired_action_timer(&mut state, now + TIMEOUT_SECS * SEC + 1)
+        .expect("the quiet seat's clock expires and is resolved");
+    assert_eq!(folded_seat, 2);
+    assert!(
+        seat(&state, 2).has_folded,
+        "a seat that does not act on its hand is folded: Robert's Rules of Poker"
+    );
+
+    let mut showdown = state.clone();
+    board_to_the_river(&mut showdown);
+    let plan = plan_payouts(&showdown);
+    assert_eq!(
+        plan.amount_for_principal(quiet),
+        0,
+        "THE FIX: the seat that declined to match wins nothing, holding the nuts. \
+         plan={:?}",
+        plan.payouts
+    );
+    assert!(plan.conserves(), "and every chip collected is still paid out");
+    assert_eq!(
+        seat(&state, 2).total_bet_this_hand,
+        20,
+        "the 20 they had in is forfeited to the pot, exactly as a fold forfeits it"
+    );
+}
+
+/// **The same defect with no waiting at all.** `sit_out()` used to set
+/// `PlayerStatus::SittingOut` with no phase check, so one call from a player facing
+/// a bet took them out of the betting round while leaving them holding cards.
+/// Reproduced on the running local `table_2`, hand 5.
+///
+/// This test drives the ENGINE half, which is what makes the exploit pay: whatever
+/// door sets a non-`Active` status on a seat that is in the hand, the street must
+/// not close behind it. (`sit_out()` itself is an `#[ic_cdk::update]`; the
+/// deferral it now performs is verified against the deployed canister.)
+#[test]
+fn a_seat_that_sits_out_mid_hand_does_not_leave_the_betting_round_it_is_in() {
+    let now = 1_000 * SEC;
+    let mut state = flop_table(&[5_000, 5_000, 5_000], now);
+    for s in 0..3u8 {
+        state.players[s as usize].as_mut().unwrap().total_bet_this_hand = 20;
+        deal(
+            &mut state,
+            s,
+            (card(Rank::Six, Suit::Clubs), card(Rank::Four, Suit::Hearts)),
+        );
+    }
+    state.pot = 60;
+
+    act(&mut state, 0, now, PlayerAction::Bet(200)).expect("seat 0 leads the flop");
+    state.players[2].as_mut().unwrap().status = PlayerStatus::SittingOut;
+    act(&mut state, 1, now, PlayerAction::Call).expect("seat 1 calls 200");
+
+    assert_eq!(
+        state.phase,
+        GamePhase::Flop,
+        "sitting out cannot close a street you still hold cards in"
+    );
+    assert_eq!(state.action_on, 2, "the seat is still owed an action");
+    assert!(can_still_act(seat(&state, 2)));
+}
+
+/// **The honest player, direction one: a pot they already have chips in cannot be
+/// given away while they are still in it.**
+///
+/// Three-handed, everybody in for 20. Seat 2's connection drops. Seat 0 folds.
+///
+/// `count_active_players` used to count only `Active` seats, so it saw ONE player
+/// left and `advance_game` would have called `end_hand_single_winner` -- handing
+/// seat 1 the pot without a showdown, while seat 2 was still unfolded and holding
+/// cards that might have won it. Now two seats are in the hand, so the hand stays
+/// in progress and seat 2 keeps the clock it is entitled to.
+#[test]
+fn a_pot_is_not_given_away_while_a_seat_that_stopped_responding_still_holds_cards() {
+    let now = 1_000 * SEC;
+    let mut state = flop_table(&[5_000, 5_000, 5_000], now);
+    for s in 0..3u8 {
+        state.players[s as usize].as_mut().unwrap().total_bet_this_hand = 20;
+        deal(
+            &mut state,
+            s,
+            (card(Rank::Six, Suit::Clubs), card(Rank::Four, Suit::Hearts)),
+        );
+    }
+    state.pot = 60;
+
+    state.players[2].as_mut().unwrap().status = PlayerStatus::Disconnected;
+    act(&mut state, 0, now, PlayerAction::Fold).expect("seat 0 folds");
+
+    assert_eq!(
+        state.phase,
+        GamePhase::Flop,
+        "two seats still hold cards, so this is not a fold-out"
+    );
+    assert!(
+        is_in_hand(seat(&state, 2)),
+        "the seat that stopped responding is still in the hand"
+    );
+    assert!(
+        !seat(&state, 2).has_folded,
+        "and nothing has folded them: only their own clock can"
+    );
+}
+
+/// **The honest player, direction two: reconnect inside your clock and you play.**
+///
+/// A dropped connection costs nothing at all until the action clock expires. The
+/// street cannot close without them, so they come back to the same decision they
+/// left, with their pot equity intact.
+#[test]
+fn a_seat_that_comes_back_inside_its_own_clock_plays_the_hand_out() {
+    let now = 1_000 * SEC;
+    let mut state = flop_table(&[5_000, 5_000, 5_000], now);
+    for s in 0..3u8 {
+        state.players[s as usize].as_mut().unwrap().total_bet_this_hand = 20;
+    }
+    state.pot = 60;
+    deal(&mut state, 0, (card(Rank::Six, Suit::Clubs), card(Rank::Four, Suit::Hearts)));
+    deal(&mut state, 1, (card(Rank::Six, Suit::Diamonds), card(Rank::Four, Suit::Spades)));
+    deal(&mut state, 2, (card(Rank::Ace, Suit::Hearts), card(Rank::Ace, Suit::Diamonds)));
+
+    act(&mut state, 0, now, PlayerAction::Bet(200)).expect("seat 0 leads");
+    state.players[2].as_mut().unwrap().status = PlayerStatus::Disconnected;
+    act(&mut state, 1, now, PlayerAction::Call).expect("seat 1 calls");
+    assert_eq!(state.action_on, 2, "the action waited for them");
+
+    // `heartbeat()` puts a reconnecting player back to Active; the decision they
+    // come back to is the one they left.
+    let back = now + (TIMEOUT_SECS - 5) * SEC;
+    state.players[2].as_mut().unwrap().status = PlayerStatus::Active;
+    act(&mut state, 2, back, PlayerAction::Call).expect("they call the 200 they owe");
+
+    assert_eq!(state.phase, GamePhase::Turn, "and now the street closes");
+    assert_eq!(seat(&state, 2).total_bet_this_hand, 220);
+    assert_eq!(seat(&state, 2).chips, 5_000 - 200);
+    let mut showdown = state.clone();
+    board_to_the_river(&mut showdown);
+    assert_eq!(
+        plan_payouts(&showdown).amount_for_principal(seat_principal(2)),
+        660,
+        "having called, they are eligible for the whole 660 their aces win: a \
+         disconnection that ends inside the clock costs nothing"
+    );
+}
+
+/// **The class, not the instance.** The bug was never "check_timeouts is wrong"; it
+/// was that PARTICIPATION and ELIGIBILITY were asked of different predicates. This
+/// pins the relationship for every status a seat can hold: a seat the engine will
+/// wait for is always a seat that can win, and a seat that can win is either owed
+/// an action or all-in. There is no third state.
+///
+/// If someone reintroduces a `status ==` filter into the betting round, one of
+/// these fails.
+#[test]
+fn every_seat_the_engine_waits_for_is_a_seat_that_can_win_the_pot() {
+    let now = 1_000 * SEC;
+    for status in [
+        PlayerStatus::Active,
+        PlayerStatus::Disconnected,
+        PlayerStatus::SittingOut,
+    ] {
+        for folded in [false, true] {
+            for all_in in [false, true] {
+                let mut state = flop_table(&[5_000, 5_000, 5_000], now);
+                for s in 0..3u8 {
+                    deal(
+                        &mut state,
+                        s,
+                        (card(Rank::Six, Suit::Clubs), card(Rank::Four, Suit::Hearts)),
+                    );
+                }
+                {
+                    let p = state.players[2].as_mut().unwrap();
+                    p.status = status.clone();
+                    p.has_folded = folded;
+                    p.is_all_in = all_in;
+                }
+                let p = seat(&state, 2);
+
+                assert_eq!(
+                    is_in_hand(p),
+                    !folded,
+                    "a dealt-in seat is in the hand exactly while it has not folded \
+                     (status {status:?}, all_in {all_in})"
+                );
+                if can_still_act(p) {
+                    assert!(
+                        is_in_hand(p),
+                        "the engine must never wait for a seat that cannot win \
+                         (status {status:?}, folded {folded}, all_in {all_in})"
+                    );
+                }
+                if is_in_hand(p) && !can_still_act(p) {
+                    assert!(
+                        p.is_all_in,
+                        "the only way to be eligible without being asked for more \
+                         money is to be all-in (status {status:?})"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// An all-in seat is the ONE legitimate way to be eligible for a pot you cannot
+/// keep matching, and the fix must not have broken it: it is not folded, it is not
+/// waited for, and the side-pot layering caps what it can win at what it paid.
+#[test]
+fn an_all_in_seat_is_still_capped_rather_than_folded() {
+    let now = 1_000 * SEC;
+    let mut state = flop_table(&[5_000, 5_000, 150], now);
+    for s in 0..3u8 {
+        deal(
+            &mut state,
+            s,
+            (card(Rank::Six, Suit::Clubs), card(Rank::Four, Suit::Hearts)),
+        );
+    }
+    deal(
+        &mut state,
+        2,
+        (card(Rank::Ace, Suit::Hearts), card(Rank::Ace, Suit::Diamonds)),
+    );
+
+    act(&mut state, 0, now, PlayerAction::Bet(1_000)).expect("seat 0 leads");
+    act(&mut state, 1, now, PlayerAction::Call).expect("seat 1 calls");
+    act(&mut state, 2, now, PlayerAction::AllIn).expect("seat 2 is all-in for 150");
+
+    assert!(seat(&state, 2).is_all_in);
+    assert!(!seat(&state, 2).has_folded, "all-in is not folded");
+    assert!(is_in_hand(seat(&state, 2)), "and it is still in the hand");
+    assert!(!can_still_act(seat(&state, 2)), "but is owed no further action");
+    assert_eq!(state.phase, GamePhase::Turn, "the street closes: nobody else owes");
+
+    let mut showdown = state.clone();
+    board_to_the_river(&mut showdown);
+    let plan = plan_payouts(&showdown);
+    assert_eq!(
+        plan.amount_for_principal(seat_principal(2)),
+        450,
+        "the nuts all-in for 150 wins 150 from each of the three stakes and no \
+         more: capped at what it matched. plan={:?}",
+        plan.payouts
+    );
+    assert!(plan.conserves());
 }
 
 /// Pre-flop, unraised: the big blind may check their option, and doing so closes
@@ -837,4 +1171,93 @@ fn the_big_blind_may_check_their_option_in_an_unraised_pot() {
     assert!(!is_betting_round_complete(&state));
     act(&mut state, 1, now, PlayerAction::Check).expect("the big blind checks the option");
     assert_eq!(state.phase, GamePhase::Flop);
+}
+
+// =============================================================================
+// 5. WHAT THE EXPLOIT WAS WORTH
+// =============================================================================
+
+/// **Quantify it.** The two states differ by one flag -- was the quiet seat folded
+/// or not -- and `plan_payouts` is the engine's own answer to "who gets what", so
+/// running both over the same deals measures the edge in chips rather than
+/// asserting it.
+///
+/// The situation is the one reproduced above and on the running `table_2`: three
+/// handed, everyone in for 20 pre-flop, seat 0 leads the flop for 200 and seat 1
+/// calls. The quiet seat has 5,000 behind and does not want to put in 200.
+///
+///   * PLAYING BY THE RULES they fold: -20, every hand, with certainty.
+///   * EXPLOITING they are skipped and stay eligible: they keep the 200 AND hold a
+///     claim on the 60 main pot, which they collect whenever their two cards beat
+///     both of the other two hands.
+///
+/// The deals are dealt from a real deck by a fixed LCG, so the number is
+/// reproducible; `--nocapture` prints it.
+#[test]
+fn the_free_showdown_was_worth_about_a_big_blind_a_hand() {
+    const HANDS: u64 = 20_000;
+    let now = 1_000 * SEC;
+    let quiet = seat_principal(2);
+    let mut rng: u64 = 0x5EED_C1EA_2DEC_0003;
+    let mut next = move || {
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (rng >> 33) as usize
+    };
+
+    let mut exploit_total: i64 = 0;
+    let mut wins = 0u64;
+    for _ in 0..HANDS {
+        // A real deal: shuffle a real deck, take six hole cards and five board.
+        let mut deck = poker_core::create_deck();
+        for i in (1..deck.len()).rev() {
+            deck.swap(i, next() % (i + 1));
+        }
+
+        let mut state = flop_table(&[5_000, 5_000, 5_000], now);
+        for s in 0..3usize {
+            let p = state.players[s].as_mut().unwrap();
+            // seats 0 and 1 put in 20 pre-flop and then 200 on the flop; the quiet
+            // seat put in the 20 and nothing since.
+            p.total_bet_this_hand = if s == 2 { 20 } else { 220 };
+            p.hole_cards = Some((deck[2 * s], deck[2 * s + 1]));
+        }
+        state.pot = 460;
+        state.community_cards = deck[6..11].to_vec();
+        state.phase = GamePhase::River;
+
+        // THE EXPLOIT: skipped by the betting round, still unfolded.
+        let exploiting = plan_payouts(&state).amount_for_principal(quiet) as i64;
+        // BY THE RULES: a player who will not match the bet is folded.
+        state.players[2].as_mut().unwrap().has_folded = true;
+        let folding = plan_payouts(&state).amount_for_principal(quiet) as i64;
+
+        assert_eq!(folding, 0, "a folded seat is paid nothing, always");
+        if exploiting > 0 {
+            wins += 1;
+        }
+        exploit_total += exploiting;
+    }
+
+    // Their stake is 20 either way; the edge is what the exploit collects on top.
+    let edge_per_hand = exploit_total as f64 / HANDS as f64;
+    println!(
+        "E-32 measured over {HANDS} deals: the skipped seat collected the 60 main \
+         pot on {wins} of them ({:.1}%), worth {:.2} chips a hand = {:.2} big \
+         blinds a hand, against a certain -20 for folding. Net edge {:.2} chips \
+         ({:.2} BB) per hand, taken from the two players who were still betting.",
+        100.0 * wins as f64 / HANDS as f64,
+        edge_per_hand,
+        edge_per_hand / 20.0,
+        edge_per_hand,
+        edge_per_hand / 20.0,
+    );
+
+    assert!(
+        edge_per_hand > 15.0,
+        "the free showdown is worth close to a big blind a hand, measured {edge_per_hand}"
+    );
+    assert!(
+        (wins as f64 / HANDS as f64) > 0.25,
+        "and it converts on roughly a third of deals, measured {wins}/{HANDS}"
+    );
 }

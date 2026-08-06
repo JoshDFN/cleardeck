@@ -162,6 +162,17 @@ impl GamePhase {
     }
 }
 
+/// Reply of `get_stuck_hand_status`: whether this table is holding a hand that no
+/// message can move, and whether anybody can end it.
+/// docs/SECURITY-FINDINGS.md FINDING 15.
+#[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub struct StuckHandStatus {
+    pub is_stuck: bool,
+    pub hand_in_progress: bool,
+    pub abandonable_in_ns: Option<u64>,
+    pub refundable_pot: u64,
+}
+
 #[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
 pub enum PlayerStatus {
     Active,

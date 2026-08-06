@@ -3,6 +3,34 @@
 Findings that touch real user funds. Each entry states what was actually executed, so a
 reader can tell a demonstrated defect from a suspected one.
 
+> ## 🚨 STATUS, 2026-08-05, AFTER WAVE 6: A SECOND INDEPENDENT AUDITOR STILL SAYS NO
+>
+> A second blind auditor was run **after** this wave's fixes, on the running system, with the
+> same instructions as the first: treat every document in this project as a marketing claim
+> until verified. Its verdict, verbatim and unsoftened:
+>
+> > **"NO — I would not tell a friend their money is safe here."**
+>
+> The first auditor's verdict, for comparison, was *"No. I would not tell a friend their money
+> is safe here, and the reason is not the poker."* **The reason is still not the poker.** Wave 6
+> closed what the first auditor found — the fund lock is gone, the free-showdown cheat is gone,
+> the fairness endpoint no longer accuses honest players — and the second auditor confirmed the
+> money arithmetic held through every hostile sequence it could construct, drained two tables to
+> exactly zero, and reproduced the shuffle from the spec alone.
+>
+> **These are the open fund-safety findings, in the order a stranger's money is at risk:**
+>
+> | | finding | what it costs | status |
+> |---|---|---|---|
+> | 1 | [FINDING 07](#finding-07) **CRITICAL** | one controller call destroys 100% of a table's seated chips, irreversibly. Re-measured this wave: **4.00000000 ICP gone**, canister holding 40 ICP against 36 ICP of claims, **every invariant silent** | OPEN since wave 2 |
+> | 2 | [FINDING 18](#finding-18) high | `cash_out` of a stuck hand walks away from your stake and tells you nothing. Composes with FINDING 07 into permanent loss with no malice | OPEN, found by the auditor |
+> | 3 | [FINDING 19](#finding-19) high | no on-chain timer: nothing moves the game, so a table freezes for ≥ 5.5 minutes when clients drop, and cycles exhaustion would lock every withdrawal at once | OPEN, found by the auditor |
+> | 4 | [FINDING 17](#finding-17) high | a hand can settle with NO live claim on it and refund every stake to the players who FOLDED. The fold-out winner loses the pot to an ordinary disconnection | OPEN, found by the wave-6 coherence pass |
+>
+> None of the four is fund THEFT. Numbers 1 and 2 are fund LOSS. **Number 1 is the largest
+> unfixed fund-loss path in the project and it has now survived four waves.** See
+> docs/WAVE-06.md for the full accounting and the shortest path to a different answer.
+
 > ## 🚨 STATUS, 2026-08-04: FINDING 10 WAS LIVE IN THE WORKING TREE, WAS DEMONSTRATED AS THEFT, AND IS NOW CLOSED
 >
 > **The thing this document warned about happened, was proved to be theft rather than a bug, and
@@ -115,6 +143,7 @@ work.
 | FINDING 10 | [E-02](DEFECTS.md#e-02) | **fund-theft (demonstrated, FIXED)** |
 | FINDING 11 | [E-12](DEFECTS.md#e-12) | low |
 | FINDING 12 | [E-06](DEFECTS.md#e-06) | high |
+| [FINDING 16](#finding-16) | [E-32](DEFECTS.md#e-32) + [E-06](DEFECTS.md#e-06) | **player-to-player fund theft (demonstrated, FIXED)** |
 
 Detailed write-ups that predate this file live alongside it:
 
@@ -537,12 +566,74 @@ Fix both at once, then re-run the reproducer, which is written to FAIL when the 
 gone so the change cannot land without updating this document. Note that BUG B's failure mode
 is silent, so fixing only BUG A would replace a clear error with a misleading one.
 
-## FINDING 07 (NEW) -- `admin_reinit_table` strands every seated player's chips
+<a id="finding-07"></a>
 
-**Severity:** HIGH, controller-only. Permanent, unrecoverable loss.
-**Status:** CONFIRMED by execution. Reproducer:
+## FINDING 07 -- `admin_reinit_table` strands every seated player's chips -- **RAISED TO CRITICAL IN WAVE 6: `reset_table` IS A SECOND DOOR, AND IT IS THE ONE THE INTERFACE POINTS AT**
+
+> ## 🚨 STILL OPEN. RE-MEASURED 2026-08-05 ON MODULE `5e07edf6…`. THIS IS THE LARGEST UNFIXED FUND-LOSS PATH IN THE PROJECT.
+>
+> An independent auditor, run AFTER this wave's fixes and given no access to these documents,
+> found it again from the outside and ranked it their number-one blocker. They left `table_3`
+> **holding 80.00000000 ICP against total claims of 0**, with both players reading
+> `get_balance = 0`.
+>
+> **The escalation is that there are two doors, not one, and they are the same function.**
+>
+> ```rust
+> fn reset_table(config: TableConfig)       -> { require_controller()?; validate_config(&config)?; init_table_state(config); }
+> fn admin_reinit_table(config: TableConfig) -> { require_controller()?; validate_config(&config)?; init_table_state(config); }
+> ```
+>
+> Byte-for-byte the same body. `init_table_state` builds a brand-new `TableState` with empty
+> seats, so **every seated player's chips cease to exist**: not returned to escrow, not
+> withdrawable, not recoverable. `admin_restore_balance` was deliberately removed
+> (`// REMOVED: admin_restore_balance - unnecessary attack surface`), so a well-meaning
+> controller cannot undo it either.
+>
+> Re-measured this wave on the module built from THIS tree, two players seated with 2 ICP each
+> (`tests/money_safety/tests/wave6_coherence.rs::probe5`):
+>
+> ```
+> BEFORE            internal_total=4000000000  chips=400000000  escrow: 1800000000 + 1800000000
+> reset_table       -> Ok
+> AFTER             chips=0                    escrow unchanged
+> admin_reinit_table-> Ok
+> AFTER             chips=0                    escrow unchanged
+> canister still holds on the ledger:            4000000000 e8s
+> full drain by both players recovered:          3600000000 e8s
+> ----------------------------------------------------------------
+> DESTROYED, unrecoverable by anybody:            400000000 e8s   (4.00000000 ICP)
+> ```
+>
+> **AND EVERY INVARIANT IN THE PROJECT IS SILENT.** M9's drain reported `fully_drained`,
+> because `internal_total` counts what the canister SAYS it owes, and after the reset it says
+> it owes nothing. M2 solvency is silent because holding MORE than you owe is not insolvency.
+> This is the wave-6 lesson exactly: the instrument was built by people who already knew the
+> answer, and it asks "can each player reach the balance the canister admits to" rather than
+> "is the canister still admitting to the balance".
+>
+> **The auditor's own framing, which is the right one:** *"An IC controller can always upgrade a
+> canister to sweep funds, but that is a deliberate act. This is a labelled recovery button that
+> silently deletes everyone's balance."* `reset_table`'s comment says only *"CAUTION: destroys
+> all state"* — it destroys MONEY, not state — and `admin_reinit_table` was described in the
+> Candid as *"for recovery after upgrade issues"*, i.e. exactly the situation in which an honest
+> operator reaches for it.
+>
+> **The fix, unchanged from wave 2 and still not taken:** refuse unless chips and escrow are
+> both zero, or return every chip to escrow BEFORE resetting and leave `BALANCES` strictly
+> untouched. There is no legitimate use of a config reset that also zeroes custody. Both
+> functions need it; fixing one and not the other is how this survived four waves.
+>
+> **It composes with [FINDING 18](#finding-18).** A player who cash_out's a stuck hand leaves a
+> stake in the pot and is told nothing. That stake is recoverable by `abandon_stuck_hand` — right
+> up until an operator calls `reset_table`, after which it is gone. Neither step requires malice.
+
+**Severity:** ~~HIGH~~ **CRITICAL**, controller-only. Permanent, unrecoverable loss.
+**Status:** CONFIRMED by execution in wave 2, **STILL OPEN**, re-confirmed by an independent
+auditor and re-measured by the wave-6 coherence pass. Reproducer:
 `reg06_admin_reinit_table_strands_every_seated_players_chips`.
-**Where:** `admin_reinit_table` -> `init_table_state`, `src/table_canister/src/lib.rs`
+**Where:** `admin_reinit_table` AND `reset_table`, both -> `init_table_state`,
+`src/table_canister/src/lib.rs`
 
 `admin_reinit_table` is documented as being "for recovery after upgrade issues". It calls
 `init_table_state(config)`, which builds a brand new `TableState` with empty seats. Every
@@ -939,14 +1030,43 @@ sends to their deposit address that does not exceed 0.0001 ICP is stranded there
 message tells the user to "send ICP to your deposit address first", which is misleading when
 they already have.
 
-## FINDING 12 (NEW) -- one action timeout ends the hand for everybody, because the disconnect timeout and the action timeout are both 30 seconds
+<a id="finding-12"></a>
+
+## FINDING 12 -- one action timeout ends the hand for everybody, because the disconnect timeout and the action timeout are both 30 seconds -- **CLOSED IN WAVE 5, GATE INVERTED IN WAVE 6**
+
+> **STATUS 2026-08-05: CLOSED, AND THE REPRODUCER NOW GATES THE FIX.**
+>
+> Two independent things had to change and both did:
+>
+> 1. **participation no longer reads `status`.** `count_players_can_act` and the other three
+>    betting-round sites ask `is_in_hand` / `can_still_act`, the same predicate `live_claims`
+>    asks, so marking a seat `Disconnected` removes it from nothing (docs/DEFECTS.md E-32);
+> 2. **`DISCONNECT_TIMEOUT_SECS` is 90**, longer than every deployed action clock (30 / 45 /
+>    60 s), so the two thresholds cannot race on any table. The ACTION clock is always first.
+>
+> Re-measured on module `5e07edf6…`, the identical sequence this finding describes:
+>
+> ```
+> before      phase Flop, board 3, pot 206000000, 2 players live
+> advance 31s; check_timeouts() -> PlayerTimedOut(1)
+> after       phase Turn, board 4, pot 206000000, 2 players live, 0 e8s destroyed
+>             seat0 Active   seat1 Active folded   seat2 Active     <- nobody Disconnected
+> nobody ever answers again; each clock expires in turn
+> FINAL       phase HandComplete, board 4, fold-out, seat 0 paid the whole 206000000
+>             0 e8s destroyed across the whole sequence
+> ```
+>
+> The board is **4 cards, not 5**: the hand ends by fold-out on the street it actually reached,
+> rather than by a five-card showdown nobody bet into. `reg09` was inverted from pinning the
+> defect to gating the fix and renamed `reg09_one_timeout_folds_only_the_seat_on_the_clock`; it
+> goes RED again if either half of the fix is reverted. The original finding follows unchanged.
 
 **Severity:** HIGH. It removes the remaining betting rounds from every player at the table
 without anyone choosing to check down, and it settles the hand out of the stale pre-flop
 breakdown, which is FINDING 01. So a 30-second lull both takes away the turn and the river and
 destroys whatever was already wagered post-flop.
-**Status:** CONFIRMED by execution against the real canister. Reproducer:
-`reg09_one_timeout_with_no_heartbeats_runs_the_whole_board_out_and_settles` in
+**Status:** CONFIRMED by execution against the real canister; **CLOSED in wave 5, gate inverted
+in wave 6.** Reproducer, now a gate: `reg09_one_timeout_folds_only_the_seat_on_the_clock` in
 `tests/money_safety/tests/regressions.rs`.
 **Where:** `check_timeouts` + `count_players_can_act` + `advance_to_next_street`,
 `src/table_canister/src/lib.rs`
@@ -1517,13 +1637,71 @@ version boundary, so nothing about persistence is known to work.
 
 ---
 
-## FINDING 15 (critical, OPEN), one unguarded evaluator call locks a funded table: every path to a player's own money closes at once
+## FINDING 15 (critical), one unguarded evaluator call locks a funded table: every path to a player's own money closes at once
 
-**Filed by the wave-5 coherence pass on the report of an independent auditor that was given the
-running local stack and no access to this repository's documents. Executed by that auditor on a
-funded local table. The call site is confirmed by code read in the current source. NOT PATCHED , 
-HARD RULE 3 says a fund finding is written up here and never quietly fixed, and this one needs a
-failing test first.**
+> ### STATUS 2026-08-05: REPRODUCED ON THE RUNNING REPLICA, ROOT CAUSE FOUND, FIXED, AND NOW GATED BY A NEW INVARIANT
+>
+> **The wave-5 write-up below named the wrong call site.** It read the current source and picked
+> the one unguarded `evaluate_hand`, in `record_hand_to_history`. That was a reasonable guess and
+> it was wrong, which matters, because the guess would have produced a one-line change that fixed
+> nothing. The canister's own log says where the trap actually was:
+>
+> ```text
+> $ icp canister logs table_2
+> Panicked at 'IMPOSSIBLE HAND: evaluate_hand needs a 3-, 4- or 5-card board (flop/turn/river),
+>   got 0 community cards (2 cards in total)', src/poker_core/src/hand.rs:187:65
+> Canister Backtrace:
+>   poker_core::hand::evaluate_hand
+>   table_canister::plan_payouts
+>   table_canister::settle_hand
+>   table_canister::end_hand_single_winner      <-- the FOLD-OUT path, not the showdown path
+>   canister_update leave_table
+> ```
+>
+> and a second one, identical, under `canister_update player_action`. Three of the four local
+> tables have this in their logs. **Read the log before believing the read.**
+>
+> **Reproduced end to end**, on the running local replica, against the byte-exact deployed module
+> `0x5298915c…`, on an isolated canister so no other agent's fixture was touched. Full transcript
+> under "Reproduced, live" below. Every door shut at once, exactly as reported.
+>
+> **The real cause is not the evaluator.** It is that the engine ended a hand as
+> "everybody else folded" while **two seats still held live claims and there was no board to rank
+> them by**. `count_active_players`, which decides that the hand is over, counted only seats whose
+> `status == Active`; `live_claims`, which decides who may win the pot, counts every seat that has
+> not folded. A player whose client stops sending heartbeats leaves the first set and stays in the
+> second. So the fold-out settlement ran with an unrankable board, and the evaluator did the only
+> thing it had been told to do about an impossible input: it trapped.
+>
+> **What was fixed, and by whom.** The cause -- participation and eligibility asked of one
+> predicate, so a missed heartbeat can never take a seat out of the hand -- was fixed in the same
+> wave by the agent working E-32/E-06; see the "WHO IS IN THE HAND" block in
+> `src/table_canister/src/lib.rs`. This entry owns the rest:
+>
+> 1. **no trapping evaluator is reachable from any update entry point.** All three sites
+>    (`rank_claims`, `push_winner`, `record_hand_to_history`) call `poker_core::try_evaluate_hand`
+>    and handle the rejection; `evaluate_hand` is no longer imported into `table_canister` at all,
+>    and a test greps for it on every run.
+> 2. **a hand that nobody can move can always be ended, by anybody.** `abandon_stuck_hand()` takes
+>    no privilege, refuses unless the action clock has been expired for five minutes (or the hand
+>    has no clock at all, which is immovable by construction), and can only ever produce one
+>    outcome: every stake back to the player who put it in. There is nothing to win by calling it.
+> 3. **"Cannot withdraw while in a hand" now means what it says.** That refusal is lifted once the
+>    hand is provably stuck. A withdrawal pays out of escrow and cannot touch the pot; a cash-out
+>    leaves the stake behind in the payout basis.
+> 4. **the false safety argument is gone.** `apply_payouts` used to justify its trap with *"which
+>    is recoverable (players can still leave the table with their stacks)"*. They cannot:
+>    `leave_table` runs the same code. The comment now says so.
+>
+> **The gate.** `M9 FUND REACHABILITY` in `tests/money_safety`: *for any state a sequence of legal
+> calls can reach, there is a sequence of legal calls by each funded player that returns that
+> player's balance to the ledger.* Two halves, both wired into the fuzzer's per-step loop and its
+> end-of-run: no update on the settlement path may TRAP while the table holds money, and at the end
+> of every run every player's money is actually taken out to the ledger and checked to arrive.
+> Reverting the fix takes it RED, with the original trap, in `tests/money_safety/tests/fund_reachability.rs`.
+>
+> **Still true and still not fixed:** the deployed module is not the source
+> ([T-33](DEFECTS.md#t-33)). Everything above is a statement about this tree.
 
 ### What was executed
 
@@ -1551,12 +1729,88 @@ call takes the identical path and traps identically. The client polls `check_tim
 call that fails. The UI offers fold, leave, cash out and withdraw; those are exactly the calls that
 fail. From the player's chair this is indistinguishable from the operator having taken the deposit.
 
-### The mechanism, in the current source
+### Reproduced, live, on the running replica (2026-08-05)
+
+Not replayed in a harness: executed against the **byte-exact deployed module**, on the running
+local replica, on a canister created for the purpose (`5tkpr-7d777-77775-aaaeq-cai`, module
+`0x5298915c64ea3b3851eb8511243c6d04adb99dac29d6e770867979583ad15e04`, the identical module
+`table_1`, `table_2`, `table_3` and `btc_table_1` are all running) so that no other agent's
+fixture was disturbed. The module bytes were taken from the replica's own state directory and
+hashed before installing, so this is the code that locked the auditor's table and not a rebuild of
+it. Script: `$SCRATCH/repro2.sh`.
+
+Three players, 40 ICP deposited each, seated for 10 ICP. One hand dealt. **Carol's client stops
+sending heartbeats** (`sit_out` reaches the identical state in one call: `status` leaves `Active`,
+`has_folded` stays `false`, the two hole cards stay in the seat). Then ordinary play: the player on
+the clock folds.
+
+```
+4. ordinary play continues. The player on the clock folds.
+  bob fold -> reject code CanisterError … Canister called `ic0.trap` with message:
+              'Panicked at 'IMPOSSIBLE HAND: ev…
+
+5. EVERY DOOR EVERY STILL-SEATED PLAYER HAS
+  check_timeouts           (variant { NoAction })
+  player_action (bob)      TRAP  'IMPOSSIBLE HAND: evaluate_hand needs a 3-…
+  player_action (alice)    (variant { Err = "Not your turn" })
+  leave_table (alice)      TRAP  'IMPOSSIBLE HAND: evaluate_hand needs a 3-…
+  leave_table (bob)        TRAP  'IMPOSSIBLE HAND: evaluate_hand needs a 3-…
+  cash_out (alice)         (variant { Err = "Cannot cash out while in a hand" })
+  cash_out (bob)           (variant { Err = "Cannot cash out while in a hand" })
+  cash_out (carol)         (variant { Err = "Cannot cash out while in a hand" })
+  withdraw (alice)         (variant { Err = "Cannot withdraw while in a hand" })
+  withdraw (bob)           (variant { Err = "Cannot withdraw while in a hand" })
+  withdraw (carol)         (variant { Err = "Cannot withdraw while in a hand" })
+```
+
+Nine of the ten calls a player can make are refused or trapped, and the tenth
+(`check_timeouts`) changes nothing. Every seat is funded. This is the auditor's report, in full,
+on the module they were given.
+
+Two details worth keeping, because both are non-obvious and both matter to the fix:
+
+- **It heals in one direction only, and by accident.** When the disconnect sweep later marks
+  *every* remaining seat silent, `count_active_players` falls to **0** rather than 1, the fold-out
+  branch is not taken, the board runs out, and the hand settles normally. So the lock is exactly
+  the window where that count is **1** while two seats still hold cards. That is why the auditor's
+  `sit_out` cleared it: it moved the count from 1 to 1-with-fewer-claims.
+- **`check_timeouts` returning `NoAction` is not safety.** It is the polling call, it reported no
+  problem, and the table was frozen.
+
+### The mechanism, corrected
+
+The wave-5 write-up below this line reads the source and blames `record_hand_to_history`. **That
+is wrong.** The trap was in `plan_payouts` -> `rank_claims`, reached from
+`end_hand_single_winner`, which is the FOLD-OUT path and not the showdown path. The canister log
+says so verbatim (see the status block at the top of this finding). The version of `rank_claims`
+in the deployed module has no board-length guard at all; the guard now in the source was added
+after that module was built, which is why the auditor's replay against current source settled.
+
+**And the guard was never the real answer anyway.** A guard makes the trap stop; it does not stop
+the engine arriving at a settlement the rules cannot describe. With the guard and without the
+cause fix, the same state settles by refunding *every* funder -- **including the players who
+folded**. Measured on the wave-5 HEAD engine, three seats, 10 chips each in, one folded, one
+disconnected:
+
+```
+live claims (not folded, holding cards): 2
+collected=30 awarded=30 payouts=[Refund 10 -> seat 0, Refund 10 -> seat 1, Refund 10 -> seat 2]
+after: pot=0  alice=100  bob(FOLDED)=100  carol=100
+```
+
+Alice won the hand and got nothing; Bob folded and got his bet back. Conservation is exact, M1 to
+M8 are all silent, and the hand has simply been un-played. **That is the shape of defect this
+project keeps producing: perfectly conserved money in the wrong place.** It is reachable on the
+wave-5 engine in **762 of 4,000** randomised endpoint-level sequences and in **0 of 4,000** after
+the cause fix.
+
+### The three call sites, as they were
 
 `poker_core::evaluate_hand` traps by design on an impossible input, that is E-09's fix, and the
 block comment above it argues for the trap and offers `try_evaluate_hand` to any caller that would
 rather handle the rejection. Three call sites in `table_canister` reach it from the settlement path.
-**Two guard the board length. One does not.**
+**All three now use `try_evaluate_hand`; `evaluate_hand` is not imported into the canister at
+all.** As they were:
 
 ```rust
 // src/table_canister/src/lib.rs:4098  , guarded
@@ -1595,32 +1849,114 @@ This composes with [FINDING 12](#finding-12) and DEFECTS E-43: a missing heartbe
 `count_players_can_act`, which is what closes the betting round early and hands control to
 `run_out_board` in the first place.
 
-### The fix, and the order to do it in
+### THE FIX AS LANDED (2026-08-05)
 
-1. **A failing test first.** A `TableState` at `Showdown` with an empty `community_cards` and at
-   least one unfolded seat holding hole cards, settled through `determine_winners`. It must trap
-   before the fix and settle after it. `tests/money_safety` is the right home: this is a money
-   invariant (M2 LEDGER REALITY holds, but *the player cannot reach the money* is not currently
-   any invariant at all, which is its own gap, see below).
-2. **One line.** `try_evaluate_hand(cards, &state.community_cards).ok()` at `:871`, so recording
-   history is lossy rather than fatal.
-3. **The auditor's own recommendation, which is broader and better:** *"make every settlement
-   evaluator call refuse rather than trap"*, and *"stop treating a missing heartbeat as an absence
-   of obligation in the betting state machine"*.
-4. **A guard against the class.** No `evaluate_hand` (as opposed to `try_evaluate_hand`) should be
-   reachable from an update entry point at all. That is a grep-able invariant and belongs in the
-   test suite.
+The order matters and it is the order the auditor asked for: cause first, boundary second, and a
+door that does not depend on either being right.
 
-### The invariant this repository does not have
+**1. The cause. A missed heartbeat is no longer an absence of obligation.** (Landed in the same
+wave by the E-32/E-06 work; see the "WHO IS IN THE HAND" block in
+`src/table_canister/src/lib.rs`.) Participation and eligibility are now one predicate,
+`is_in_hand`, so `count_active_players` and `live_claims` cannot disagree about who is still in
+the hand. A seat that stops responding is still offered the action, its clock runs, and it is
+folded by `resolve_expired_action_timer` if it does not act. The fold-out settlement can therefore
+no longer be entered with two live claims and no board. Measured: **762 of 4,000** randomised
+sequences reached that state before, **0 of 4,000** after.
+
+**2. The boundary. No trapping evaluator is reachable from any update entry point.** All three
+sites use `poker_core::try_evaluate_hand`:
+
+| site | what a rejection now does |
+|---|---|
+| `rank_claims` | drops that seat from the ranking and logs `CRITICAL:`. The money it was contesting is refunded to the seats that funded it by `plan_payouts`'s carry rule. |
+| `push_winner` | records the winner with no hand description. It has already been decided who is owed what; a display field may not undo that. |
+| `record_hand_to_history` | writes `null` for `final_hand_rank`. An archive field may not roll back a completed payout. |
+
+`evaluate_hand` is no longer imported into `table_canister` at all, so the rule is greppable
+rather than remembered, and
+`no_trapping_evaluator_is_reachable_from_an_update_entry_point` in
+`tests/money_safety/tests/fund_reachability.rs` runs that grep on every test run. **Guarding each
+site by hand is exactly the discipline that failed here** -- wave 3 guarded two of three -- so the
+fix is a rule and not three guards.
+
+**3. The door that depends on neither. `abandon_stuck_hand()`.**
+
+> A recovery path only a controller can take is not a recovery path, it is a support queue.
+
+No privilege check: any principal may call it. It refuses unless the hand is **provably**
+immovable, and "provably" means a fact about the state rather than a guess about the cause:
+
+* the action clock has been expired for five minutes (every ordinary call resets it, and the
+  longest configured `action_timeout_secs` plus the time bank is 90 s, so this is not reachable by
+  a slow player); **or**
+* a live hand has no action clock at all, which is immovable by construction, because
+  `resolve_expired_action_timer` is the only thing that can move a hand nobody is acting on.
+
+The only outcome it can produce is `refund_every_stake`: each player gets back exactly what they
+put into this hand, through `apply_payouts`, so it is held to the same conservation post-condition
+as a real settlement. **Nobody wins, so there is nothing to gain by forcing it**, whatever cards
+you were holding. It logs `CRITICAL:` when it fires, because reaching it means the settlement path
+failed and that must never be quiet. `get_stuck_hand_status()` is a **query**, deliberately: it has
+to answer when every update fails.
+
+**4. "Cannot withdraw while in a hand" now means what it says.** Both guards are lifted once
+`hand_is_stuck`. This is not weakening them: while the hand can progress they refuse exactly as
+before, and that is pinned by
+`m9_the_in_a_hand_refusal_lifts_once_the_hand_cannot_progress`. A withdrawal pays out of escrow and
+cannot touch the pot; a cash-out calls `record_departed_stake`, so the stake stays in the payout
+basis and only the uncontested stack behind leaves.
+
+**5. A false safety argument, deleted.** `apply_payouts` justified its deliberate trap with *"which
+is recoverable (players can still leave the table with their stacks and the code can be fixed and
+the message retried)"*. **They cannot.** `leave_table` runs the same code and traps too. The
+post-condition is kept -- paying out a plan that does not add up is worse than anything -- and the
+argument is replaced with the true one: it is safe to trap there only because it is unreachable
+from any plan that can now be built, and safe to be wrong about that only because
+`abandon_stuck_hand` does not run through it.
+
+### The invariant this repository did not have — M9, now built
 
 Every money invariant here asks whether the arithmetic is right: chips conserved, escrow ≥
-liabilities, the right principal paid. **None of them asks whether a player can still get their
+liabilities, the right principal paid. **None of them asked whether a player can still get their
 money out.** A table can satisfy every invariant in `tests/money_safety` while being permanently
-frozen with funded seats, and that is the state the auditor reached in ordinary play. The missing
-invariant, stated so it can be built:
+frozen with funded seats, and that is the state the auditor reached in ordinary play.
 
-> **M9 REACHABILITY.** For any state a sequence of legal calls can reach, there exists a sequence of
-> legal calls by each funded player that returns that player's balance to the ledger.
+> **M9 FUND REACHABILITY.** For any state a sequence of legal calls can reach, there exists a
+> sequence of legal calls by each funded player that returns that player's balance to the ledger.
+
+`tests/money_safety/src/invariants/reachability.rs`. Two halves, because either alone is a hole:
+
+* **`check_no_settlement_trap`, on every step of the fuzzer, at zero extra message cost.** No
+  update on the settlement path may TRAP while the canister holds money. Blunt, and exactly right
+  for this canister: a trap is not a failed call here, it is a closed door. The IC rolls the
+  message back, so the state that caused it is still there and the next call takes the identical
+  path -- and the doors are not independent, because `check_timeouts`, `player_action` and
+  `leave_table` all run settlement while `withdraw` and `cash_out` refuse during a hand. Severity
+  `FundsUnreachable`, never excusable by the documented-defect register, and it is the one
+  severity with a **zero `delta_e8s`**: nothing has gone missing, which is precisely why every
+  other invariant is silent.
+* **`drain`, at the end of every fuzz run and in each hand-written reproducer.** Actually take
+  every player's money out -- `check_timeouts`, then `abandon_stuck_hand`, then `cash_out`, then
+  `withdraw`, using only calls a player can make, with time advanced between rounds because
+  waiting is a legal move -- and check it lands on the ledger. `final_internal_total` in the fuzz
+  report is now the answer to *"how much could not be got out"*, not *"how much was left lying
+  about"*. A structural check only fails on the failure modes somebody imagined; a drain fails on
+  all of them.
+
+**It has teeth, demonstrated by reverting the fix.** Restoring the deployed shape of `rank_claims`,
+the pre-fix `is_in_hand`, and a `hand_is_stuck` that always says false (a copy of the tree in
+`$SCRATCH/revert`) takes it from 6/6 green to **5 of 6 red**, with the original trap:
+
+```
+M9 VIOLATED: player_action TRAPPED with 6000000000 e8s at the table. A trap rolls the message
+back, so this door is shut permanently for this state … 'IMPOSSIBLE HAND: evaluate_hand needs a
+3-, 4- or 5-card board (flop/turn/river), got 0 community cards (2 cards in total)',
+src/poker_core/src/hand.rs:187:65
+```
+
+The one test that stays green under the revert is the checker's own self-test
+(`m9s_per_step_check_can_actually_fail`), which must pass either way or the invariant cannot be
+trusted to fire.
 
 ### Why this outranks its own severity
 
@@ -1629,3 +1965,339 @@ and it settled correctly. So the binary holding money and the source offered for
 the same program, and the one holding money is worse
 ([DEFECTS.md T-33](DEFECTS.md#t-33)). A verifiable shuffle inside an unverifiable binary buys a
 player very little.
+
+---
+
+## FINDING 16 -- a player who stops answering keeps a claim on the pot without paying for it (PLAYER-TO-PLAYER FUND THEFT, DEMONSTRATED, FIXED)
+
+**Status: FIXED in wave 5.** Recorded here rather than only in
+[DEFECTS.md E-32](DEFECTS.md#e-32) because it moves real user funds and this file is
+where fund-loss findings belong. Everything below was executed by the wave-5 CRITIC
+against real installed modules on PocketIC -- not read out of the source, and not
+taken from the wave report it was checking.
+
+### What it was
+
+`PARTICIPATION` in the betting round was decided by `status == PlayerStatus::Active`
+(`find_next_active_seat`, `count_players_can_act`, `is_betting_round_complete`,
+`count_active_players`). `ELIGIBILITY` for the pot was decided by `live_claims`,
+which asks only for hole cards and `!has_folded`. A seat that stopped sending
+heartbeats for 30 seconds was marked `Disconnected`, dropped out of the first set,
+and stayed in the second: **skipped by the betting round while still eligible for
+every pot layer it had already paid into.**
+
+No conservation invariant, pot total, or settlement oracle can see this. Every chip
+adds up. They just end up with the wrong player.
+
+### Reproduced, pre-fix, on an installed module
+
+Pre-fix module `sha256=8d66080fe9984cf32157e77f49b098eaad6dea8dc6e43fc36c3b9f4e2219fd6b`
+(the wave-5 tree with only the E-32 fix sites reverted to their `ad40c53` shape).
+Three seats, 2 ICP each, `action_timeout_secs` longer than the heartbeat threshold so
+that going quiet is the ONLY thing that happens. The attacker plays the pre-flop
+normally, then closes the tab:
+
+```
+hand 3: flop reached, attacker paid_in=2000000. after a 35 s silence
+        check_timeouts -> NoAction, attacker status=Disconnected folded=false
+        phase=Flop action_on=1
+hand 3: COMPLETE. board=5 showdown_seats=[0, 1, 2] attacker in showdown=true
+        attacker won=6000000 attacker total_bet=2000000 folded=false
+```
+
+**6,000,000 e8s collected on a 2,000,000 e8 stake, with one action for the whole
+hand and no message at all after the flop.** 4,000,000 e8s of that was the other two
+players' money. Two more hands in the same six-hand run reached a five-card showdown
+the same way. The edge is measured over 20,000 real deals by
+`the_free_showdown_was_worth_about_a_big_blind_a_hand` in
+`src/table_canister/tests/betting_rules.rs`: **0.98 big blinds per exploited spot**,
+against a certain `-1 BB` for folding.
+
+`sit_out()` was the same hole with no waiting: one message from a player facing a
+bet, and the street closed behind them while they kept their cards, their claim and
+every chip.
+
+### The same mismatch also settled a hand on a THREE-CARD BOARD, silently
+
+The other direction is worse than "the pot is given away without a showdown". With a
+`Disconnected` seat still holding cards, `count_active_players` reached 1 while TWO
+seats had a live claim, so `end_hand_single_winner` fired -- and `rank_claims` ranks
+any board of 3 to 5 cards. Observed on the pre-fix module:
+
+```
+phase=HandComplete
+  seat 0 status=Disconnected folded=false cards=true chips=204000000 total_bet=2000000
+  seat 1 status=Active       folded=false cards=true chips=198000000 total_bet=2000000
+  seat 2 status=Active       folded=true  cards=true chips=198000000 total_bet=2000000
+  ended with board=3 winners=[(0, 6000000)] showdown=[]
+```
+
+Seat 1 was an honest, connected, unfolded player with 2,000,000 e8s in the pot. The
+hand was decided against them on the flop, the turn and the river were never dealt,
+**and it was recorded as a fold-out with an empty showdown list, so neither hand was
+ever published.** That is a decided poker hand no player could audit.
+
+### It also locked the honest disconnected player out of their own decision
+
+Pre-fix, the street advanced past the quiet seat, so `state.action_on` was never
+theirs again. Measured on the same module, for a player who reconnects:
+
+```
+==== CRITIC returning-player driver, build=prefix ====
+the third seat is Disconnected while facing a 20000000 bet
+phase=Turn action_on=2 (disconnected seat is 1) folded=false
+the disconnected seat reaches for the time bank -> Err("Not your turn")
+heartbeat -> Ok(()) ; and its call lands -> Err("Not your turn")
+```
+
+They could not call, could not fold, and could not reach the time bank they had paid
+for -- while remaining liable to be paid out on a hand nobody let them play.
+
+### What the fix does, verified on the fixed module
+
+Fixed module `sha256=5e07edf6fdfdb60f96471dcfc6adab226d1c14746d12b291d952c4eeec1a969c`.
+Participation is now asked of the same predicate as eligibility (`is_in_hand` /
+`can_still_act`). `Disconnected` no longer moves money. Same drivers, same seats:
+
+* the six-hand attack run reaches **0** free five-card showdowns, and the attacker
+  ends `-4,000,000` e8s -- exactly the blinds they forfeited by not acting;
+* `sit_out()` mid-hand is deferred to the end of the hand and the seat is still
+  offered the action;
+* a genuinely `Disconnected` seat (95 s of silence, past the new 90 s threshold) is
+  offered the action, keeps its cards, and **the hand stays in progress**;
+* the same seat can reach `use_time_bank()` **and** land a `Call` when it comes back.
+
+The one path out of a hand for a player who will not act is now their own action
+clock, which folds them, exactly as Robert's Rules of Poker requires.
+
+### What is NOT closed by this fix
+
+1. **A forfeited action is a FOLD even when checking would have cost nothing.**
+   Measured on BOTH modules: on a flop where `current_bet == 0` and the seat on the
+   clock owes 0, the clock expiring produces `folded=true` and forfeits their whole
+   stake in the pot. Every online room checks you down in that spot. This is the last
+   place a network blip still costs an honest player a pot they could have had for
+   free. It is pinned by `reg08` in `tests/money_safety`, so closing it means
+   changing that test in the same commit.
+2. **[E-36](DEFECTS.md#e-36) is still live and now has a price.** A seat that takes
+   an empty chair mid-hand and calls `sit_in()` becomes `Active` holding no cards,
+   `is_in_hand` accepts it, and it is offered the action on every street. Measured on
+   the fixed module: it bet 20,000,000 e8s on the flop, the turn AND the river --
+   **60,000,000 e8s (0.6 ICP) into a hand it could never win**, in a single hand.
+   Nothing is destroyed (the internal total is unchanged to the e8 and `plan_payouts`
+   refuses to pay a cardless claim), but the money is transferred to the other
+   players. Closing it means requiring `hole_cards.is_some()` outright.
+3. **`reg09` and FINDING 12 above still describe E-06 as live.** `reg09` now fails
+   with `left: Turn, right: HandComplete`, which is its own doc comment's definition
+   of "fixed", so `./scripts/dev.sh test` is RED on one test until the pair is
+   updated together.
+
+**Reproduce:** the two drivers used above are
+`$SCRATCH/critic_e32.rs` and `$SCRATCH/critic_gaps.rs`, dropped into
+`tests/money_safety/tests/` of a `cp -Rc` copy and run with
+`CRITIC_BUILD=prefix|fixed cargo test --test critic_e32 -- --test-threads=1 --nocapture`.
+The pre-fix module is produced by reverting the six E-32 sites in
+`src/table_canister/src/lib.rs` to their `ad40c53` shape.
+
+---
+
+<a id="finding-17"></a>
+## FINDING 17 (high) -- a hand can be settled with NO live claim on it, and every stake handed back to the players who folded
+
+**Severity:** HIGH. Not fund theft and not fund loss: conservation is exact and every e8 goes
+back to the principal that put it in. What is lost is the POT, by the player who won it, to an
+ordinary disconnection. And what is lost more broadly is the property this wave was commissioned
+to establish — that the table can no longer be wedged into a state the rules of poker cannot
+describe.
+**Status:** DEMONSTRATED by execution on the wave-6 module `5e07edf6…`, twice, by two different
+sequences. **NOT FIXED.**
+**Where:** `is_in_hand` + `count_active_players` -> `end_hand_single_winner` -> `plan_payouts`'s
+"nobody can win ANY of this money" branch, `src/table_canister/src/lib.rs`.
+**Related:** docs/DEFECTS.md [E-36](DEFECTS.md#e-36), raised from medium to high by this finding.
+
+### The disagreement that is supposed to be closed
+
+Wave 6's headline fix (FINDING 16 / E-32) was that PARTICIPATION and ELIGIBILITY must be the
+same question. Participation is now:
+
+```rust
+pub fn is_in_hand(p: &Player) -> bool {
+    !p.has_folded && (p.hole_cards.is_some() || p.status == PlayerStatus::Active)
+}
+```
+
+Eligibility is `live_claims`, which requires `hole_cards.is_some()`. **A seat that is `Active`
+and holds no cards is in the first set and not the second.** That is the identical mismatch, at
+a fifth site, in the same wave that closed the other four. The source comment beside it says the
+disjunct *"changes nothing; it holds no cards, so `live_claims` still refuses to pay it"* — which
+is true of the payout and false of everything upstream of it, and is the sentence that stopped
+anyone looking.
+
+`count_active_players(state) == 1` is what triggers `end_hand_single_winner`. The ONE seat it
+counts can be the cardless one. `live_claims` is then EMPTY, so `plan_payouts` takes the branch
+added in this same wave for corrupt states — *"hand every seat back exactly what it put in"* —
+and the hand is un-played.
+
+### Executed, sequence A: nobody needs to cooperate
+
+`tests/money_safety/tests/wave6_coherence.rs::probe4`, in the repo:
+
+```
+alice v bob heads-up; a real 52,000,000 e8 pot (0.52 ICP)
+carol calls join_table(2) mid-hand              -> Ok      (an ordinary call)
+carol calls sit_in()                            -> Ok      (an ordinary call)
+alice folds                                     -> Ok      (ordinary poker; BOB HAS WON)
+bob's client drops; his own action clock expires
+check_timeouts()                                -> PlayerTimedOut(1)
+
+FINAL phase=HandComplete pot=0
+  seat0 chips=200000000  bet=2000000  folded=true   <- got their blind back
+  seat1 chips=200000000  bet=2000000  folded=true   <- WON the hand, paid nothing
+  seat2 chips=200000000  bet=0        cards=false
+```
+
+No trap. No `CRITICAL:` line. No `WARNING:`. Exact conservation. M1 through M9 silent and the
+M9 drain clean. Every player ends on precisely their buy-in.
+
+### Executed, sequence B: both card-holders fold
+
+`$SCRATCH/cd6/…::wave6_coherence.rs::probe2` reaches the same settlement with a smaller pot and no timeout at
+all, which is what makes it cheap to trigger deliberately.
+
+### Why this is worse than it looks, and why it is not a regression
+
+It is **not a regression**: before wave 6 the same state was reached and the money was
+*destroyed* rather than refunded (`plan_payouts` returned early and the next `start_new_hand`
+zeroed `state.pot`). The refund is a real improvement.
+
+What changed is REACHABILITY. Before wave 6 a seat that stopped answering was SKIPPED by the
+betting round; now it is offered the action and **folded by its own clock**, which is correct
+poker and is the fix. But it means "every seat holding cards has folded" is now reachable by
+ordinary disconnection, where before it needed everyone to fold on purpose. The fix to E-32
+increased the traffic through the one door E-36 leaves open.
+
+### What it says about the instruments
+
+This is the second time in this project that a defect has been invisible to every gate because
+the gates all ask arithmetic questions. FINDING 15 added M9 FUND REACHABILITY for exactly that
+reason — and M9 is a TRAP detector plus a DRAIN detector, and this is neither. The money is
+reachable, the arithmetic is exact, and the outcome is still wrong. **The only instrument in the
+repo that could convict it is the independent settlement oracle in `tests/settlement`, which
+asks what each seat is OWED by the rules of poker rather than whether the totals balance — and
+it still does not run inside the fuzz loop and still has no CI job (docs/DEFECTS.md H-23).**
+
+### Fix
+
+One line, in the seating path:
+
+```rust
+pub fn is_in_hand(p: &Player) -> bool {
+    !p.has_folded && p.hole_cards.is_some()
+}
+```
+
+That makes the file's own stated rule true, and closes E-36's first half (betting into a hand
+you hold no cards in) at the same time, because `find_next_active_seat` would stop offering the
+action to a cardless seat.
+
+**It was deliberately NOT taken in this pass.** It is a behaviour change to another agent's file
+during a wave with three concurrent editors, and docs/DEFECTS.md E-36 documents that landing it
+requires deleting the `E-36` register entry in `tests/money_safety/src/documented.rs` and the
+`"carries both a live stake and a departed stake"` tolerated substring in the SAME change, or
+`register_entries_are_all_still_needed` fails on purpose. It is one change by one owner, and it
+is the shortest item on docs/WAVE-06.md's path to yes.
+
+---
+
+<a id="finding-18"></a>
+## FINDING 18 (high) -- `cash_out` of a stuck hand walks away from your own stake, and nothing anywhere says so
+
+**Severity:** HIGH. Recoverable in principle, permanently lost in combination with
+[FINDING 07](#finding-07), and invisible on every endpoint a leaving player would look at.
+**Status:** DEMONSTRATED by an independent auditor on the running local canisters, then
+REPRODUCED by the wave-6 coherence pass
+(`$SCRATCH/cd6/tests/money_safety/tests/wave6_coherence.rs::probe3`, kept in the scratch copy:
+it records behaviour rather than pinning it). **NOT FIXED.**
+**Where:** `cash_out` (and the identical guard in `withdraw`), via `hand_is_stuck`,
+`src/table_canister/src/lib.rs`.
+
+FINDING 15's fix lifted the "cannot cash out while in a hand" refusal once `hand_is_stuck` — a
+correct and necessary change, because that refusal was the second half of the lock. But the
+guard is the only thing that ever told a player their money was committed. With it lifted, the
+seat is vacated and **the stake stays in the pot**, correctly (`record_departed_stake` keeps it
+in the payout basis so it is not destroyed), and the player is told nothing at all:
+
+```
+PROBE3 stuck_hand_status = { is_stuck: true, hand_in_progress: true, refundable_pot: 3000000 }
+PROBE3 cash_out(alice) -> Ok(198000000)   balance 1800000000 -> 1998000000
+PROBE3 withdraw(alice, 1998000000) -> Ok
+PROBE3 cash_out(bob)   -> Ok(199000000)   balance 1800000000 -> 1999000000
+PROBE3 withdraw(bob,   1999000000) -> Ok
+PROBE3 AFTER cash_out: phase=PreFlop pot=3000000 seats: (none)
+PROBE3 internal_total still owed = 3000000
+```
+
+Both players have left, both have withdrawn everything the canister will admit to owing them,
+`get_player_count` is 0, and **the canister is sitting on a live pre-flop hand with a
+3,000,000 e8 pot and no players in it.** The auditor's transcript is the same shape with bigger
+numbers: `cash_out -> Ok = 0` while 2.98 ICP of theirs was in the pot and `get_balance` returned
+0.
+
+It IS recoverable: `abandon_stuck_hand()` refunds every stake to the principal that put it in,
+and the probe confirms a clean full drain afterwards. But **nothing on the withdrawal path
+points at it.** `cash_out`'s reply is a bare `Ok(n)`; `get_balance` omits it; `withdraw`'s error
+messages never name it; the table view does not carry it. The one endpoint that does know,
+`get_stuck_hand_status`, has to be asked by a client that already knows to ask.
+
+**Fix**, in the auditor's own order of priority:
+
+1. have `cash_out` and `leave_table` report the amount still committed — `Ok = 0` should read
+   `Ok = 0, 298_000_000 still in a stuck pot, call abandon_stuck_hand to recover it`;
+2. surface it in `get_balance` or the table view, so a client cannot fail to show it;
+3. name `abandon_stuck_hand` explicitly in `withdraw`'s refusal path.
+
+None of these touches the money path. All three are strings.
+
+---
+
+<a id="finding-19"></a>
+## FINDING 19 (high) -- nothing on chain moves the game, so liveness is outsourced to whoever has a browser tab open
+
+**Severity:** HIGH for a fund-holding canister. Not a loss path on its own; it is the enabling
+condition for [FINDING 18](#finding-18) and it is why "can I always get my money out promptly"
+is honestly answered *no*.
+**Status:** CONFIRMED by an independent auditor and re-verified in the wave-6 coherence pass by
+inspection of the source at `5e07edf6…`. **NOT FIXED.**
+**Where:** `src/table_canister/` — `ic-cdk-timers = "1"` is declared at `Cargo.toml:22` and
+`set_timer` appears **nowhere** in `src/`:
+
+```
+$ grep -rn "set_timer" src/          # no output
+$ grep -n "timers" src/*/Cargo.toml
+src/table_canister/Cargo.toml:22:ic-cdk-timers = "1"
+```
+
+Every clock in this engine — the action timer, the disconnect threshold, the sitting-out
+auto-kick, the stuck-hand grace — is only ever evaluated inside a message somebody else sends.
+`check_timeouts` is an ordinary update call. If every client at a table closes its tab, the hand
+freezes and stays frozen indefinitely: the auditor measured `abandonable_in_ns =
+169_194_575_000` at t+160 s, i.e. a **5.5-minute minimum dead window** before any principal can
+even begin to unstick it, and the canister will sit in that state forever if nobody calls.
+
+The wave-6 escape hatch (`abandon_stuck_hand`, deliberately callable by anyone) is the right
+mitigation for a table with at least one interested party still awake. It is not a substitute
+for a clock: it needs a caller too.
+
+**Fix:** a canister timer that calls the same `check_timeouts` logic on the table's own action
+clock. It is a well-trodden IC pattern and the dependency is already in the manifest.
+
+### The unexplored area the auditor named next, and this pass did not reach either
+
+**Cycles.** These canisters custody real funds and there is no cycles monitoring and no top-up
+mechanism anywhere in the tree. An IC canister below its freezing threshold rejects every update
+call, which means `deposit`, `withdraw`, `cash_out` and `abandon_stuck_hand` all stop at once.
+That is the one remaining way for every player at a table to be unable to withdraw
+simultaneously with no in-application remedy, and it composes with the absence of a timer: there
+is nothing on chain that would notice. See
+[reference: IC freezing threshold and runway](DEFECTS.md) — canisters freeze below 30 days of
+idle burn, and frozen is recoverable while true zero uninstalls.

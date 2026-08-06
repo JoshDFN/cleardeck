@@ -83,15 +83,19 @@ export const ALLOWLIST = [
         id: 'occupancy-count',
         selector: '.players-text, .seat-count, .seat-note, .c-seats, .bar-sub, .notice, '
             + '.pot-label, .split-info, .seats, .chip, .layout-note, .tally, .state-block, '
-            + '.pane-sub, .drift-strip, .row-badges .badge',
+            + '.pane-sub, .drift-strip, .row-badges .badge, .retention',
         tokens: '^\\d{1,3}$',
         why: 'a count of players, seats, rows, hands or cards ("2 at risk", "2 seats", '
             + '"5 of 17 seats taken", "My hands (1)", "7 of 7 cards", "7 cards re-derived '
             + 'here", "2 of 3 lobby records quote figures the table contracts do not '
-            + 'charge"). Counts, not amounts: '
+            + 'charge", "keeps only its last 100 hands"). Counts, not amounts: '
             + 'player counts are reported against get_player_count(), the config drift is a '
             + 'structural failure in assertLobbyAgreement, and the card tally is the '
-            + "fairness scene's own verdict, asserted there",
+            + "fairness scene's own verdict, asserted there. `.retention` is the fairness "
+            + "panel's durability block: its only number is the table's hand-retention cap, "
+            + 'read live from get_fairness_retention() on the same canister the rest of the '
+            + 'panel is asserted against, and the decimal-point shape invariant above still '
+            + 'refuses any money figure that appears there',
     },
     {
         id: 'hands-dealt-count',

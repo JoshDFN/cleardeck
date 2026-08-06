@@ -113,8 +113,82 @@ type Rank = variant {
   Three;
   Queen;
 };
+// --- The commitment check -------------------------------------------------
+// A RECORD, not two positional strings. Candid keys record fields by hashed
+// name, so `check_shuffle_commitment` cannot be called "backwards": there is no
+// argument order to get wrong. This replaced `verify_shuffle`, which took two
+// unnamed 64-character hex strings and returned a bare bool, so a transposed
+// call and a broken proof were the same answer (docs/DEFECTS.md E-44).
+type CommitmentCheckArgs = record {
+  // 64 lowercase hex chars: the hand's committed SHA-256.
+  seed_hash : text;
+  // hex: the seed revealed when the hand ended. 32 bytes in a live hand.
+  revealed_seed : text;
+};
+type CommitmentMatch = record {
+  committed_hash : text;
+  revealed_seed : text;
+  // SHA256(revealed_seed), recomputed. Equal to committed_hash.
+  computed_hash : text;
+  // Read these two. The canister confirming its own hash is close to
+  // meaningless, and these fields say so in the answer itself.
+  this_proves : text;
+  this_does_not_prove : text;
+};
+type CommitmentNoMatch = record {
+  seed_hash_field : text;
+  revealed_seed_field : text;
+  // Both readings are shown, so the caller can see BOTH were tried.
+  computed_from_revealed_seed : text;
+  computed_from_seed_hash : text;
+  meaning : text;
+};
+type CommitmentMalformed = record {
+  // "seed_hash" or "revealed_seed": the field at fault, by name.
+  field : text;
+  reason : text;
+  character_length : nat64;
+};
+type CommitmentCheck = variant {
+  // SHA256(revealed_seed) == seed_hash.
+  Match : CommitmentMatch;
+  // A VALID pair, with the two values in each other's fields. Not a failure.
+  FieldsSwapped : CommitmentMatch;
+  // Neither reading matches. The only arm that is evidence of a bad proof.
+  NoMatch : CommitmentNoMatch;
+  // The call could not be evaluated. Names which field and why.
+  Malformed : CommitmentMalformed;
+};
+// --- Durability of the fairness record ------------------------------------
+type FairnessRetention = record {
+  table_keeps_last_n_hands : nat64;
+  table_copy_is_destructible_by_controller : bool;
+  archive_canister : opt principal;
+  summary : text;
+};
+type HistoryStatus = record {
+  // null means NOTHING IS BEING ARCHIVED off this table.
+  history_canister : opt principal;
+  recorded_ok_since_start : nat64;
+  failed_since_start : nat64;
+  in_flight : nat64;
+  unrecorded_backlog : nat64;
+  unrecorded_dropped : nat64;
+  last_recorded_hand : opt nat64;
+  last_error : opt text;
+  local_history_cap : nat64;
+  local_history_len : nat64;
+};
 type Result = variant { Ok; Err : text };
 type Result_1 = variant { Ok : nat64; Err : text };
+// Why a hand is not moving, and whether anybody can end it.
+// docs/SECURITY-FINDINGS.md FINDING 15.
+type StuckHandStatus = record {
+  is_stuck : bool;
+  hand_in_progress : bool;
+  abandonable_in_ns : opt nat64;
+  refundable_pot : nat64;
+};
 type Result_2 = variant { Ok : TableState; Err : text };
 type Result_3 = variant { Ok : record { Card; Card }; Err : text };
 type Result_4 = variant { Ok : ShuffleProof; Err : text };
@@ -225,8 +299,7 @@ service : (TableConfig) -> {
   admin_reinit_table : (TableConfig) -> (Result);
   // Admin: Get balance for a specific player (controller only, read-only)
   admin_get_balance : (principal) -> (Result_1) query;
-  // Admin: Restore balance for a player (TEMPORARY - for recovery only)
-  admin_restore_balance : (principal, nat64) -> (Result_1);
+  // REMOVED: admin_restore_balance - unnecessary attack surface
   // Admin: Get all balances (for auditing/recovery)
   // Returns (total_assigned, list of (principal, balance))
   admin_get_all_balances : () -> (variant { Ok : record { nat64; vec record { principal; nat64 } }; Err : text }) query;
@@ -244,10 +317,11 @@ service : (TableConfig) -> {
   // Deposit ICP to your escrow balance using ICRC-2 transfer_from
   // You must first approve this canister to spend your ICP via icrc2_approve
   deposit : (nat64) -> (Result_1);
-  // Deposit from an external wallet (like OISY) using ICRC-2 transfer_from
-  // The external wallet must first approve this canister, then pass their principal here
-  // Balance is credited to the caller's account (not the external wallet)
-  deposit_from_external : (principal, nat64) -> (Result_1);
+  // Claim funds sent to your unique deposit subaccount by an external wallet
+  // External wallets transfer to (canister_id, get_deposit_subaccount()), then call this to claim
+  claim_external_deposit : () -> (Result_1);
+  // Get your unique deposit subaccount for external wallet transfers
+  get_deposit_subaccount : () -> (vec nat8) query;
   // DEV ONLY: Get free test chips for local development
   // Disabled when dev_mode is false (production)
   dev_faucet : (nat64) -> (Result_1);
@@ -306,6 +380,16 @@ service : (TableConfig) -> {
   // Set the history canister ID (controller only)
   // Pass None to clear/disable history recording
   set_history_canister : (opt principal) -> (Result);
+  // Is the fairness record for this table reaching a durable archive?
+  // Public, unauthenticated, and sometimes the honest answer is "no".
+  get_history_status : () -> (HistoryStatus) query;
+  // How long a proof survives, and who can destroy it. Read this before you sit.
+  get_fairness_retention : () -> (FairnessRetention) query;
+  // Re-send every settled hand the archive has not acknowledged. Callable by
+  // any non-anonymous principal on purpose: the party with the strongest
+  // interest in the proof surviving is the player, not the operator.
+  // Returns how many records this call sent.
+  flush_unrecorded_hands : () -> (Result_1);
   // Voluntarily show your hole cards to the table
   // Only allowed after you've folded or at the end of the hand
   show_cards : () -> (Result_3);
@@ -319,9 +403,30 @@ service : (TableConfig) -> {
   // Use time bank to extend action time
   // Returns remaining time bank seconds
   use_time_bank : () -> (Result_1);
+  // Check a commit-reveal pair and say WHICH check failed. Arguments are a
+  // record, so there is no order to get wrong; the answer names the fault and
+  // carries both hashes. Use this one.
+  check_shuffle_commitment : (CommitmentCheckArgs) -> (CommitmentCheck) query;
+  // DEPRECATED, kept so an existing caller is not handed a false accusation.
+  // Now answers the same question in EITHER argument order, so `false` can no
+  // longer mean "you called it backwards". It still cannot tell a malformed
+  // argument from a broken proof; `check_shuffle_commitment` can.
   verify_shuffle : (text, text) -> (bool) query;
-  // Withdraw your balance from the table
+  // Withdraw your balance from the table.
+  // Refuses while you are in a hand THAT CAN STILL PROGRESS. Once the hand is
+  // stuck (see get_stuck_hand_status) it does not refuse: a withdrawal pays out
+  // of escrow and cannot touch the pot.
   withdraw : (nat64) -> (Result_1);
+  // Is this table holding a hand that no message can move, and can it be ended?
+  // A query, so it answers even when every update on the settlement path fails.
+  get_stuck_hand_status : () -> (StuckHandStatus) query;
+  // End a hand that no message can move and give every stake back to the player
+  // who put it in. Anybody may call it; it refuses unless the hand's action clock
+  // has been expired for 5 minutes, or the hand has no clock at all. Nobody wins:
+  // the only outcome it can produce is "everyone gets their own money back", so
+  // there is nothing to gain by forcing it.
+  // docs/SECURITY-FINDINGS.md FINDING 15.
+  abandon_stuck_hand : () -> (Result_1);
   // Get a BTC deposit address for native Bitcoin deposits
   // Users can send real BTC to this address, then call update_btc_balance
   // Only available for BTC tables

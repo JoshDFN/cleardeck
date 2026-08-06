@@ -332,14 +332,116 @@ up_deploy() {
   jq -r 'to_entries[] | "      \(.key)  \(.value)"' "$f"
 }
 
-up_wire() {
-  local history_id t principal count
-  history_id="$(local_id history)"
-  for t in "${TABLE_CANISTERS[@]}"; do
-    icp_local canister call "$t" set_history_canister \
-      "(opt principal \"$history_id\")" --identity "$CONTROLLER" >/dev/null
-    info "$t -> history $history_id"
+# `icp canister call` EXITS ZERO when the method returns `variant { Err = ... }`.
+# The Candid Result is a value, not a transport failure, so `cmd >/dev/null ||
+# die` cannot see a refusal. Every controller-only call in this file went through
+# that hole. Route them here instead: the reply is read, an `Err` is fatal, and
+# the message the canister actually gave is printed.
+call_or_die() {
+  local what="$1"; shift
+  local out
+  if ! out="$("$@" 2>&1)"; then
+    die "$what: the call itself failed
+      $out"
+  fi
+  case "$out" in
+    *"variant { Err"*|*"Err ="*)
+      die "$what: the canister REFUSED it (exit status was still 0)
+      $out" ;;
+  esac
+  printf '%s' "$out"
+}
+
+# Which local identity actually controls $1.
+#
+# `$CONTROLLER` is a documented claim, and on this machine it was false: the
+# backend was deployed by the default identity, so every
+# `--identity cd-local-deployer` controller call returned
+# `Err("Unauthorized: controller access required")` and exited 0. Resolve it
+# from the canister instead of asserting it. `icp identity list` prints
+# name and principal on one line, so one call maps them all.
+resolve_controller_identity() {
+  local canister="$1" controllers name principal
+  controllers="$(icp_local canister status "$canister" 2>/dev/null \
+                 | awk -F': ' '/^[[:space:]]*Controllers:/ {print $2}')"
+  [ -n "$controllers" ] || return 1
+  # Prefer the documented identity when it really is a controller.
+  for name in "$CONTROLLER" $(icp identity list 2>/dev/null \
+                              | sed 's/^\*\{0,1\}[[:space:]]*//' | awk 'NF>=2 {print $1}'); do
+    principal="$(icp identity principal --identity "$name" 2>/dev/null)" || continue
+    case " $controllers " in
+      *" $principal "*) printf '%s' "$name"; return 0 ;;
+    esac
   done
+  return 1
+}
+
+# Wiring the archive is TWO calls in opposite directions, and shipping only one
+# of them is invisible until somebody looks for a hand from last week.
+#
+# The table needs `set_history_canister` so it knows where to send. The archive
+# needs `authorize_table` so it will accept what arrives. This function used to
+# make only the first call, as an identity that is not a controller, discarding
+# stdout and never reading the `Err` in the reply. It then printed
+# "table_1 -> history <id>" and returned success. The result held for the whole
+# of wave 5: every table pointed nowhere, the archive was authorised for no
+# tables, `record_hand` had never once been accepted, and `get_total_hands`
+# returned 0 while the README called the archive "permanent hand history"
+# (docs/DEFECTS.md T-34).
+#
+# So: the controller is resolved, not assumed; both directions are called; every
+# reply is read; and the wiring is CHECKED by reading it back off both canisters
+# afterwards. A silent archive is worth less than no archive, because no archive
+# does not claim to be one.
+up_wire() {
+  local history_id t principal count table_principal authorized ctl
+  history_id="$(local_id history)"
+
+  ctl="$(resolve_controller_identity table_1)" \
+    || die "no local icp identity controls table_1, so the archive cannot be wired. \
+Controllers: $(icp_local canister status table_1 2>/dev/null | awk -F': ' '/Controllers:/{print $2}')"
+  if [ "$ctl" != "$CONTROLLER" ]; then
+    warn "the controller is '$ctl', NOT the documented '$CONTROLLER'. Using '$ctl'."
+  fi
+
+  for t in "${TABLE_CANISTERS[@]}"; do
+    table_principal="$(local_id "$t")"
+    call_or_die "$t set_history_canister" \
+      icp_local canister call "$t" set_history_canister \
+        "(opt principal \"$history_id\")" --identity "$ctl" >/dev/null
+    call_or_die "history authorize_table($t)" \
+      icp_local canister call history authorize_table \
+        "(principal \"$table_principal\")" --identity "$ctl" >/dev/null
+    info "$t ($table_principal) <-> history $history_id"
+  done
+
+  # Postconditions, read back off the canisters. A call that returned Ok is not
+  # the same fact as the wiring being in place.
+  for t in "${TABLE_CANISTERS[@]}"; do
+    icp_local canister call "$t" get_history_canister '()' --query \
+      | grep -qF "$history_id" \
+      || die "$t get_history_canister does not report $history_id after wiring"
+  done
+  authorized="$(icp_local canister call history get_authorized_tables '()' --query)"
+  for t in "${TABLE_CANISTERS[@]}"; do
+    table_principal="$(local_id "$t")"
+    printf '%s' "$authorized" | grep -qF "$table_principal" \
+      || die "history does not list $t ($table_principal) as authorised after wiring"
+  done
+  ok "archive wired both ways and verified: ${#TABLE_CANISTERS[@]} table(s) <-> history $history_id"
+
+  # Hands that settled while the archive was unreachable are still held by the
+  # tables. Push them now, so bringing the stack up repairs the record instead
+  # of only fixing it going forward.
+  for t in "${TABLE_CANISTERS[@]}"; do
+    icp_local canister call "$t" flush_unrecorded_hands '()' --identity "$ctl" >/dev/null 2>&1 || true
+  done
+
+  # The lobby wiring below is left exactly as it was, including its use of
+  # $CONTROLLER and its `|| warn`. The same blind spot applies to it -- an
+  # Err in the reply still exits 0 -- but the lobby is another agent's file
+  # this wave and a silent behaviour change here would be worse than a
+  # documented one. Filed in docs/DEFECTS.md.
   principal="$(icp identity principal --identity "$CONTROLLER")"
   icp_local canister call lobby set_admin "(principal \"$principal\")" \
     --identity "$CONTROLLER" >/dev/null || warn "lobby set_admin non-zero (already set?)"

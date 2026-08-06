@@ -17,12 +17,22 @@ not in your verifier. Report it.
 
 | | |
 |---|---|
-| **Proven** | The 52-card order was fixed before any card was seen, and the cards you were dealt follow from the seed the table committed to. |
-| **Proven** | Nobody chose the deck after seeing hole cards: the commitment `SHA256(seed)` is published before the deal and the seed is revealed only when the hand ends. |
+| **Proven** | **The whole 52-card order was fixed before the board was shown.** Record the commitment while a hand is in progress and only the flop exists, then predict the turn and the river from the seed revealed at the end: they come out right, and so do the hole cards of a seat that folded and never showed them. |
+| **Proven** | The cards you were dealt follow from the seed the table committed to. Change any one card, at any position, and `SHA256(seed)` stops matching the commitment. |
+| **NOT proven** | **That the commitment existed before the cards did.** `start_new_hand` commits and deals in a single message, so no outsider can observe the commitment before cards exist. The row above is what a stranger can actually check, and it is the honest version of the claim. |
 | **NOT proven** | That the seed was unpredictable. The seed comes from the Internet Computer's `raw_rand`, and you are trusting the subnet's randomness, not arithmetic. |
 | **NOT proven** | That the money went to the right player. That is settlement, a separate question. |
 
 A verifier that reproduces the cards has checked the shuffle. It has **not** audited ClearDeck.
+
+> **On the wording.** This section used to read *"the commitment `SHA256(seed)` is published before
+> the deal"*. An independent auditor, working only from this document and a running canister,
+> reproduced three hands exactly and then said that sentence claims more than anyone outside the
+> canister can witness, because the commit and the deal are one message. It is correct.
+> [DEFECTS.md D-06](DEFECTS.md#d-06). What the auditor *did* prove is the first row, and that is
+> what this document now claims. You can witness the ordering yourself, without trusting us: copy
+> the commitment off the screen while a hand is still running, and check it against the one shown
+> after the seed is revealed.
 
 ## 1. Inputs
 
@@ -30,18 +40,30 @@ For each hand, the table canister publishes a `ShuffleProof`:
 
 | field | type | meaning |
 |---|---|---|
-| `seed_hash` | lowercase hex string, 64 chars | `SHA256(seed)`, published **before** the deal |
+| `seed_hash` | lowercase hex string, 64 chars | `SHA256(seed)`, on screen from the moment the first card is dealt |
 | `revealed_seed` | lowercase hex string, or absent | the `seed` bytes, published **after** the hand ends |
-| `timestamp` | nanoseconds since the Unix epoch | when the hand started |
+| `timestamp` | nanoseconds since the Unix epoch | when the hand started, according to the canister |
 
 `seed` is 32 bytes obtained from the Internet Computer management canister's `raw_rand`. The
 algorithm below accepts a seed of **any** byte length, and the test vectors deliberately include
 short seeds, but a live hand always uses 32 bytes.
 
-**Step 0 of any verification:** check `SHA256(revealed_seed) == seed_hash`, byte for byte. If that
-fails, stop: the table revealed a seed it did not commit to. (This check alone is *not* a
-verification of the shuffle. It is what the canister's own `verify_shuffle` query does, and it only
-proves the canister can hash.)
+**Step 0 of any verification:** check `SHA256(revealed_seed) == seed_hash`, byte for byte, **on your
+own machine**. If that fails, stop: the table revealed a seed it did not commit to.
+
+This check alone is *not* a verification of the shuffle, and asking the canister to do it for you is
+not a verification of anything at all. The table exposes
+`check_shuffle_commitment : (record { seed_hash : text; revealed_seed : text }) -> (CommitmentCheck)`
+and the archive exposes `check_recorded_hand : (nat64) -> (RecordedHandCheck)`; both re-hash the same
+32 bytes and both say so in their own reply, in a `this_does_not_prove` field. They exist so a
+mistake reads as a mistake — the answer names which field was malformed, or that the two values were
+put in each other's fields, instead of returning a bare `false` that a player reads as "I was
+cheated". They are not part of the verification, and nothing in sections 2 to 5 needs them.
+
+> The table's old `verify_shuffle : (text, text) -> (bool)` returned `false` for a genuine proof
+> passed in the natural reading order, with no parameter names on the wire to say which string was
+> which ([DEFECTS.md E-44](DEFECTS.md#e-44)). It is still there, still deprecated, and now answers
+> in either order so it cannot manufacture an accusation; prefer `check_shuffle_commitment`.
 
 ## 2. Deck construction
 
@@ -263,6 +285,32 @@ node    src/poker_core/tests/verify/verify_shuffle.mjs --vectors src/poker_core/
 They are deliberately *not* built from `poker_core`: an independent reimplementation is the only
 thing that can catch a specification which does not match the code.
 
+## 6a. How long the proof survives, and who can destroy it
+
+A fairness guarantee you cannot re-check tomorrow is not a fairness guarantee. So, precisely:
+
+| where the proof lives | how long | who can destroy it |
+|---|---|---|
+| the **table canister**, `get_hand_history(hand_number)` | the **last 100 hands**. `periodic_cleanup` drains the excess; heads-up that is under an hour of play | any **controller of the table**, in one call: `reset_table` erases all 100 at once. `admin_reinit_table` does the same |
+| the **archive canister** (`history`), `get_hand(hand_id)` | **for the life of the canister.** No method deletes, prunes, edits or expires a record, and there is no cap. Re-sending a hand already stored returns the existing id instead of writing a second copy | any **controller of the archive**, by reinstalling or deleting the canister itself. No application code can prevent that. The archive's `admin` cannot remove a record, but can admit a new writer with `authorize_table` |
+| **your own machine** | as long as you keep it | you |
+
+Both canisters state this themselves, so the paragraph above is checkable rather than believable:
+
+```
+icp canister call table_1 get_fairness_retention   # the table's copy, and its cap
+icp canister call history get_retention_policy     # the archive's copy, and its admin
+icp canister call table_1 get_history_status       # is archiving actually working RIGHT NOW
+```
+
+`get_history_status` matters more than it looks. Through wave 5 the archive was deployed, authorised
+for no tables and holding zero records; every `record_hand` was rejected and the only report was an
+`ic_cdk::println!` nobody can read ([DEFECTS.md T-34](DEFECTS.md#t-34)). A table now counts both
+outcomes, keeps the last error verbatim, and holds every un-archived hand for retry, which any
+non-anonymous caller can push with `flush_unrecorded_hands`. If `history_canister` is `null`, or
+`unrecorded_backlog` is not zero, **nothing durable is being written and you should copy the seed
+hash off your own screen.**
+
 ## 7. How this is tested
 
 | test | what it pins |
@@ -273,9 +321,13 @@ thing that can catch a specification which does not match the code.
 | `.github/workflows/ci.yml` job `wasm32-tests` | runs the wasm32 replay on every push and pull request |
 | `src/poker_core/tests/verify/*`, driven by `wasm32_golden.rs::outsider_reimplementations_reproduce_the_vectors` | the Python and JavaScript verifiers replaying all 2,000 vectors, so THIS DOCUMENT drifting from the code is a test failure |
 | the proof of the fix (2026-08-04) | two hands dealt on the real canister wasm under PocketIC, then reproduced — hole cards and full board — from the revealed seed alone by both outsider verifiers. The pre-fix arithmetic reproduces 0 of 9 and 0 of 11 of those cards |
+| `table_canister::commitment_check_tests` (host) | that **no honest caller can get an accusation out of `check_shuffle_commitment` by making a mistake**: the documented placement, the transposed placement, upper case, surrounding whitespace, a truncated paste, a principal in the hash field, an empty field and a genuine cross-hand mismatch each get the arm that names what happened, and both matching arms still carry their own `this_does_not_prove` |
+| `history_canister::retention_tests` (host) | that a re-sent hand is stored **once**, that a hand reusing a number after `reset_table` is **still stored** (the failure mode that silently destroys proofs, [DEFECTS.md E-49](DEFECTS.md#e-49)), and that 250 consecutive writes never shrink the archive |
+| the durability run (2026-08-05) | 101 real hands on a local table: all 101 acknowledged by the archive, then the table's copy destroyed twice over — pruned to 100 by `periodic_cleanup` and then wiped entirely by `reset_table` — with hand 1 still readable from the archive and still verifying against `shasum` off-chain |
 
 ## 8. Version history
 
 | version | date | change |
 |---|---|---|
 | v1 | 2026-08-04 | First specification. Width-independent draw plus the rejection rule; golden vectors regenerated by wasm32 execution. Supersedes the undocumented pre-`ceacc37` behaviour, which truncated the draw to 32 bits on-chain and could not be reproduced by anyone. No hand had ever been dealt on mainnet, so no history was invalidated. |
+| v1 | 2026-08-05 | **No change to the algorithm**, so every vector and every hand already dealt is unaffected. Documentation only: section 0 now claims what an outsider can check ("the whole 52-card order was fixed before the board was shown") and files the ordering claim under NOT proven; section 1's step 0 describes `check_shuffle_commitment` and why asking the canister proves nothing; section 6a states how long a proof survives and who can destroy it. |

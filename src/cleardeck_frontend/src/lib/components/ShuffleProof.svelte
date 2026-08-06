@@ -13,9 +13,28 @@
   // revealed seed and shows the player their OWN two cards and the board coming
   // out of it at the positions the dealing rule predicts.
   //
-  // The canister's `verify_shuffle` is still called, but only inside "Show the
-  // work", explicitly labelled as proving nothing. Its answer is never allowed
-  // to influence the verdict.
+  // The canister's own commitment check is still called, but only inside "Show
+  // the work", explicitly labelled as proving nothing. Its answer is never
+  // allowed to influence the verdict.
+  //
+  // Two things changed after the wave-5 audit.
+  //
+  //  1. The endpoint it calls is now `check_shuffle_commitment`, which takes a
+  //     RECORD and answers with a named variant. The old
+  //     `verify_shuffle(text, text) -> bool` returned `false` for a genuine
+  //     proof passed in the natural reading order, and a bare bool cannot tell
+  //     "you called it backwards" from "you were cheated"
+  //     (docs/DEFECTS.md E-44). This panel always passed them the right way
+  //     round, so it never saw the trap; the person who did was the player
+  //     calling the canister directly, and they are the one who is already
+  //     suspicious.
+  //
+  //  2. The panel now states HOW LONG the proof survives and WHO CAN DESTROY
+  //     IT, read live off the canister rather than asserted here. That question
+  //     had no answer anywhere in the product: the archive canister was
+  //     deployed, authorised for no tables and empty, so every proof lived only
+  //     in the table's 100-hand ring, prunable and erasable by one admin call
+  //     (docs/DEFECTS.md T-34).
 
   import Card from './Card.svelte';
   import logger from '$lib/logger.js';
@@ -31,6 +50,24 @@
   let showWork = $state(false);
   let showLimits = $state(false);
   let houseEcho = $state(null);       // the canister's own answer; decorative only
+  let retention = $state(null);       // how long this proof lasts, read off the chain
+
+  // `tableActor` is `createTableActorProxy(...)`: a Proxy that builds a real
+  // actor per call. It is NOT an Actor instance, so `Actor.agentOf` on it
+  // yields nothing and a hand-built side-actor is not an option -- an earlier
+  // attempt at exactly that failed silently and the retention block below
+  // rendered "Unknown" on the rendered page, which the screenshot harness
+  // caught. The endpoints are declared in
+  // `src/declarations/table_1/table_1.did.js` instead, so the Proxy can reach
+  // them like every other method.
+  //
+  // A method can still be absent, because a table canister may be older than
+  // its declarations. `canAsk` only proves there is an actor to ask -- the
+  // Proxy answers `typeof === 'function'` for every property, including ones
+  // that do not exist -- so the real handling of an older canister is the
+  // rejected call caught below. Both paths degrade to "unknown", which is the
+  // honest thing for a durability claim to say when it cannot check itself.
+  const canAsk = (method) => typeof tableActor?.[method] === 'function';
 
   /** Candid `opt T` arrives as [] or [value]; some paths hand us the value. */
   function opt(value) {
@@ -190,38 +227,110 @@
       phase = 'failed';
     }
 
-    askTheHouse(); // deliberately last, deliberately not awaited into the verdict
+    askTheHouse();    // deliberately last, deliberately not awaited into the verdict
+    readRetention();  // same: a durability answer must never gate the arithmetic
   }
 
   /**
-   * Asks the table canister its own `verify_shuffle`. This proves NOTHING —
+   * Asks the table canister its own commitment check. This proves NOTHING —
    * it is the accused re-hashing its own evidence — and is shown only so the
    * player can see the difference between that and the check above.
+   *
+   * It is asked TWICE, once with the two values in the fields named for them
+   * and once with them transposed, and both answers are shown. That is not
+   * decoration: the endpoint this replaced answered "false" to the second
+   * question, and a player who read that as an accusation would have been
+   * reading a typo (docs/DEFECTS.md E-44).
    */
   async function askTheHouse() {
-    if (!tableActor || !proof?.seed_hash || !revealedSeed) return;
-    houseEcho = { state: 'asking', value: null };
+    if (!proof?.seed_hash || !revealedSeed) return;
+    if (!canAsk('check_shuffle_commitment')) return;
+    houseEcho = { state: 'asking', straight: null, swapped: null };
     try {
-      const answer = await withDeadline(
-        tableActor.verify_shuffle(proof.seed_hash, revealedSeed),
+      const [straight, swapped] = await withDeadline(
+        Promise.all([
+          tableActor.check_shuffle_commitment({
+            seed_hash: proof.seed_hash,
+            revealed_seed: revealedSeed,
+          }),
+          tableActor.check_shuffle_commitment({
+            seed_hash: revealedSeed,
+            revealed_seed: proof.seed_hash,
+          }),
+        ]),
         8000,
-        'timeout',
+        ['timeout', 'timeout'],
       );
-      if (answer === 'timeout') {
-        houseEcho = { state: 'unreachable', value: null };
+      if (straight === 'timeout') {
+        houseEcho = { state: 'unreachable', straight: null, swapped: null };
         return;
       }
-      houseEcho = { state: 'answered', value: answer === true };
+      houseEcho = {
+        state: 'answered',
+        straight: Object.keys(straight ?? {})[0] ?? null,
+        swapped: Object.keys(swapped ?? {})[0] ?? null,
+      };
     } catch (e) {
       logger.debug('ShuffleProof: canister echo unavailable', e);
-      houseEcho = { state: 'unreachable', value: null };
+      houseEcho = { state: 'unreachable', straight: null, swapped: null };
     }
   }
+
+  /**
+   * How long this proof survives, and who can destroy it. Read off the table
+   * canister so the sentence on screen is the canister's own answer and not a
+   * promise this file makes on its behalf.
+   */
+  async function readRetention() {
+    if (!canAsk('get_fairness_retention') || !canAsk('get_history_status')) {
+      retention = { state: 'unknown' };
+      return;
+    }
+    try {
+      const [policy, status] = await withDeadline(
+        Promise.all([tableActor.get_fairness_retention(), tableActor.get_history_status()]),
+        8000,
+        ['timeout', 'timeout'],
+      );
+      if (policy === 'timeout') {
+        retention = { state: 'unknown' };
+        return;
+      }
+      const archive = opt(policy.archive_canister);
+      retention = {
+        state: 'known',
+        cap: Number(policy.table_keeps_last_n_hands),
+        archive: archive ? archive.toText() : null,
+        backlog: Number(status.unrecorded_backlog ?? 0n),
+        dropped: Number(status.unrecorded_dropped ?? 0n),
+        failed: Number(status.failed_since_start ?? 0n),
+        recorded: Number(status.recorded_ok_since_start ?? 0n),
+      };
+    } catch (e) {
+      logger.debug('ShuffleProof: retention unavailable', e);
+      retention = { state: 'unknown' };
+    }
+  }
+
+  /** True only when a durable copy is configured AND nothing is stuck. */
+  const archiving = $derived(
+    retention?.state === 'known' && !!retention.archive && retention.backlog === 0,
+  );
 
   // Deliberately a plain variable, NOT $state: the effect must not take a
   // dependency on it, or writing `phase`/`report` from runVerification() would
   // retrigger the effect and re-verify forever.
   let verifiedKey = '';
+  let retentionAsked = false;
+
+  // The retention answer does not depend on the hand, and a player is entitled
+  // to it BEFORE a seed is revealed, so it is read on its own as soon as there
+  // is an actor to ask.
+  $effect(() => {
+    if (!tableActor || retentionAsked) return;
+    retentionAsked = true;
+    readRetention();
+  });
 
   $effect(() => {
     const hash = proof?.seed_hash;
@@ -312,16 +421,22 @@
       <p>The fairness proof appears as soon as cards are dealt.</p>
     </div>
   {:else}
-    <!-- STEP 1 — the commitment, published before any card existed -->
+    <!-- STEP 1 — the commitment. Deliberately NOT "published before the deal":
+         start_new_hand commits and deals in one message, so no outsider can
+         watch the commitment appear before cards exist. What IS provable is
+         that the whole 52-card order was fixed before the board was shown, and
+         that is what this rung claims. docs/DEFECTS.md D-06. -->
     <ol class="ladder">
       <li class="rung done">
         <div class="rung-mark">1</div>
         <div class="rung-body">
-          <h4>Before the deal, the table locked in a hash</h4>
+          <h4>The whole deck was fixed before the board came out</h4>
           <p class="rung-note">
-            The table says it published this at {formatTimestamp(proof.timestamp)}. That timestamp is the
-            canister's own word and is the one thing on this panel you have to take on trust; everything
-            below is checked here. Once the hash is out, the deck behind it cannot be changed.
+            This hash has been on screen since the first card was dealt, and it fixes all 52 positions:
+            the turn and the river were already decided while you were looking at the flop.
+            The table says it published it at {formatTimestamp(proof.timestamp)}; that timestamp is the
+            canister's own word and is the one thing on this panel you have to take on trust. Everything
+            below is checked here.
           </p>
           <div class="proof-item">
             <span class="label">SHA-256 commitment</span>
@@ -526,6 +641,47 @@
     {/if}
 
     <!-- ------------------------------------------------------------- -->
+    <!-- How long this proof lasts, and who can take it away.           -->
+    <!-- Read live off the canister. Not behind a toggle: a fairness    -->
+    <!-- guarantee you cannot re-check tomorrow is not a guarantee, and -->
+    <!-- the player should not have to go looking for that sentence.    -->
+    <!-- ------------------------------------------------------------- -->
+    <div class="retention" class:warn={retention?.state === 'known' && !archiving} class:unknown={retention?.state !== 'known'}>
+      <span class="retention-head">How long this proof survives</span>
+      {#if retention?.state === 'known' && archiving}
+        <p>
+          This table keeps only its <strong>last {retention.cap} hands</strong>, and any controller of
+          the table can erase all of them with one call. Every settled hand is also written to a separate
+          archive canister, <code>{retention.archive}</code>, which has no method that deletes, prunes or
+          edits a record. A hand recorded there is permanent for the life of that canister.
+        </p>
+        <p class="retention-catch">
+          <strong>What can still destroy it:</strong> a controller of that archive canister, by
+          reinstalling or deleting the canister itself. No code can prevent that. If you want a copy
+          nobody else can take away, copy the seed and the hash above and keep them.
+        </p>
+      {:else if retention?.state === 'known'}
+        <p class="retention-bad">
+          {#if !retention.archive}
+            <strong>No archive is configured on this table.</strong> The only copy of this proof is the
+            last {retention.cap} hands held in the table canister. Older hands are already gone, and one
+            controller call erases the rest.
+          {:else}
+            <strong>{retention.backlog} settled hand(s) have not reached the archive.</strong> Until they
+            do, those proofs exist only in the table's {retention.cap}-hand ring.
+          {/if}
+          Copy the seed and the hash above now if you may want to re-check this hand later.
+        </p>
+      {:else}
+        <p class="retention-bad">
+          <strong>Unknown.</strong> This page could not get a durability answer out of the table, so
+          assume the proof survives only inside the table's own capped ring of recent hands, which one
+          controller call erases. Copy the seed and the hash above.
+        </p>
+      {/if}
+    </div>
+
+    <!-- ------------------------------------------------------------- -->
     <!-- Show the work                                                  -->
     <!-- ------------------------------------------------------------- -->
     {#if report?.layout}
@@ -580,15 +736,15 @@
             <h5>What the table's own verifier says</h5>
             <div class="house-echo">
               <p class="work-note">
-                The table canister exposes a <code>verify_shuffle</code> query. It recomputes the same
-                SHA-256 and answers true. <strong>That answer is worth nothing</strong>: it is the house
-                checking its own homework, on the house's machine, and it never touches a card. It is shown
-                here only so the difference is visible. Nothing above depends on it.
+                The table canister exposes a <code>check_shuffle_commitment</code> query. It recomputes the
+                same SHA-256 and answers <code>Match</code>. <strong>That answer is worth nothing</strong>:
+                it is the house checking its own homework, on the house's machine, and it never touches a
+                card. It is shown here only so the difference is visible. Nothing above depends on it.
               </p>
               <div class="echo-row">
-                <span class="echo-label">canister verify_shuffle</span>
+                <span class="echo-label">seed_hash = hash, revealed_seed = seed</span>
                 {#if houseEcho?.state === 'answered'}
-                  <span class="echo-value">{String(houseEcho.value)} — proves only that the canister can hash</span>
+                  <span class="echo-value">{houseEcho.straight} — proves only that the canister can hash</span>
                 {:else if houseEcho?.state === 'unreachable'}
                   <span class="echo-value muted">unreachable — and the check above still passed without it</span>
                 {:else if houseEcho?.state === 'asking'}
@@ -597,6 +753,20 @@
                   <span class="echo-value muted">not asked</span>
                 {/if}
               </div>
+              <div class="echo-row">
+                <span class="echo-label">the two values transposed</span>
+                {#if houseEcho?.state === 'answered'}
+                  <span class="echo-value">{houseEcho.swapped} — the same proof, and it says so</span>
+                {:else}
+                  <span class="echo-value muted">—</span>
+                {/if}
+              </div>
+              <p class="work-note echo-history">
+                Both rows are here on purpose. The endpoint this replaced took two unnamed hex strings and
+                returned a bare <code>true</code>/<code>false</code>, so passing them the way a reader
+                naturally would got you <code>false</code> for a perfectly good proof, and
+                <em>"you called it backwards"</em> and <em>"you were cheated"</em> were the same answer.
+              </p>
             </div>
           </div>
         {/if}
@@ -690,9 +860,11 @@
         <div class="limits">
           <div class="limit proven">
             <span class="limit-tag">Proven</span>
-            <p>The cards you were dealt follow from the seed the table committed to. That seed fixes all 52
-              positions, and every card you saw this hand sits exactly where it puts one. Checked here, on
-              your machine, from the cards on your screen.</p>
+            <p><strong>The whole 52-card order was fixed before the board was shown.</strong> The cards you
+              were dealt follow from the seed the table committed to; that seed fixes all 52 positions, and
+              every card you saw this hand sits exactly where it puts one. Checked here, on your machine,
+              from the cards on your screen. Copy the hash while a hand is still running and you can
+              predict the turn and the river from the seed revealed at the end.</p>
           </div>
           <div class="limit proven">
             <span class="limit-tag">Proven</span>
@@ -1204,6 +1376,41 @@
 
   .echo-value { font-size: 11px; color: #c4cbd8; }
   .echo-value.muted { color: #6b7280; font-style: italic; }
+  .echo-history { margin: 8px 0 0; }
+
+  /* Retention: on screen, never behind a toggle */
+  .retention {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: rgba(78, 205, 196, 0.06);
+    border: 1px solid rgba(78, 205, 196, 0.25);
+  }
+
+  .retention.warn, .retention.unknown {
+    background: rgba(241, 196, 15, 0.07);
+    border-color: rgba(241, 196, 15, 0.32);
+  }
+
+  .retention-head {
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: #4ecdc4;
+    margin-bottom: 7px;
+  }
+
+  .retention.warn .retention-head, .retention.unknown .retention-head { color: #f1c40f; }
+
+  .retention p { margin: 0 0 8px; font-size: 11.5px; line-height: 1.6; color: #a9b2c4; }
+  .retention p:last-child { margin-bottom: 0; }
+  .retention strong { color: #fff; }
+  .retention code { font-family: 'Monaco', 'Consolas', monospace; font-size: 10px; color: #4ecdc4; word-break: break-all; }
+  .retention-catch { color: #8b93a7; }
+  .retention-bad { color: #f1c40f; }
+  .retention-bad strong { color: #f5d547; }
 
   /* Verify elsewhere */
   .manual-verify { margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.08); }

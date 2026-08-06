@@ -31,6 +31,24 @@ const AUTO_DEAL_DELAY_NS: u64 = 3_000_000_000;
 const RELOAD_TIMEOUT_SECS: u64 = 60;
 const SITTING_OUT_KICK_SECS: u64 = 120; // Auto-kick sitting out players after 2 minutes
 
+/// How long a seat may go without a heartbeat before it is SHOWN as disconnected.
+///
+/// This number no longer decides anything about money. Before the E-32 fix it did:
+/// a seat that crossed it was dropped out of the betting round while staying
+/// eligible for the pot, so 30 seconds of a flaky connection either handed a
+/// cheater a free showdown or took an honest player's hand off them. Participation
+/// is now decided by [`is_in_hand`], and the only clock that can fold anybody is
+/// the ACTION clock (`TableConfig::action_timeout_secs`, plus the seat's time
+/// bank), which is the clock a player can actually see running.
+///
+/// What is left for it to do is cosmetic and slow: the "disconnected" badge in the
+/// UI, exclusion from the NEXT deal (a seat that is not there does not get cards),
+/// and the start of the [`SITTING_OUT_KICK_SECS`] clock that eventually frees the
+/// chair and returns the stack to escrow. 30 seconds was mean for all three -- a
+/// tab reload can cost that -- so it is 90, giving a real disconnection 90 + 120 =
+/// 3 and a half minutes before its seat is given away.
+const DISCONNECT_TIMEOUT_SECS: u64 = 90;
+
 // ICP Ledger canister ID (mainnet)
 const ICP_LEDGER_CANISTER: &str = "ryjl3-tyaaa-aaaaa-aaaba-cai";
 const ICP_TRANSFER_FEE: u64 = 10_000; // 0.0001 ICP
@@ -742,6 +760,101 @@ mod history_types {
 
 use history_types::*;
 
+// ---------------------------------------------------------------------------
+// Whether the archive is actually receiving anything
+// ---------------------------------------------------------------------------
+//
+// `record_hand_to_history` was fire-and-forget with an `ic_cdk::println!` on
+// every failure path, and canister stdout is not a thing a player can read. An
+// independent auditor found the consequence: the history canister was deployed,
+// authorised for NO tables and holding ZERO records, every `record_hand` call
+// had been rejected as unauthorised, and nothing anywhere said so
+// (docs/DEFECTS.md T-34). The table looked healthy the whole time.
+//
+// So: count both outcomes, keep the last error, and keep the records that did
+// not land so they can be sent again once the wiring is fixed. All of it is
+// readable with one query, `get_history_status`, by anybody.
+
+/// How many un-archived hands the table will hold onto for a later retry.
+/// Bounded because this lives in the heap of a canister that holds funds.
+const MAX_UNRECORDED_HANDS: usize = 64;
+
+/// How many backlog records one `flush_unrecorded_hands` call will send.
+const MAX_FLUSH_BATCH: usize = 16;
+
+/// Minimum gap between flushes, table-wide.
+///
+/// `flush_unrecorded_hands` is open to any player on purpose, and each call can
+/// fan out to MAX_FLUSH_BATCH inter-canister calls. With the archive down, a
+/// failed batch goes straight back into the backlog, so without a cooldown a
+/// caller could loop flush -> fail -> re-buffer -> flush and burn the cycles of
+/// a canister that custodies funds. The per-caller rate limiter does not bound
+/// this, because the cost is per CALL and the limiter is per caller. Ten
+/// seconds is nothing to somebody who wants their proof archived and everything
+/// to somebody trying to spend the table's cycles.
+const FLUSH_COOLDOWN_NS: u64 = 10_000_000_000;
+
+thread_local! {
+    // Deliberately NOT in PersistentState: these describe the current running
+    // instance, and `get_history_status` says so in its own field names.
+    static HISTORY_RECORDED_OK: RefCell<u64> = RefCell::new(0);
+    static HISTORY_FAILED: RefCell<u64> = RefCell::new(0);
+    static HISTORY_LAST_ERROR: RefCell<Option<String>> = RefCell::new(None);
+    static HISTORY_LAST_RECORDED_HAND: RefCell<Option<u64>> = RefCell::new(None);
+    static HISTORY_IN_FLIGHT: RefCell<u64> = RefCell::new(0);
+    /// Hands the archive has not acknowledged. Retryable via `flush_unrecorded_hands`.
+    static UNRECORDED_HANDS: RefCell<Vec<HandHistoryRecord>> = RefCell::new(Vec::new());
+    /// Hands dropped from the backlog because it was full. Never silent.
+    static UNRECORDED_DROPPED: RefCell<u64> = RefCell::new(0);
+    /// When the backlog was last flushed, for FLUSH_COOLDOWN_NS.
+    static LAST_FLUSH_AT: RefCell<u64> = RefCell::new(0);
+}
+
+/// Everything a player or a gate needs to know about whether the fairness
+/// record for this table is actually being archived anywhere durable.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct HistoryStatus {
+    /// The archive this table sends to. `null` means NOTHING IS BEING ARCHIVED
+    /// and every proof on this table is subject to the local cap below.
+    pub history_canister: Option<Principal>,
+    /// Hands the archive acknowledged since this instance last started.
+    pub recorded_ok_since_start: u64,
+    /// Hands the archive refused, or that failed to reach it, since start.
+    pub failed_since_start: u64,
+    /// Calls sent and not yet answered. A zero backlog with a non-zero value
+    /// here does not yet mean the records landed.
+    pub in_flight: u64,
+    /// Hands held for retry. Non-zero means the archive is behind.
+    pub unrecorded_backlog: u64,
+    /// Hands dropped because the backlog hit its cap. These are gone from here.
+    pub unrecorded_dropped: u64,
+    /// The hand number of the last acknowledged record.
+    pub last_recorded_hand: Option<u64>,
+    /// Verbatim last failure, so a wiring mistake reads as a wiring mistake.
+    pub last_error: Option<String>,
+    /// How many hands this table keeps locally before pruning the oldest.
+    pub local_history_cap: u64,
+    /// How many hands are in the local ring right now.
+    pub local_history_len: u64,
+}
+
+/// The retention rule, in machine-readable form, so the sentence in the UI and
+/// the sentence in the README can be checked against the canister rather than
+/// believed. A player is entitled to know how long the evidence lasts and who
+/// can destroy it BEFORE they sit down.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct FairnessRetention {
+    /// Hands kept in this table canister. The oldest is pruned past this.
+    pub table_keeps_last_n_hands: u64,
+    /// True: the table's own copy is erased by the controller-only
+    /// `reset_table` / `admin_reinit_table`, and pruned by `periodic_cleanup`.
+    pub table_copy_is_destructible_by_controller: bool,
+    /// Where the durable copy goes. `null` means there is no durable copy.
+    pub archive_canister: Option<Principal>,
+    /// Plain English, deliberately unflattering where the truth is unflattering.
+    pub summary: String,
+}
+
 /// Set the history canister ID (controller only)
 /// Pass None to clear/disable history recording
 #[ic_cdk::update]
@@ -757,6 +870,218 @@ fn set_history_canister(canister_id: Option<Principal>) -> Result<(), String> {
 #[ic_cdk::query]
 fn get_history_canister() -> Option<Principal> {
     HISTORY_ID.with(|h| *h.borrow())
+}
+
+/// Is the fairness record for this table reaching a durable archive?
+///
+/// Deliberately a public query with no auth: the person who needs this answer is
+/// the player, and the answer they need is sometimes "no".
+#[ic_cdk::query]
+fn get_history_status() -> HistoryStatus {
+    HistoryStatus {
+        history_canister: HISTORY_ID.with(|h| *h.borrow()),
+        recorded_ok_since_start: HISTORY_RECORDED_OK.with(|c| *c.borrow()),
+        failed_since_start: HISTORY_FAILED.with(|c| *c.borrow()),
+        in_flight: HISTORY_IN_FLIGHT.with(|c| *c.borrow()),
+        unrecorded_backlog: UNRECORDED_HANDS.with(|b| b.borrow().len() as u64),
+        unrecorded_dropped: UNRECORDED_DROPPED.with(|c| *c.borrow()),
+        last_recorded_hand: HISTORY_LAST_RECORDED_HAND.with(|h| *h.borrow()),
+        last_error: HISTORY_LAST_ERROR.with(|e| e.borrow().clone()),
+        local_history_cap: MAX_HAND_HISTORY_ENTRIES as u64,
+        local_history_len: HAND_HISTORY.with(|h| h.borrow().len() as u64),
+    }
+}
+
+/// How long a proof survives, and who can destroy it.
+#[ic_cdk::query]
+fn get_fairness_retention() -> FairnessRetention {
+    let archive = HISTORY_ID.with(|h| *h.borrow());
+    let summary = match archive {
+        Some(id) => format!(
+            "This table keeps the last {n} hands. Older ones are pruned by periodic_cleanup, and \
+             a controller of THIS canister can erase all of them at once with reset_table. Every \
+             settled hand is also written to the archive canister {id}, which has no method that \
+             deletes or edits a record: once a hand is acknowledged there it is permanent for the \
+             life of that canister. What can still destroy it is a controller of the ARCHIVE \
+             canister reinstalling or deleting the canister itself, which no application code can \
+             prevent. So: a proof survives locally for {n} hands, and in the archive until \
+             somebody with the archive's controller key takes it away. Check get_history_status \
+             on this table to see whether archiving is actually working right now.",
+            n = MAX_HAND_HISTORY_ENTRIES,
+            id = id,
+        ),
+        None => format!(
+            "NO ARCHIVE IS CONFIGURED ON THIS TABLE. The only copy of every shuffle proof is the \
+             last {n} hands held in this canister. Older hands are already gone, and a controller \
+             of this canister can erase the rest at once with reset_table. Do not rely on being \
+             able to re-check a hand later: copy the seed hash and the revealed seed yourself \
+             while the hand is on your screen.",
+            n = MAX_HAND_HISTORY_ENTRIES,
+        ),
+    };
+    FairnessRetention {
+        table_keeps_last_n_hands: MAX_HAND_HISTORY_ENTRIES as u64,
+        table_copy_is_destructible_by_controller: true,
+        archive_canister: archive,
+        summary,
+    }
+}
+
+/// Re-send every hand the archive has not acknowledged.
+///
+/// Callable by anyone who is not anonymous, on purpose. The backlog exists
+/// because the archive was unreachable or misconfigured, and the party with the
+/// strongest interest in the proof surviving is the player, not the operator.
+/// Rate-limited on the shared player limiter, and bounded per call.
+#[ic_cdk::update]
+fn flush_unrecorded_hands() -> Result<u64, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot flush the history backlog".to_string());
+    }
+    check_rate_limit()?;
+
+    let history_id = HISTORY_ID.with(|h| *h.borrow()).ok_or_else(|| {
+        "No history canister is configured on this table, so there is nowhere to flush to. \
+         A controller must call set_history_canister first."
+            .to_string()
+    })?;
+
+    // Nothing to send costs nothing to send, so an empty backlog does not claim
+    // the cooldown. Only a call that actually fans out is throttled.
+    if UNRECORDED_HANDS.with(|b| b.borrow().is_empty()) {
+        return Ok(0);
+    }
+
+    // Table-wide cooldown, checked and claimed before anything is drained.
+    let now = ic_cdk::api::time();
+    LAST_FLUSH_AT.with(|l| {
+        let last = *l.borrow();
+        if last != 0 && now < last + FLUSH_COOLDOWN_NS {
+            return Err(format!(
+                "A flush ran {}s ago. This table accepts one every {}s so a failing archive \
+                 cannot be turned into a way of burning its cycles. The backlog is not lost: \
+                 read get_history_status and try again.",
+                (now - last) / 1_000_000_000,
+                FLUSH_COOLDOWN_NS / 1_000_000_000,
+            ));
+        }
+        *l.borrow_mut() = now;
+        Ok(())
+    })?;
+
+    let batch: Vec<HandHistoryRecord> = UNRECORDED_HANDS.with(|b| {
+        let mut backlog = b.borrow_mut();
+        let take = backlog.len().min(MAX_FLUSH_BATCH);
+        backlog.drain(0..take).collect()
+    });
+
+    let sent = batch.len() as u64;
+    for record in batch {
+        dispatch_hand_to_history(history_id, record);
+    }
+    Ok(sent)
+}
+
+/// This canister's own principal, or a placeholder off-chain.
+///
+/// `ic_cdk::api::canister_self()` TRAPS outside a canister ("canister_self_size
+/// should only be called inside canisters"), and `payout_tests` drives real
+/// settlement in-process on the host. Before this pass `record_hand_to_history`
+/// returned early when no archive was configured, which is why the host never
+/// reached it; now every settled hand builds a record so an unwired table can
+/// still buffer it, so the host reaches it every time. Off-wasm there IS no
+/// canister identity, and the only place the placeholder can appear is a host
+/// test's in-memory backlog, which is never sent anywhere.
+fn self_principal() -> Principal {
+    #[cfg(target_arch = "wasm32")]
+    {
+        ic_cdk::api::canister_self()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Principal::anonymous()
+    }
+}
+
+/// Remember an acknowledged record.
+fn note_history_success(hand_number: u64) {
+    HISTORY_RECORDED_OK.with(|c| *c.borrow_mut() += 1);
+    HISTORY_LAST_RECORDED_HAND.with(|h| *h.borrow_mut() = Some(hand_number));
+}
+
+/// Remember a failure, keep the record, and never lose the reason.
+fn note_history_failure(message: String, record: HandHistoryRecord) {
+    ic_cdk::println!("HISTORY: {}", message);
+    HISTORY_FAILED.with(|c| *c.borrow_mut() += 1);
+    HISTORY_LAST_ERROR.with(|e| *e.borrow_mut() = Some(message));
+    UNRECORDED_HANDS.with(|b| {
+        let mut backlog = b.borrow_mut();
+        // Drop the OLDEST when full: a full backlog means the archive has been
+        // broken for a while, and the recent hands are the ones somebody is
+        // still able to check against their own screen.
+        while backlog.len() >= MAX_UNRECORDED_HANDS {
+            backlog.remove(0);
+            UNRECORDED_DROPPED.with(|d| *d.borrow_mut() += 1);
+        }
+        backlog.push(record);
+    });
+}
+
+/// Send one record and account for the outcome. Never traps, never blocks the
+/// hand: a hand that has settled has settled whether or not the archive is up.
+fn dispatch_hand_to_history(history_id: Principal, record: HandHistoryRecord) {
+    HISTORY_IN_FLIGHT.with(|c| *c.borrow_mut() += 1);
+    ic_cdk::futures::spawn(async move {
+        let hand_number = record.hand_number;
+        let retry_copy = record.clone();
+
+        let call_result = ic_cdk::call::Call::unbounded_wait(history_id, "record_hand")
+            .with_arg(record)
+            .await;
+
+        HISTORY_IN_FLIGHT.with(|c| {
+            let mut n = c.borrow_mut();
+            *n = n.saturating_sub(1);
+        });
+
+        match call_result {
+            // `Response::candid::<R>()` is `decode_one`, NOT a tuple decode. The
+            // original wiring asked it for `(Result<u64, String>,)`, i.e. a
+            // one-field RECORD wrapping the variant, which the archive never
+            // sends. So every write, including the ones the archive accepted and
+            // stored, came back "Failed to decode history response" -- the table
+            // could not observe its own successes. It was invisible because the
+            // only report was an `ic_cdk::println!`. Measured on the running
+            // replica: 3 hands played, `get_table_hand_count` on the archive said
+            // 3, and the table said 0 recorded / 3 failed.
+            Ok(response) => match response.candid::<Result<u64, String>>() {
+                Ok(Ok(_archive_id)) => note_history_success(hand_number),
+                Ok(Err(e)) => note_history_failure(
+                    format!(
+                        "hand {hand_number}: archive {history_id} REFUSED the record: {e}. \
+                         Held for retry."
+                    ),
+                    retry_copy,
+                ),
+                Err(e) => note_history_failure(
+                    format!(
+                        "hand {hand_number}: archive {history_id} answered in a shape this table \
+                         cannot decode ({e:?}). The two canisters disagree about record_hand's \
+                         interface. Held for retry."
+                    ),
+                    retry_copy,
+                ),
+            },
+            Err(e) => note_history_failure(
+                format!(
+                    "hand {hand_number}: the call to archive {history_id} failed ({e:?}). \
+                     Held for retry."
+                ),
+                retry_copy,
+            ),
+        }
+    });
 }
 
 /// Set a custom display name (visible to all players)
@@ -811,11 +1136,13 @@ fn get_display_name(principal: Principal) -> Option<String> {
 
 /// Record a completed hand to the history canister (fire and forget)
 fn record_hand_to_history(state: &TableState, winners: &[Winner], went_to_showdown: bool) {
-    let history_id = match HISTORY_ID.with(|h| *h.borrow()) {
-        Some(id) => id,
-        None => return, // No history canister configured, skip recording
-    };
-    let table_id = ic_cdk::api::canister_self();
+    // The record is built whether or not an archive is configured. An unwired
+    // table used to return here and leave no trace at all, which is how a table
+    // that had archived nothing for its whole life still looked healthy
+    // (docs/DEFECTS.md T-34). Now the hand goes into the retry backlog and
+    // `get_history_status` says why, so wiring the archive later recovers it.
+    let history_id = HISTORY_ID.with(|h| *h.borrow());
+    let table_id = self_principal();
 
     // Get the shuffle proof
     let shuffle_proof = match &state.shuffle_proof {
@@ -831,7 +1158,26 @@ fn record_hand_to_history(state: &TableState, winners: &[Winner], went_to_showdo
                 timestamp: proof.timestamp,
             }
         }
-        None => return, // No proof, don't record
+        None => {
+            // A settled hand always has a proof, because `start_new_hand` sets
+            // one before it deals. If that ever stops being true the hand is
+            // unarchivable and the player must be told, not left with a silent
+            // gap in the record. Counted, with the reason kept.
+            HISTORY_FAILED.with(|c| *c.borrow_mut() += 1);
+            HISTORY_LAST_ERROR.with(|e| {
+                *e.borrow_mut() = Some(format!(
+                    "hand {}: settled with NO shuffle proof, so there is nothing to archive and \
+                     this hand cannot be checked by anyone. This should be impossible; please \
+                     report it.",
+                    state.hand_number
+                ));
+            });
+            ic_cdk::println!(
+                "HISTORY: hand {} settled with no shuffle proof",
+                state.hand_number
+            );
+            return;
+        }
     };
 
     // Build player records
@@ -867,8 +1213,17 @@ fn record_hand_to_history(state: &TableState, winners: &[Winner], went_to_showdo
                     starting_chips: starting,
                     ending_chips: p.chips,
                     hole_cards: if show_cards { p.hole_cards } else { None },
+                    // `try_`, not `evaluate_hand`. This is a HISTORY FIELD. It ran
+                    // last on the settlement path and it could trap the whole
+                    // settlement -- rolling back a completed payout, leaving the
+                    // pot unpaid and the table unmovable -- to avoid writing one
+                    // `null` into an archive record. A hand the evaluator cannot
+                    // describe is recorded without a description.
+                    // docs/SECURITY-FINDINGS.md FINDING 15.
                     final_hand_rank: if show_cards {
-                        p.hole_cards.as_ref().map(|cards| evaluate_hand(cards, &state.community_cards))
+                        p.hole_cards.as_ref().and_then(|cards| {
+                            poker_core::try_evaluate_hand(cards, &state.community_cards).ok()
+                        })
                     } else {
                         None
                     },
@@ -949,32 +1304,22 @@ fn record_hand_to_history(state: &TableState, winners: &[Winner], went_to_showdo
         went_to_showdown,
     };
 
-    // Async call to history canister - best effort but log errors
-    ic_cdk::futures::spawn(async move {
-        let call_result = ic_cdk::call::Call::unbounded_wait(history_id, "record_hand")
-            .with_arg(record)
-            .await;
-
-        // Log errors for debugging but don't fail the hand
-        match call_result {
-            Ok(response) => {
-                match response.candid::<(Result<u64, String>,)>() {
-                    Ok((Ok(_hand_id),)) => {
-                        // Success - history recorded
-                    }
-                    Ok((Err(e),)) => {
-                        ic_cdk::println!("History canister rejected record: {}", e);
-                    }
-                    Err(e) => {
-                        ic_cdk::println!("Failed to decode history response: {:?}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                ic_cdk::println!("Failed to call history canister: {:?}", e);
-            }
-        }
-    });
+    // Async, because a settled hand must not wait on an archive. NOT
+    // fire-and-forget: every outcome is counted, and a record the archive did
+    // not acknowledge is kept for `flush_unrecorded_hands` rather than lost to
+    // a `println!` nobody can read. See `get_history_status`.
+    match history_id {
+        Some(id) => dispatch_hand_to_history(id, record),
+        None => note_history_failure(
+            format!(
+                "hand {}: no archive canister is configured on this table, so this shuffle proof \
+                 exists ONLY in the local ring of {} hands. Held for retry; a controller must \
+                 call set_history_canister, then anyone may call flush_unrecorded_hands.",
+                record.hand_number, MAX_HAND_HISTORY_ENTRIES
+            ),
+            record,
+        ),
+    }
 }
 
 // ============================================================================
@@ -1936,9 +2281,20 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
     }
 
     // Check if player is in a hand (can't withdraw during play)
+    //
+    // ONLY WHILE THE HAND CAN ACTUALLY PROGRESS. docs/SECURITY-FINDINGS.md
+    // FINDING 15: this refusal is the second half of the lock. It is a fair rule
+    // for a hand in play -- your chips are committed and your escrow is the
+    // collateral behind them -- and it is not a rule at all once the hand has
+    // stopped moving, at which point it is just the last door closing. A stuck
+    // hand does not gate a withdrawal, because a withdrawal cannot touch the pot:
+    // it pays out of escrow, and the stake in the pot stays in the pot.
     let in_hand = TABLE.with(|t| {
         let table = t.borrow();
         if let Some(state) = table.as_ref() {
+            if hand_is_stuck(state, now) {
+                return false;
+            }
             if state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete {
                 // Check if this player is in the current hand
                 return state.players.iter().flatten()
@@ -2220,11 +2576,21 @@ fn reload(amount: u64) -> Result<u64, String> {
 #[ic_cdk::update]
 fn cash_out() -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
+    let now = ic_cdk::api::time();
 
     // Check if player is in a hand
+    //
+    // ONLY WHILE THE HAND CAN ACTUALLY PROGRESS -- see the note on the same guard
+    // in `withdraw`, and docs/SECURITY-FINDINGS.md FINDING 15. Cashing out of a
+    // stuck hand does not take the stake with it: `record_departed_stake` below
+    // keeps every chip this player has already put in inside the payout basis, so
+    // the only thing that leaves is the stack behind, which was never contested.
     let in_hand = TABLE.with(|t| {
         let table = t.borrow();
         if let Some(state) = table.as_ref() {
+            if hand_is_stuck(state, now) {
+                return false;
+            }
             if state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete {
                 return state.players.iter().flatten()
                     .any(|p| p.principal == caller && !p.has_folded);
@@ -2570,7 +2936,30 @@ fn init_table_state(config: TableConfig) {
 // `get_straight_high` were private helpers here before the move (never part of
 // the Candid surface) and are reached through `evaluate_hand` inside
 // `poker_core`; they stay `pub` there for the test and fuzz harnesses.
-use poker_core::{create_deck, evaluate_hand, shuffle_deck, Contribution};
+//
+// ---------------------------------------------------------------------------
+// `evaluate_hand` IS DELIBERATELY NOT IMPORTED (docs/SECURITY-FINDINGS.md FINDING 15)
+// ---------------------------------------------------------------------------
+//
+// `poker_core::evaluate_hand` TRAPS on an impossible input. That is right for a
+// pure library and wrong for every caller in this file, because a trap here is
+// not a failed call, it is a locked table: the message rolls back, the state that
+// caused the trap is still there, and the next call takes the identical path. On
+// the module deployed to the local replica, one such trap closed `player_action`,
+// `leave_table` and `check_timeouts` at once while `withdraw` and `cash_out` were
+// refusing "while in a hand" -- about 420 ICP with no door open at all.
+//
+// So this canister calls `poker_core::try_evaluate_hand` at every site, always by
+// its full path, and NEVER imports the trapping name. That makes the rule
+// greppable rather than remembered:
+//
+//     grep -n '[^_]evaluate_hand(' src/table_canister/src/lib.rs   # must be empty
+//
+// which is exactly what
+// `no_trapping_evaluator_is_reachable_from_an_update_entry_point` in
+// `tests/money_safety/tests/fund_reachability.rs` asserts on every run. Adding
+// `evaluate_hand` back to this import list is enough to fail it.
+use poker_core::{create_deck, shuffle_deck, Contribution};
 
 // ============================================================================
 // GAME FLOW
@@ -2843,14 +3232,130 @@ fn reveal_seed_on_hand_end(state: &mut TableState) {
     });
 }
 
-/// Find next active seat that can act (not folded, not all-in)
+// ============================================================================
+// WHO IS IN THE HAND
+// ============================================================================
+//
+// docs/DEFECTS.md E-32 and E-06 were one mistake asked in four places.
+//
+// PARTICIPATION -- whose turn is it (`find_next_active_seat`), is anybody left to
+// play for the pot (`count_active_players`), can anybody still put money in
+// (`count_players_can_act`), does the street close (`is_betting_round_complete`)
+// -- used to be decided by `status == PlayerStatus::Active`.
+//
+// ELIGIBILITY -- who may WIN the pot (`live_claims`) -- is decided by "seated,
+// holds cards, has not folded", and says nothing about `status`.
+//
+// Those are not the same set. A seat that stops heartbeating for 30 seconds is
+// marked `Disconnected` by `check_timeouts`; it then left the PARTICIPATION set
+// and stayed in the ELIGIBILITY set. It was never asked to call, so the street
+// closed without it, and it arrived at the showdown holding its chips AND its
+// claim on every pot level it had already paid into. That is a cheat, it is
+// entirely client-side -- stop sending heartbeats -- and it is worth about a big
+// blind a hand in a game whose whole edge is a fraction of one.
+//
+// It cut the other way too, and that half hurt the honest player: with a
+// `Disconnected` seat still holding cards, `count_active_players` could reach 1
+// while two seats still had a live claim, so `end_hand_single_winner` gave the
+// pot away without a showdown the other seat was entitled to.
+//
+// THE RULE. Poker offers a player facing a bet three options -- call, raise,
+// fold -- and no fourth. A player who does not act on their hand does not get to
+// keep a claim on the money: Robert's Rules of Poker (Ciaffone), the rule the
+// wave-4 audit already recorded against E-32, is that a player called upon to act
+// who fails to act has a folded hand. Every online room implements exactly this:
+// your clock runs whether or not your client is still connected, and the hand is
+// folded when it expires. The all-in-style "disconnect protection" that a few
+// rooms offered in the early 2000s -- capping a dropped player at what they had
+// already contributed while they kept the rest of their stack -- was withdrawn
+// precisely because it could be triggered on purpose. That is the exact shape of
+// what this engine was doing by accident.
+//
+// So participation is now asked of THE SAME PREDICATE as eligibility -- with ONE
+// remaining disagreement, which is docs/SECURITY-FINDINGS.md FINDING 17 and is
+// written up on `is_in_hand` below: a seat that is `Active` and holds NO CARDS is
+// in the participation set and not the eligibility set. Everything else here holds:
+//
+//   * a seat in the hand is never skipped. It is offered the action and its clock
+//     runs, so a real disconnection gets the full `action_timeout_secs` (plus its
+//     time bank) to come back -- and, if nobody has bet, costs it nothing at all.
+//   * a seat that does not act is folded by `resolve_expired_action_timer`, which
+//     is the ONE path out of a hand for a player who will not act. It forfeits
+//     what it has in, exactly like any other fold.
+//   * `PlayerStatus::Disconnected` no longer moves money. It is a display state
+//     and the start of the auto-kick clock, nothing more.
+//
+// Tests: `tests/betting_rules.rs` sections 4 and 5.
+
+/// Is this seat still IN the hand -- so still able to win money from it?
+///
+/// The same question [`live_claims`] asks on the payout path, and deliberately so:
+/// if these two ever disagree, some seat is either being asked to pay for a pot it
+/// cannot win or being handed one it never paid for.
+///
+/// `hole_cards.is_some()` is what "was dealt into THIS hand" means. The
+/// `status == Active` disjunct covers a seat that has been made Active during a
+/// live hand without being dealt in -- `join_table` mid-hand plus `sit_in()`,
+/// which is docs/DEFECTS.md E-36 and belongs to the seating path.
+///
+/// # THIS PREDICATE STILL DISAGREES WITH `live_claims`, AND IT COSTS SOMEBODY THE POT
+///
+/// **docs/SECURITY-FINDINGS.md FINDING 17.** An earlier version of this comment
+/// said of the `status == Active` disjunct that *"including it changes nothing;
+/// it holds no cards, so `live_claims` still refuses to pay it."* That is true of
+/// the PAYOUT and false of everything upstream of it, and it is the sentence that
+/// stopped anyone looking. Corrected here for the same reason `apply_payouts`'s
+/// "recoverable" comment was corrected: a false claim in a comment is load-bearing.
+///
+/// A cardless `Active` seat is counted by [`count_active_players`], and
+/// `count_active_players(state) == 1` is what calls `end_hand_single_winner`. So
+/// when the last seat HOLDING CARDS folds -- including when it is folded by its own
+/// action clock, which is exactly what the E-32 fix above now does to a dropped
+/// client -- the engine settles a "fold-out" whose `live_claims` is EMPTY,
+/// [`plan_payouts`] takes its no-claimant branch, and every stake goes back to its
+/// funder. Measured on this module: a 52,000,000 e8 pot, three seats, all three
+/// ending on exactly their buy-in, the player who folded refunded and the player
+/// who WON the hand paid nothing. No trap, no `CRITICAL:` line, conservation exact,
+/// M1 through M9 silent.
+///
+/// It is not a regression -- before the wave-6 refund branch the same state
+/// DESTROYED the money -- but the rule this section claims to enforce is not yet
+/// true. The fix is to drop the disjunct:
+///
+/// ```ignore
+/// !p.has_folded && p.hole_cards.is_some()
+/// ```
+///
+/// which also closes E-36's first half, because `find_next_active_seat` would stop
+/// offering the action to a seat with no cards. It must land together with the
+/// `E-36` entry in `tests/money_safety/src/documented.rs` and the tolerated
+/// `"carries both a live stake and a departed stake"` substring, in ONE change, or
+/// `register_entries_are_all_still_needed` fails on purpose.
+pub fn is_in_hand(p: &Player) -> bool {
+    !p.has_folded && (p.hole_cards.is_some() || p.status == PlayerStatus::Active)
+}
+
+/// Is this seat still owed an action -- in the hand, and with chips behind?
+///
+/// An all-in seat is IN the hand and can win, but can never be asked for more
+/// money; that is the one legitimate way to be eligible for a pot without matching
+/// every later bet, and the side-pot layering is what caps it.
+pub fn can_still_act(p: &Player) -> bool {
+    is_in_hand(p) && !p.is_all_in
+}
+
+/// Find the next seat that is owed an action (in the hand, not all-in).
+///
+/// Deliberately does NOT consult `status`: see the note above. A seat that has
+/// stopped responding is still offered the action, and its clock -- not its
+/// connection -- is what takes it out of the hand.
 fn find_next_active_seat(state: &TableState, from_seat: u8) -> u8 {
     let num_seats = state.players.len();
     let mut seat = (from_seat as usize + 1) % num_seats;
 
     for _ in 0..num_seats {
         if let Some(ref player) = state.players[seat] {
-            if player.status == PlayerStatus::Active && !player.has_folded && !player.is_all_in {
+            if can_still_act(player) {
                 return seat as u8;
             }
         }
@@ -2877,17 +3382,21 @@ fn find_next_active_seat_with_chips(state: &TableState, from_seat: u8) -> u8 {
     from_seat
 }
 
+/// How many seats still have a claim on this pot.
+///
+/// Drives "everybody else folded, pay the last player standing". It must count the
+/// SAME seats `live_claims` will pay, or the engine hands a pot to one player
+/// while another still holds cards in it.
 fn count_active_players(state: &TableState) -> usize {
     state.players.iter()
-        .filter(|p| p.as_ref().map(|p| !p.has_folded && p.status == PlayerStatus::Active).unwrap_or(false))
+        .filter(|p| p.as_ref().map(is_in_hand).unwrap_or(false))
         .count()
 }
 
+/// How many seats can still put money in.
 fn count_players_can_act(state: &TableState) -> usize {
     state.players.iter()
-        .filter(|p| p.as_ref().map(|p| {
-            !p.has_folded && !p.is_all_in && p.status == PlayerStatus::Active
-        }).unwrap_or(false))
+        .filter(|p| p.as_ref().map(can_still_act).unwrap_or(false))
         .count()
 }
 
@@ -3539,8 +4048,13 @@ pub fn is_betting_round_complete(state: &TableState) -> bool {
         }
     }
 
+    // THE INVARIANT THIS FUNCTION IS. A street may not close while a seat that can
+    // still win the pot has not acted, or has not matched the bet. Asking that of
+    // `can_still_act` rather than of `status == Active` is what closes E-32: a seat
+    // that has stopped responding is exactly a seat that has not acted, so the
+    // round stays open, the action is offered to it, and its clock decides.
     for player in state.players.iter().flatten() {
-        if !player.has_folded && !player.is_all_in && player.status == PlayerStatus::Active {
+        if can_still_act(player) {
             // Player hasn't acted yet this round
             if !player.has_acted_this_round {
                 return false;
@@ -4079,10 +4593,42 @@ fn live_claims(state: &TableState) -> Vec<(u8, Principal, (Card, Card))> {
 /// Rank the claims, IF there is a board to rank them against.
 ///
 /// A hand that ends before the flop has no board and needs no ranking: everybody
-/// else folded, so the last player standing takes the pot without showing.
-/// `poker_core::evaluate_hand` rejects a 0-card board by trapping -- that is the
-/// E-09 fix doing its job -- so ranking unconditionally here would trap on every
-/// pre-flop fold-out.
+/// else folded, so the last player standing takes the pot without showing. So a
+/// short board is not an error here, it is the ordinary pre-flop fold-out, and it
+/// returns an empty ranking.
+///
+/// # This call site is the one that locked a funded table
+///
+/// docs/SECURITY-FINDINGS.md FINDING 15. The module deployed on the local replica
+/// (`0x5298915c…`) ranks unconditionally, with `poker_core::evaluate_hand`, which
+/// TRAPS on a 0-card board. Reached from `end_hand_single_winner`, that trap took
+/// out `player_action`, `leave_table` and `check_timeouts` in the same state,
+/// while `withdraw` and `cash_out` were refusing with "Cannot withdraw while in a
+/// hand" -- every door a player has, shut at once, over about 420 ICP. Verbatim
+/// backtrace from that canister's own log:
+///
+/// ```text
+/// poker_core::hand::evaluate_hand
+/// table_canister::plan_payouts
+/// table_canister::settle_hand
+/// table_canister::end_hand_single_winner
+/// canister_update leave_table
+/// ```
+///
+/// Two things had to be true for that, and both are now false:
+///
+/// 1. the hand reached a fold-out settlement while TWO seats still held live
+///    claims and there was no board to rank them by -- fixed at the cause, in the
+///    "WHO IS IN THE HAND" section above: participation is now the same predicate
+///    as eligibility, so a seat that has not folded is never counted out of the
+///    hand by a missed heartbeat;
+/// 2. the evaluator call on the settlement path could TRAP. It cannot now. A
+///    rejected claim is DROPPED from the ranking, loudly, and the money it was
+///    contesting is refunded to the seats that put it there by
+///    [`plan_payouts`]'s carry rule. Refusing beats trapping here for one reason
+///    only: a trap rolls the message back, so the state that caused it is still
+///    there, and the next call takes the identical path. There is no such thing
+///    as a recoverable trap on the settlement path.
 fn rank_claims(
     state: &TableState,
     claim: &[(u8, Principal, (Card, Card))],
@@ -4092,13 +4638,26 @@ fn rank_claims(
     }
     claim
         .iter()
-        .map(|(seat, principal, cards)| {
-            (
-                *seat,
-                evaluate_hand(cards, &state.community_cards),
-                *principal,
-                *cards,
-            )
+        .filter_map(|(seat, principal, cards)| {
+            match poker_core::try_evaluate_hand(cards, &state.community_cards) {
+                Ok(rank) => Some((*seat, rank, *principal, *cards)),
+                Err(e) => {
+                    // A legal board length and still an impossible hand means a
+                    // duplicate card: the deck and the deal disagree. Say so, in
+                    // the CRITICAL: dialect the money-safety harness watches for,
+                    // and settle the rest of the hand rather than freezing the
+                    // table around one corrupt seat.
+                    ic_cdk::println!(
+                        "CRITICAL: hand {}: seat {} cannot be ranked and is dropped from the \
+                         showdown ({}). The money it was contesting is refunded to the seats \
+                         that put it in. See docs/SECURITY-FINDINGS.md FINDING 15.",
+                        state.hand_number,
+                        seat,
+                        e
+                    );
+                    None
+                }
+            }
         })
         .collect()
 }
@@ -4161,6 +4720,52 @@ fn best_hands_among(
 ///   by construction is the player sitting in that seat holding those cards.
 ///
 /// Nothing here reads a principal out of `state.players` by seat index.
+/// Give every stake back to the player who put it in, and award nothing.
+///
+/// The plan of last resort, and the reason a stuck hand can never hold anybody's
+/// money hostage (docs/SECURITY-FINDINGS.md FINDING 15). It is:
+///
+/// * **always available.** It needs no board, no ranking, no evaluator and no
+///   opinion about who was winning. There is no input it cannot produce a plan
+///   for, which is exactly the property the settlement path was missing.
+/// * **exactly conserving.** Every e8 the hand collected goes back to the seat
+///   that funded it, so it satisfies [`PayoutPlan::conserves`] by construction and
+///   `apply_payouts` will accept it.
+/// * **ungameable.** You get your own money back, no more and no less, so there is
+///   nothing to win by forcing it -- unlike "pay the deepest stack", which is what
+///   this engine used to do with money it could not attribute (FINDING 02).
+///
+/// It is NOT a settlement. Nobody wins the hand; the hand is abandoned. It is only
+/// ever reached from [`abandon_stuck_hand`], which requires the hand to have been
+/// provably immovable first, and it says so in the log.
+pub fn refund_every_stake(state: &TableState) -> PayoutPlan {
+    let stakes = hand_stakes(state);
+    let contributions: Vec<Contribution> = stakes.iter().map(Stake::contribution).collect();
+    let collected = poker_core::total_contributed(&contributions);
+    let side_pots = poker_core::build_side_pots_from_contributions(&contributions);
+    let payouts: Vec<Payout> = stakes
+        .iter()
+        .filter(|s| s.amount > 0)
+        .map(|s| Payout {
+            seat: s.seat,
+            // THE OWNER OF THE STAKE, not the occupant of the chair (FINDING 13).
+            principal: s.owner,
+            amount: s.amount,
+            reason: PayoutReason::Refund { layer: 0 },
+        })
+        .collect();
+    let awarded = payouts
+        .iter()
+        .fold(0u64, |a, p| a.saturating_add(p.amount));
+    PayoutPlan {
+        side_pots,
+        payouts,
+        ranked: Vec::new(),
+        collected,
+        awarded,
+    }
+}
+
 pub fn plan_payouts(state: &TableState) -> PayoutPlan {
     let stakes = hand_stakes(state);
     let contributions: Vec<Contribution> = stakes.iter().map(Stake::contribution).collect();
@@ -4360,10 +4965,29 @@ pub fn collect_contributions(players: &[Option<Player>]) -> Vec<Contribution> {
 /// Refuses -- by trapping, so the whole message is rolled back -- to apply a plan
 /// that does not pay out exactly what the hand collected. ClearDeck takes no rake,
 /// so that is exact to the e8, and a plan that fails it can only mean a bug in
-/// [`plan_payouts`]. Trapping leaves the hand unsettled and the state untouched,
+/// [`plan_payouts`]. Paying out a plan that does not add up is worse than any
+/// alternative, so this stays.
+///
+/// # The old justification for the trap was FALSE, and it mattered
+///
+/// It used to read: *"trapping leaves the hand unsettled and the state untouched,
 /// which is recoverable (players can still leave the table with their stacks and
-/// the code can be fixed and the message retried); paying out a plan that does not
-/// add up is not.
+/// the code can be fixed and the message retried)"*.
+///
+/// **Players cannot still leave the table.** `leave_table` reaches this same code,
+/// so it traps too; so does `player_action`; so does `check_timeouts`; and
+/// `withdraw` and `cash_out` refuse "while in a hand". A trap anywhere on the
+/// settlement path closes every door a player has, simultaneously and permanently,
+/// because a trap rolls the message back and the next call takes the identical
+/// path. That is not a theory: it is what happened, over about 420 ICP, and it is
+/// docs/SECURITY-FINDINGS.md FINDING 15.
+///
+/// The post-condition is kept and the argument for it is replaced. It is safe to
+/// trap here **only because it is now unreachable from a plan that exists**:
+/// [`plan_payouts`] refunds anything it cannot award rather than dropping it, and
+/// [`refund_every_stake`] is conserving by construction. And it is safe to be
+/// wrong about that, because [`abandon_stuck_hand`] does not run through any of
+/// this and gives every player their stake back regardless.
 ///
 /// Returns one aggregated [`Winner`] per credited (seat, PRINCIPAL) pair. A refund
 /// of money nobody could win is included in that list: `Winner::amount` means
@@ -4500,9 +5124,13 @@ fn push_winner(
     let rank = match payout.reason {
         // A refund is not a win, so it carries no hand.
         PayoutReason::Refund { .. } => None,
+        // `try_`, not `evaluate_hand`: a hand this cannot rank costs the WINNER
+        // RECORD its hand description and nothing else. Trapping here would undo
+        // a settlement that has already decided who is owed what, and leave the
+        // table wedged on a display field (FINDING 15).
         PayoutReason::PotShare { .. } => shown
             .filter(|_| state.community_cards.len() >= 3)
-            .map(|cards| evaluate_hand(&cards, &state.community_cards)),
+            .and_then(|cards| poker_core::try_evaluate_hand(&cards, &state.community_cards).ok()),
     };
     winners.push(Winner {
         seat: payout.seat,
@@ -4634,6 +5262,189 @@ pub fn determine_winners(state: &mut TableState, now: u64) {
 }
 
 // ============================================================================
+// FUND REACHABILITY -- THE HAND THAT CANNOT MOVE
+// ============================================================================
+//
+// docs/SECURITY-FINDINGS.md FINDING 15, and the rule it exists to enforce:
+//
+//     NO STATE MAY MAKE A PLAYER'S FUNDS UNREACHABLE.
+//
+// Every other invariant in this project asks whether the arithmetic is right.
+// None of them asks whether the player can still get the money out, and a table
+// can satisfy all of them while being frozen with funded seats. That is the state
+// an independent auditor reached in ordinary play, over about 420 ICP, and the
+// reason it was reachable is that a player's four doors are not independent:
+//
+//   `check_timeouts`, `player_action`, `leave_table`   all run the settlement path
+//   `withdraw`, `cash_out`                             both refuse "while in a hand"
+//
+// So ONE failure on the settlement path shuts all five at once, and because a
+// trap rolls the message back, the failure is permanent rather than transient.
+// Three separate things now stand between a player and that state:
+//
+//  1. the settlement path cannot trap on an unrankable hand any more (`rank_claims`,
+//     `push_winner`, `record_hand_to_history` all use `try_evaluate_hand`), and it
+//     cannot be handed an unrankable hand in the first place (the "WHO IS IN THE
+//     HAND" section);
+//  2. `plan_payouts` always produces a conserving plan, refunding any layer it
+//     cannot settle to the seats that funded it;
+//  3. and if both of those are wrong anyway -- which is the assumption to make,
+//     because both were wrong before -- [`abandon_stuck_hand`] below is a door
+//     that does not depend on either. It needs no evaluator, no board and no
+//     opinion about who was winning.
+//
+// "Cannot withdraw while in a hand" is a reasonable answer only while the hand can
+// actually progress, so `withdraw` and `cash_out` stop giving it once the hand is
+// provably stuck, and say what to call instead.
+
+/// How long past its own expiry an action clock may sit before the hand it
+/// belongs to is treated as stuck.
+///
+/// Well clear of any legitimate delay: the longest configured `action_timeout_secs`
+/// on any table is 60 s and the time bank adds 30 s, so a hand that has not moved
+/// for five minutes past a clock that has already run out is not slow, it is
+/// broken. Short enough that a player is not left waiting on a support ticket.
+const STUCK_HAND_GRACE_NS: u64 = 300 * 1_000_000_000;
+
+/// Is this table holding a hand that no message can move?
+///
+/// Two ways for that to be true, and they are facts about the state rather than
+/// guesses about the cause:
+///
+/// * **the clock ran out and nothing resolved it.** `check_timeouts` and
+///   `player_action` both resolve an expired timer, so a timer that is still
+///   expired [`STUCK_HAND_GRACE_NS`] later means every attempt to resolve it has
+///   failed -- which, on this path, means every attempt has TRAPPED;
+/// * **there is no clock at all** while a hand is live. `resolve_expired_action_timer`
+///   is the only thing that moves a hand nobody is acting on, and it does nothing
+///   without a timer, so this state is immovable by construction, immediately and
+///   not after any grace period.
+///
+/// Deliberately says nothing about WHY. A predicate that had to recognise the
+/// specific defect would have to be updated for the next one.
+pub fn hand_is_stuck(state: &TableState, now: u64) -> bool {
+    let live =
+        state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete;
+    if !live {
+        return false;
+    }
+    match state.action_timer {
+        Some(ref t) => now > t.expires_at.saturating_add(STUCK_HAND_GRACE_NS),
+        None => true,
+    }
+}
+
+/// What a client needs to tell a player why the table is not moving, and what
+/// they can do about it. A query, so it costs nothing and works when the update
+/// path does not.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct StuckHandStatus {
+    /// True when [`abandon_stuck_hand`] would succeed right now.
+    pub is_stuck: bool,
+    /// True while a hand is live at all.
+    pub hand_in_progress: bool,
+    /// Nanoseconds until this hand becomes abandonable. `null` when it already is,
+    /// or when no hand is live.
+    pub abandonable_in_ns: Option<u64>,
+    /// Chips that would be handed back if it were abandoned now.
+    pub refundable_pot: u64,
+}
+
+#[ic_cdk::query]
+fn get_stuck_hand_status() -> StuckHandStatus {
+    let now = ic_cdk::api::time();
+    TABLE.with(|t| {
+        let table = t.borrow();
+        let state = match table.as_ref() {
+            Some(s) => s,
+            None => {
+                return StuckHandStatus {
+                    is_stuck: false,
+                    hand_in_progress: false,
+                    abandonable_in_ns: None,
+                    refundable_pot: 0,
+                }
+            }
+        };
+        let live = state.phase != GamePhase::WaitingForPlayers
+            && state.phase != GamePhase::HandComplete;
+        let is_stuck = hand_is_stuck(state, now);
+        let abandonable_in_ns = match (live, is_stuck, state.action_timer.as_ref()) {
+            (true, false, Some(t)) => {
+                Some(t.expires_at.saturating_add(STUCK_HAND_GRACE_NS).saturating_sub(now))
+            }
+            _ => None,
+        };
+        StuckHandStatus {
+            is_stuck,
+            hand_in_progress: live,
+            abandonable_in_ns,
+            refundable_pot: if live { state.pot } else { 0 },
+        }
+    })
+}
+
+/// Abandon a hand that no message can move, and give every stake back.
+///
+/// **Anybody may call this. There is no privilege check, and that is deliberate:**
+/// a recovery path only a controller can take is not a recovery path, it is a
+/// support queue, and the players whose money is stuck are the ones with the
+/// incentive to use it. It cannot be used as a weapon, because
+///
+/// * it refuses unless [`hand_is_stuck`] -- five minutes past a clock that has
+///   already expired, or a live hand with no clock at all. A hand that is merely
+///   slow is not abandonable, and any ordinary call (`check_timeouts`,
+///   `player_action`) resets the clock and takes it further out of reach;
+/// * the only outcome it can produce is [`refund_every_stake`]: each player gets
+///   back exactly what they put into this hand. There is nothing to win by calling
+///   it, whatever cards you were holding.
+///
+/// Returns the number of e8s handed back.
+#[ic_cdk::update]
+fn abandon_stuck_hand() -> Result<u64, String> {
+    let now = ic_cdk::api::time();
+    TABLE.with(|t| {
+        let mut table = t.borrow_mut();
+        let state = table.as_mut().ok_or("Table not initialized")?;
+
+        if !hand_is_stuck(state, now) {
+            let live = state.phase != GamePhase::WaitingForPlayers
+                && state.phase != GamePhase::HandComplete;
+            return Err(if live {
+                "This hand can still progress. Call check_timeouts, or take your action. A hand \
+                 is only abandonable once its action clock has been expired for 5 minutes."
+                    .to_string()
+            } else {
+                "No hand in progress".to_string()
+            });
+        }
+
+        let plan = refund_every_stake(state);
+        // Loud, and in the dialect the money-safety harness treats as the
+        // canister's own testimony against itself. Reaching this line means the
+        // settlement path failed to do its job, and that must never be quiet.
+        ic_cdk::println!(
+            "CRITICAL: hand {} was ABANDONED as unmovable at phase {}: no message could advance \
+             it. {} e8s across {} stakes returned to the players who put them in; nobody won the \
+             hand. See docs/SECURITY-FINDINGS.md FINDING 15.",
+            state.hand_number,
+            phase_to_string(&state.phase),
+            plan.collected,
+            plan.payouts.len()
+        );
+
+        reveal_seed_on_hand_end(state);
+        let refunded = plan.collected;
+        // Through `apply_payouts`, so the abandonment is held to the SAME
+        // conservation post-condition as a real settlement.
+        let winners = apply_payouts(state, &plan);
+        record_hand_to_history(state, &winners, false);
+        finish_hand(state, now);
+        Ok(refunded)
+    })
+}
+
+// ============================================================================
 // TIMEOUT HANDLING
 // ============================================================================
 
@@ -4647,14 +5458,20 @@ pub enum TimeoutCheckResult {
 
 /// Check for timeouts, auto-fold, and auto-deal
 /// This should be called periodically or before each action
+///
+/// MARKING A SEAT `Disconnected` HERE DOES NOT TAKE IT OUT OF THE HAND. It used
+/// to, by omission -- every count that drove the betting round filtered on
+/// `status == Active` -- and that was docs/DEFECTS.md E-32 and E-06. See the note
+/// above [`is_in_hand`]. A seat in a live hand leaves it by folding, by being
+/// folded when its ACTION clock expires ([`resolve_expired_action_timer`]), or by
+/// being all-in. Nothing in this function folds anybody except that one call.
 #[ic_cdk::update]
 fn check_timeouts() -> TimeoutCheckResult {
     // Run periodic cleanup of unbounded maps
     periodic_cleanup();
 
     let now = ic_cdk::api::time();
-    // Mark players as disconnected if no heartbeat for 30 seconds
-    const DISCONNECT_TIMEOUT_NS: u64 = 30 * 1_000_000_000;
+    let disconnect_timeout_ns: u64 = DISCONNECT_TIMEOUT_SECS * 1_000_000_000;
 
     TABLE.with(|t| {
         let mut table = t.borrow_mut();
@@ -4665,7 +5482,7 @@ fn check_timeouts() -> TimeoutCheckResult {
 
         // Check for disconnected players (no heartbeat)
         for player in state.players.iter_mut().flatten() {
-            if player.status == PlayerStatus::Active && now > player.last_seen + DISCONNECT_TIMEOUT_NS {
+            if player.status == PlayerStatus::Active && now > player.last_seen + disconnect_timeout_ns {
                 player.status = PlayerStatus::Disconnected;
                 // Also set sitting_out_since for the kick timer
                 if player.sitting_out_since.is_none() {
@@ -4881,7 +5698,25 @@ fn heartbeat() -> Result<(), String> {
     })
 }
 
-/// Sit out (voluntarily)
+/// Sit out (voluntarily).
+///
+/// **You cannot sit out of a hand you are already in.** This used to set
+/// `PlayerStatus::SittingOut` unconditionally, with no phase check, which was
+/// docs/DEFECTS.md E-32 with no waiting at all: one call, from a player facing a
+/// bet they did not like, took them out of the betting round while leaving them
+/// holding cards and eligible for every pot layer they had already paid into.
+/// Reproduced on the local `table_2`, hand 5: the seat that called this was never
+/// asked to match a 2 ICP bet, kept the chips, and was still `has_folded = false`
+/// with cards at the showdown.
+///
+/// Real rooms defer it for the same reason: "sit out" takes effect between hands,
+/// and the hand you are in you must finish -- by acting, or by letting your clock
+/// run out, which folds you. So a request made mid-hand becomes
+/// [`sit_out_next_hand`], and the caller stays in the betting round they are
+/// already in.
+///
+/// A player who is not in the current hand (folded, never dealt in, or there is no
+/// hand) sits out immediately, as before.
 #[ic_cdk::update]
 fn sit_out() -> Result<(), String> {
     let caller = ic_cdk::api::msg_caller();
@@ -4891,8 +5726,15 @@ fn sit_out() -> Result<(), String> {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
 
+        let hand_is_live = state.phase != GamePhase::WaitingForPlayers
+            && state.phase != GamePhase::HandComplete;
+
         for player in state.players.iter_mut().flatten() {
             if player.principal == caller {
+                if hand_is_live && is_in_hand(player) {
+                    player.is_sitting_out_next_hand = true;
+                    return Ok(());
+                }
                 player.status = PlayerStatus::SittingOut;
                 player.sitting_out_since = Some(now);
                 return Ok(());
@@ -5322,20 +6164,369 @@ fn get_time_remaining() -> Option<u64> {
     })
 }
 
+// ============================================================================
+// THE COMMITMENT CHECK
+// ============================================================================
+//
+// This used to be `verify_shuffle : (text, text) -> (bool) query`, and an
+// independent auditor called it "worse than having no endpoint"
+// (docs/DEFECTS.md E-44). Three separate faults, and the third is the one that
+// matters:
+//
+//   1. The Candid carried no parameter names, so nothing on the wire said which
+//      of the two hex strings was the hash.
+//   2. The return was a bare `bool`, so "you passed them backwards" and "the
+//      table revealed a seed it never committed to" were the SAME ANSWER.
+//   3. Both strings are 64 lowercase hex characters for a real hand, so a
+//      reader cannot tell them apart by looking, and the natural reading order
+//      -- seed first, then hash -- was the order that returned `false`.
+//
+// The person most likely to call this is someone who already suspects they were
+// cheated. Handing that person a `false` they cannot interpret manufactures an
+// accusation out of a typo.
+//
+// What is here now:
+//
+//   * `check_shuffle_commitment` takes a RECORD with named fields. Candid keys
+//     record fields by name, not position, so the arguments cannot be
+//     transposed on the wire at all.
+//   * It answers with a VARIANT that names which check failed, and carries both
+//     hashes so the caller can see the arithmetic rather than trust the verdict.
+//   * If the values are put in each other's fields it says so, in an arm that
+//     is explicitly NOT a failed proof, and still shows the match.
+//   * Every arm carries `this_proves` and `this_does_not_prove` in plain text,
+//     because the honest verification is the one that runs on the player's
+//     machine and this one cannot be allowed to impersonate it.
+//
+// `verify_shuffle` is kept, order-insensitive, purely so nobody who already
+// wrote the old call gets a false accusation out of it.
+
+/// Arguments for `check_shuffle_commitment`.
+///
+/// A record, not two positional strings, precisely so the order cannot be got
+/// wrong: Candid matches record fields by hashed name.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct CommitmentCheckArgs {
+    /// The `seed_hash` from the hand's `ShuffleProof`: 64 lowercase hex chars.
+    pub seed_hash: String,
+    /// The `revealed_seed` from the same `ShuffleProof`: hex, 32 bytes in a live hand.
+    pub revealed_seed: String,
+}
+
+/// A commitment that checks out, whichever field the caller put it in.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct CommitmentMatch {
+    /// The value that behaved like the committed hash.
+    pub committed_hash: String,
+    /// The value that behaved like the revealed seed.
+    pub revealed_seed: String,
+    /// `SHA256(revealed_seed)`, recomputed here. Equal to `committed_hash`.
+    pub computed_hash: String,
+    pub this_proves: String,
+    pub this_does_not_prove: String,
+}
+
+/// The two values are hex, and neither reading of them is a commit-reveal pair.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct CommitmentNoMatch {
+    /// What was passed in the `seed_hash` field.
+    pub seed_hash_field: String,
+    /// What was passed in the `revealed_seed` field.
+    pub revealed_seed_field: String,
+    /// `SHA256(revealed_seed_field)` -- the documented reading.
+    pub computed_from_revealed_seed: String,
+    /// `SHA256(seed_hash_field)` -- the swapped reading, shown so the caller can
+    /// see that BOTH readings were tried before this answer was given.
+    pub computed_from_seed_hash: String,
+    pub meaning: String,
+}
+
+/// One of the two fields is not a hex string this canister can read.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct CommitmentMalformed {
+    /// `"seed_hash"` or `"revealed_seed"` -- the field at fault, by name.
+    pub field: String,
+    pub reason: String,
+    pub character_length: u64,
+}
+
+/// The answer to "is this seed the one that hash commits to?", with the reason.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub enum CommitmentCheck {
+    /// `SHA256(revealed_seed) == seed_hash`, values in the fields named for them.
+    Match(CommitmentMatch),
+    /// The pair IS a valid commit-reveal pair, but the caller put each value in
+    /// the other's field. This is a note about the call, NOT a failed proof.
+    FieldsSwapped(CommitmentMatch),
+    /// Both values parsed, neither reading matches. This is the only answer that
+    /// is evidence of anything wrong with the hand.
+    NoMatch(CommitmentNoMatch),
+    /// The call could not be evaluated. Says which field and why.
+    Malformed(CommitmentMalformed),
+}
+
+const COMMITMENT_PROVES: &str =
+    "Only that the revealed seed is the pre-image of the committed hash. This canister \
+     re-hashed 32 bytes it was handed; it did not look at a card, a hand or a pot.";
+
+const COMMITMENT_DOES_NOT_PROVE: &str =
+    "Nothing about fairness. This is the table checking its own homework on the table's own \
+     machine. The verification that counts re-derives all 52 cards from the seed on YOUR \
+     machine -- docs/SHUFFLE-SPEC.md, or src/poker_core/tests/verify/verify_shuffle.{py,mjs}. \
+     A rigged table can answer Match all day; what it cannot do is make the deck you \
+     re-derive contain the cards you were shown.";
+
+/// Normalise one field: trim, lowercase, and refuse anything that is not hex.
+fn read_hex_field(field: &str, value: &str) -> Result<(String, Vec<u8>), CommitmentMalformed> {
+    let text = value.trim().to_lowercase();
+    let malformed = |reason: &str| CommitmentMalformed {
+        field: field.to_string(),
+        reason: reason.to_string(),
+        character_length: text.chars().count() as u64,
+    };
+    if text.is_empty() {
+        return Err(malformed(
+            "empty. Copy this value out of the hand's ShuffleProof; both fields are required.",
+        ));
+    }
+    // Character set BEFORE parity, or a principal (27 chars, hyphens) is
+    // reported as "an odd number of hex characters", which sends the caller
+    // looking for a truncated paste instead of a pasted-the-wrong-thing.
+    if !text.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(malformed(
+            "not hexadecimal. Expected only the characters 0-9 and a-f. A principal, a hand \
+             number, a quoted string or a value copied with surrounding punctuation lands here.",
+        ));
+    }
+    if text.len() % 2 != 0 {
+        return Err(malformed(
+            "an odd number of hex characters, so it cannot be a whole number of bytes. \
+             A truncated copy-paste does this.",
+        ));
+    }
+    match hex::decode(&text) {
+        Ok(bytes) => Ok((text, bytes)),
+        Err(_) => Err(malformed(
+            "not hexadecimal. Expected only the characters 0-9 and a-f.",
+        )),
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+/// Check a commit-reveal pair and say WHICH check failed.
+///
+/// See the block comment above for why this replaced a `(text, text) -> bool`.
+/// It is a query, it reads no table state, and its answer is worth exactly what
+/// the `this_does_not_prove` field says it is worth.
 #[ic_cdk::query]
-fn verify_shuffle(seed_hash: String, revealed_seed: String) -> bool {
-    let seed_bytes = match hex::decode(&revealed_seed) {
-        Ok(b) => b,
-        Err(_) => return false,
+fn check_shuffle_commitment(args: CommitmentCheckArgs) -> CommitmentCheck {
+    let (hash_field, hash_field_bytes) = match read_hex_field("seed_hash", &args.seed_hash) {
+        Ok(v) => v,
+        Err(e) => return CommitmentCheck::Malformed(e),
+    };
+    let (seed_field, seed_field_bytes) = match read_hex_field("revealed_seed", &args.revealed_seed)
+    {
+        Ok(v) => v,
+        Err(e) => return CommitmentCheck::Malformed(e),
     };
 
-    let mut hasher = Sha256::new();
-    hasher.update(&seed_bytes);
-    let computed_hash = hex::encode(hasher.finalize());
+    // The documented reading: the `revealed_seed` field holds the seed.
+    let hash_of_seed_field = sha256_hex(&seed_field_bytes);
+    if hash_of_seed_field == hash_field {
+        return CommitmentCheck::Match(CommitmentMatch {
+            committed_hash: hash_field,
+            revealed_seed: seed_field,
+            computed_hash: hash_of_seed_field,
+            this_proves: COMMITMENT_PROVES.to_string(),
+            this_does_not_prove: COMMITMENT_DOES_NOT_PROVE.to_string(),
+        });
+    }
 
-    // Case-insensitive comparison to handle potential case differences
-    // from serialization/deserialization through Candid
-    computed_hash.to_lowercase() == seed_hash.to_lowercase()
+    // The transposed reading. A SHA-256 two-cycle would make both readings hold
+    // at once; none is known, and the documented reading is answered first, so
+    // this arm can only be reached when the documented one did not hold.
+    let hash_of_hash_field = sha256_hex(&hash_field_bytes);
+    if hash_of_hash_field == seed_field {
+        return CommitmentCheck::FieldsSwapped(CommitmentMatch {
+            committed_hash: seed_field,
+            revealed_seed: hash_field,
+            computed_hash: hash_of_hash_field,
+            this_proves: COMMITMENT_PROVES.to_string(),
+            this_does_not_prove: COMMITMENT_DOES_NOT_PROVE.to_string(),
+        });
+    }
+
+    CommitmentCheck::NoMatch(CommitmentNoMatch {
+        seed_hash_field: hash_field,
+        revealed_seed_field: seed_field,
+        computed_from_revealed_seed: hash_of_seed_field,
+        computed_from_seed_hash: hash_of_hash_field,
+        meaning:
+            "Neither value hashes to the other, so these two strings are not a commit-reveal \
+             pair. Before concluding anything about the table, check that both were copied from \
+             the SAME hand's ShuffleProof: a hash from one hand and a seed from another lands \
+             here, and so does a truncated paste. If they are from one hand, the table revealed \
+             a seed it did not commit to, and that IS a broken proof -- please report it."
+                .to_string(),
+    })
+}
+
+/// Deprecated. Kept only so a caller who already wrote the old two-string call
+/// cannot be handed a false accusation by it.
+///
+/// It now answers the same question in EITHER argument order, so a `false` can
+/// no longer mean "you called it backwards". A `false` still cannot distinguish
+/// a malformed argument from a broken proof, which is exactly why this is
+/// deprecated: use `check_shuffle_commitment`, which names both.
+#[ic_cdk::query]
+fn verify_shuffle(seed_hash: String, revealed_seed: String) -> bool {
+    matches!(
+        check_shuffle_commitment(CommitmentCheckArgs {
+            seed_hash,
+            revealed_seed,
+        }),
+        CommitmentCheck::Match(_) | CommitmentCheck::FieldsSwapped(_)
+    )
+}
+
+#[cfg(test)]
+mod commitment_check_tests {
+    //! The one property that matters here is NEGATIVE: no honest caller can get
+    //! an accusation out of this endpoint by making a mistake. Each test below
+    //! is a mistake a real person makes with two 64-character hex strings.
+
+    use super::*;
+
+    /// A real commit-reveal pair from a hand `table_1` dealt on the local
+    /// replica. Kept verbatim so this test is pinned to something the engine
+    /// actually produced, not to something the test computed for itself.
+    const SEED: &str = "2b8a1a4ab2910e4940ee5d3800ef1289fcd0b3436b926adc387d37d0c184235a";
+    const HASH: &str = "41779ced2453b2e910c1ac0cc994cc9486f7f00dead6dae79fcf2eac40b7c9a8";
+
+    fn check(seed_hash: &str, revealed_seed: &str) -> CommitmentCheck {
+        check_shuffle_commitment(CommitmentCheckArgs {
+            seed_hash: seed_hash.to_string(),
+            revealed_seed: revealed_seed.to_string(),
+        })
+    }
+
+    #[test]
+    fn the_fixture_really_is_a_commit_reveal_pair() {
+        assert_eq!(sha256_hex(&hex::decode(SEED).unwrap()), HASH);
+    }
+
+    #[test]
+    fn the_documented_field_placement_matches() {
+        match check(HASH, SEED) {
+            CommitmentCheck::Match(m) => {
+                assert_eq!(m.computed_hash, HASH);
+                assert_eq!(m.committed_hash, HASH);
+                assert_eq!(m.revealed_seed, SEED);
+                assert!(!m.this_does_not_prove.is_empty());
+            }
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn transposing_the_two_values_is_reported_as_a_transposition_not_a_failure() {
+        // The whole finding. `verify_shuffle(seed, hash)` used to answer `false`
+        // here, and `false` reads as "you were cheated". docs/DEFECTS.md E-44.
+        match check(SEED, HASH) {
+            CommitmentCheck::FieldsSwapped(m) => {
+                assert_eq!(m.committed_hash, HASH, "the hash must still be identified as the hash");
+                assert_eq!(m.revealed_seed, SEED);
+            }
+            other => panic!("expected FieldsSwapped, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_deprecated_bool_cannot_manufacture_an_accusation() {
+        assert!(verify_shuffle(HASH.to_string(), SEED.to_string()));
+        assert!(verify_shuffle(SEED.to_string(), HASH.to_string()));
+    }
+
+    #[test]
+    fn case_and_surrounding_whitespace_are_a_copy_paste_artefact_not_a_verdict() {
+        assert!(matches!(
+            check(&format!("  {}  ", HASH.to_uppercase()), &format!("\n{SEED}\t")),
+            CommitmentCheck::Match(_)
+        ));
+    }
+
+    #[test]
+    fn a_genuine_mismatch_is_still_reported_and_shows_both_readings() {
+        let other_seed = "951ca24e5324ddefaddf82ecb62f5aa773ef5222e09fff7143ef34dcf4511395";
+        match check(HASH, other_seed) {
+            CommitmentCheck::NoMatch(n) => {
+                assert_eq!(n.computed_from_revealed_seed, sha256_hex(&hex::decode(other_seed).unwrap()));
+                assert_eq!(n.computed_from_seed_hash, sha256_hex(&hex::decode(HASH).unwrap()));
+                assert_ne!(n.computed_from_revealed_seed, n.seed_hash_field);
+            }
+            other => panic!("expected NoMatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_non_hex_field_is_named_as_non_hex_not_as_truncated() {
+        // A principal is 27 characters, an odd number. Reporting "an odd number
+        // of hex characters" would send the caller hunting for a truncated
+        // paste, so the character-set check runs first.
+        match check("4fbx2-kt777-77775-aaabq-cai", SEED) {
+            CommitmentCheck::Malformed(m) => {
+                assert_eq!(m.field, "seed_hash");
+                assert!(m.reason.contains("not hexadecimal"), "reason was: {}", m.reason);
+            }
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_truncated_paste_is_named_as_a_truncated_paste() {
+        match check(HASH, &SEED[..17]) {
+            CommitmentCheck::Malformed(m) => {
+                assert_eq!(m.field, "revealed_seed");
+                assert_eq!(m.character_length, 17);
+                assert!(m.reason.contains("odd number"), "reason was: {}", m.reason);
+            }
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_empty_field_says_which_one_is_empty() {
+        match check("", SEED) {
+            CommitmentCheck::Malformed(m) => assert_eq!(m.field, "seed_hash"),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+        match check(HASH, "") {
+            CommitmentCheck::Malformed(m) => assert_eq!(m.field, "revealed_seed"),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_answer_that_could_be_read_as_a_verdict_carries_its_own_disclaimer() {
+        for c in [check(HASH, SEED), check(SEED, HASH)] {
+            let (proves, not) = match c {
+                CommitmentCheck::Match(m) | CommitmentCheck::FieldsSwapped(m) => {
+                    (m.this_proves, m.this_does_not_prove)
+                }
+                other => panic!("expected a matching arm, got {other:?}"),
+            };
+            assert!(proves.contains("pre-image"), "this_proves lost its meaning: {proves}");
+            assert!(
+                not.contains("Nothing about fairness"),
+                "an answer that reads as a fairness verdict must say it is not one: {not}"
+            );
+        }
+    }
 }
 
 /// Get current player count (for lobby display)
@@ -6969,5 +8160,196 @@ mod payout_tests {
                 "a pot share must name the seat's own occupant"
             );
         }
+    }
+}
+
+// ============================================================================
+// FUND REACHABILITY -- host tests for the two pure pieces
+// ============================================================================
+//
+// docs/SECURITY-FINDINGS.md FINDING 15. The PocketIC gate lives in
+// `tests/money_safety/tests/fund_reachability.rs` and drives the real canister
+// end to end; these are the fast checks on the parts that are pure functions, so
+// a mistake in either shows up in `cargo test` rather than in a 20-second
+// replica run.
+#[cfg(test)]
+mod stuck_hand_tests {
+    use super::*;
+
+    const SEC: u64 = 1_000_000_000;
+
+    fn table_at(phase: GamePhase, timer: Option<ActionTimer>) -> TableState {
+        TableState {
+            id: 0,
+            config: TableConfig {
+                small_blind: 1,
+                big_blind: 2,
+                min_buy_in: 10,
+                max_buy_in: 1000,
+                max_players: 6,
+                action_timeout_secs: 30,
+                ante: 0,
+                time_bank_secs: 30,
+                currency: Currency::ICP,
+            },
+            players: (0..6).map(|_| None).collect(),
+            community_cards: Vec::new(),
+            deck: Vec::new(),
+            deck_index: 0,
+            pot: 0,
+            side_pots: Vec::new(),
+            current_bet: 0,
+            min_raise: 2,
+            phase,
+            dealer_seat: 0,
+            small_blind_seat: 0,
+            big_blind_seat: 1,
+            action_on: 0,
+            action_timer: timer,
+            shuffle_proof: None,
+            hand_number: 1,
+            last_aggressor: None,
+            bb_has_option: false,
+            first_hand: false,
+            auto_deal_at: None,
+            last_action: None,
+            departed_stakes: None,
+        }
+    }
+
+    fn timer_expiring_at(t: u64) -> Option<ActionTimer> {
+        Some(ActionTimer {
+            player_seat: 0,
+            started_at: 0,
+            expires_at: t,
+            using_time_bank: false,
+        })
+    }
+
+    /// A hand that is merely slow is NOT abandonable. This is the property that
+    /// keeps `abandon_stuck_hand` from being a weapon, so it is pinned first.
+    #[test]
+    fn a_running_clock_is_not_a_stuck_hand() {
+        let st = table_at(GamePhase::PreFlop, timer_expiring_at(30 * SEC));
+        assert!(!hand_is_stuck(&st, 1 * SEC), "clock still running");
+        assert!(!hand_is_stuck(&st, 31 * SEC), "just expired: check_timeouts's job");
+        assert!(
+            !hand_is_stuck(&st, 30 * SEC + STUCK_HAND_GRACE_NS),
+            "the grace period is exclusive at its own boundary"
+        );
+    }
+
+    #[test]
+    fn a_clock_expired_past_the_grace_period_is_a_stuck_hand() {
+        let st = table_at(GamePhase::PreFlop, timer_expiring_at(30 * SEC));
+        assert!(hand_is_stuck(&st, 30 * SEC + STUCK_HAND_GRACE_NS + 1));
+    }
+
+    /// A live hand with no clock at all cannot be advanced by anything:
+    /// `resolve_expired_action_timer` is the only thing that moves a hand nobody
+    /// is acting on, and it does nothing without a timer. So this is stuck
+    /// immediately, with no grace period, and that is a fact about the code rather
+    /// than a tolerance.
+    #[test]
+    fn a_live_hand_with_no_clock_is_stuck_immediately() {
+        assert!(hand_is_stuck(&table_at(GamePhase::Flop, None), 0));
+        assert!(hand_is_stuck(&table_at(GamePhase::River, None), 0));
+    }
+
+    /// An idle table is never stuck, whatever the clock says. Otherwise every
+    /// finished hand would look abandonable and `withdraw`'s guard would be
+    /// permanently off.
+    #[test]
+    fn an_idle_table_is_never_stuck() {
+        for phase in [GamePhase::WaitingForPlayers, GamePhase::HandComplete] {
+            assert!(!hand_is_stuck(&table_at(phase.clone(), None), u64::MAX));
+            assert!(!hand_is_stuck(
+                &table_at(phase, timer_expiring_at(0)),
+                u64::MAX
+            ));
+        }
+    }
+
+    /// The plan of last resort must give every player exactly their own money and
+    /// nothing else, and it must satisfy the same post-condition a real settlement
+    /// does -- otherwise `apply_payouts` would trap on it and the escape hatch
+    /// would be another closed door.
+    #[test]
+    fn refunding_every_stake_conserves_exactly_and_pays_each_owner_their_own() {
+        let mut st = table_at(GamePhase::PreFlop, None);
+        let wagers = [(0u8, 25u64), (1, 100), (2, 100), (3, 7)];
+        for (seat, wagered) in wagers {
+            st.players[seat as usize] = Some(Player {
+                principal: Principal::from_slice(&[seat + 1]),
+                seat,
+                chips: 500,
+                hole_cards: None,
+                current_bet: 0,
+                total_bet_this_hand: wagered,
+                // Seat 3 folded. A refund is not a payout: an abandoned hand was
+                // never played, so a folded seat gets its money back too.
+                has_folded: seat == 3,
+                has_acted_this_round: true,
+                is_all_in: false,
+                status: PlayerStatus::Active,
+                last_seen: 0,
+                timeout_count: 0,
+                time_bank_remaining: 30,
+                is_sitting_out_next_hand: false,
+                broke_at: None,
+                sitting_out_since: None,
+            });
+        }
+        st.pot = wagers.iter().map(|(_, w)| w).sum();
+
+        let plan = refund_every_stake(&st);
+        assert!(plan.conserves(), "apply_payouts would trap on a plan that does not");
+        assert_eq!(plan.collected, 232);
+        assert_eq!(plan.awarded, 232);
+        assert!(plan.ranked.is_empty(), "an abandoned hand ranks nobody");
+        for (seat, wagered) in wagers {
+            assert_eq!(
+                plan.amount_for_principal(Principal::from_slice(&[seat + 1])),
+                wagered,
+                "seat {seat} must get back exactly what it put in, and nothing else"
+            );
+        }
+        assert!(
+            plan.payouts
+                .iter()
+                .all(|p| matches!(p.reason, PayoutReason::Refund { .. })),
+            "nobody wins an abandoned hand"
+        );
+    }
+
+    /// It needs no board, no cards and no evaluator. That is the whole point: it is
+    /// the one plan that exists for every input, including the inputs that produced
+    /// FINDING 15.
+    #[test]
+    fn refunding_every_stake_needs_no_board_and_no_cards() {
+        let mut st = table_at(GamePhase::PreFlop, None);
+        st.players[0] = Some(Player {
+            principal: Principal::from_slice(&[1]),
+            seat: 0,
+            chips: 0,
+            hole_cards: None,
+            current_bet: 0,
+            total_bet_this_hand: 5,
+            has_folded: false,
+            has_acted_this_round: false,
+            is_all_in: true,
+            status: PlayerStatus::Disconnected,
+            last_seen: 0,
+            timeout_count: 0,
+            time_bank_remaining: 0,
+            is_sitting_out_next_hand: false,
+            broke_at: None,
+            sitting_out_since: None,
+        });
+        st.pot = 5;
+        assert!(st.community_cards.is_empty());
+        let plan = refund_every_stake(&st);
+        assert!(plan.conserves());
+        assert_eq!(plan.awarded, 5);
     }
 }

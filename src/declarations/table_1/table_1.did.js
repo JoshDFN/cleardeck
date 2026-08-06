@@ -249,6 +249,52 @@ export const idlFactory = ({ IDL }) => {
     }),
     'Checked' : Utxo,
   });
+  // --- fairness endpoints (see src/table_canister/src/lib.rs) ----------------
+  const CommitmentMatch = IDL.Record({
+    'committed_hash' : IDL.Text,
+    'revealed_seed' : IDL.Text,
+    'computed_hash' : IDL.Text,
+    'this_proves' : IDL.Text,
+    'this_does_not_prove' : IDL.Text,
+  });
+  const CommitmentCheck = IDL.Variant({
+    'Match' : CommitmentMatch,
+    'FieldsSwapped' : CommitmentMatch,
+    'NoMatch' : IDL.Record({
+      'seed_hash_field' : IDL.Text,
+      'revealed_seed_field' : IDL.Text,
+      'computed_from_revealed_seed' : IDL.Text,
+      'computed_from_seed_hash' : IDL.Text,
+      'meaning' : IDL.Text,
+    }),
+    'Malformed' : IDL.Record({
+      'field' : IDL.Text,
+      'reason' : IDL.Text,
+      'character_length' : IDL.Nat64,
+    }),
+  });
+  const CommitmentCheckArgs = IDL.Record({
+    'seed_hash' : IDL.Text,
+    'revealed_seed' : IDL.Text,
+  });
+  const FairnessRetention = IDL.Record({
+    'table_keeps_last_n_hands' : IDL.Nat64,
+    'table_copy_is_destructible_by_controller' : IDL.Bool,
+    'archive_canister' : IDL.Opt(IDL.Principal),
+    'summary' : IDL.Text,
+  });
+  const HistoryStatus = IDL.Record({
+    'history_canister' : IDL.Opt(IDL.Principal),
+    'recorded_ok_since_start' : IDL.Nat64,
+    'failed_since_start' : IDL.Nat64,
+    'in_flight' : IDL.Nat64,
+    'unrecorded_backlog' : IDL.Nat64,
+    'unrecorded_dropped' : IDL.Nat64,
+    'last_recorded_hand' : IDL.Opt(IDL.Nat64),
+    'last_error' : IDL.Opt(IDL.Text),
+    'local_history_cap' : IDL.Nat64,
+    'local_history_len' : IDL.Nat64,
+  });
   return IDL.Service({
     'add_controller' : IDL.Func([IDL.Principal], [Result], []),
     'admin_get_all_balances' : IDL.Func(
@@ -341,6 +387,14 @@ export const idlFactory = ({ IDL }) => {
         [],
       ),
     'use_time_bank' : IDL.Func([], [Result_1], []),
+    'check_shuffle_commitment' : IDL.Func(
+        [CommitmentCheckArgs],
+        [CommitmentCheck],
+        ['query'],
+      ),
+    'get_fairness_retention' : IDL.Func([], [FairnessRetention], ['query']),
+    'get_history_status' : IDL.Func([], [HistoryStatus], ['query']),
+    'flush_unrecorded_hands' : IDL.Func([], [Result_1], []),
     'verify_shuffle' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], ['query']),
     'withdraw' : IDL.Func([IDL.Nat64], [Result_1], []),
   });
