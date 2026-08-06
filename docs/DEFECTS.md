@@ -20,7 +20,11 @@ has a single queue to work from.
 > Read [WAVE-08.md](WAVE-08.md) §7 before planning wave 9.
 >
 > **THE FIFTH CROSS-AGENT DEFECT was hunted rather than stumbled on: [E-70](#e-70) /
-> [FINDING 35](SECURITY-FINDINGS.md#finding-35), OPEN.** Its signature is one level up from the
+> [FINDING 35](SECURITY-FINDINGS.md#finding-35) — CLOSED 2026-08-06, together with
+> [E-72](#e-72) and [E-73](#e-73).** A live 2.00 ICP instance of it is on mainnet table_1 today
+> and closing this does NOT return that money; it makes the canister able to see it and say it.
+> Nothing was added that can edit a balance, and `no_setter_was_added_to_fix_the_books` is the
+> gate that keeps it that way. Its signature is one level up from the
 > previous four. Not "correct totals, wrong recipients", **a correct instrument pointed at a
 > subset of the accounts.** The canister has an observation record for every deposit SUBACCOUNT
 > and none for its MAIN account, so `admin_audit_deposit_custody` replies
@@ -38,6 +42,32 @@ has a single queue to work from.
 > 10 red, and 5/5 protected notices on every one of the 24, behind both modals and under a real error toast.**
 > It was dark because of [E-74](#e-74), not because of the replica. Four reds it could finally
 > see: [E-71](#e-71), [E-75](#e-75), [E-76](#e-76) and [E-65](#e-65).
+
+> **WAVE 9, 2026-08-06 — THE FRONTEND IS NOW BUILT FOR MAINNET THROUGH A NAMED PATH THAT
+> VERIFIES ITS OWN OUTPUT.** `npm run build:mainnet` states the target in the command, refuses a
+> contradictory `DFX_NETWORK`, checks every id against the ROLE the committed mapping gives it
+> (T-01 in the direction nothing guarded), then reads the emitted JavaScript back and **deletes the
+> dist if it does not verify**. 13 static checks, plus 23 rendered ones with mainnet made
+> unreachable by two independent locks.
+>
+> **The first version of that verifier passed 12 of 12 while measuring nothing** — one wrong
+> repetition count in a regex made `allPrincipals()` return an empty map, and the check
+> "no local replica canister id in a mainnet bundle" printed a green tick over
+> `checked 0 distinct canister id(s)` on a bundle containing eleven. The standing lesson of this
+> repository, reproduced by the instrument written to enforce it, within the hour. There is a
+> mutation self-test now (`build/verify-bundle.selftest.mjs`, 8 mutations, each caught by the
+> named check) and a floor assertion so a scan that finds nothing fails instead of passing.
+>
+> Three new frontend defects, all found by rendering rather than by reading: [T-38](#t-38) (the
+> "Deployed Canister Hashes" the app has been showing are three upgrades stale and nothing
+> compared them to anything), [T-39](#t-39) (local sign-in navigates to
+> `http://undefined.localhost:4943`), [T-40](#t-40) (**0 of 5 protected notices legible with the
+> Verify Code dialog open, at both viewports** — HARD RULE 2, in the one dialog whose subject is
+> whether this deployment can be trusted). All three are FIXED.
+>
+> **[E-70](#e-70) / [FINDING 35](SECURITY-FINDINGS.md#finding-35) now has a player-facing surface,
+> and on today's deployment that surface reads as a WARNING**, because the honest answer is that
+> the canister cannot say. See the E-70 entry.
 
 > **WAVE 7, 2026-08-06.** A **third** independent auditor, run AFTER wave 7's fixes, still says
 > **"No — I would not tell a friend their money is safe here."** Every blocker that stopped
@@ -5434,6 +5464,114 @@ minimum ([T-26](#t-26)) is right in the canister and in the source and **has nev
 rendered page**, because there is no BTC row in the local lobby and Withdraw is disabled at zero
 balance. Deploying a local ckBTC ledger is the one change that makes both verifiable.
 
+<a id="t-38"></a>
+### T-38, high, the "Deployed Canister Hashes" the app has been showing are three upgrades stale, and nothing in the repository compared them to anything — **FIXED IN THIS PASS**
+
+**Found while building the mainnet bundle, by reading the public dashboard index** (allowed
+plain-HTTPS read; no mainnet canister was called).
+
+`routes/+page.svelte` carried, hard-coded, under the heading **"Deployed Canister Hashes"**:
+
+```
+lobby   0xff6c893de860c5bd8dae85d67344ee94619fb6faad6d68b3265c9a6fe5a2cef8
+tables  0x1b84e2fa1c35fd50001cb059ba644784fe5a6b36a093a2ac3e56c39bc3bbdf28
+history 0xc9b1b78a6490cd2034b967dc9de11bb6377170e0e5ef96144b546da3a93dd8f9
+```
+
+`https://ic-api.internetcomputer.org/api/v3/canisters/<id>` reports, for the six live canisters:
+
+```
+kpfcd (lobby)    fee23e8e2e8a24ab0ee622039916f91b18ac2a78fbb40011ae533701d83443d1
+kggj7 (history)  5736c9ac0d33959a11bcecf5c87881e579611d0cf4f2baa050e66a56f72657cc
+kieex/lfkaz/lclgn/qrhly (tables)
+                 5d57a1e9f17aedafb3ff33805b9a83266d8b6f44d7b02df8a2bf7f6078687fde
+```
+
+Not one of the three matched. **Nothing noticed, because nothing compared them**: the heading is a
+claim about the state of the world made by a static file, and no build step, no test and no gate
+read it. A verification surface whose numbers are never checked is worse than none — it is the
+page a careful person reads *instead of* verifying.
+
+The panel also printed `icp canister status <ID> -e ic` as the command to check with.
+`canister_status` is a **controller-only** management call on mainnet, so the instruction was
+unrunnable by every stranger it was printed for. [T-33](#t-33) made this exact point about
+`scripts/verify-build.sh` two waves ago; the panel kept doing it.
+
+**Fixed.** `$lib/deployed-build.js` holds the expected hashes as an explicitly labelled CLAIM,
+with the date, who declared it, and the sentence *"this page was built on a machine that could not
+read the deployed hashes for itself"*. The panel puts a **live reading beside it**, fetched on
+demand in the reader's own browser from the public index (a party that is not us), with three
+outcomes rendered: `match`, `MISMATCH` — *"do not deposit until that is explained"* — and
+`unknown`, which is not the same as match. The printed command is a `curl` one-liner anybody can
+run, plus `./scripts/verify-build.sh --mainnet` to reproduce the hashes from source.
+
+**STILL OPEN FOR THE OPERATOR, AND IT IS NOT A UI QUESTION.** The hashes this wave was told are
+deployed —
+`lobby 0x7ee36baa…`, `history 0x59d4b80c…`, `tables 0x511c9d0e…` — are **not** the ones the public
+index reports. They are what `EXPECTED_MODULE_HASHES` now contains, so the panel's own live check
+will read MISMATCH on all six until that is resolved. Three explanations fit and this wave could
+not distinguish them without calling mainnet: the index is lagging; the upgrade did not land; or
+the two sets hash different bytes (raw `.wasm` versus the gzipped module actually installed).
+`./scripts/verify-build.sh --mainnet` settles it.
+
+<a id="t-39"></a>
+### T-39, medium, local sign-in navigates to `http://undefined.localhost:4943` — **FIXED IN THIS PASS**
+
+Found by reading the emitted chunk of the mainnet build. `auth.js` built the local Internet
+Identity origin as
+
+```js
+`http://${import.meta.env.CANISTER_ID_INTERNET_IDENTITY}.localhost:4943`
+```
+
+and **`import.meta.env.CANISTER_ID_*` does not exist in this build**. Vite exposes only
+`VITE_`-prefixed variables on `import.meta.env`; `vite-plugin-environment` puts the
+`CANISTER_`-prefixed ones on `process.env`. `canisters.js` reads all three spellings for precisely
+this reason, three files away. The compiled literal is, verbatim:
+
+```
+"http://undefined.localhost:4943"
+```
+
+Two independent faults in one line: that, and the hard-coded `4943` when this project's managed
+replica is pinned to **8077** ([T-03](#t-03)).
+
+It survived because the screenshot harness authenticates with agent identities and never presses
+Sign In, and because the MAINNET branch is unaffected (it takes `II_URL`). **Fixed**: the id is
+resolved from all three spellings, the port comes from `LOCAL_GATEWAY_PORT`, and an unresolvable
+id now **rejects with an actionable message** instead of opening a window on a host that cannot
+exist. Note that nothing in `dev.sh` or the harness exports the local II id at all, so the local
+sign-in path stays unusable until something does — the difference is that it now says so.
+
+<a id="t-40"></a>
+### T-40, high, 0 of 5 protected notices legible with the Verify Code dialog open, at both viewports — **FIXED IN THIS PASS**
+
+**Measured, not read**, by rendering the mainnet bundle and hit-testing each phrase on its own
+pixels with `elementFromPoint` (`tools/shots/verify-mainnet-bundle.mjs`). Desktop 1440x900 and
+mobile 390x844, identical result:
+
+```
+.strip-text          display:none              (portrait table strip; not this view)
+.banner-warning      y -325  800x56            above the fold: opening this dialog from the
+                                               footer link auto-scrolls the page
+.disclaimer-warning  y  674  800x59            IN the viewport, under .modal-backdrop
+                                               (rgba(0,0,0,0.8) + 4px blur, z-index 1000)
+-------------------------------------------------------------------------------------
+0 of 5 phrases on their own pixels
+```
+
+Every other dialog in this application was fixed for exactly this — DepositModal, WithdrawModal
+and HowItWorks under [T-31](#t-31), HandHistory under [H-36](#h-36) — and **the one dialog that
+was missed is the one whose entire subject is whether this deployment can be trusted.** The
+scroll is what made it worse than the others: the top banner is not merely dimmed, it is off
+screen, because the control that opens the dialog is in the footer.
+
+**Fixed** by the established remedy: `.verify-modal` becomes a flex column with the body in a
+scroller and the four notices restated verbatim in a `flex-shrink: 0` block outside it, so
+arriving at the dialog is enough to have them on screen. Additional copy only; nothing anywhere
+else weakened. Re-measured: 5/5 at both viewports, with the dialog open, and 5/5 at both viewports
+on the lobby **underneath a real error toast**.
+
 <a id="d-06"></a>
 ### D-06, medium, two claims a stranger reads as stronger than they are
 
@@ -6970,10 +7108,25 @@ non-empty backlog and asserts the count survives. Found while re-anchoring the r
 ---
 
 <a id="e-70"></a>
-### E-70, high, THE FIFTH CROSS-AGENT DEFECT: every observation instrument was built for the deposit subaccounts and none for the main account — **OPEN**
+### E-70, high, THE FIFTH CROSS-AGENT DEFECT: every observation instrument was built for the deposit subaccounts and none for the main account — **CLOSED 2026-08-06**
 
-[SECURITY-FINDINGS.md FINDING 35](SECURITY-FINDINGS.md#finding-35) carries the reproduction.
-Index entry, and the shape, because the shape is what recurs:
+**CLOSED.** [SECURITY-FINDINGS.md FINDING 35](SECURITY-FINDINGS.md#finding-35) carries the fix,
+what it does not fix, and the driven output. In one line: the main account now has an
+observation record (`MAIN_CUSTODY`, persisted `opt` at the top level and verified across a real
+`--mode upgrade`), anybody including an anonymous caller can take a reading
+(`refresh_solvency()`, `refresh_main_account_custody()`), `get_solvency()` publishes OWES against
+HOLDS with a signed difference, a three-state verdict and the age of every reading — `null`, never
+zero, where one has never been taken — and the two surfaces a player already reads carry it:
+`get_custody_status().canister_solvency` and the refusal a withdrawal gets when the ledger will
+not pay it. Gated by `tests/money_safety/tests/solvency.rs` (9 tests) and by
+`invariants::solvency` on every fuzz step, at a new never-excusable severity
+`InsolvencyUnreported`.
+
+**THERE IS A LIVE 2.00 ICP SHORTFALL ON MAINNET table_1 AND THIS DOES NOT FIX IT.** It makes it
+visible and quotable. No setter was added and none may be:
+`no_setter_was_added_to_fix_the_books` is a source-level gate.
+
+The shape, kept because the shape is what recurs:
 
 Five agents edited `src/table_canister/src/lib.rs`. The wave's organising insight, *a query
 cannot call the ledger, so ask from an update and write the answer down*, was implemented for
@@ -6985,6 +7138,49 @@ on a canister holding 5 ICP, and `admin_update_config(BTC)` is accepted on the s
 It is not the "correct totals, wrong recipients" signature this time. It is the one above it:
 **a correct instrument pointed at a subset of the accounts, and a census whose MEASURED BY column
 names the test harness rather than the canister.**
+
+**WAVE 9: THE PLAYER-FACING HALF IS BUILT, AND IT IS BLOCKED ON ONE GENERATED FILE.**
+
+The canister half landed during this wave: `src/table_canister/table_canister.did` now publishes
+`get_solvency : () -> (SolvencyReport) query` and `refresh_solvency : () -> (Result_Solvency)`,
+with a `SolvencyVerdict` variant of `CanPayEveryone | CannotPayEveryone | Unknown`.
+
+**`src/declarations/table_1/table_1.did.js` HAS NOT BEEN REGENERATED FROM IT.** That generated
+file is the Candid the BUNDLE is compiled against, so as of this build the browser does not know
+those methods exist, `describeSolvencySurface()` finds nothing, and the deposit screen renders
+`unsupported`. The wording is still true, and it is still a warning rather than silence — but the
+canister can now answer and the UI is not asking. Regenerating that one file is the whole
+remaining step; nothing in `src/cleardeck_frontend/**` needs to change, which is the property the
+discovery-by-Candid design was for. `tools/shots/test-solvency.mjs` asserts BOTH halves: the
+shipped `SolvencyReport` field-for-field (so the frontend is proven ready), and that today's
+declarations carry no solvency surface (so this paragraph cannot go stale silently).
+
+What the frontend does with each answer:
+
+* `src/cleardeck_frontend/src/lib/solvency.js` DISCOVERS the solvency surface from the table's
+  own Candid (`declarations/table_1/table_1.did.js`), structurally: a query whose return record
+  carries both "what the ledger holds" and "what is owed", or a stated shortfall. It names no
+  method, so regenerating the declarations wires it with no edit here.
+* **`verdict` WINS OVER ANY ARITHMETIC THIS CLIENT COULD DO**, because the Candid says so:
+  *"shortfall_e8s is null when there is no shortfall OR when the answer is not known — branch on
+  `verdict`, never on this"*. Deriving from `shortfall_e8s` would read UNKNOWN as FINE. An
+  unrecognised verdict tag degrades to `unknown`, never to `covered`. And `as_of_ns` (when the
+  REPORT was computed, always set) is deliberately NOT matched as an observation timestamp; only
+  `main_observed_at_ns` is, because matching the wrong one turns "nobody has ever looked" into
+  "looked just now". All three are pinned by tests.
+* Until the declarations land the discovery returns nothing and the state is `unsupported`, which renders as
+  **"This table cannot report whether it actually holds the money it says it owes"**, in red,
+  above every control that can move money, on the deposit screen and the withdraw screen.
+  `covered` is the only state that renders nothing. **Unknown is not zero and unknown is not
+  fine** — the four other states are all reasons not to deposit, and they are worded that way.
+* `src/cleardeck_frontend/src/lib/components/SolvencyNotice.svelte` is in the document flow with
+  no `position: fixed` and no z-index, so it cannot become one more thing that covers the four
+  protected notices ([E-52](#e-52)).
+
+This does not close E-70. A UI that says "the canister cannot tell you" is the correct rendering
+of an open defect, not a fix for it. What it removes is the state the finding is actually about:
+a player standing in front of a deposit button on a table that is 2.00 ICP short, with the
+application showing them nothing at all.
 
 <a id="e-71"></a>
 ### E-71, high, the archive's `(table_id, hand_number)` is not a key: eleven records answer to "table_2 hand 1", with three different pots — **OPEN**
@@ -7022,7 +7218,12 @@ already is unique), the UI and the spec citing it, and `record_hand` refusing, o
 versioning, a `(table_id, hand_number)` it has already seen.
 
 <a id="e-72"></a>
-### E-72, high, the money-safety harness's `CustodyStatus` mirror silently drops `unfinished_ledger_ops` — **OPEN**
+### E-72, high, the money-safety harness's `CustodyStatus` mirror silently drops `unfinished_ledger_ops` — **CLOSED 2026-08-06**
+
+**CLOSED.** The field is declared, and — the part that matters —
+`CustodyStatus::components_sum_to_total()` asserts an identity that cannot hold unless EVERY
+component field is declared, so the next silently dropped field fails a test instead of
+narrowing the record in silence. [SECURITY-FINDINGS.md FINDING 36](SECURITY-FINDINGS.md#finding-36).
 
 [SECURITY-FINDINGS.md FINDING 36](SECURITY-FINDINGS.md#finding-36). Cross-agent 1 × 2: agent one
 wrote the comment *"Mirrored in FULL on purpose"*, agent two added a tenth field to the canister's
@@ -7031,11 +7232,15 @@ the custody surface has been reading nine of ten fields ever since. Found by wri
 name in a probe and having `rustc` refuse it.
 
 <a id="e-73"></a>
-### E-73, high, `total_liability()` — the last custody guard's only input — has one caller, no query and no gate — **PARTLY ADDRESSED 2026-08-06**
+### E-73, high, `total_liability()` — the last custody guard's only input — has one caller, no query and no gate — **CLOSED 2026-08-06**
 
-[SECURITY-FINDINGS.md FINDING 37](SECURITY-FINDINGS.md#finding-37). `tests/money_safety/tests/coherence_w8.rs`
-is now the first test that aims at the guard, and it is named in `./scripts/dev.sh test`. That is
-one state, not an instrument; the entry stays open until a query exposes the terms.
+**CLOSED by the one query this entry asked for.** `get_solvency().guard_liability` IS
+`total_liability()`, published beside every term it is built from, and
+`invariants::solvency::check_solvency_report_is_coherent` asserts all of them term by term
+against independently computed figures on every snapshot the harness takes — including every
+fuzz step. A term that goes missing from the guard now fails a test instead of waiting for
+somebody to flip a currency and find out.
+[SECURITY-FINDINGS.md FINDING 37](SECURITY-FINDINGS.md#finding-37).
 
 <a id="e-74"></a>
 ### E-74, medium, `local-up` reports success for a lobby it did not populate, and an empty lobby makes the ENTIRE screenshot harness unrunnable — **OPEN, and it is why the notice gate was dark for two waves**

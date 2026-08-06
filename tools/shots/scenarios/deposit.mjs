@@ -109,15 +109,77 @@ export default {
       table: TABLE, asPlayer: HERO_PLAYER,
     }));
 
+    // ===================================================================
+    // IS THE SOLVENCY VERDICT ON THIS SCREEN, AND IS IT ABOVE THE CONTROLS?
+    // ===================================================================
+    //
+    // docs/SECURITY-FINDINGS.md FINDING 35 / docs/DEFECTS.md E-70. Mainnet
+    // table_1 is 2.00 ICP short of its own books and nothing in the canister can
+    // say so, so this screen showed a player nothing at all before committing
+    // real money.
+    //
+    // Two things are asserted, and the ORDER one is the load-bearing one: a
+    // warning below the amount field is a warning the player reads after
+    // deciding. It is checked geometrically, not by DOM order, because a CSS
+    // change can reorder a flex container without touching the markup.
+    //
+    // `covered` is the only state that renders nothing, so an absent block is
+    // only acceptable when the canister actually said it is covered. On today's
+    // deployment there is no solvency surface at all, the state is
+    // `unsupported`, and the block MUST be there.
+    const solvencyEl = page.locator('.modal-content .solvency');
+    const solvencyPresent = (await solvencyEl.count()) > 0;
+    const solvencyState = solvencyPresent
+      ? await solvencyEl.first().getAttribute('data-solvency-state')
+      : null;
+    const solvencyVisible = solvencyPresent
+      ? await solvencyEl.first().isVisible().catch(() => false)
+      : false;
+
+    let solvencyAboveControls = null;
+    if (solvencyVisible) {
+      const box = await solvencyEl.first().boundingBox();
+      const control = page.locator('.modal-content .btn-primary, .modal-content .amount-input')
+        .first();
+      const cBox = await control.boundingBox().catch(() => null);
+      solvencyAboveControls = box && cBox ? box.y + box.height <= cBox.y + 1 : null;
+    }
+
+    // It must not be an overlay either: HARD RULE 2 forbids anything in this app
+    // covering the four protected notices, and the notices are restated inside
+    // this very dialog directly above this block.
+    const solvencyIsInFlow = solvencyPresent
+      ? await solvencyEl.first().evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return cs.position === 'static' || cs.position === 'relative';
+      })
+      : null;
+
+    const solvencyOk = solvencyState === 'covered'
+      ? !solvencyPresent || !solvencyVisible
+      : solvencyVisible && solvencyAboveControls !== false && solvencyIsInFlow !== false;
+
     return withAgreement({
-      verified: /deposit/i.test(title),
+      verified: /deposit/i.test(title) && solvencyOk,
       checks: {
         modals: modal,
         title,
         viewportWidth: viewport?.width ?? null,
         walletSources: sourceToggle.map((t) => t.replace(/\s+/g, ' ').trim()).filter(Boolean),
+        solvency: {
+          present: solvencyPresent,
+          visible: solvencyVisible,
+          state: solvencyState,
+          aboveMoneyControls: solvencyAboveControls,
+          inDocumentFlow: solvencyIsInFlow,
+          ok: solvencyOk,
+          reason: solvencyOk
+            ? null
+            : 'the deposit screen does not warn about this table\'s solvency, or warns '
+              + 'below the controls that move money (docs/SECURITY-FINDINGS.md FINDING 35)',
+        },
       },
-      notes: title,
+      notes: `${title}; solvency verdict on screen: ${solvencyState ?? 'ABSENT'}`,
     }, tableAgreement, depositAgreement);
   },
 };

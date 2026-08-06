@@ -237,9 +237,145 @@ type CustodyStatus = record {
   // unfinished_ledger_ops: everything this canister holds that belongs to you,
   // across every account it owns and every movement it has begun.
   total : nat64;
-  // What to do next, in words, naming abandon_stuck_hand when it is needed.
+  // CAN THIS CANISTER PAY EVERYONE, INCLUDING YOU?
+  // Every field above answers "how much of this is mine". None of them answers
+  // "is it actually there", and on mainnet table_1 on 2026-08-06 the answer was
+  // no, by 2.00 ICP, with every one of those fields correct.
+  // docs/SECURITY-FINDINGS.md FINDING 35. Unknown is NOT a soft yes: branch on
+  // this field, never on canister_shortfall_e8s being null.
+  canister_solvency : SolvencyVerdict;
+  // How many e8s short, when canister_solvency says it cannot pay everyone.
+  // null in the other two states, including Unknown.
+  canister_shortfall_e8s : opt nat64;
+  // What to do next, in words, naming abandon_stuck_hand when it is needed. The
+  // shortfall sentence comes FIRST when there is one.
   advice : text;
 };
+// Can this canister pay everyone it owes? Three answers and not two: a canister
+// that has never asked the ledger what it holds DOES NOT KNOW, and an unknown is
+// not a zero and not an all-clear. docs/SECURITY-FINDINGS.md FINDING 35.
+type SolvencyVerdict = variant {
+  // Every account has been read and what it holds covers what it owes.
+  CanPayEveryone;
+  // It owes more than it holds. Sayable even with unread deposit subaccounts:
+  // money at one is owed to the principal it was derived from, so it lands on
+  // BOTH sides of the comparison and cannot close a gap.
+  CannotPayEveryone;
+  // At least one account has never been read. NOT "probably fine".
+  Unknown;
+};
+// One reading of this canister's MAIN ledger account -- the account
+// get_deposit_address() publishes, where every sweep and every pull lands, and
+// where essentially all of the money is. docs/SECURITY-FINDINGS.md FINDING 35.
+type MainAccountObservation = record {
+  // icrc1_balance_of((this canister, null)) exactly as the ledger returned it.
+  amount : nat64;
+  // When the LEDGER answered. Never advanced by a derived adjustment.
+  observed_at_ns : nat64;
+  ledger : principal;
+  // Confirmed movements in and out since that reading. A raise is applied only
+  // when the movement provably happened AFTER the reading; a lowering is applied
+  // always. Adjustments happen when the ledger's answer comes back, so
+  // amount + credited_since - debited_since can be too LOW freely and too HIGH
+  // only by a payout already handed to the ledger and not yet settled -- which is
+  // counted on the OWED side at the same time, so the published difference is
+  // identical either way. That is what makes "I cannot pay everyone" trustworthy.
+  credited_since : nat64;
+  debited_since : nat64;
+};
+type Result_MainCustody = variant { Ok : MainAccountObservation; Err : text };
+// WHAT THIS CANISTER OWES, WHAT IT HOLDS, AND WHETHER THE FIRST FITS INSIDE THE
+// SECOND. docs/SECURITY-FINDINGS.md FINDING 35 / docs/DEFECTS.md E-70.
+//
+// After the deposit subaccounts cancel (every e8 observed in one is held by this
+// canister AND owed to the principal it was derived from), the signed difference
+// reduces to one line:
+//
+//   difference = main_account - escrow - chips - pot - payouts_in_flight
+//
+// Everything else here exists so a reader can check that line instead of taking
+// it on trust, and so an UNOBSERVED account is never read as an empty one.
+type SolvencyReport = record {
+  currency : text;
+  // The ledger this table's currency selects RIGHT NOW.
+  ledger : principal;
+  // When this report was computed. NOT when anything in it was observed.
+  as_of_ns : nat64;
+
+  // -- WHAT IT OWES --
+  escrow : nat64;
+  chips_at_table : nat64;
+  pot : nat64;
+  // The pot as the ATTRIBUTED stakes sum to it; `owed` uses the larger of the two.
+  committed_stake : nat64;
+  // Observed money in this canister's own deposit subaccounts, net of sweeps in
+  // flight. The same figure total_liability() uses.
+  unswept_deposits : nat64;
+  // Open pull and sweep intents: value arriving that is not booked yet.
+  unfinished_incoming : nat64;
+  // The pull half of unfinished_incoming. The only in-flight term added to the
+  // HELD side too: it is on one side of the ledger boundary or the other, so
+  // counting it on both is what stops an unfinished deposit from manufacturing a
+  // shortfall. unfinished_incoming - pulls_in_flight is the sweep half.
+  pulls_in_flight : nat64;
+  // Ledger fees an open sweep will burn out of the subaccount it is draining.
+  // Subtracted from HELD so the difference does not wobble by one fee per sweep.
+  sweep_fees_in_flight : nat64;
+  // Open payout intents: value already debited from escrow and handed to the
+  // ledger, not yet seen to leave.
+  payouts_in_flight : nat64;
+  owed : nat64;
+
+  // -- WHAT IT HOLDS --
+  // NULL MEANS NOBODY HAS EVER LOOKED, not "the account is empty".
+  main_account : opt nat64;
+  // When the LEDGER was asked. null means never.
+  main_observed_at_ns : opt nat64;
+  // Which ledger that reading was taken on; differs from `ledger` when the
+  // currency has been changed since.
+  main_ledger : opt principal;
+  main_credited_since_reading : nat64;
+  main_debited_since_reading : nat64;
+  // Every e8 observed in the deposit subaccounts, WITHOUT netting sweeps in
+  // flight: while a sweep is open the money is still there as far as any reading
+  // goes.
+  deposit_subaccounts : nat64;
+  deposit_accounts_observed : nat64;
+  deposit_oldest_observed_at_ns : opt nat64;
+  // HOW MANY enumerable deposit accounts have NEVER been read. Balances unknown,
+  // not zero. Non-zero forces verdict = Unknown unless the canister already knows
+  // it is short. The COUNT and not the list, because this is a public query and
+  // the census is every principal holding escrow at this table: publishing it
+  // would turn a solvency instrument into a player roster.
+  deposit_accounts_never_observed_count : nat64;
+  // WHICH ones, scoped to the caller: all of them for a controller, YOUR OWN
+  // principal (only if it is unread) for anybody else. Same rule
+  // get_all_ledger_intents uses. Branch on the count above, never on this being
+  // empty.
+  deposit_accounts_never_observed : vec principal;
+  // main_account + deposit_subaccounts + pulls_in_flight - sweep_fees_in_flight,
+  // exactly. NULL whenever main_account is null: there is no honest total that
+  // treats a never-read account as empty.
+  held : opt nat64;
+
+  // -- THE ANSWER --
+  // held - owed, signed. Negative means it CANNOT pay everyone.
+  difference_e8s : opt int;
+  // The magnitude of a negative difference. null when there is no shortfall OR
+  // when the answer is not known -- branch on `verdict`, never on this.
+  shortfall_e8s : opt nat64;
+  // Money at the main account that no escrow balance, chip stack, pot or open
+  // payout accounts for: held for somebody this canister cannot yet name.
+  unattributed_at_main : opt nat64;
+  // total_liability(), the single number the currency guard reads, published so
+  // an instrument can CHECK the guard instead of having to trigger it.
+  // docs/SECURITY-FINDINGS.md FINDING 37.
+  guard_liability : nat64;
+  verdict : SolvencyVerdict;
+  // The answer in words, naming the numbers and the method to call next.
+  summary : text;
+};
+type Result_Solvency = variant { Ok : SolvencyReport; Err : text };
 // ONE IRREVERSIBLE LEDGER MOVEMENT THIS CANISTER COMMITTED TO, written down
 // BEFORE it was attempted. docs/SECURITY-FINDINGS.md FINDING 29.
 //
@@ -534,7 +670,29 @@ service : (TableConfig) -> {
   // any principal named in the argument, and write down what the ledger says.
   // Moves no money. Required before a currency change: the guard refuses while
   // any published address has never been read.
+  // Controller: read every deposit subaccount this canister can enumerate AND its
+  // own MAIN account, and write down what the ledger says. Moves no money.
+  // Required before a currency change. Reading the main account is
+  // docs/SECURITY-FINDINGS.md FINDING 35: this reply said "1 audited, 0 held,
+  // 0 unaudited" on a canister holding 5 ICP, because the money was in the one
+  // account it never looked at. The tuple shape cannot grow, so the main-account
+  // reading lands in get_solvency() and in the canister log.
   admin_audit_deposit_custody : (vec principal) -> (Result_DepositAudit);
+  // CAN THIS CANISTER PAY EVERYONE IT OWES? What it owes, what it holds, the
+  // signed difference, a plain-language verdict, and the age of every reading it
+  // is built from -- with null, never zero, where a reading has NEVER been taken.
+  // A query: free, no permission, and it answers while every update is refused.
+  // docs/SECURITY-FINDINGS.md FINDING 35.
+  get_solvency : () -> (SolvencyReport) query;
+  // Ask the ledger what this canister's MAIN account holds right now, write it
+  // down, and return the whole solvency report. ANY principal may call it,
+  // including an anonymous one: a player has to be able to check whether the
+  // table can pay them without asking permission. Moves no money and is safe to
+  // call repeatedly.
+  refresh_solvency : () -> (Result_Solvency);
+  // The same reading on its own, without the report. Any principal, moves no
+  // money.
+  refresh_main_account_custody : () -> (Result_MainCustody);
   // DEV ONLY: Get free test chips for local development
   // Disabled when dev_mode is false (production)
   dev_faucet : (nat64) -> (Result_1);

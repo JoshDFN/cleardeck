@@ -109,6 +109,16 @@ pub struct Snapshot {
     /// Enumerable deposit accounts the canister has never read. An account here
     /// has an UNKNOWN balance, which every guard has to treat as money.
     pub canister_unaudited_deposit_accounts: usize,
+    /// **What the canister itself says about whether it can pay everyone**, read
+    /// from `get_solvency()` as an ANONYMOUS caller, because a player must be able
+    /// to ask without permission.
+    ///
+    /// `None` means the build has no such surface at all -- which is the state
+    /// docs/SECURITY-FINDINGS.md FINDING 35 describes and is itself reported as a
+    /// violation, not skipped. Every other field of this snapshot is a fact about
+    /// the world; this one is the canister's CLAIM about it, and the gap between
+    /// the two is what `invariants::solvency` measures.
+    pub canister_solvency: Option<SolvencyReport>,
     pub table: TableState,
 }
 
@@ -800,8 +810,41 @@ impl World {
             chips_total: self.chips_total(),
             canister_unswept_deposits,
             canister_unaudited_deposit_accounts: unaudited.len(),
+            canister_solvency: self.solvency(),
             table: self.table_state(),
         }
+    }
+
+    /// `get_solvency()` as an ANONYMOUS caller.
+    ///
+    /// Anonymous on purpose: the claim being tested is that a player can find out
+    /// whether the table can pay them WITHOUT asking anybody's permission, so the
+    /// harness asks with the least authority there is. `None` when the method does
+    /// not exist, is rejected, or does not decode -- all three of which are "this
+    /// build cannot say whether it is solvent", which is the defect, not a reason
+    /// to skip the check.
+    pub fn solvency(&self) -> Option<SolvencyReport> {
+        let bytes = self
+            .query_raw(Principal::anonymous(), "get_solvency", Encode!().unwrap())
+            .ok()?;
+        decode_one::<SolvencyReport>(&bytes).ok()
+    }
+
+    /// `refresh_solvency()`: ask the ledger what the main account holds, write it
+    /// down, and return the whole report.
+    ///
+    /// Takes `who` so a test can prove any principal may call it. It moves no
+    /// money, so the harness's exemption bookkeeping is untouched.
+    pub fn refresh_solvency(&self, who: Principal) -> Outcome<SolvencyReport> {
+        self.update_result(who, "refresh_solvency", Encode!().unwrap())
+    }
+
+    /// `refresh_main_account_custody()`: the reading on its own.
+    pub fn refresh_main_account_custody(
+        &self,
+        who: Principal,
+    ) -> Outcome<MainAccountObservation> {
+        self.update_result(who, "refresh_main_account_custody", Encode!().unwrap())
     }
 
     // -----------------------------------------------------------------------

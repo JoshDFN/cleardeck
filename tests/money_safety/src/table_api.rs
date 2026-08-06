@@ -437,6 +437,17 @@ impl HandHistoryAmounts {
 /// **Mirrored in FULL on purpose.** A partial mirror here would let the field be
 /// deleted from the canister without a single test noticing, which is precisely
 /// how the deposit subaccounts stayed outside every instrument for seven waves.
+///
+/// # And that is exactly what happened to it (docs/DEFECTS.md E-72, FINDING 36)
+///
+/// The comment above was written by one agent; a second agent added
+/// `unfinished_ledger_ops` to the canister's record in the same wave; **Candid
+/// record subtyping drops unknown fields silently**, so nothing failed, nothing
+/// warned, and every harness assertion against this surface read nine of ten
+/// fields. The mechanism the comment exists to prevent is the mechanism that got
+/// it. The field is here now, and [`CustodyStatus::components_sum_to_total`] is
+/// what makes the completeness load-bearing rather than decorative: it can only
+/// hold while every component field is declared.
 #[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
 pub struct CustodyStatus {
     pub escrow: u64,
@@ -450,8 +461,103 @@ pub struct CustodyStatus {
     /// `None` means the canister has NEVER asked the ledger about that address.
     /// It does not mean the address is empty.
     pub unswept_deposit_observed_at_ns: Option<u64>,
+    /// Money of this caller's that the canister has moved on the ledger and not
+    /// finished booking. docs/SECURITY-FINDINGS.md FINDING 29.
+    pub unfinished_ledger_ops: u64,
     pub total: u64,
+    /// Whether the canister can pay EVERYONE, not just this caller.
+    /// docs/SECURITY-FINDINGS.md FINDING 35.
+    pub canister_solvency: SolvencyVerdict,
+    /// Magnitude of the shortfall when `canister_solvency` is
+    /// `CannotPayEveryone`. `None` in the other two states -- including
+    /// `Unknown`, so this is never the field to branch on.
+    pub canister_shortfall_e8s: Option<u64>,
     pub advice: String,
+}
+
+impl CustodyStatus {
+    /// The identity that makes a FULL mirror mean something.
+    ///
+    /// FINDING 36's fix is not "add the missing field": it is one assertion that
+    /// cannot hold unless every component field is present, so the next silently
+    /// dropped field fails a test instead of quietly narrowing the record.
+    pub fn components_sum_to_total(&self) -> bool {
+        self.escrow
+            .saturating_add(self.chips_at_table)
+            .saturating_add(self.committed_in_pot)
+            .saturating_add(self.unswept_deposit)
+            .saturating_add(self.unfinished_ledger_ops)
+            == self.total
+    }
+}
+
+/// Can the canister pay everyone it owes? Mirrored from
+/// `src/table_canister/src/lib.rs`. docs/SECURITY-FINDINGS.md FINDING 35.
+#[derive(Clone, Copy, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub enum SolvencyVerdict {
+    CanPayEveryone,
+    CannotPayEveryone,
+    Unknown,
+}
+
+/// One reading of the canister's MAIN ledger account.
+#[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub struct MainAccountObservation {
+    pub amount: u64,
+    pub observed_at_ns: u64,
+    pub ledger: Principal,
+    pub credited_since: u64,
+    pub debited_since: u64,
+}
+
+/// Reply of `get_solvency()` / `refresh_solvency()`.
+///
+/// **Mirrored in FULL on purpose**, with [`CustodyStatus`]'s cautionary tale one
+/// screen above it. Every field here is asserted somewhere in
+/// `invariants::solvency`, which is the only thing that keeps a full mirror
+/// honest.
+#[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub struct SolvencyReport {
+    pub currency: String,
+    pub ledger: Principal,
+    pub as_of_ns: u64,
+
+    pub escrow: u64,
+    pub chips_at_table: u64,
+    pub pot: u64,
+    pub committed_stake: u64,
+    pub unswept_deposits: u64,
+    pub unfinished_incoming: u64,
+    pub pulls_in_flight: u64,
+    pub sweep_fees_in_flight: u64,
+    pub payouts_in_flight: u64,
+    pub owed: u64,
+
+    /// `None` means the canister has NEVER read its own main account.
+    pub main_account: Option<u64>,
+    pub main_observed_at_ns: Option<u64>,
+    pub main_ledger: Option<Principal>,
+    pub main_credited_since_reading: u64,
+    pub main_debited_since_reading: u64,
+    pub deposit_subaccounts: u64,
+    pub deposit_accounts_observed: u64,
+    pub deposit_oldest_observed_at_ns: Option<u64>,
+    /// How many enumerable deposit accounts have never been read. The COUNT is
+    /// public; the roster is not.
+    pub deposit_accounts_never_observed_count: u64,
+    /// Which ones, scoped to the caller: all for a controller, your own for
+    /// anybody else. The harness reads `get_solvency()` as ANONYMOUS, so this is
+    /// normally empty and the count above is the field to branch on.
+    pub deposit_accounts_never_observed: Vec<Principal>,
+    /// `None` whenever `main_account` is `None`.
+    pub held: Option<u64>,
+
+    pub difference_e8s: Option<i128>,
+    pub shortfall_e8s: Option<u64>,
+    pub unattributed_at_main: Option<u64>,
+    pub guard_liability: u64,
+    pub verdict: SolvencyVerdict,
+    pub summary: String,
 }
 
 /// Reply of `get_deposit_custody` / `refresh_deposit_custody`.

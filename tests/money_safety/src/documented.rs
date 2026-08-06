@@ -263,6 +263,16 @@ fn never_excusable(s: Severity) -> bool {
             // record is what a player would be shown to settle a dispute.
             // docs/SECURITY-FINDINGS.md FINDING 30.
             | Severity::FalseRecord
+            // The canister owes more than it holds and cannot see or say so. No id
+            // excuses a fund-holding canister that reports an all-clear, or reports
+            // nothing at all, while the ledger says it cannot pay the people whose
+            // money it has. It carries a real e8 magnitude AND a zero-magnitude
+            // half (a report whose own terms do not add up), and neither is
+            // tolerable: the whole point of the surface is that somebody can act on
+            // it, and a surface that can be wrong in the reassuring direction is
+            // worse than no surface, because it is believed.
+            // docs/SECURITY-FINDINGS.md FINDING 35, docs/DEFECTS.md E-70.
+            | Severity::InsolvencyUnreported
     )
 }
 

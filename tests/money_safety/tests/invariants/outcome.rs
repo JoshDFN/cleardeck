@@ -402,6 +402,11 @@ mod synthetic {
             chips_total: 0,
             canister_unswept_deposits: 0,
             canister_unaudited_deposit_accounts: 0,
+            // A synthetic snapshot for the OUTCOME legs, which are about who won a
+            // hand and never about custody. `None` here means "this fixture makes
+            // no claim about solvency"; the solvency legs are driven from real
+            // worlds in `invariants/solvency.rs` and `tests/solvency.rs`.
+            canister_solvency: None,
             ledger_deposit_by_principal: BTreeMap::new(),
             canister_deposit_by_principal: BTreeMap::new(),
             table: TableState {

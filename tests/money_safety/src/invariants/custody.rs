@@ -60,7 +60,16 @@ pub struct CustodyStatus {
     /// Nanoseconds until the hand becomes abandonable. `None` when it already is,
     /// or when nothing is committed.
     pub abandonable_in_ns: Option<u64>,
-    /// Everything above, added up: what the canister holds for this caller.
+    /// **What the canister holds for this caller across EVERY account and every
+    /// movement it has begun**, which is strictly more than the fields above.
+    ///
+    /// It also counts `unswept_deposit` and `unfinished_ledger_ops`, neither of
+    /// which is declared here, because this mirror is deliberately narrow and
+    /// Candid record subtyping drops what it does not declare. The full mirror,
+    /// and the assertion that the components really do sum to this, live at
+    /// `table_api::CustodyStatus`. This doc used to say "Everything above, added
+    /// up", which was true when it was written and stopped being true twice
+    /// without a single test noticing (docs/SECURITY-FINDINGS.md FINDING 36).
     pub total: u64,
     /// Plain-language next step, naming the method by name when one is needed.
     pub advice: String,

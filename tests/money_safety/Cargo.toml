@@ -36,6 +36,17 @@ pocket-ic = "11.0.0"
 # tests need to talk to the management canister directly.
 ic-management-canister-types = "0.5.0"
 candid = "0.10"
+# THE COMMITTED INTERFACE, PARSED AND USED AS A DECODER.
+#
+# `src/table_canister/table_canister.did` is what `icp.yaml` installs and what
+# every client is generated from, and this project already has a finding for it
+# not describing the code it claims to (FINDING 03 / E-08). `ic_cdk 0.19`'s
+# `export_candid!()` emits the interface at BUILD time via candid-extractor, not
+# as a queryable method, so the canister cannot simply be asked. Instead
+# `tests/solvency.rs` parses the committed file and decodes a REAL reply against
+# it: a client generated from that file can decode what the canister actually
+# sends, or the test fails.
+candid_parser = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
@@ -88,3 +99,17 @@ opt-level = 1
 [[test]]
 name = "ledger_boundary"
 path = "tests/ledger_boundary.rs"
+
+# CAN THIS CANISTER PAY EVERYONE, AND CAN IT SAY SO (docs/SECURITY-FINDINGS.md
+# FINDING 35, docs/DEFECTS.md E-70). Named explicitly for the reason
+# `admin_custody` and `ledger_boundary` are: an auto-discovered target is a target
+# no human ever types, and there is a REAL 2.00 ICP shortfall on mainnet table_1
+# that not one surface of the canister could see or say. If this file is renamed,
+# this line fails rather than the coverage silently going away.
+#
+# NOT YET IN `scripts/dev.sh test`, which names its targets one by one and is
+# owned elsewhere. `cargo test --tests` runs it; the canonical gate does not until
+# a line is added there.
+[[test]]
+name = "solvency"
+path = "tests/solvency.rs"

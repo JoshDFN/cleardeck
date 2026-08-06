@@ -20,9 +20,17 @@
   // the panel are still shown as text on purpose: that display is the point of
   // the panel, and it is sourced from MAINNET_CANISTER_IDS rather than retyped.
   import {
-    IS_MAINNET_BUILD, MAINNET_CANISTER_IDS, NETWORK, statusCommandFor,
+    agentHost, II_URL, IS_MAINNET_BUILD, MAINNET_CANISTER_IDS, NETWORK, statusCommandFor,
   } from "$lib/ic-config.js";
-  import { lobbyCanisterId } from "$lib/canisters";
+  import { lobbyCanisterId, historyCanisterId } from "$lib/canisters";
+  // docs/DEFECTS.md T-38: the "Deployed Canister Hashes" table stated three
+  // hashes as fact and had been three upgrades stale for an unknown length of
+  // time, because nothing in the app, the build or any gate compared them to
+  // anything. See the header of $lib/deployed-build.js for what replaced them.
+  import {
+    EXPECTED_MODULE_HASHES, EXPECTED_PROVENANCE, LIVE_HASH_SOURCE, REBUILD_COMMAND,
+    compareHash, displayHash, liveHashCommandForAll, readLiveModuleHash,
+  } from "$lib/deployed-build.js";
   import { currencyOf, formatTokenAmount } from "$lib/utils.js";
   import { HttpAgent } from '@dfinity/agent';
   import { Principal } from '@dfinity/principal';
@@ -84,6 +92,73 @@
   const verifyStatusCommand = statusCommandFor(
     IS_MAINNET_BUILD ? MAINNET_CANISTER_IDS.btc_table_1 : lobbyCanisterId,
   );
+
+  // ==========================================================================
+  // THE HASH CHECK, RUN BY THE READER, AGAINST A SOURCE THAT IS NOT US
+  // ==========================================================================
+  //
+  // The six canisters whose module hash says what code is running. `frontend` is
+  // excluded on purpose: its module hash is the ASSET CANISTER's, which says
+  // nothing about the bundle it happens to be serving, and listing it under
+  // "is the deployed code the source?" would be the panel's fourth false claim.
+  const VERIFIABLE_ROLES = ['lobby', 'history', 'table_1', 'table_2', 'table_3', 'btc_table_1'];
+
+  const allHashCommand = liveHashCommandForAll(
+    VERIFIABLE_ROLES.map((r) => MAINNET_CANISTER_IDS[r]),
+  );
+
+  /** @type {Record<string, {verdict:string, expected:string|null, live:string|null, error:string|null}>} */
+  let liveHashes = $state({});
+  let checkingHashes = $state(false);
+  let hashCheckRan = $state(false);
+
+  // Deliberately NOT on mount. This is a call to a third party, and a page that
+  // silently contacts an index every time it loads has made a decision on the
+  // reader's behalf. It is one button, and pressing it is the check.
+  async function checkLiveHashes() {
+    checkingHashes = true;
+    hashCheckRan = true;
+    try {
+      const results = await Promise.all(
+        VERIFIABLE_ROLES.map(async (role) => {
+          const read = await readLiveModuleHash(MAINNET_CANISTER_IDS[role]);
+          const cmp = compareHash(role, read.hash);
+          return [role, { ...cmp, error: read.error }];
+        }),
+      );
+      liveHashes = Object.fromEntries(results);
+    } finally {
+      checkingHashes = false;
+    }
+  }
+
+  // One summary line, so the answer does not have to be assembled by eye from
+  // six rows. Any mismatch dominates; any unknown beats "all match".
+  const hashVerdict = $derived.by(() => {
+    if (!hashCheckRan) return null;
+    const rows = Object.values(liveHashes);
+    if (rows.length === 0) return null;
+    const mismatched = rows.filter((r) => r.verdict === 'mismatch');
+    const unknown = rows.filter((r) => r.verdict === 'unknown' || r.verdict === 'no-expectation');
+    if (mismatched.length) {
+      return {
+        kind: 'mismatch',
+        text: `${mismatched.length} of ${rows.length} canisters are running code that is NOT `
+          + 'what this page describes. Do not deposit until that is explained.',
+      };
+    }
+    if (unknown.length) {
+      return {
+        kind: 'unknown',
+        text: `${rows.length - unknown.length} of ${rows.length} confirmed; `
+          + `${unknown.length} could not be read. Unread is not the same as matching.`,
+      };
+    }
+    return {
+      kind: 'match',
+      text: `All ${rows.length} canisters are running the module hashes this page states.`,
+    };
+  });
 
   // Current avatar style from localStorage - passed to PokerTable
   let currentAvatarStyle = $state(typeof localStorage !== 'undefined' ? (localStorage.getItem('poker_avatar_style') || 'bottts') : 'bottts');
@@ -868,7 +943,19 @@
       </div>
       <div class="logo-text">
         <span class="brand">ClearDeck</span>
-        <span class="tagline">Provably Fair Poker</span>
+        <!-- WHICH CHAIN THIS PAGE IS TALKING TO, ON THE SAME LINE AS THE
+             TAGLINE. On the same line on purpose: it costs no vertical space, and
+             every pixel above the table is a pixel of felt (docs/DEFECTS.md T-19,
+             docs/WAVE-04.md). The value is COMPILED IN by the build
+             (ic-config.js NETWORK), not sniffed from the hostname, so it agrees
+             with the canisters this bundle is actually wired to by construction:
+             the same constant decides both. -->
+        <span class="tagline">
+          Provably Fair Poker
+          <span class="net-chip" class:mainnet={IS_MAINNET_BUILD} data-network={NETWORK}>
+            {IS_MAINNET_BUILD ? 'IC mainnet · real funds' : `${NETWORK} build · test funds`}
+          </span>
+        </span>
       </div>
     </div>
 
@@ -1029,6 +1116,23 @@
       </div>
       <div class="footer-right">
         <span class="version">v0.1.0-alpha</span>
+        <span class="footer-divider">|</span>
+        <!-- The second statement of the target network, at the other end of the
+             page from the first, and this one names the canister the app is
+             actually wired to rather than only the chain. -->
+        <!-- The id is inside `<code class="canister-id">` deliberately. The
+             screenshot harness's token census requires every numeric token on
+             screen to be matched to a canister figure or excused by a REVIEWED
+             rule, and a bare principal in a <span> is four unexplained numbers
+             ("4", "5", "777", "77775") on every scene — it failed the census on
+             all 24 shots the first time this shipped. `token-allowlist.mjs`
+             already has the right rule (`identifier-digits`, scoped to
+             `.canister-id` among others), so this reuses it rather than widening
+             the one escape hatch the inverted gate has. -->
+        <span class="net-footer" class:mainnet={IS_MAINNET_BUILD} data-network={NETWORK}>
+          {IS_MAINNET_BUILD ? 'IC mainnet' : NETWORK} · lobby
+          <code class="canister-id">{lobbyCanisterId ?? 'unwired'}</code>
+        </span>
       </div>
     </div>
   </footer>
@@ -1070,77 +1174,139 @@
 
 {#if showVerify}
   <div class="modal-backdrop" onclick={() => showVerify = false} role="button" tabindex="-1" aria-label="Close"></div>
-  <div class="verify-modal">
+  <div class="verify-modal" role="dialog" aria-modal="true" aria-labelledby="verify-modal-title">
     <button class="close-btn" onclick={() => showVerify = false}>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
       </svg>
     </button>
 
-    <h2>Verify the Code</h2>
+  <div class="verify-scroll">
+    <h2 id="verify-modal-title">Verify the Code</h2>
     <p class="verify-intro">
-      Every canister on the Internet Computer has a publicly visible WASM hash.
-      You can verify that what's running matches the source code.
+      Every canister on the Internet Computer has a publicly visible module hash.
+      You can check that what is running is what this source builds to, without
+      trusting this page for any of it.
     </p>
 
-    <div class="verify-section">
-      <h3>1. Check Deployed Hash</h3>
-      <p>Query the IC to see the hash of the deployed canister:</p>
-      <div class="code-block">
-        <code>{verifyStatusCommand}</code>
-        <button class="copy-btn" onclick={() => navigator.clipboard.writeText(verifyStatusCommand)}>Copy</button>
-      </div>
+    <!-- WHAT THIS PAGE IS TALKING TO. Sourced from the same constants that wire
+         the actors (ic-config.js / canisters.js), so it cannot disagree with the
+         connection it describes. docs/DEFECTS.md T-01, T-02. -->
+    <div class="verify-section wiring" data-network={NETWORK}>
+      <h3>0. What this page is connected to</h3>
+      <dl class="wiring-list">
+        <div><dt>Network</dt><dd class:live={IS_MAINNET_BUILD}>
+          {IS_MAINNET_BUILD ? 'Internet Computer mainnet — REAL funds' : `${NETWORK} — test funds only`}
+        </dd></div>
+        <div><dt>Gateway</dt><dd><code>{agentHost()}</code></dd></div>
+        <div><dt>Sign-in</dt><dd><code>{IS_MAINNET_BUILD ? II_URL : 'local Internet Identity'}</code></dd></div>
+        <div><dt>Lobby canister</dt><dd><code>{lobbyCanisterId ?? 'unwired'}</code></dd></div>
+        <div><dt>History canister</dt><dd><code>{historyCanisterId ?? 'unwired'}</code></dd></div>
+      </dl>
       {#if !IS_MAINNET_BUILD}
         <p class="hash-note">
-          This is a <strong>{NETWORK}</strong> development build, so the command above targets
-          the local replica. The live mainnet canister IDs are listed below.
+          This is a <strong>{NETWORK}</strong> development build. It cannot reach the live
+          canisters — the build refuses to wire them (docs/DEFECTS.md T-01) — so nothing
+          you do here moves real money. The mainnet ids below are shown for reference.
         </p>
       {/if}
     </div>
 
     <div class="verify-section">
-      <h3>2. Build from Source</h3>
-      <p>Clone the repo and build in Docker to get the source hash:</p>
+      <h3>1. Read the hash that is running, right now</h3>
+      <p>
+        Anyone can read a canister's module hash from the public dashboard index. No
+        identity, no controller rights, no wallet:
+      </p>
       <div class="code-block">
-        <code>git clone https://github.com/JoshDFN/cleardeck<br/>cd cleardeck<br/>docker build -t verify .</code>
-        <button class="copy-btn" onclick={() => navigator.clipboard.writeText('git clone https://github.com/JoshDFN/cleardeck && cd cleardeck && docker build -t verify .')}>Copy</button>
+        <code>{allHashCommand}</code>
+        <button class="copy-btn" onclick={() => navigator.clipboard.writeText(allHashCommand)}>Copy</button>
       </div>
+      <p class="hash-note">
+        <code>icp canister status &lt;ID&gt; -e ic</code> reads the same value, but
+        <code>canister_status</code> is a controller-only management call on mainnet,
+        so it will refuse for anyone who is not an operator of this project. That is
+        why the command above is the one printed here.
+        {#if !IS_MAINNET_BUILD}
+          On this build, <code>{verifyStatusCommand}</code> reads your own replica.
+        {/if}
+      </p>
     </div>
 
     <div class="verify-section">
-      <h3>3. Compare</h3>
-      <p>If the hashes match, the deployed code is verified to be the source code. No trust required.</p>
+      <h3>2. Build the source and compare</h3>
+      <p>
+        This rebuilds every canister in the digest-pinned container the mainnet fleet
+        is deployed from, and compares each module against the live hash:
+      </p>
+      <div class="code-block">
+        <code>{REBUILD_COMMAND}</code>
+        <button class="copy-btn" onclick={() => navigator.clipboard.writeText(REBUILD_COMMAND)}>Copy</button>
+      </div>
+      <p class="hash-note">
+        If they match, the code running is the code in the repository. If they do not,
+        nothing else on this page means anything.
+      </p>
     </div>
 
+    <!-- THE HASH TABLE, AS A CLAIM WITH A DATE AND A CHECK BESIDE IT.
+         This block used to print three hashes under the heading "Deployed
+         Canister Hashes" with no date, no source and no comparison, and they were
+         three upgrades stale. A number nobody checks is not verification; it is
+         the thing a careful reader checks INSTEAD of verifying. -->
     <div class="canister-ids">
-      <h3>Deployed Canister Hashes</h3>
-      <p class="hash-note">Verify with: <code>icp canister status &lt;ID&gt; -e ic</code></p>
+      <h3>3. Expected module hashes, and the live reading</h3>
+      <p class="hash-note provenance">
+        <strong>These are a claim, not a measurement.</strong> Declared
+        {EXPECTED_PROVENANCE.declaredOn} by {EXPECTED_PROVENANCE.declaredBy}:
+        {EXPECTED_PROVENANCE.claim}. This page was built on a machine that
+        {EXPECTED_PROVENANCE.whyNot}, so press the button and compare for yourself —
+        the reading comes from {LIVE_HASH_SOURCE.name}, which is not us.
+      </p>
+
+      <button class="hash-check-btn" onclick={checkLiveHashes} disabled={checkingHashes}>
+        {checkingHashes ? 'Reading the live hashes…' : 'Check the live hashes now'}
+      </button>
+
+      {#if hashVerdict}
+        <p class="hash-verdict {hashVerdict.kind}" data-hash-verdict={hashVerdict.kind}>
+          {hashVerdict.text}
+        </p>
+      {/if}
+
       <table>
         <tbody>
-          <tr>
-            <td>Lobby</td>
-            <td><code class="canister-id">{MAINNET_CANISTER_IDS.lobby}</code></td>
-          </tr>
-          <tr>
-            <td colspan="2" class="hash-row"><code class="hash">0xff6c893de860c5bd8dae85d67344ee94619fb6faad6d68b3265c9a6fe5a2cef8</code></td>
-          </tr>
-          <tr>
-            <td>Tables (all)</td>
-            <td><code class="canister-id">kieex..., lfkaz..., lclgn..., qrhly...</code></td>
-          </tr>
-          <tr>
-            <td colspan="2" class="hash-row"><code class="hash">0x1b84e2fa1c35fd50001cb059ba644784fe5a6b36a093a2ac3e56c39bc3bbdf28</code></td>
-          </tr>
-          <tr>
-            <td>History</td>
-            <td><code class="canister-id">{MAINNET_CANISTER_IDS.history}</code></td>
-          </tr>
-          <tr>
-            <td colspan="2" class="hash-row"><code class="hash">0xc9b1b78a6490cd2034b967dc9de11bb6377170e0e5ef96144b546da3a93dd8f9</code></td>
-          </tr>
+          {#each VERIFIABLE_ROLES as role}
+            {@const live = liveHashes[role]}
+            <tr>
+              <td>{role}</td>
+              <td><code class="canister-id">{MAINNET_CANISTER_IDS[role]}</code></td>
+            </tr>
+            <tr>
+              <td colspan="2" class="hash-row">
+                <code class="hash">expected {displayHash(EXPECTED_MODULE_HASHES[role])}</code>
+              </td>
+            </tr>
+            {#if live}
+              <tr>
+                <td colspan="2" class="hash-row">
+                  <code class="hash live-{live.verdict}">
+                    {#if live.live}
+                      live&nbsp;&nbsp;&nbsp;&nbsp; {displayHash(live.live)}
+                      {live.verdict === 'match' ? '  ✓ match' : '  ✗ MISMATCH'}
+                    {:else}
+                      live&nbsp;&nbsp;&nbsp;&nbsp; could not be read — {live.error ?? 'unknown'}
+                    {/if}
+                  </code>
+                </td>
+              </tr>
+            {/if}
+          {/each}
         </tbody>
       </table>
-      <p class="hash-note">All table canisters use the same WASM (same hash).</p>
+      <p class="hash-note">
+        All four tables run the same module, so they are expected to share one hash.
+      </p>
     </div>
 
     <a href="https://github.com/JoshDFN/cleardeck" target="_blank" rel="noopener" class="github-link">
@@ -1149,6 +1315,36 @@
       </svg>
       View Source on GitHub
     </a>
+  </div>
+
+    <!-- THE FOUR PROTECTED NOTICES, INSIDE THIS DIALOG (HARD RULE 2).
+         docs/DEFECTS.md T-40, found by rendering the mainnet bundle and
+         hit-testing each phrase on its own pixels. Measured at 1440x900 AND
+         390x844, with this dialog open:
+
+           .banner-warning     y -325  (the page auto-scrolls to the footer link
+                                        that opens this dialog, so the top banner
+                                        is above the fold)
+           .disclaimer-warning y  674  in the viewport, and under
+                                       `.modal-backdrop` — rgba(0,0,0,0.8) plus a
+                                       4 px blur at z-index 1000
+           .strip-text         display:none (portrait table strip, not this view)
+
+         0 of 5 phrases legible, at both viewports. Every other dialog in this
+         app was fixed for exactly this (DepositModal, WithdrawModal, HowItWorks
+         docs/DEFECTS.md T-31; HandHistory H-36) and the one dialog whose entire
+         subject is "can you trust this deployment" was missed.
+
+         Same remedy, same reasoning: restated verbatim, pinned OUTSIDE the
+         scrolling region so arriving at the dialog is enough to have read them,
+         additional copy only, nothing anywhere else weakened. -->
+    <p class="modal-notices">
+      <span class="notice-icon" aria-hidden="true">⚠️</span>
+      <strong>Unaudited code with known bugs</strong> — this is for education and testing, any
+      deposit is at your own risk and your funds are NOT safe. Online gambling is illegal in many
+      jurisdictions; only use it where legally permitted. 18+ only. No middleman, no house, 0% rake.
+      No rake is taken from any pot on any table.
+    </p>
   </div>
 {/if}
 
@@ -2293,7 +2489,12 @@
     backdrop-filter: blur(4px);
   }
 
-  /* Verify Modal */
+  /* Verify Modal.
+     A FLEX COLUMN with the scrolling body in the middle, so `.modal-notices`
+     below can be `flex-shrink: 0` and stay on screen however long the panel
+     grows. Before docs/DEFECTS.md T-40 the whole dialog was one `overflow-y:
+     auto` box; a pinned footer inside that would have scrolled away with
+     everything else. */
   .verify-modal {
     position: fixed;
     top: 50%;
@@ -2302,14 +2503,38 @@
     background: linear-gradient(180deg, #1a1a24 0%, #12121a 100%);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 16px;
-    padding: 32px;
     max-width: 600px;
     width: 90%;
     max-height: 85vh;
-    overflow-y: auto;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
     z-index: 1001;
     box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
   }
+
+  .verify-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 32px;
+  }
+
+  /* Not in the scroller. See the markup note: the four protected notices must be
+     on screen the moment this dialog opens, not after a scroll. */
+  .verify-modal .modal-notices {
+    flex-shrink: 0;
+    margin: 0;
+    padding: 10px 24px 12px;
+    border-top: 1px solid rgba(248, 113, 113, 0.28);
+    background: rgba(185, 28, 28, 0.16);
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .verify-modal .modal-notices strong { color: #fef08a; }
+  .verify-modal .notice-icon { font-size: 12px; }
 
   .verify-modal h2 {
     color: #00d4aa;
@@ -2487,4 +2712,153 @@
     border-radius: 4px;
     margin-bottom: 8px;
   }
+
+  /* ==========================================================================
+     WHICH NETWORK, AND WHETHER THE DEPLOYED CODE IS THIS CODE
+     ==========================================================================
+     Nothing in this block is `position: fixed` and nothing carries a z-index.
+     Every one of these elements is in the document flow, so none of them can
+     paint over the four protected notices (HARD RULE 2, docs/DEFECTS.md E-52).
+     ========================================================================== */
+
+  /* Inline with the tagline, and `display: inline` RATHER THAN `inline-block`,
+     which is the whole point of the rule.
+     Above the table every vertical pixel is felt (docs/DEFECTS.md T-19,
+     docs/WAVE-05.md). An `inline-block` contributes its full margin box to the
+     line box, so this chip at 9px with 1px padding and a 1px border made the
+     11px tagline line 14.8px tall, grew the header, and cost measurable felt:
+     the sweep read table-preflop desktop at 27.7% of frame against a 27.8%
+     baseline. A plain `inline` box's padding and border do NOT affect line
+     height, so the chip is now free. Keep it `inline`; no border. */
+  .net-chip {
+    display: inline;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    white-space: nowrap;
+  }
+
+  /* Louder on mainnet, and only on mainnet: this is the state in which a
+     mistake costs the reader money. */
+  .net-chip.mainnet {
+    background: rgba(185, 28, 28, 0.75);
+    color: #fecaca;
+  }
+
+  .net-footer {
+    color: #555;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .net-footer.mainnet { color: #f87171; }
+
+  .net-footer .canister-id {
+    font-family: 'Monaco', 'Menlo', monospace;
+    font-size: 11px;
+    color: inherit;
+  }
+
+  .verify-section.wiring {
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .verify-section.wiring[data-network="ic"] {
+    border-color: rgba(248, 113, 113, 0.4);
+    background: rgba(185, 28, 28, 0.12);
+  }
+
+  .wiring-list {
+    display: grid;
+    gap: 5px;
+    margin: 0;
+    font-size: 12.5px;
+  }
+
+  .wiring-list div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: baseline;
+  }
+
+  .wiring-list dt { margin: 0; color: #888; }
+  .wiring-list dd { margin: 0; color: #ddd; text-align: right; word-break: break-all; }
+  .wiring-list dd.live { color: #fca5a5; font-weight: 700; }
+
+  .wiring-list code {
+    font-family: 'Monaco', 'Menlo', monospace;
+    font-size: 11px;
+    color: #a78bfa;
+  }
+
+  .hash-note.provenance {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(240, 180, 41, 0.3);
+    background: rgba(240, 180, 41, 0.08);
+    color: rgba(255, 255, 255, 0.72);
+    line-height: 1.55;
+  }
+
+  .hash-note.provenance strong { color: #f0b429; }
+
+  .hash-check-btn {
+    width: 100%;
+    margin: 4px 0 12px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(0, 212, 170, 0.35);
+    background: rgba(0, 212, 170, 0.16);
+    color: #00d4aa;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .hash-check-btn:disabled { opacity: 0.6; cursor: default; }
+  .hash-check-btn:hover:not(:disabled) { background: rgba(0, 212, 170, 0.26); }
+
+  .hash-verdict {
+    margin: 0 0 12px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    font-weight: 600;
+  }
+
+  .hash-verdict.match {
+    border: 1px solid rgba(74, 222, 128, 0.4);
+    background: rgba(22, 101, 52, 0.25);
+    color: #86efac;
+  }
+
+  .hash-verdict.unknown {
+    border: 1px solid rgba(240, 180, 41, 0.4);
+    background: rgba(240, 180, 41, 0.12);
+    color: #fcd34d;
+  }
+
+  .hash-verdict.mismatch {
+    border: 1px solid rgba(248, 113, 113, 0.6);
+    background: rgba(185, 28, 28, 0.25);
+    color: #fca5a5;
+  }
+
+  .hash-row .hash.live-match { color: #86efac; }
+  .hash-row .hash.live-mismatch {
+    color: #fca5a5;
+    background: rgba(185, 28, 28, 0.25);
+    font-weight: 700;
+  }
+  .hash-row .hash.live-unknown { color: #fcd34d; }
 </style>

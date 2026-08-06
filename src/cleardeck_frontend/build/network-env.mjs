@@ -22,6 +22,22 @@
 //     project's own mainnet mapping (.icp/data/mappings/ic.ids.json). A mainnet
 //     id on a local build aborts the build.
 //
+// WAVE 9 ADDS THE OTHER DIRECTION, AND IT WAS MISSING.
+// --------------------------------------------------------------------------
+// Everything above is a one-way valve: it stops MAINNET ids reaching a LOCAL
+// build. Nothing stopped ARBITRARY ids reaching a MAINNET build. `DFX_NETWORK=ic`
+// took whatever the repo-root `.env` happened to say, and that file is an
+// untracked, hand-editable, dfx-era leftover holding an absolute path from one
+// developer's laptop. An `.env` with one wrong character produced a bundle that
+// says "MAINNET" in the UI, tells the player their funds are on the live
+// canisters, and talks to something else. That is T-01 with the polarity
+// reversed and the same consequence.
+//
+// So a mainnet build now checks the ROLE, not just the membership: LOBBY must be
+// the id the committed mapping calls `lobby`, HISTORY must be the one it calls
+// `history`. `.icp/data/mappings/ic.ids.json` is tracked and is what `icp -e ic`
+// itself resolves, so this cannot drift from the deployment.
+//
 // Every message here is written for the person whose build just failed.
 
 import fs from 'node:fs';
@@ -39,7 +55,9 @@ How to build:
                 VITE_CANISTER_ID_LOBBY=<local>  \\
                 VITE_CANISTER_ID_HISTORY=<local> npm run build
 
-  mainnet     DFX_NETWORK=ic npm run build       (ids come from the repo-root .env)
+  mainnet     npm run build:mainnet              (the named path: states the
+                                                  target, then VERIFIES the built
+                                                  bundle before it can be deployed)
 
 Why this is mandatory: the repo-root .env holds the MAINNET canister ids, which
 custody real ICP and ckBTC. A build that does not state its target used to fall
@@ -50,7 +68,7 @@ back to those ids silently. See docs/DEFECTS.md T-01.`;
  * `icp -e ic` itself resolves, so the denylist is never a hand-maintained copy.
  *
  * @param {string} repoRoot
- * @returns {{ids: string[], source: string}}
+ * @returns {{ids: string[], byRole: Record<string,string>, source: string}}
  */
 export function readMainnetIds(repoRoot) {
   const file = path.join(repoRoot, '.icp', 'data', 'mappings', 'ic.ids.json');
@@ -70,11 +88,18 @@ export function readMainnetIds(repoRoot) {
   } catch (e) {
     throw new Error(`${file} is not valid JSON: ${e.message}`);
   }
-  const ids = Object.values(parsed).map(String).filter(Boolean);
+  const byRole = Object.freeze(
+    Object.fromEntries(
+      Object.entries(parsed)
+        .map(([role, id]) => [String(role), String(id)])
+        .filter(([, id]) => Boolean(id)),
+    ),
+  );
+  const ids = Object.values(byRole);
   if (ids.length === 0) {
     throw new Error(`${file} lists no canisters; refusing to build with an empty denylist.`);
   }
-  return { ids, source: path.relative(repoRoot, file) };
+  return { ids, byRole, source: path.relative(repoRoot, file) };
 }
 
 /**
@@ -131,7 +156,8 @@ function idFromEnv(env, name) {
  */
 export function prepareBuildEnv({ repoRoot, env = process.env }) {
   const network = requireNetwork(env);
-  const { ids: mainnetIds, source: denylistSource } = readMainnetIds(repoRoot);
+  const { ids: mainnetIds, byRole: mainnetByRole, source: denylistSource } =
+    readMainnetIds(repoRoot);
 
   // The repo-root .env IS the mainnet id list. Load it only for a mainnet build.
   // dotenv never overrides a variable already present, so an explicit id wins.
@@ -148,6 +174,7 @@ export function prepareBuildEnv({ repoRoot, env = process.env }) {
   const resolved = {};
   const missing = [];
   const wrongNetwork = [];
+  const wrongRole = [];
 
   for (const name of REQUIRED_CANISTERS) {
     const id = idFromEnv(env, name);
@@ -158,6 +185,21 @@ export function prepareBuildEnv({ repoRoot, env = process.env }) {
     if (network !== 'ic' && mainnetIds.includes(id)) {
       wrongNetwork.push(`${name}=${id}`);
       continue;
+    }
+    // THE OTHER DIRECTION (see the header note). On mainnet, membership in the
+    // mapping is not enough: the id has to be the one that mapping gives THIS
+    // ROLE. Wiring `history` into the LOBBY slot passes a membership test and
+    // produces a bundle that reaches the wrong live canister.
+    if (network === 'ic') {
+      const expected = mainnetByRole[name.toLowerCase()];
+      if (!expected) {
+        wrongRole.push(
+          `${name}: ${denylistSource} has no entry named "${name.toLowerCase()}", so this build ` +
+            'cannot confirm which live canister that is',
+        );
+      } else if (expected !== id) {
+        wrongRole.push(`${name}=${id} but ${denylistSource} says ${name.toLowerCase()}=${expected}`);
+      }
     }
     resolved[name] = id;
   }
@@ -182,6 +224,18 @@ export function prepareBuildEnv({ repoRoot, env = process.env }) {
     );
   }
 
+  if (wrongRole.length) {
+    throw new Error(
+      'ABORT: building for MAINNET, but the canister ids do not match the roles in ' +
+        `${denylistSource}:\n  ${wrongRole.join('\n  ')}\n` +
+        'These ids came from the repo-root .env, which is untracked and hand-edited. ' +
+        'The tracked mapping is what `icp -e ic` resolves and what the deployment ' +
+        'actually is, so it wins. A bundle that says "MAINNET" in the UI and talks ' +
+        'to a canister nobody named is the T-01 failure with the polarity reversed.\n' +
+        HOW_TO_BUILD,
+    );
+  }
+
   // Publish the resolved values under both prefixes so canisters.js resolves the
   // same ids no matter which one it reads first, and stamp the target network
   // into the bundle so ic-config.js never has to guess from window.location.
@@ -197,8 +251,12 @@ export function prepareBuildEnv({ repoRoot, env = process.env }) {
   // leaving it in the environment only invites a future "sensible default".
   if (network !== 'ic') {
     delete env.CANISTER_ID;
-    delete env.CANISTER_CANDID_PATH;
   }
+  // `CANISTER_CANDID_PATH` goes on EVERY network. It is an absolute path on one
+  // developer's laptop (`/Users/<name>/…/assetstorage.did`) and it is exposed to
+  // the bundle by `environment("all", { prefix: "CANISTER_" })`. Nothing reads it;
+  // the only thing it can ever do is put a home directory in a public artifact.
+  delete env.CANISTER_CANDID_PATH;
 
   return {
     network,
@@ -206,5 +264,6 @@ export function prepareBuildEnv({ repoRoot, env = process.env }) {
     envFileLoaded,
     denylistSource,
     denylistSize: mainnetIds.length,
+    mainnetByRole,
   };
 }

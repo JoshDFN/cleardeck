@@ -783,11 +783,35 @@ fn currency_cannot_be_changed_while_the_canister_owes_anybody_anything() {
     assert!(!reset_table(&seated, &btc).is_ok());
     assert!(!admin_reinit_table(&seated, &btc).is_ok());
 
-    // (c) on a genuinely empty canister it is an ordinary config change.
+    // (c) on a canister that has PROVED it is empty it is an ordinary config
+    //     change -- and "proved" now includes the MAIN account.
+    //
+    // docs/SECURITY-FINDINGS.md FINDING 35. This case used to pass with no reading
+    // at all, which is exactly the hole: the guard read a liability of zero on a
+    // canister whose main account -- the one `get_deposit_address()` publishes,
+    // where an exchange withdrawal lands with no message -- it had never looked
+    // at. An empty BOOK is not an empty ACCOUNT. The escape hatch is still there
+    // and it is one public call, which is asserted here in both directions so a
+    // future reader can see it is a guard and not a lock.
     let empty = World::new(TableConfig::six_max_icp(), &["alice"]);
+    let unread = reset_table(&empty, &btc);
+    assert!(
+        !unread.is_ok(),
+        "FINDING 35: a table that has never read its own main account cannot say that account \
+         is empty, and must refuse the flip. It answered: {}",
+        unread.message()
+    );
+    assert!(
+        unread.message().contains("NEVER asked"),
+        "and the refusal must name the reading it is missing: {}",
+        unread.message()
+    );
+    empty
+        .refresh_solvency(candid::Principal::anonymous())
+        .expect("the reading is public: anybody may take it, and it moves no money");
     assert!(
         reset_table(&empty, &btc).is_ok(),
-        "an empty table may be re-denominated"
+        "a table that has PROVED it is empty may be re-denominated"
     );
     assert_eq!(empty.table_state().config.currency, Currency::BTC);
 }

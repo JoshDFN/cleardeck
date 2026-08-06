@@ -3,16 +3,38 @@
 Findings that touch real user funds. Each entry states what was actually executed, so a
 reader can tell a demonstrated defect from a suspected one.
 
+> ## 🚨 STATUS, WAVE 10, 2026-08-06: THE CANISTER CAN NOW SAY IT CANNOT PAY — AND ON MAINNET IT CANNOT, BY 2.00 ICP
+>
+> [FINDING 35](#finding-35) is **CLOSED**: the main account has an observation record, anybody
+> (including an anonymous caller) can take a reading, `get_solvency()` publishes what the
+> canister owes against what it holds with the age of every reading and `null` where a reading
+> has never been taken, and a withdrawal that fails for want of canister funds now says so
+> instead of returning the ledger's debug string.
+>
+> **The 2.00 ICP shortfall on mainnet table_1 is real and is NOT fixed by this.** Nothing here
+> edits a balance and nothing here may: see the "CLOSED" box on FINDING 35 and the
+> `no_setter_was_added_to_fix_the_books` gate. The canister's job is to report it truthfully;
+> returning the money is an operator action.
+>
+> | account | canister-side observation record | in `total_liability()` | operator can audit it |
+> |---|---|---|---|
+> | ICP **main** / ckBTC **main** | `MAIN_CUSTODY` (wave 10) | yes, `main_uncredited_observed()` | yes, and `admin_audit_deposit_custody` reads it |
+> | ICP / ckBTC **deposit subaccounts** | `DEPOSIT_CUSTODY` | yes | yes |
+>
+> [FINDING 36](#finding-36) and [FINDING 37](#finding-37) are closed with it: the harness's
+> `CustodyStatus` mirror is complete and has a sum assertion that cannot hold if a field is
+> silently dropped again, and `total_liability()` is published as `SolvencyReport.guard_liability`
+> so an instrument can check the guard instead of having to trigger it.
+>
+> ---
+>
 > ## 🚨 STATUS, WAVE 8 COHERENCE PASS, 2026-08-06: THE CENSUS HAS SIX ACCOUNTS AND THE CANISTER CAN READ FOUR
+>
+> *(Superseded by the box above; kept because it is the statement of the defect.)*
 >
 > The banner below says every instrument now measures both kinds of ledger account. **That is
 > true of the harness and false of the canister**, and the difference is
 > [FINDING 35](#finding-35).
->
-> | account | canister-side observation record | in `total_liability()` | operator can audit it |
-> |---|---|---|---|
-> | ICP **main** / ckBTC **main** | **NONE** | **no** | **no** |
-> | ICP / ckBTC **deposit subaccounts** | `DEPOSIT_CUSTODY` | yes | yes |
 >
 > Driven on this tree: `admin_audit_deposit_custody` replies **`(1 audited, 0 held, 0 unaudited)`
 > on a canister holding 5 ICP** of a named player's, and `admin_update_config(BTC)` is then
@@ -4689,7 +4711,178 @@ one number and formatted as the current currency.
 ---
 
 <a id="finding-35"></a>
-## FINDING 35 (high). THE FIFTH CROSS-AGENT DEFECT: the canister has an observation record for every deposit SUBACCOUNT and none for its MAIN account, so money at `get_deposit_address()` is invisible to every surface INCLUDING the operator's audit tool, and the currency guard will let a controller close its only recovery door, **OPEN, DRIVEN 2026-08-06 on the wave-8 tree**
+## FINDING 35 (high). THE FIFTH CROSS-AGENT DEFECT: the canister has an observation record for every deposit SUBACCOUNT and none for its MAIN account, so money at `get_deposit_address()` is invisible to every surface INCLUDING the operator's audit tool, and the currency guard will let a controller close its only recovery door, **CLOSED 2026-08-06, gated by `tests/money_safety/tests/solvency.rs` (12 tests) and by `invariants::solvency` on every fuzz step**
+
+> ## CLOSED, and there is a REAL 2.00 ICP instance of it on mainnet right now
+>
+> Measured on `kieex-haaaa-aaaaj-qor3q-cai` (table_1) on 2026-08-06, immediately after the six
+> backend canisters were upgraded to the reproducible build:
+>
+> ```text
+>     escrow claimed   940,640,001 e8s
+>     chips at table             0
+>     pot                        0
+>     ledger main account holds  740,640,001 e8s
+>     ------------------------------------------
+>     SHORTFALL        200,000,000 e8s  (2.00 ICP)
+> ```
+>
+> Every published deposit subaccount was audited: `(5 audited, 0 held, 0 unaudited)`. The money
+> is not hiding there. The escrow list shows one principal holding 740,620,001 and a second
+> holding exactly 200,000,000 — the signature of the old deposit double-credit
+> ([FINDING 10](#finding-10)), which is closed in the deployed code and left this residue.
+>
+> **THE DISCREPANCY HAS NOT BEEN ERASED AND MUST NOT BE.** No method was added that lets a
+> controller change a player's balance; `admin_restore_balance` was deleted once already, and
+> `tests/money_safety/tests/solvency.rs::no_setter_was_added_to_fix_the_books` is now a
+> source-level gate that fails if one comes back under any of five plausible names. Editing a
+> balance would not return the money to anybody. It would only stop the canister saying it was
+> missing.
+>
+> **What is closed is that the canister could not SEE it or SAY it.** It can now, on five
+> surfaces, and it says "I do not know" rather than "solvent" when it has not looked.
+>
+> | | before | now |
+> |---|---|---|
+> | main-account observation record | none | `MAIN_CUSTODY` (`MainAccountObservation`), persisted `opt` at the top level of `PersistentState` |
+> | who can take a reading | nobody | **anybody**, incl. anonymous: `refresh_solvency()`, `refresh_main_account_custody()` |
+> | player-readable answer | none | `get_solvency()` query: OWES, HOLDS, signed difference, verdict, age of every reading |
+> | `get_custody_status` | ten correct fields, none of which could say the money is not there | `canister_solvency` + `canister_shortfall_e8s`, and the shortfall sentence FIRST in `advice` |
+> | withdrawal that fails for want of canister funds | `InsufficientFunds { balance: Nat(740640001) }` | a named refusal that says the canister is short, by how much, that the escrow is refunded, and which public method proves it |
+> | `admin_audit_deposit_custody` | iterated subaccounts only; answered `(1 audited, 0 held, 0 unaudited)` on a canister holding 5 ICP | reads the MAIN account first and logs `CANNOT PAY EVERYONE — …` |
+> | `total_liability()` | four terms, none for the main account | fifth term `main_uncredited_observed()`, plus an UNKNOWN-IS-NOT-ZERO leg covering the main account |
+> | harness | no leg could see it: the harness can always read the ledger itself | `invariants::solvency`, four legs, new never-excusable `Severity::InsolvencyUnreported`, per fuzz step |
+>
+> Driven end to end on the real mainnet ICP ledger wasm on PocketIC, reproducing the mainnet
+> shape locally (2.00 ICP leaves the canister's main account with no message to it):
+>
+> ```text
+> HEALTHY -> CanPayEveryone owed=940640001 held=Some(940640001)
+> 2.00 ICP left the canister's main account at block 6
+> LEDGER main=740630001 escrow_total=940640001 (short by 200010000)
+> VIOLATION owes_more_than_it_holds_across_every_account [FundCreation] ... SHORT 200010000 e8s
+> SOLVENCY -> CannotPayEveryone  owed=940640001 held=Some(740630001) diff=Some(-200010000)
+> alice withdrew 500000000; bob is owed 440640001 and the canister now holds 240630001
+> WITHDRAW REFUSAL -> Err("THIS TABLE COULD NOT PAY YOU BECAUSE THIS CANISTER IS SHORT, not
+>   because there is anything wrong with your request. It asked the ICP ledger to send you
+>   4.4064 ICP out of its main account and the ledger answered that the account holds only
+>   2.4063 ICP (240630001 e8s). Your escrow has been put back in full ... this canister owes
+>   4.4064 ICP (440640001 e8s) across every player and is short by 2.0001 ICP (200010000 e8s).
+>   It has just written that reading down, so get_solvency() will show it to anybody who asks ...
+>   This is not something a controller can fix by editing a balance: there is deliberately no
+>   method here that can.")
+> ```
+>
+> Note the sequence in the last three lines. **alice asked first and was paid in full out of
+> money that was never all there; bob, who did nothing wrong, is the one the ledger turned
+> away.** That is what a shortfall does, and it is why the canister has to say so before anybody
+> reaches the front of the queue.
+>
+> ### The one property everything else rests on, and it is asserted, not argued
+>
+> A deposit-subaccount reading is stale-LOW by construction. A main-account reading is not: money
+> arrives there with no message, and this canister spends out of it. So the one-directional
+> property had to be BUILT, out of an asymmetry:
+>
+> * an adjustment that **lowers** the written-down balance (a confirmed payout) is applied
+>   ALWAYS, even at the risk of double-subtracting a movement the reading already reflected;
+> * an adjustment that **raises** it (a confirmed pull, sweep or notified deposit) is applied
+>   ONLY when the movement provably happened after the reading — its ledger timestamp, or the
+>   intent's `created_at_time`, is strictly greater than `observed_at_ns`.
+>
+> `check_written_down_holdings_are_not_overstated` asserts it on every snapshot, and
+> `the_written_down_main_balance_is_never_higher_than_the_ledger` drives it through a pull, a
+> sweep, a payout and an unannounced arrival:
+>
+> ```text
+> after the first reading                ledger_main=   500000000 claimed=Some(500000000)
+> after a pull, no new reading           ledger_main=   800000000 claimed=Some(800000000)
+> after a sweep, no new reading          ledger_main=   999990000 claimed=Some(999990000)
+> after a payout, no new reading         ledger_main=   699990000 claimed=Some(699990000)
+> after an unannounced arrival           ledger_main=   799990000 claimed=Some(699990000)   <- LOW
+> ```
+>
+> ### AND THE FIRST VERSION OF THAT CHECK WAS WRONG, in the way this repository is always wrong
+>
+> It asserted `main_account <= ledger_main` **unconditionally**, on the strength of the argument
+> above, written in a comment. The argument has an exception and the exception is reachable and
+> this project has a whole harness for it. Adjustments are applied at `settle_intent`, i.e. when
+> the ledger's answer comes back — so a payout the ledger has ALREADY EXECUTED and whose
+> continuation was discarded ([FINDING 29](#finding-29)) has left the chain and not yet left the
+> record. Measured:
+>
+> ```text
+> BEFORE: main=Some(800000000) held=Some(800000000) diff=Some(0) payouts_in_flight=0
+> DURING: main=Some(800000000) (LEDGER says 600000000) held=Some(800000000) diff=Some(0)
+>                                                            payouts_in_flight=200000000
+> AFTER:  main=Some(600000000) (LEDGER says 600000000) held=Some(600000000) diff=Some(0)
+> ```
+>
+> **What makes it harmless is not the size of the gap. It is that the same amount is on the OWED
+> side for exactly as long.** A payout debits the main account by exactly `intent.amount`
+> (`amount - fee` to the player, `fee` burnt out of the same account) and exactly `intent.amount`
+> is `payouts_in_flight` until the instant the record is adjusted, so
+> `(main + A) - (owed + A) == main - owed`: the published DIFFERENCE, which is what the verdict
+> is computed from, is **identical to the e8** before, during and after. The same cancellation
+> holds for a sweep, between the deposit term and the journal.
+>
+> The correct statement, which is what is asserted now:
+>
+> * a per-account figure may be stale-high by **at most what the journal already names**;
+> * `held` may not be stale-high **at all** (`canister_claims_to_hold_more_than_the_ledger_holds`);
+> * so a false alarm is possible and a false all-clear is not.
+>
+> Driven by `a_payout_in_flight_moves_the_parts_and_not_the_answer`, which asserts the check is
+> silent, that the record really is running ahead of the chain at that moment (otherwise the
+> bound is untested), and that the answer does not move.
+>
+> ### A PRIVACY REGRESSION the first version of this surface shipped with
+>
+> `get_solvency()` is a public query, and its first version returned
+> `deposit_accounts_never_observed : vec principal`. `deposit_account_census()` is every principal
+> holding escrow at this table, every principal seated, and every principal already observed —
+> so an **anonymous caller could enumerate the players.** That list had been controller-only
+> (`admin_get_deposit_custody`) and the new surface handed it to anybody.
+>
+> An unknown has to be VISIBLE without being ENUMERABLE. The field is now:
+>
+> * `deposit_accounts_never_observed_count : nat64` — always the true total, public. This is
+>   what the verdict branches on, so the answer does not depend on who is asking.
+> * `deposit_accounts_never_observed : vec principal` — **all of them for a controller, and your
+>   own principal (only if it is unread) for anybody else**, which is the rule
+>   `get_all_ledger_intents` already uses.
+>
+> The summary prose is scoped the same way. Asserted in
+> `a_never_observed_main_account_reads_as_unknown_and_never_as_solvent`: the count is non-zero,
+> the anonymous list is empty, the anonymous prose does not contain the player's principal, and
+> the same query as that player names their own address.
+>
+> **What IS newly public, deliberately:** the aggregate `escrow`, `chips_at_table`, `pot` and
+> `owed`. A solvency claim that does not state what is owed cannot be checked by the person it
+> is made to, and this canister's whole problem was making unfalsifiable claims. No per-principal
+> amount is exposed.
+>
+> ### A hole found while closing it, which nothing above would have caught
+>
+> A reading is taken on ONE ledger. `Currency::ledger_canister()` selects between the ICP and
+> ckBTC ledgers, and a table that has changed currency owns a main account on each. Counting an
+> ICP reading as evidence about the ckBTC account would let the canister answer "I can pay
+> everyone" in satoshis it has never looked for — a false all-clear, the one direction the whole
+> design forbids. `observed_main_entry()` therefore FILTERS by the live ledger, and
+> `observed_deposit_gross()` does the same on the held side. `DepositObservation::ledger`
+> already recorded this and nothing enforced it.
+>
+> ### What is NOT closed by this
+>
+> * **The 2.00 ICP on mainnet is still missing.** This makes it visible and quotable; it does not
+>   return it. That is an operator action, and the honest options are funding the canister or
+>   telling the affected principal.
+> * The reading is only as fresh as the last `refresh_solvency()`. Every surface states its age
+>   and none of them presents it as current.
+> * A currency change now requires a reading of the main account **on the ledger in force**, in
+>   both directions. On mainnet that is one public call; on a replica with no ckBTC ledger
+>   installed it cannot be taken, and `the_currency_guard_refuses_while_the_main_account_has_never_been_read`
+>   asserts that outcome rather than leaving it as a surprise.
 
 Found by the wave-8 coherence pass, deliberately, by asking the one question that is above all
 five agents rather than inside any of them: **which of the six accounts in "THE ACCOUNT CENSUS"
@@ -4782,7 +4975,23 @@ own recommendation and is one line.
 ---
 
 <a id="finding-36"></a>
-## FINDING 36 (instrument, high), the money-safety harness's `CustodyStatus` mirror is missing the field that carries FINDING 29's money, under a comment that says it is "Mirrored in FULL on purpose", **OPEN, 2026-08-06**
+## FINDING 36 (instrument, high), the money-safety harness's `CustodyStatus` mirror is missing the field that carries FINDING 29's money, under a comment that says it is "Mirrored in FULL on purpose", **CLOSED 2026-08-06**
+
+> **CLOSED.** `tests/money_safety/src/table_api.rs::CustodyStatus` now declares
+> `unfinished_ledger_ops` (and the two fields FINDING 35 added), and the fix is NOT "add the
+> missing field" -- a mirror can silently lose the next one exactly the same way. The fix is
+> `CustodyStatus::components_sum_to_total()`:
+>
+> ```text
+> escrow + chips_at_table + committed_in_pot + unswept_deposit + unfinished_ledger_ops == total
+> ```
+>
+> That identity **cannot hold unless every component field is declared**, because Candid drops
+> what the mirror does not name while `total` keeps counting it. It is asserted in
+> `tests/money_safety/tests/solvency.rs` on both a healthy and an insolvent table, so a
+> silently narrowed record fails a test instead of quietly reading nine fields of ten.
+> `invariants/custody.rs`'s narrow mirror has its `total` doc corrected: it says which two
+> fields are in the total and not above it, and why that mirror is deliberately narrow.
 
 Found by the wave-8 coherence pass, by writing `cs.unfinished_ledger_ops` in a probe and having
 the compiler refuse it.
@@ -4822,7 +5031,27 @@ which is the only thing that makes a full mirror load-bearing rather than decora
 ---
 
 <a id="finding-37"></a>
-## FINDING 37 (instrument, high), `total_liability()` is the only number the project's last custody guard reads, and it has one caller, no query, no surface and no gate: the only way to sample it is to attempt the destructive operation it guards, **PARTLY ADDRESSED 2026-08-06**
+## FINDING 37 (instrument, high), `total_liability()` is the only number the project's last custody guard reads, and it has one caller, no query, no surface and no gate: the only way to sample it is to attempt the destructive operation it guards, **CLOSED 2026-08-06**
+
+> **CLOSED, by the one query this finding asked for.** `get_solvency()` publishes
+> `guard_liability` -- `total_liability()` itself -- alongside every term it is built from, so
+> the guard can be SAMPLED without attempting the destructive operation it protects.
+>
+> The number alone would not be enough; a published figure nobody checks is the same instrument
+> in a different font. `invariants::solvency::check_solvency_report_is_coherent` runs on every
+> snapshot the harness takes, including every fuzz step, and asserts term by term against
+> figures it computes independently:
+>
+> * `escrow` against `admin_get_all_balances`, `chips_at_table` against `admin_get_table_chips`,
+>   `pot` against the table state, `unswept_deposits` against `admin_get_deposit_custody`;
+> * `owed` against the sum of its own published terms;
+> * `held` against `main_account + deposit_subaccounts + pulls_in_flight - sweep_fees_in_flight`;
+> * `difference_e8s` against `held - owed`;
+> * and `guard_liability` against `owed - payouts_in_flight + unattributed_at_main`, which is
+>   the relation that makes the report and the guard the same instrument.
+>
+> A term that goes missing from the guard now fails a test instead of waiting for somebody to
+> flip a currency and find out.
 
 The structural reason FINDING 21, FINDING 33 and FINDING 35 are three instances of one defect.
 
@@ -4852,3 +5081,79 @@ instrument.
 separately and their sum, so the harness can assert term-by-term against its own independently
 computed figures on every fuzz step. A guard whose number no instrument can read is a guard
 nobody can gate, and this project has now shipped three defects inside exactly that gap.
+
+---
+
+## FINDING 38 (high) -- `get_solvency()` counts an open `pull` on BOTH sides on the strength of the reading not yet containing the money, and wave 10 shipped a public button that makes the reading contain it: one anonymous `refresh_solvency()` turns a real, correctly-reported shortfall into a published SURPLUS -- **OPEN, DEMONSTRATED 2026-08-06 (wave-10 critic)**
+
+> **What was executed.** `tests/money_safety` on PocketIC with the real mainnet ICP ledger wasm,
+> against the wave-10 build (`table_canister.wasm` sha256
+> `1c2da9f96b50efa669a2130bf649852bc9a9dbcc45512f4e2b22d2b8be7c9fad`). Probe source and full log
+> are in the critic scratch (`critic_w10.rs::critic_a_public_refresh_during_an_in_flight_pull_invents_a_surplus`).
+>
+> ```text
+> STEP 1  truly short          verdict=CannotPayEveryone diff=-100010000 owed=800000000 held=699990000
+> STEP 2  FINDING 29 injection alice's 2 ICP deposit LANDS at the main account, continuation
+>                              discarded, pull intent stays OPEN, alice NOT credited
+>                              ledger_main 699990000 -> 899990000
+> STEP 3  stale reading        verdict=CannotPayEveryone diff=-100010000     <-- still correct
+> STEP 4  ONE PUBLIC refresh_solvency(), called by an unrelated player
+>                              verdict=CanPayEveryone   diff=+99990000
+>                              owed=1000000000 held=1099990000 pulls_in_flight=200000000
+>                              LEDGER holds 899990000 against a true liability of 1000000000
+>                              => the canister is STILL SHORT 100010000 e8s
+> ```
+>
+> Not one of the seven new solvency legs fired. `check_insolvency_is_reported` returned **0
+> violations**, because `harness_owed()` excludes open intents by design while the ledger balance
+> it is compared against already contains the money. `check_written_down_holdings_are_not_overstated`
+> is silent by construction: its bound is `ledger_holdings + payouts_in_flight + pulls_in_flight`
+> and `held` lands on it exactly.
+
+### The arithmetic
+
+`held = main_account + deposit_subaccounts + pulls_in_flight - sweep_fees_in_flight`, and the
+justification in `open_pull_total()` is stated in the code:
+
+> *"If the pull happened, the canister holds it (in the main account, **not yet in the reading**)
+> and owes it; if it did not, it neither holds nor owes it."*
+
+That parenthesis is a claim about the AGE of the reading. `refresh_solvency()` is public,
+unpermissioned, callable by an anonymous principal, and its entire purpose is to make the reading
+current -- at which point `main_account` already contains the pulled money and
+`pulls_in_flight` adds it a second time. The overstatement is exactly the open pull amount.
+
+### Why the window is durable, not a race
+
+An intent whose continuation was discarded (FINDING 29 -- an upgrade mid-call is one of the
+things that discards one, and the six backend canisters were upgraded on 2026-08-06) stays open
+until somebody calls `resolve_my_ledger_intents()`. Past `INTENT_RETRY_WINDOW_NS` (20h)
+`lease_ledger_intent` refuses to re-issue it at all and the entry is **kept forever**, pending
+operator reconciliation. For that entire time every fresh reading produces the inflated answer.
+
+### The mirror, also demonstrated
+
+`critic_a_public_refresh_during_an_in_flight_payout_invents_a_shortfall`: a canister holding
+600000000 e8s against a true liability of 600000000 e8s (difference 0, `CanPayEveryone` on the
+stale reading) answers **`CannotPayEveryone ... it is SHORT 200000000 e8s`** after one public
+`refresh_solvency()` while a payout sits in the same window. `check_point_in_time` -> 0
+violations. `shortfall_sentence_from()` puts that sentence FIRST in every player's
+`get_custody_status().advice`, so a free, unpermissioned call broadcasts a false insolvency
+notice to the whole table.
+
+### The suggested shape of the fix
+
+Count an in-flight `pull` on the OWED side only, and never add it to `held`. In the
+"money has not arrived" case the canister then cries poor by the pull amount, which is the safe
+direction and one `resolve_my_ledger_intents()` from being cleared; in the "money has arrived"
+case it is exactly right. The same asymmetry that governs `MainAccountObservation::credited_since`
+(apply a raise only when it provably post-dates the reading, apply a lowering always) is the rule
+this term does not follow.
+
+### And a gate that would have caught it
+
+Every existing solvency leg is one-directional: they convict a canister that claims MORE than the
+ledger holds and are silent on one that claims less, and none of them compares the published
+`difference_e8s` against a difference the harness computes from the ledger plus the journal. A
+leg asserting `difference_e8s <= ledger_holdings - (escrow + chips + pot + unswept + pulls that
+have already landed)` goes red on step 4 above.

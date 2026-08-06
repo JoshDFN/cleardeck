@@ -7,6 +7,9 @@
     "setup": "npm i && icp deploy -e local",
     "start": "vite --port 3000",
     "build": "vite build",
+    "build:mainnet": "node build/build-mainnet.mjs",
+    "verify:bundle": "node build/verify-bundle.mjs",
+    "verify:deployed": "node build/verify-deployed.mjs",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "format": "prettier --write \"src/**/*.{json,js,jsx,ts,tsx,css,scss}\""
   },

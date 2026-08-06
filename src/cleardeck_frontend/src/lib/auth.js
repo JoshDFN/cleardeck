@@ -5,10 +5,47 @@ import { Principal } from '@dfinity/principal';
 import { Ed25519KeyIdentity } from '@dfinity/identity';
 import { idlFactory as ledgerIdlFactory } from './ledger.did.js';
 import logger from './logger.js';
-import { isLocal, agentHost, II_URL } from './ic-config.js';
+import { isLocal, agentHost, II_URL, LOCAL_GATEWAY_PORT } from './ic-config.js';
 
 // Mainnet detection + the II provider / agent-host literals are centralized in
 // ./ic-config.js (id.ai/authorize + icp-api.io), env-overridable for rollback.
+
+/**
+ * The local Internet Identity origin, or null when this build does not know it.
+ *
+ * FOUND WHILE VERIFYING THE MAINNET BUNDLE (docs/DEFECTS.md T-39). This line
+ * used to be written inline as
+ *
+ *     `http://${import.meta.env.CANISTER_ID_INTERNET_IDENTITY}.localhost:4943`
+ *
+ * and `import.meta.env.CANISTER_ID_*` IS NOT DEFINED IN THIS BUILD. Vite exposes
+ * only `VITE_`-prefixed variables on `import.meta.env`; vite-plugin-environment
+ * puts the `CANISTER_`-prefixed ones on `process.env`. The same file already
+ * knows this -- `canisters.js` reads all three spellings for exactly this reason
+ * -- but the II URL read only the one that does not exist, so every local build
+ * compiled the literal string
+ *
+ *     "http://undefined.localhost:4943"
+ *
+ * (confirmed in the emitted chunk), and local sign-in navigated to a host that
+ * cannot exist. It never showed up because the screenshot harness authenticates
+ * with agent identities and never presses Sign In, and because the MAINNET
+ * branch -- the one this wave is shipping -- is unaffected: it takes `II_URL`.
+ *
+ * The port comes from LOCAL_GATEWAY_PORT for the same reason as the agent host:
+ * this project's managed replica is pinned to 8077, not 4943 (docs/DEFECTS.md
+ * T-03), so the hard-coded 4943 here was a second, independent way for local
+ * sign-in to reach nothing.
+ *
+ * @returns {string|null}
+ */
+function localIdentityProvider() {
+    const id = import.meta.env.VITE_CANISTER_ID_INTERNET_IDENTITY
+        || import.meta.env.CANISTER_ID_INTERNET_IDENTITY
+        || (typeof process !== 'undefined' ? process.env?.CANISTER_ID_INTERNET_IDENTITY : undefined);
+    if (!id) return null;
+    return `http://${id}.localhost:${LOCAL_GATEWAY_PORT}`;
+}
 
 // For local dev, we can use a deterministic identity based on a seed
 // This avoids the II passkey issues in local development
@@ -112,9 +149,22 @@ function createAuthStore() {
                     }
 
                     // Use local II for local dev, production II (id.ai) for mainnet
-                    const identityProvider = isLocal()
-                        ? `http://${import.meta.env.CANISTER_ID_INTERNET_IDENTITY}.localhost:4943`
-                        : II_URL;
+                    const identityProvider = isLocal() ? localIdentityProvider() : II_URL;
+
+                    // An unresolvable local II is an ERROR, not a URL to try.
+                    // Navigating to `http://undefined.localhost:4943` opens a
+                    // window that can never complete the delegation handshake,
+                    // and the user is left looking at a browser error with no
+                    // way to tell it from a passkey problem.
+                    if (!identityProvider) {
+                        reject(new Error(
+                            'This local build does not know the Internet Identity canister id, so '
+                            + 'sign-in cannot be started. Export CANISTER_ID_INTERNET_IDENTITY (or '
+                            + 'VITE_CANISTER_ID_INTERNET_IDENTITY) when building, or bring the stack '
+                            + 'up with ./scripts/dev.sh local-up. See docs/DEFECTS.md T-39.',
+                        ));
+                        return state;
+                    }
 
                     state.authClient.login({
                         identityProvider,

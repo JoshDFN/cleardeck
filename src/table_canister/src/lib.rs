@@ -679,6 +679,12 @@ thread_local! {
     static DISPLAY_NAMES: RefCell<HashMap<Principal, String>> = RefCell::new(HashMap::new());
     // Heartbeat rate limiting: caller -> (last_time, count_in_window)
     static HEARTBEAT_RATE_LIMITS: RefCell<HashMap<Principal, (u64, u32)>> = RefCell::new(HashMap::new());
+    // Solvency-refresh rate limiting: caller -> (window_start, count_in_window).
+    //
+    // A DEDICATED map and not `RATE_LIMITS`, deliberately: a player checking
+    // whether the table can pay them must never spend the budget they need to act
+    // in a hand. See `check_solvency_refresh_rate_limit`.
+    static SOLVENCY_RATE_LIMITS: RefCell<HashMap<Principal, (u64, u32)>> = RefCell::new(HashMap::new());
     // Last cleanup timestamp to throttle cleanup operations
     static LAST_CLEANUP: RefCell<u64> = RefCell::new(0);
 }
@@ -769,6 +775,10 @@ fn periodic_cleanup() {
     });
 
     DEPOSIT_RATE_LIMITS.with(|r| {
+        r.borrow_mut().retain(|_, (window_start, _)| *window_start > cutoff);
+    });
+
+    SOLVENCY_RATE_LIMITS.with(|r| {
         r.borrow_mut().retain(|_, (window_start, _)| *window_start > cutoff);
     });
 
@@ -2242,6 +2252,25 @@ fn settle_intent(id: u64, outcome: IntentOutcome, now: u64) -> Result<u64, Strin
                 return Ok(current);
             };
 
+            // THE MAIN ACCOUNT MOVED, AND THE LEDGER SAID SO (FINDING 35).
+            //
+            // This is the one place where a movement of account (1)/(3) is known
+            // to have happened -- a block index came back. Every kind here
+            // touches the main account: a `Pull` and a `Sweep` put `amount` INTO
+            // it, and a `Payout` takes exactly `amount` OUT (the recipient gets
+            // `amount - fee` and the ledger burns the fee from the same account).
+            //
+            // Placed BEFORE the anti-replay claim below on purpose: the money
+            // moved whether or not this canister ends up crediting anybody for
+            // it, and a written-down balance that ignores a confirmed movement is
+            // the thing this record exists to stop being.
+            match intent.kind {
+                LedgerIntentKind::Pull | LedgerIntentKind::Sweep => {
+                    note_main_credit(intent.amount, intent.created_at_time)
+                }
+                LedgerIntentKind::Payout => note_main_debit(intent.amount),
+            }
+
             if intent.kind.credits_on_success() {
                 // The anti-replay record still governs, and it is still the only
                 // writer of "this block index has been consumed". A block that is
@@ -2381,6 +2410,91 @@ fn classify_transfer_from_error(e: &TransferFromError) -> IntentOutcome {
     }
 }
 
+/// [`classify_transfer_error`], plus the two things a bare classifier cannot do:
+/// WRITE DOWN what the ledger just revealed, and say what it means in words.
+///
+/// # `InsufficientFunds` is an observation, and it was being thrown away
+///
+/// The ledger's refusal carries `balance` -- the real, current balance of the
+/// account the transfer was to come out of. For a `Payout` that account is this
+/// canister's MAIN account, the one account it had no way to read (FINDING 35),
+/// and the fact arrived free, at the exact moment it mattered most. It was
+/// discarded into a `format!("{other:?}")`.
+///
+/// # And the player was handed a debug string
+///
+/// `withdraw` ends in `settle_intent`, whose refusal path refunds the escrow and
+/// returns this reason verbatim. So a player whose withdrawal failed because the
+/// TABLE is short read `InsufficientFunds { balance: Nat(740640001) }` and had no
+/// way to tell it from a problem with their own request. A canister that cannot
+/// pay has to say so, to the person it could not pay.
+fn classify_ledger_error_for(
+    intent: &LedgerIntent,
+    e: &TransferError,
+    ledger_id: Principal,
+    currency: Currency,
+) -> IntentOutcome {
+    if let TransferError::InsufficientFunds { balance } = e {
+        let held: u64 = balance.0.clone().try_into().unwrap_or(0);
+        let now = ic_cdk::api::time();
+        match intent.kind {
+            // The source is this canister's MAIN account.
+            LedgerIntentKind::Payout => {
+                record_main_observation(ledger_id, held, now);
+                return IntentOutcome::Refused(insufficient_canister_funds_message(
+                    intent.amount,
+                    held,
+                    currency,
+                ));
+            }
+            // The source is the owner's deposit SUBACCOUNT. Same principle: the
+            // refusal is a reading of that account, so write it down rather than
+            // go on reporting the figure that turned out to be wrong.
+            LedgerIntentKind::Sweep => {
+                record_deposit_observation(intent.who, ledger_id, held, now);
+            }
+            // The source is the OWNER's wallet, which is not an account of this
+            // canister. Nothing of ours to write down.
+            LedgerIntentKind::Pull => {}
+        }
+    }
+    classify_transfer_error(e)
+}
+
+/// What to tell somebody whose payout the ledger refused because THIS CANISTER
+/// does not have the money.
+///
+/// docs/SECURITY-FINDINGS.md FINDING 35. Names the shortfall, says the escrow has
+/// been put back, and points at the two methods that let the reader check the
+/// claim themselves rather than take it from the party that just failed to pay
+/// them.
+fn insufficient_canister_funds_message(wanted: u64, held: u64, currency: Currency) -> String {
+    let report = build_solvency_report();
+    let short = report
+        .shortfall_e8s
+        .map(|s| format!("{} ({} e8s)", currency.format_amount(s), s))
+        .unwrap_or_else(|| "an amount it cannot yet compute".to_string());
+    format!(
+        "THIS TABLE COULD NOT PAY YOU BECAUSE THIS CANISTER IS SHORT, not because there is \
+         anything wrong with your request. It asked the {} ledger to send you {} out of its \
+         main account and the ledger answered that the account holds only {} ({} e8s). Your \
+         escrow has been put back in full -- nothing of yours has been spent and nothing has \
+         been lost. On its own books this canister owes {} ({} e8s) across every player and is \
+         short by {}. It has just written that reading down, so get_solvency() will show it to \
+         anybody who asks, and refresh_solvency() takes a fresh one -- both are public and \
+         neither moves money. This is not something a controller can fix by editing a balance: \
+         there is deliberately no method here that can. Take it to the table operator, and \
+         quote this reading.",
+        currency.symbol(),
+        currency.format_amount(wanted),
+        currency.format_amount(held),
+        held,
+        currency.format_amount(report.owed),
+        report.owed,
+        short,
+    )
+}
+
 fn nat_to_u64_saturating(n: &Nat) -> u64 {
     u64::try_from(n.0.clone()).unwrap_or(u64::MAX)
 }
@@ -2466,7 +2580,7 @@ async fn attempt_intent(intent: &LedgerIntent) -> IntentOutcome {
                 ic_cdk::call(ledger_id, "icrc1_transfer", (args,)).await;
             match out {
                 Ok((Ok(block),)) => IntentOutcome::Moved(nat_to_u64_saturating(&block)),
-                Ok((Err(e),)) => classify_transfer_error(&e),
+                Ok((Err(e),)) => classify_ledger_error_for(intent, &e, ledger_id, currency),
                 Err((code, msg)) => {
                     IntentOutcome::Unknown(format!("Failed to sweep deposit: {code:?} - {msg}"))
                 }
@@ -2478,7 +2592,11 @@ async fn attempt_intent(intent: &LedgerIntent) -> IntentOutcome {
                 ic_cdk::call(ledger_id, "icrc1_transfer", (args,)).await;
             match out {
                 Ok((Ok(block),)) => IntentOutcome::Moved(nat_to_u64_saturating(&block)),
-                Ok((Err(e),)) => classify_transfer_error(&e),
+                // NOT the bare classifier. A payout the ledger refuses for
+                // `InsufficientFunds` is this canister failing to pay a player out
+                // of its own main account, and that fact has to be written down and
+                // said in words rather than returned as a debug string. FINDING 35.
+                Ok((Err(e),)) => classify_ledger_error_for(intent, &e, ledger_id, currency),
                 Err((code, msg)) => IntentOutcome::Unknown(format!(
                     "Call to {} ledger failed: {code:?} - {msg}",
                     currency.symbol()
@@ -2864,8 +2982,15 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
         }
     };
 
-    // Helper function to verify and credit a transfer
-    let verify_and_credit = |transfer: &Transfer| -> Result<u64, String> {
+    // Helper function to verify and credit a transfer.
+    //
+    // `block_at_ns` is when the LEDGER wrote the block. It is threaded in because
+    // this door credits escrow for money that arrived in the MAIN account with no
+    // message to this canister at all, so the written-down main balance has to
+    // learn about it -- but only if the reading predates the transfer, or it
+    // would count the same e8s twice and overstate what the canister holds.
+    // docs/SECURITY-FINDINGS.md FINDING 35.
+    let verify_and_credit = |transfer: &Transfer, block_at_ns: u64| -> Result<u64, String> {
         // Verify the transfer was TO this canister
         if transfer.to.len() != 32 {
             return Err("Invalid destination account".to_string());
@@ -2956,14 +3081,20 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
             new_balance
         });
 
+        // The escrow side of this transfer is now on the books; the LEDGER side
+        // has been true since `block_at_ns`. Tell the main-account record, which
+        // applies it only if its reading is older than the block.
+        note_main_credit(amount, block_at_ns);
+
         Ok(new_balance)
     };
 
     // Check if we got the block directly
     if !response.blocks.is_empty() {
         let block = &response.blocks[0];
+        let block_at_ns = block.timestamp.timestamp_nanos;
         let result = if let Some(Operation::Transfer(ref transfer)) = block.transaction.operation {
-            verify_and_credit(transfer)
+            verify_and_credit(transfer, block_at_ns)
         } else {
             Err("Transaction is not a transfer".to_string())
         };
@@ -3171,7 +3302,11 @@ async fn claim_external_deposit() -> Result<u64, String> {
         Ok((Ok(block),)) => IntentOutcome::Moved(nat_to_u64_saturating(&block)),
         // `Duplicate` means an earlier attempt of THIS intent already swept, and
         // the ledger is handing over the block index that attempt never saw.
-        Ok((Err(e),)) => match classify_transfer_error(&e) {
+        // `classify_ledger_error_for` and not the bare classifier: an
+        // `InsufficientFunds` here is the ledger telling this canister the real
+        // balance of the deposit subaccount it just tried to drain, and throwing
+        // that away is how a wrong observation survives its own refutation.
+        Ok((Err(e),)) => match classify_ledger_error_for(&intent, &e, ledger_id, currency) {
             IntentOutcome::Moved(b) => IntentOutcome::Moved(b),
             _ => IntentOutcome::Refused(format!(
                 "Sweep transfer failed: {:?}. Your {} is still at your deposit address and this \
@@ -3461,6 +3596,232 @@ fn unaudited_deposit_accounts() -> Vec<Principal> {
         .into_iter()
         .filter(|p| !known.contains(p))
         .collect()
+}
+
+// ===========================================================================
+// ACCOUNT (1)/(3) OF "THE ACCOUNT CENSUS": THE MAIN ACCOUNT
+// (docs/SECURITY-FINDINGS.md FINDING 35, docs/DEFECTS.md E-70)
+// ===========================================================================
+//
+// Wave 8's organising insight was: *money arrives at an account with no message
+// to the canister, and an IC query cannot call a ledger, so the canister must ASK
+// from an UPDATE and WRITE THE ANSWER DOWN.* That was implemented for the deposit
+// SUBACCOUNTS -- `DEPOSIT_CUSTODY` above -- and for nothing else. The MAIN
+// account, where essentially all of the money actually sits, had no observation
+// record, no reader, and no term in any guard, so:
+//
+//   * `admin_audit_deposit_custody` answered `(1 audited, 0 held, 0 unaudited)`
+//     on a canister holding 5 ICP at the address `get_deposit_address()` had
+//     itself published;
+//   * `total_liability()` read ZERO on that canister and the currency guard
+//     accepted a re-denomination;
+//   * and on MAINNET table_1, measured 2026-08-06 immediately after the upgrade,
+//     escrow claimed 940,640,001 e8s while the ledger's main account held
+//     740,640,001 -- a REAL 2.00 ICP shortfall, and not one surface on the
+//     canister could see it or say it.
+//
+// # THE WRITTEN-DOWN BALANCE CAN ONLY BE TOO LOW -- EXCEPT BY WHAT IS IN FLIGHT
+//
+// A deposit subaccount observation is stale-low by construction (see
+// `observed_deposit_total`). The main account is NOT: it goes up when anybody
+// transfers in with no message, and it goes down whenever this canister pays
+// somebody. So the one-directional property has to be BUILT, and it is built by
+// making the two adjustment directions asymmetric:
+//
+//   * an adjustment that LOWERS the written-down balance (a confirmed payout) is
+//     applied ALWAYS -- even at the risk of double-subtracting a movement the
+//     reading already reflected;
+//   * an adjustment that RAISES it (a confirmed pull, sweep or notified deposit)
+//     is applied ONLY when the movement PROVABLY happened after the reading, i.e.
+//     its ledger timestamp is strictly greater than `observed_at_ns`.
+//
+// Nothing else can lower the account: this canister is the only principal that
+// can sign a transfer out of it. So
+//
+// ```text
+//   main_balance_now() <= what the ledger holds + open payouts
+// ```
+//
+// **The `+ open payouts` is not slack and it must not be rounded away.** An
+// adjustment is applied at `settle_intent`, which is the moment the ledger's
+// answer comes back -- so a payout the ledger has already executed and whose
+// continuation was discarded (FINDING 29) has left the chain and not yet left
+// this record. The first version of this comment claimed the bound without that
+// term and was simply wrong, in a state this repository has a whole harness for.
+//
+// It costs the report nothing, and that is the part worth understanding rather
+// than trusting. A payout debits the main account by EXACTLY `intent.amount`
+// (`amount - fee` to the player, `fee` burnt from the same account), and exactly
+// `intent.amount` sits on the OWED side as `payouts_in_flight` until the same
+// instant the record is adjusted. So
+//
+// ```text
+//   (main + A) - (owed + A)  ==  main - owed
+// ```
+//
+// and the published DIFFERENCE -- the number the verdict is computed from -- is
+// identical whether or not the movement has landed. The same cancellation holds
+// for a sweep, between the deposit-subaccount term and the journal.
+//
+// So: the per-account figures can be stale-high by at most what the journal
+// already names, the TOTAL cannot be stale-high at all, and the worst a stale
+// record can do is make the canister cry poor when it is fine -- never claim it
+// can pay when it cannot. A false alarm is one free `refresh_solvency()` away
+// from being cleared; a false all-clear is what FINDING 35 was. Both bounds are
+// asserted, not argued:
+// `tests/money_safety/src/invariants/solvency.rs::check_written_down_holdings_are_not_overstated`.
+
+/// One reading of this canister's MAIN ledger account, taken by asking the
+/// ledger, plus the movements this canister has performed since.
+///
+/// The exact analogue of [`DepositObservation`] for account (1)/(3), and
+/// deliberately the same shape: an amount, when the ledger answered, and WHICH
+/// ledger answered (a table that changed currency holds a different account on
+/// each one).
+#[derive(Clone, Debug, PartialEq, Eq, CandidType, Deserialize)]
+pub struct MainAccountObservation {
+    /// `icrc1_balance_of((this canister, None))`, exactly as the ledger returned
+    /// it. Never adjusted -- the adjustments live in the two fields below, so
+    /// "what the ledger said" and "what this canister has derived since" can
+    /// never be confused for one another.
+    pub amount: u64,
+    /// `ic_cdk::api::time()` when the ledger answered. **Never advanced by a
+    /// derived adjustment**: it is the age of the READING, and a report that aged
+    /// its own reading every time the canister moved money would be claiming
+    /// freshness it does not have.
+    pub observed_at_ns: u64,
+    /// WHICH ledger was asked.
+    pub ledger: Principal,
+    /// e8s this canister has ADDED to the main account since `observed_at_ns`, in
+    /// movements the ledger CONFIRMED with a block index and which provably
+    /// happened after the reading. See the asymmetry note above.
+    pub credited_since: u64,
+    /// e8s this canister has REMOVED since `observed_at_ns`, in movements the
+    /// ledger confirmed. Applied unconditionally, because over-subtracting is the
+    /// safe direction.
+    pub debited_since: u64,
+}
+
+impl MainAccountObservation {
+    /// The best LOWER BOUND this canister can state for its own main-account
+    /// balance. See "THE WRITTEN-DOWN BALANCE CAN ONLY BE TOO LOW" above.
+    pub fn balance_now(&self) -> u64 {
+        self.amount
+            .saturating_add(self.credited_since)
+            .saturating_sub(self.debited_since)
+    }
+}
+
+thread_local! {
+    /// What the ledger last said about this canister's MAIN account.
+    ///
+    /// PERSISTED (`PersistentState::main_custody`). `None` means **NOBODY HAS
+    /// EVER LOOKED**, which is not "the account is empty" -- it is the state every
+    /// surface here has to render as UNKNOWN. That distinction is the whole of
+    /// wave 8's lesson and the reason this is an `Option` rather than a `u64`
+    /// defaulting to zero.
+    static MAIN_CUSTODY: RefCell<Option<MainAccountObservation>> = RefCell::new(None);
+}
+
+/// Write down what the ledger just said about the main account, and reset the
+/// derived adjustments: they only ever describe movements SINCE a reading, and
+/// this is a new reading.
+fn record_main_observation(ledger: Principal, amount: u64, now: u64) {
+    MAIN_CUSTODY.with(|m| {
+        *m.borrow_mut() = Some(MainAccountObservation {
+            amount,
+            observed_at_ns: now,
+            ledger,
+            credited_since: 0,
+            debited_since: 0,
+        });
+    });
+}
+
+/// The last reading of the main account, with its age.
+///
+/// `None` means never asked -- **and also means "never asked on the ledger that
+/// is in force now"**, which is the same thing for every purpose here. A table
+/// that was ICP and is now BTC has a main account on each ledger, and a reading
+/// taken on the old one says nothing whatever about the new one. Counting it
+/// would OVERSTATE what the canister holds in the currency it now owes, which is
+/// the one direction this record is not allowed to be wrong in.
+///
+/// `DepositObservation::ledger` exists for exactly this reason and this is its
+/// twin; the difference is that this one is enforced rather than merely recorded.
+fn observed_main_entry() -> Option<MainAccountObservation> {
+    let live = get_table_currency().ledger_canister();
+    MAIN_CUSTODY.with(|m| m.borrow().clone()).filter(|o| o.ledger == live)
+}
+
+/// The reading as it was written down, whatever ledger it was taken on.
+///
+/// Only for surfaces that report the reading ITSELF (and its ledger) rather than
+/// using it as a figure. Never feed this into a total.
+fn recorded_main_entry() -> Option<MainAccountObservation> {
+    MAIN_CUSTODY.with(|m| m.borrow().clone())
+}
+
+/// The canister's own lower bound on its main-account balance, or `None` if it
+/// has never asked.
+fn observed_main_balance() -> Option<u64> {
+    observed_main_entry().map(|o| o.balance_now())
+}
+
+/// A movement INTO the main account that the ledger confirmed.
+///
+/// `happened_at_ns` is when it happened ON THE LEDGER. The credit is applied only
+/// when that instant is strictly after the reading, because otherwise the reading
+/// already contains it and applying it would OVERSTATE what the canister holds --
+/// the one direction this record is not allowed to be wrong in.
+fn note_main_credit(amount: u64, happened_at_ns: u64) {
+    MAIN_CUSTODY.with(|m| {
+        let mut slot = m.borrow_mut();
+        let Some(entry) = slot.as_mut() else {
+            return; // Never observed: there is no reading to adjust.
+        };
+        if happened_at_ns <= entry.observed_at_ns {
+            // Possibly already in the reading. Skipping understates what this
+            // canister holds, which is the safe direction.
+            return;
+        }
+        entry.credited_since = entry.credited_since.saturating_add(amount);
+    });
+}
+
+/// A movement OUT OF the main account that the ledger confirmed. Applied
+/// unconditionally: see the asymmetry note above.
+fn note_main_debit(amount: u64) {
+    MAIN_CUSTODY.with(|m| {
+        let mut slot = m.borrow_mut();
+        if let Some(entry) = slot.as_mut() {
+            entry.debited_since = entry.debited_since.saturating_add(amount);
+        }
+    });
+}
+
+/// `icrc1_balance_of((this canister, None))` on `ledger`.
+///
+/// The main-account twin of [`query_deposit_subaccount_balance`], and split out
+/// for the same reason: there is exactly ONE reader of this account in the
+/// canister, so no caller can invent its own idea of what "the main account"
+/// means.
+async fn query_main_account_balance(ledger_id: Principal) -> Result<u64, String> {
+    let account = Account {
+        owner: canister_id(),
+        subaccount: None,
+    };
+    let balance_result: Result<(Nat,), _> =
+        ic_cdk::call(ledger_id, "icrc1_balance_of", (account,)).await;
+    match balance_result {
+        Ok((bal,)) => Ok(bal.0.try_into().unwrap_or(0)),
+        Err((code, msg)) => Err(format!(
+            "Could not ask the {} ledger what this canister holds in its main account: \
+             {:?} - {}. Nothing has been moved and nothing has been written down; the last \
+             reading, if there is one, is unchanged and get_solvency() still reports its age.",
+            ledger_id, code, msg
+        )),
+    }
 }
 
 /// What the canister is holding for one principal at the deposit address it
@@ -3784,6 +4145,12 @@ async fn verify_ckbtc_deposit(block_index: u64, caller: Principal, canister: Pri
         new_balance
     });
 
+    // Same as the ICP door above: this credits escrow for satoshis that arrived
+    // in the MAIN ckBTC account with no message to this canister, so the
+    // main-account record has to learn about it -- and only if its reading
+    // predates the transaction. docs/SECURITY-FINDINGS.md FINDING 35.
+    note_main_credit(amount, tx.timestamp);
+
     Ok(new_balance)
 }
 
@@ -3954,7 +4321,13 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
         let observed = observed_deposit_entry(&caller);
         deposit_custody_sentence(observed.as_ref().map(|o| o.amount).unwrap_or(0), currency)
     };
-    let committed_note = [committed_note, deposit_note]
+    // AND WHETHER THE TABLE CAN PAY ANYBODY AT ALL.
+    //
+    // docs/SECURITY-FINDINGS.md FINDING 35. The two notes above answer "where is
+    // the rest of my money"; this one answers the question underneath it, and a
+    // player asking for money out of a canister that is short has to be told,
+    // whichever refusal they land on.
+    let committed_note = [committed_note, deposit_note, canister_shortfall_sentence()]
         .iter()
         .filter(|s| !s.is_empty())
         .cloned()
@@ -4673,6 +5046,35 @@ fn admin_get_deposit_custody() -> Result<(u64, Vec<(Principal, u64, u64)>, Vec<P
 async fn admin_audit_deposit_custody(also: Vec<Principal>) -> Result<(u64, u64, u64), String> {
     require_controller()?;
     let ledger_id = get_table_currency().ledger_canister();
+
+    // THE MAIN ACCOUNT FIRST, because that is where the money is.
+    //
+    // docs/SECURITY-FINDINGS.md FINDING 35: this method used to iterate the
+    // deposit subaccounts and nothing else, so it answered `(1 audited, 0 held,
+    // 0 unaudited)` -- an all-clear, in the affirmative -- on a canister holding
+    // 5 ICP at the address `get_deposit_address()` had published. The tuple
+    // shape is load-bearing for existing readers and cannot grow an element, so
+    // the reading goes into the record every surface reads (`get_solvency()`)
+    // and into the log, and the count stays what it always meant.
+    //
+    // A ledger that will not answer is NOT evidence of an empty account, so a
+    // failure here leaves the record untouched -- the same rule the subaccount
+    // loop below follows -- and the audit still reports on what it could read.
+    match query_main_account_balance(ledger_id).await {
+        Ok(main) => {
+            record_main_observation(ledger_id, main, ic_cdk::api::time());
+            ic_cdk::println!(
+                "admin_audit_deposit_custody: main account holds {} e8s.",
+                main
+            );
+        }
+        Err(e) => ic_cdk::println!(
+            "admin_audit_deposit_custody: the MAIN account could NOT be read ({}). This audit \
+             is incomplete and get_solvency() will keep reporting Unknown.",
+            e
+        ),
+    }
+
     // Read the never-read accounts first: they are the ones whose balance is
     // unknown, and an unknown balance is what the guards have to treat as money.
     let mut targets = unaudited_deposit_accounts();
@@ -4704,6 +5106,20 @@ async fn admin_audit_deposit_custody(also: Vec<Principal>) -> Result<(u64, u64, 
             failures.join("; ")
         );
     }
+    // THE ANSWER THE OPERATOR ACTUALLY NEEDS, logged after every account this call
+    // could reach has been read. The tuple below cannot carry it without breaking
+    // its existing readers, and an audit whose all-clear says nothing about
+    // whether the canister can pay is the all-clear FINDING 35 walked past.
+    let report = build_solvency_report();
+    ic_cdk::println!(
+        "admin_audit_deposit_custody: {} -- {}",
+        match report.verdict {
+            SolvencyVerdict::CanPayEveryone => "CAN PAY EVERYONE",
+            SolvencyVerdict::CannotPayEveryone => "CANNOT PAY EVERYONE",
+            SolvencyVerdict::Unknown => "SOLVENCY UNKNOWN",
+        },
+        report.summary
+    );
     Ok((
         read,
         observed_deposit_total(),
@@ -4927,7 +5343,21 @@ fn escrow_total() -> u64 {
 /// deduplication would not fire and it would move money a second time, on the
 /// wrong chain. A table with unfinished ledger operations is a funded table.
 fn total_liability() -> u64 {
-    let table = TABLE.with(|t| {
+    escrow_total()
+        .saturating_add(table_claims())
+        .saturating_add(observed_deposit_total())
+        .saturating_add(journalled_incoming_total())
+        .saturating_add(main_uncredited_observed())
+}
+
+/// Everything the live table is holding for the people at it: seated chips plus
+/// the pot.
+///
+/// `pot.max(staked)` and not `pot`, for the reason `table_custody` documents: the
+/// two are the same number whenever the hand is coherent, and when they disagree
+/// the LARGER one is the amount that has to be covered.
+fn table_claims() -> u64 {
+    TABLE.with(|t| {
         t.borrow()
             .as_ref()
             .map(|s| {
@@ -4935,11 +5365,677 @@ fn total_liability() -> u64 {
                 c.chips.saturating_add(c.pot.max(c.staked))
             })
             .unwrap_or(0)
+    })
+}
+
+/// Money the canister has WATCHED ARRIVE in its own main account and credited to
+/// nobody. **The fifth term of [`total_liability`], and it is FINDING 35.**
+///
+/// The main account is where an exchange withdrawal lands, where
+/// `get_deposit_address()` points, and where every sweep and every pull ends up.
+/// Value can arrive there with no message to this canister at all, so an e8 of it
+/// that no escrow balance, no chip stack, no pot and no open payout accounts for
+/// is money held for somebody this canister cannot yet name. It is a LIABILITY --
+/// `notify_deposit` exists precisely to attach a name to it later -- and until
+/// FINDING 35 it was in no term of the guard, so a table sitting on 5 ICP of a
+/// player's money reported that it owed nobody anything and let a controller
+/// re-denominate it onto a ledger where it held none.
+///
+/// Zero when the account has never been read, which is NOT a claim that it is
+/// empty: the "UNKNOWN IS NOT ZERO" leg of
+/// [`refuse_currency_change_while_funded`] is what covers that case, exactly as
+/// it does for a deposit subaccount nobody has looked at.
+fn main_uncredited_observed() -> u64 {
+    let Some(main) = observed_main_balance() else {
+        return 0;
+    };
+    main.saturating_sub(
+        escrow_total()
+            .saturating_add(table_claims())
+            .saturating_add(open_payout_total()),
+    )
+}
+
+/// Money named by open `payout` intents: debited from escrow, handed to the
+/// ledger, and not yet seen to leave.
+///
+/// A payout debits the main account by EXACTLY `intent.amount` -- the recipient
+/// gets `amount - fee` and the ledger burns `fee` out of the same account (see
+/// [`payout_args`]) -- which is what makes a solvency difference that counts this
+/// on the owed side INVARIANT to whether the payout has settled yet.
+fn open_payout_total() -> u64 {
+    LEDGER_INTENTS.with(|j| {
+        j.borrow()
+            .values()
+            .filter(|i| i.kind == LedgerIntentKind::Payout)
+            .fold(0u64, |acc, i| acc.saturating_add(i.amount))
+    })
+}
+
+/// Money named by open `pull` intents: on its way from a player's own wallet into
+/// this canister's main account, and on one side of that boundary or the other.
+///
+/// Counted on BOTH sides of the solvency report on purpose. If the pull happened,
+/// the canister holds it (in the main account, not yet in the reading) and owes
+/// it; if it did not, it neither holds nor owes it. Either way the two terms are
+/// equal, so an unfinished deposit can never by itself manufacture a shortfall --
+/// which is the false alarm that would otherwise fire on every `deposit()` call
+/// in flight.
+fn open_pull_total() -> u64 {
+    LEDGER_INTENTS.with(|j| {
+        j.borrow()
+            .values()
+            .filter(|i| i.kind == LedgerIntentKind::Pull)
+            .fold(0u64, |acc, i| acc.saturating_add(i.amount))
+    })
+}
+
+/// The ledger fees an open `sweep` will burn out of the deposit subaccounts it is
+/// draining.
+///
+/// [`open_sweep_total`] is gross (`amount + fee`) because it is netted OUT of the
+/// deposit observation; this is the fee half alone, and it is subtracted from the
+/// HELD side of the solvency report so that the difference does not wobble by one
+/// transfer fee per sweep for as long as the sweep is in flight.
+fn open_sweep_fee_total() -> u64 {
+    let fee = get_table_currency().transfer_fee();
+    LEDGER_INTENTS.with(|j| {
+        j.borrow()
+            .values()
+            .filter(|i| i.kind == LedgerIntentKind::Sweep)
+            .fold(0u64, |acc, _| acc.saturating_add(fee))
+    })
+}
+
+/// Every e8 the canister has SEEN in one of its own deposit subaccounts **on the
+/// ledger that is in force now**, with no netting at all.
+///
+/// [`observed_deposit_total`] nets open sweeps out because it feeds the OWED
+/// side. This is the HELD side: while a sweep is in flight the money is still
+/// sitting in the subaccount as far as any reading is concerned, and pretending
+/// otherwise would understate what the canister holds by the amount of every
+/// sweep it started.
+///
+/// The ledger filter is the same rule [`observed_main_entry`] applies and for the
+/// same reason: a reading taken on the ICP ledger is not evidence about a ckBTC
+/// account. On the OWED side counting it anyway is conservative; on the HELD side
+/// it would be a false all-clear, so here it is excluded and the principal is
+/// reported as never-read-on-this-ledger by [`unread_deposit_accounts_here`].
+fn observed_deposit_gross() -> u64 {
+    let live = get_table_currency().ledger_canister();
+    DEPOSIT_CUSTODY.with(|d| {
+        d.borrow()
+            .values()
+            .filter(|o| o.ledger == live)
+            .fold(0u64, |acc, o| acc.saturating_add(o.amount))
+    })
+}
+
+/// Deposit accounts with no reading **on the ledger in force now**: the
+/// never-read ones plus any whose only reading was taken on a different ledger.
+fn unread_deposit_accounts_here() -> Vec<Principal> {
+    let live = get_table_currency().ledger_canister();
+    let read_here: Vec<Principal> = DEPOSIT_CUSTODY.with(|d| {
+        d.borrow()
+            .iter()
+            .filter(|(_, o)| o.ledger == live)
+            .map(|(p, _)| *p)
+            .collect()
     });
-    escrow_total()
-        .saturating_add(table)
-        .saturating_add(observed_deposit_total())
-        .saturating_add(journalled_incoming_total())
+    deposit_account_census()
+        .into_iter()
+        .filter(|p| !read_here.contains(p))
+        .collect()
+}
+
+/// The age of the OLDEST deposit-subaccount reading on the ledger in force, i.e.
+/// the worst case for the whole deposit half of the report. `None` when there are
+/// none.
+fn deposit_oldest_observed_at_ns() -> Option<u64> {
+    let live = get_table_currency().ledger_canister();
+    DEPOSIT_CUSTODY.with(|d| {
+        d.borrow()
+            .values()
+            .filter(|o| o.ledger == live)
+            .map(|o| o.observed_at_ns)
+            .min()
+    })
+}
+
+// ===========================================================================
+// CAN THIS CANISTER PAY EVERYONE IT OWES?
+// (docs/SECURITY-FINDINGS.md FINDING 35, docs/DEFECTS.md E-70)
+// ===========================================================================
+//
+// A canister custodying funds that cannot tell anyone it is insolvent is the
+// defect. On MAINNET table_1, 2026-08-06:
+//
+//     escrow claimed   940,640,001 e8s
+//     chips at table             0
+//     pot                        0
+//     ledger main account        740,640,001 e8s
+//     -------------------------------------------
+//     SHORTFALL        200,000,000 e8s  (2.00 ICP)
+//
+// Every published deposit subaccount was audited and held nothing, so the money
+// is not hiding there. The residue is the old deposit double-credit (FINDING 10),
+// which is closed in the deployed code. **The point is not to erase the
+// discrepancy** -- no method here may edit a player's balance, and
+// `admin_restore_balance` was deliberately deleted once already. The point is
+// that the canister could not SEE it or SAY it.
+//
+// # The whole report reduces to one line, and it is worth stating
+//
+// The deposit subaccounts cover themselves exactly: every e8 observed in one is
+// on the HELD side and the same e8 is owed to the principal it was derived from
+// on the OWED side. An open `pull` is on both sides for the same reason. So after
+// the two cancel, the signed difference this report publishes is
+//
+// ```text
+//   difference = main_account_balance
+//              - escrow - chips - pot - payouts_in_flight
+// ```
+//
+// i.e. **the main account has to cover escrow, the chips, the pot and every
+// withdrawal already handed to the ledger.** Everything else in the record exists
+// so that a reader can check that line rather than take it on trust, and so that
+// an UNOBSERVED account is never silently read as an empty one.
+
+/// Can this canister pay everyone it owes?
+///
+/// Three answers and not two, because the third is the one wave 8 had to learn:
+/// a canister that has never asked the ledger what it holds does not know, and
+/// **an unknown is not a zero and not an all-clear.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CandidType, Deserialize)]
+pub enum SolvencyVerdict {
+    /// Every input has been observed and what it holds covers what it owes.
+    CanPayEveryone,
+    /// It owes more than it holds. This is a statement the canister is entitled
+    /// to make even with unread deposit subaccounts, because money at a deposit
+    /// subaccount is owed to the principal that subaccount was derived from --
+    /// it lands on BOTH sides of the comparison and cannot close a gap.
+    CannotPayEveryone,
+    /// At least one account has never been read, so the comparison cannot be
+    /// made. **Not "probably fine".**
+    Unknown,
+}
+
+/// What this canister owes, what it holds, and whether the first fits inside the
+/// second -- with the age of every reading it is built from.
+///
+/// A QUERY, so it is free, it needs no permission and it answers while every
+/// update is being refused. It reports the LAST OBSERVATIONS, because a query on
+/// the IC cannot call a ledger; [`refresh_solvency`] is the update that takes new
+/// ones and anybody may call it.
+#[derive(Clone, Debug, CandidType, Deserialize)]
+pub struct SolvencyReport {
+    /// Symbol of the currency this table is denominated in RIGHT NOW.
+    pub currency: String,
+    /// The ledger that currency selects right now. A reading taken on a different
+    /// ledger is reported with the ledger it was taken on, in `main_ledger`.
+    pub ledger: Principal,
+    /// When this report was computed. Not when anything in it was observed.
+    pub as_of_ns: u64,
+
+    // -- WHAT IT OWES ------------------------------------------------------
+    /// Withdrawable escrow, summed over every player.
+    pub escrow: u64,
+    /// Chips in front of seated players.
+    pub chips_at_table: u64,
+    /// The live pot as the table records it.
+    pub pot: u64,
+    /// The live pot as the ATTRIBUTED stakes sum to it. Equal to `pot` on a
+    /// coherent hand; `owed` uses the larger of the two.
+    pub committed_stake: u64,
+    /// Observed money in this canister's own deposit subaccounts, net of sweeps
+    /// already in flight. The same figure `total_liability()` uses.
+    pub unswept_deposits: u64,
+    /// Open `pull` and `sweep` intents: value arriving that has not been booked.
+    pub unfinished_incoming: u64,
+    /// The `pull` half of `unfinished_incoming`: value on its way from a player's
+    /// own wallet. Published separately because it is the only in-flight term
+    /// that is added to the HELD side as well -- it is on one side of the ledger
+    /// boundary or the other, so counting it on both sides is what stops an
+    /// unfinished deposit from manufacturing a shortfall. `unfinished_incoming -
+    /// pulls_in_flight` is the sweep half.
+    pub pulls_in_flight: u64,
+    /// The ledger fees an open sweep will burn out of the deposit subaccount it
+    /// is draining. Subtracted from the HELD side, so the difference does not
+    /// wobble by one transfer fee per sweep while the sweep is in flight.
+    pub sweep_fees_in_flight: u64,
+    /// Open `payout` intents: value already debited from escrow and handed to the
+    /// ledger, not yet seen to leave.
+    pub payouts_in_flight: u64,
+    /// The sum of the terms above (`pot` and `committed_stake` counted once, at
+    /// the larger of the two).
+    pub owed: u64,
+
+    // -- WHAT IT HOLDS -----------------------------------------------------
+    /// The main account, as last read from the ledger and adjusted only by
+    /// movements this canister performed and the ledger confirmed.
+    /// **`null` means NOBODY HAS EVER LOOKED**, not "the account is empty".
+    pub main_account: Option<u64>,
+    /// When the LEDGER was asked. `null` means never. The figure above can be
+    /// arbitrarily old and this is the only thing that says so.
+    pub main_observed_at_ns: Option<u64>,
+    /// Which ledger that reading was taken on. Differs from `ledger` when the
+    /// table's currency has been changed since.
+    pub main_ledger: Option<Principal>,
+    /// Confirmed movements INTO the main account since the reading, already
+    /// included in `main_account`. Published so a reader can subtract them and
+    /// recover the raw reading.
+    pub main_credited_since_reading: u64,
+    /// Confirmed movements OUT of the main account since the reading.
+    pub main_debited_since_reading: u64,
+    /// Every e8 observed in this canister's deposit subaccounts, WITHOUT netting
+    /// sweeps in flight: while a sweep is open the money is still in the
+    /// subaccount as far as any reading goes.
+    pub deposit_subaccounts: u64,
+    /// How many deposit accounts that figure is built from.
+    pub deposit_accounts_observed: u64,
+    /// The oldest of those readings. `null` when there are none.
+    pub deposit_oldest_observed_at_ns: Option<u64>,
+    /// **How many** deposit accounts this canister can enumerate and has NEVER
+    /// read. Their balances are UNKNOWN, not zero. Non-zero forces
+    /// `verdict = Unknown` unless the canister already knows it is short.
+    ///
+    /// The COUNT and not the list, because this is a public query: the census is
+    /// every principal holding escrow at this table, and publishing it to an
+    /// anonymous caller would turn a solvency instrument into a player roster.
+    /// The list is in the field below, scoped.
+    pub deposit_accounts_never_observed_count: u64,
+    /// WHICH accounts, scoped to the caller: **every one of them for a
+    /// controller, and your own principal (only if it is unread) for anybody
+    /// else.**
+    ///
+    /// The same rule `get_all_ledger_intents` uses, for the same reason. An
+    /// operator needs the roster to audit; a player needs to know whether their
+    /// OWN published address has been read; nobody needs the list of everybody
+    /// else's principals, and this method is callable by anyone including an
+    /// anonymous caller. Branch on the count above, never on this being empty.
+    pub deposit_accounts_never_observed: Vec<Principal>,
+    /// `main_account + deposit_subaccounts + pulls_in_flight -
+    /// sweep_fees_in_flight`, exactly. **`null` whenever `main_account` is
+    /// null**: there is no honest total that treats a never-read account as
+    /// empty.
+    pub held: Option<u64>,
+
+    // -- THE ANSWER --------------------------------------------------------
+    /// `held - owed`, signed. Negative means the canister CANNOT pay everyone.
+    /// `null` when `held` is null.
+    pub difference_e8s: Option<i128>,
+    /// The magnitude of a negative difference, for a reader that only wants the
+    /// bad number. `null` when there is no shortfall OR when the answer is not
+    /// known -- branch on `verdict`, never on this being null.
+    pub shortfall_e8s: Option<u64>,
+    /// Money at the main account that no escrow balance, chip stack, pot or open
+    /// payout accounts for: held for somebody this canister cannot yet name.
+    /// `null` when the main account has never been read.
+    pub unattributed_at_main: Option<u64>,
+    /// `total_liability()`, the single number the currency guard reads, published
+    /// so an instrument can check the guard instead of having to trigger it.
+    /// docs/SECURITY-FINDINGS.md FINDING 37.
+    pub guard_liability: u64,
+    /// The answer, in one of three states.
+    pub verdict: SolvencyVerdict,
+    /// The answer in words, naming the numbers and the method to call next.
+    pub summary: String,
+}
+
+/// Build the report from whatever the canister currently knows.
+fn build_solvency_report() -> SolvencyReport {
+    let now = ic_cdk::api::time();
+    let currency = get_table_currency();
+    let ledger = currency.ledger_canister();
+
+    let escrow = escrow_total();
+    let (chips_at_table, pot, committed_stake) = TABLE.with(|t| {
+        t.borrow()
+            .as_ref()
+            .map(|s| {
+                let c = table_custody(s);
+                (c.chips, c.pot, c.staked)
+            })
+            .unwrap_or((0, 0, 0))
+    });
+    let unswept_deposits = observed_deposit_total();
+    let unfinished_incoming = journalled_incoming_total();
+    let pulls_in_flight = open_pull_total();
+    let sweep_fees_in_flight = open_sweep_fee_total();
+    let payouts_in_flight = open_payout_total();
+    let owed = escrow
+        .saturating_add(chips_at_table)
+        .saturating_add(pot.max(committed_stake))
+        .saturating_add(unswept_deposits)
+        .saturating_add(unfinished_incoming)
+        .saturating_add(payouts_in_flight);
+
+    // `observed_main_entry`, not `recorded_main_entry`: a reading taken on the
+    // ledger this table USED to be denominated in is not a reading of the account
+    // it owes out of now.
+    let main = observed_main_entry();
+    let deposit_subaccounts = observed_deposit_gross();
+    let deposit_accounts_observed = DEPOSIT_CUSTODY.with(|d| {
+        let live = ledger;
+        d.borrow().values().filter(|o| o.ledger == live).count()
+    }) as u64;
+    let never_observed = unread_deposit_accounts_here();
+    // THE COUNT IS PUBLIC, THE ROSTER IS NOT. See the field comments: this is a
+    // query anybody may call, and `deposit_account_census()` is every principal
+    // holding escrow at this table.
+    let never_observed_count = never_observed.len() as u64;
+    let caller = ic_cdk::api::msg_caller();
+    let never_observed_visible: Vec<Principal> = if is_controller() {
+        never_observed.clone()
+    } else {
+        never_observed
+            .iter()
+            .copied()
+            .filter(|p| *p == caller)
+            .collect()
+    };
+
+    let held = main.as_ref().map(|m| {
+        m.balance_now()
+            .saturating_add(deposit_subaccounts)
+            .saturating_add(pulls_in_flight)
+            .saturating_sub(sweep_fees_in_flight)
+    });
+    let difference_e8s = held.map(|h| h as i128 - owed as i128);
+    let shortfall_e8s = difference_e8s.and_then(|d| (d < 0).then(|| (-d) as u64));
+    let unattributed_at_main = main.as_ref().map(|_| main_uncredited_observed());
+
+    let verdict = match (main.as_ref(), difference_e8s) {
+        // NOBODY HAS LOOKED. Everything below this line would be a guess.
+        (None, _) => SolvencyVerdict::Unknown,
+        // Short is knowable even with unread subaccounts: see the doc comment on
+        // `SolvencyVerdict::CannotPayEveryone`.
+        (Some(_), Some(d)) if d < 0 => SolvencyVerdict::CannotPayEveryone,
+        // THE COUNT, not the caller-scoped list: the verdict must not depend on
+        // who is asking. A player whose own address happens to be read would
+        // otherwise be told the table is fine while five others are unread.
+        (Some(_), _) if never_observed_count > 0 => SolvencyVerdict::Unknown,
+        _ => SolvencyVerdict::CanPayEveryone,
+    };
+
+    let summary = solvency_summary(
+        verdict,
+        currency,
+        owed,
+        held,
+        difference_e8s,
+        main.as_ref(),
+        never_observed_count,
+        &never_observed_visible,
+        now,
+    );
+
+    SolvencyReport {
+        currency: currency.symbol().to_string(),
+        ledger,
+        as_of_ns: now,
+        escrow,
+        chips_at_table,
+        pot,
+        committed_stake,
+        unswept_deposits,
+        unfinished_incoming,
+        pulls_in_flight,
+        sweep_fees_in_flight,
+        payouts_in_flight,
+        owed,
+        main_account: main.as_ref().map(|m| m.balance_now()),
+        main_observed_at_ns: main.as_ref().map(|m| m.observed_at_ns),
+        // The RECORDED ledger, even when it is not the live one. That mismatch is
+        // exactly why `main_account` above may be null on a canister that has been
+        // read, and a reader has to be able to see the reason rather than infer it.
+        main_ledger: recorded_main_entry().map(|m| m.ledger),
+        main_credited_since_reading: main.as_ref().map(|m| m.credited_since).unwrap_or(0),
+        main_debited_since_reading: main.as_ref().map(|m| m.debited_since).unwrap_or(0),
+        deposit_subaccounts,
+        deposit_accounts_observed,
+        deposit_oldest_observed_at_ns: deposit_oldest_observed_at_ns(),
+        deposit_accounts_never_observed_count: never_observed_count,
+        deposit_accounts_never_observed: never_observed_visible,
+        held,
+        difference_e8s,
+        shortfall_e8s,
+        unattributed_at_main,
+        guard_liability: total_liability(),
+        verdict,
+        summary,
+    }
+}
+
+/// The one place the solvency answer is written in words.
+///
+/// Shared by [`get_solvency`], [`get_custody_status`]'s advice and `withdraw`'s
+/// refusals, for the reason [`deposit_custody_sentence`] is shared by four
+/// callers: FINDING 28 is what happens when one surface makes up its own sentence
+/// about the same state.
+#[allow(clippy::too_many_arguments)]
+fn solvency_summary(
+    verdict: SolvencyVerdict,
+    currency: Currency,
+    owed: u64,
+    held: Option<u64>,
+    difference: Option<i128>,
+    main: Option<&MainAccountObservation>,
+    never_observed_count: u64,
+    never_observed_visible: &[Principal],
+    now: u64,
+) -> String {
+    let age = |then: u64| -> String {
+        let secs = now.saturating_sub(then) / 1_000_000_000;
+        format!("{secs}s ago")
+    };
+    match verdict {
+        SolvencyVerdict::Unknown if main.is_none() => format!(
+            "I DO NOT KNOW whether this canister can pay everyone it owes. It owes {} ({} e8s) \
+             and it has NEVER asked the {} ledger what its own main account holds, so there is \
+             no figure to compare that against. This is not a statement that the account is \
+             empty. Call refresh_solvency() -- it is public, it needs no permission, it moves \
+             no money and it is safe to call repeatedly -- and ask again.{}",
+            currency.format_amount(owed),
+            owed,
+            currency.symbol(),
+            match recorded_main_entry() {
+                Some(o) => format!(
+                    " (There IS a reading on record, but it was taken on ledger {} and this \
+                     table is now denominated in {}, whose ledger is {}. A balance on one \
+                     ledger is not evidence about an account on another, so it is not counted.)",
+                    o.ledger,
+                    currency.symbol(),
+                    currency.ledger_canister()
+                ),
+                None => String::new(),
+            },
+        ),
+        SolvencyVerdict::Unknown => format!(
+            "I DO NOT KNOW whether this canister can pay everyone it owes. On the readings it \
+             has, it owes {} ({} e8s) and holds {} ({} e8s), a difference of {} e8s -- but {} \
+             deposit address(es) it has published have NEVER been read, so part of what it \
+             holds and part of what it owes are both unmeasured. Money at an unread deposit \
+             address lands on both sides of that comparison, so it cannot turn a shortfall into \
+             a surplus, but it can make this answer wrong about the size of either side. Call \
+             refresh_solvency(), and refresh_deposit_custody() as each of those principals, or \
+             admin_audit_deposit_custody() as a controller. Main account last read {}.{}",
+            currency.format_amount(owed),
+            owed,
+            held.map(|h| currency.format_amount(h)).unwrap_or_default(),
+            held.unwrap_or(0),
+            difference.unwrap_or(0),
+            never_observed_count,
+            main.map(|m| age(m.observed_at_ns))
+                .unwrap_or_else(|| "never".to_string()),
+            // Named only where the caller is entitled to the names: all of them
+            // for a controller, their own for anybody else. The census is every
+            // principal holding escrow here and this is a public query.
+            if never_observed_visible.is_empty() {
+                String::new()
+            } else {
+                format!(" Unread, of the ones you may see: {never_observed_visible:?}")
+            },
+        ),
+        SolvencyVerdict::CannotPayEveryone => {
+            let short = difference.map(|d| -d).unwrap_or(0);
+            format!(
+                "THIS CANISTER CANNOT PAY EVERYONE IT OWES. It owes {} ({} e8s) and it holds {} \
+                 ({} e8s): it is SHORT {} e8s. Withdrawals will keep working until the money \
+                 runs out and then they will start failing at the ledger, and the last people \
+                 to ask will be the ones who are not paid. Nothing here can fix that by editing \
+                 a balance and nothing here will try -- this canister has no method that lets \
+                 anybody change what a player is owed, on purpose. Take the reading yourself \
+                 with refresh_solvency() (public, moves no money), read your own position with \
+                 get_custody_status(), and take this to the table operator. Main account last \
+                 read {}.",
+                currency.format_amount(owed),
+                owed,
+                held.map(|h| currency.format_amount(h)).unwrap_or_default(),
+                held.unwrap_or(0),
+                short,
+                main.map(|m| age(m.observed_at_ns))
+                    .unwrap_or_else(|| "never".to_string()),
+            )
+        }
+        SolvencyVerdict::CanPayEveryone => format!(
+            "This canister can pay everyone it owes, on the readings it has: it owes {} ({} \
+             e8s) and holds {} ({} e8s), a surplus of {} e8s. Every account it can enumerate \
+             has been read. The main-account reading was taken {}, and a reading is not the \
+             present: call refresh_solvency() for a fresh one.",
+            currency.format_amount(owed),
+            owed,
+            held.map(|h| currency.format_amount(h)).unwrap_or_default(),
+            held.unwrap_or(0),
+            difference.unwrap_or(0),
+            main.map(|m| age(m.observed_at_ns))
+                .unwrap_or_else(|| "never".to_string()),
+        ),
+    }
+}
+
+/// The shortfall sentence, or the empty string when the canister is not KNOWN to
+/// be short.
+///
+/// Deliberately empty in the UNKNOWN case. Every player who has never triggered a
+/// reading would otherwise see a warning on every surface all the time, and this
+/// project has already lost a wave to a gate nobody read; the machine-readable
+/// `CustodyStatus::canister_solvency` carries the unknown, and
+/// [`get_solvency`]`.summary` spells it out for anyone who asks about it directly.
+fn shortfall_sentence_from(report: &SolvencyReport) -> String {
+    if report.verdict != SolvencyVerdict::CannotPayEveryone {
+        return String::new();
+    }
+    let currency = get_table_currency();
+    format!(
+        "AND A WARNING ABOUT THE WHOLE TABLE, NOT JUST YOU: this canister currently owes more \
+         than it holds. It owes {} ({} e8s) across every player and it holds {} ({} e8s), so it \
+         is SHORT {} e8s. That means somebody's withdrawal will fail. Call get_solvency() for \
+         the full breakdown and refresh_solvency() to take a fresh reading yourself.",
+        currency.format_amount(report.owed),
+        report.owed,
+        currency.format_amount(report.held.unwrap_or(0)),
+        report.held.unwrap_or(0),
+        report.shortfall_e8s.unwrap_or(0),
+    )
+}
+
+/// [`shortfall_sentence_from`] for callers that do not already hold a report.
+fn canister_shortfall_sentence() -> String {
+    shortfall_sentence_from(&build_solvency_report())
+}
+
+/// What this canister owes, what it holds, and whether the first fits inside the
+/// second.
+///
+/// **A QUERY, so it is free and it needs no permission.** It reports the last
+/// readings; [`refresh_solvency`] takes new ones and anybody may call it.
+#[ic_cdk::query]
+fn get_solvency() -> SolvencyReport {
+    build_solvency_report()
+}
+
+/// How many main-account readings one principal may take per minute.
+///
+/// Generous on purpose. A client that wants a live number should poll the QUERY
+/// (`get_solvency`), which is free and unlimited; this bound exists only so that
+/// an update which makes an inter-canister call cannot be used to burn the
+/// canister's cycles, which is the standing concern of FINDING 19 / FINDING 26.
+///
+/// **A limit and not a throttle.** A throttle would hand the caller an older
+/// reading while the call looked like it had succeeded, and every defect in this
+/// file's history is a surface that served a narrower or older answer than it
+/// appeared to. Over the limit, the call is REFUSED, in words, and the caller
+/// knows exactly what they did and did not get.
+const MAX_SOLVENCY_REFRESH_PER_MINUTE: u32 = 30;
+
+fn check_solvency_refresh_rate_limit() -> Result<(), String> {
+    let caller = ic_cdk::api::msg_caller();
+    let now = ic_cdk::api::time();
+    let minute_ns: u64 = 60_000_000_000;
+    SOLVENCY_RATE_LIMITS.with(|r| {
+        let mut limits = r.borrow_mut();
+        let (window_start, count) = limits.get(&caller).copied().unwrap_or((0, 0));
+        if now.saturating_sub(window_start) > minute_ns {
+            limits.insert(caller, (now, 1));
+            return Ok(());
+        }
+        if count >= MAX_SOLVENCY_REFRESH_PER_MINUTE {
+            return Err(format!(
+                "You have asked this canister to re-read its own main account {} times in the \
+                 last minute, which is the limit. Nothing is wrong and nothing is being \
+                 hidden: get_solvency() is a QUERY, it is free, it is unlimited, and it \
+                 reports the last reading together with exactly how old that reading is. \
+                 This limit is on the UPDATE that costs an inter-canister call.",
+                count
+            ));
+        }
+        limits.insert(caller, (window_start, count + 1));
+        Ok(())
+    })
+}
+
+/// Ask the ledger what this canister's MAIN account holds right now, write the
+/// answer down, and return it.
+///
+/// The main-account twin of [`refresh_deposit_custody`], and the call that makes
+/// [`get_solvency`] true. **Any principal may call it, including an anonymous
+/// one**: a player has to be able to check whether the table can pay them without
+/// asking anybody's permission, and there is nothing here to gain by calling it
+/// or to lose by somebody else doing so.
+///
+/// It moves no money and it is safe to call repeatedly: the only state it writes
+/// is the reading itself, which is overwritten each time.
+///
+/// Bounded by [`MAX_SOLVENCY_REFRESH_PER_MINUTE`] per principal, which is a
+/// REFUSAL and never a silently stale answer -- see the constant.
+#[ic_cdk::update]
+async fn refresh_main_account_custody() -> Result<MainAccountObservation, String> {
+    check_solvency_refresh_rate_limit()?;
+    let ledger_id = get_table_currency().ledger_canister();
+    let amount = query_main_account_balance(ledger_id).await?;
+    record_main_observation(ledger_id, amount, ic_cdk::api::time());
+    observed_main_entry().ok_or_else(|| "reading was not written down".to_string())
+}
+
+/// Take a fresh main-account reading and return the whole solvency report.
+///
+/// One call for the question a player actually has -- *can this table pay me?* --
+/// so nobody has to know that the answer is assembled from two surfaces. Any
+/// principal may call it; it moves no money.
+///
+/// It does NOT re-read the deposit subaccounts: that is up to fifty
+/// inter-canister calls and it is what `refresh_deposit_custody()` (yours) and
+/// `admin_audit_deposit_custody()` (all of them) are for. The report says how
+/// many are unread and how old the rest are, and refuses to call itself solvent
+/// while any of them has never been looked at.
+#[ic_cdk::update]
+async fn refresh_solvency() -> Result<SolvencyReport, String> {
+    check_solvency_refresh_rate_limit()?;
+    let ledger_id = get_table_currency().ledger_canister();
+    let amount = query_main_account_balance(ledger_id).await?;
+    record_main_observation(ledger_id, amount, ic_cdk::api::time());
+    Ok(build_solvency_report())
 }
 
 /// Refuse a config whose `currency` differs from the live one while the canister
@@ -4968,6 +6064,30 @@ fn refuse_currency_change_while_funded(new_config: &TableConfig) -> Result<(), S
         // nothing to that sum and could be holding anything, which is precisely
         // the state FINDING 21 flipped the currency in. Refuse until every
         // enumerable deposit account has a reading.
+        //
+        // THE MAIN ACCOUNT IS ONE OF THOSE ACCOUNTS (FINDING 35). It was not in
+        // this leg either, so a table that had never read the account
+        // `get_deposit_address()` publishes -- the account holding essentially all
+        // of the money -- read a liability of zero and the flip was accepted on a
+        // canister sitting on 5 ICP. `main_uncredited_observed()` covers the case
+        // where the account HAS been read; this covers the case where it has not.
+        if observed_main_entry().is_none() {
+            return Err(format!(
+                "Refusing to change this table's currency from {} to {}: this canister has \
+                 NEVER asked the {} ledger what its own main account holds, so it cannot say \
+                 that account is empty. That account is where get_deposit_address() points, \
+                 where every sweep and every pull lands, and where an exchange withdrawal \
+                 arrives with no message to this canister at all. The currency selects the \
+                 LEDGER, so money sitting there becomes unreachable the moment every path \
+                 starts looking at the new one. Call refresh_solvency() -- it is public, it \
+                 moves no money -- or admin_audit_deposit_custody(), which now reads the main \
+                 account too, and then change the currency. \
+                 See docs/SECURITY-FINDINGS.md FINDING 35.",
+                current.symbol(),
+                new_config.currency.symbol(),
+                current.symbol(),
+            ));
+        }
         let unaudited = unaudited_deposit_accounts();
         if unaudited.is_empty() {
             return Ok(());
@@ -8168,6 +9288,22 @@ pub struct CustodyStatus {
     /// unfinished_ledger_ops`: everything the canister is holding that belongs to
     /// you, across every account it owns and every movement it has begun.
     pub total: u64,
+    /// **Can this canister pay everyone, including you?**
+    ///
+    /// Every field above answers "how much of this is mine". None of them answers
+    /// "is it actually there", and on MAINNET table_1 on 2026-08-06 the answer was
+    /// no, by 2.00 ICP, with every one of those fields correct. A record whose job
+    /// is "what is this canister holding for me" that cannot say the canister is
+    /// short is the defect, not the number.
+    /// docs/SECURITY-FINDINGS.md FINDING 35.
+    ///
+    /// `Unknown` is the honest answer until somebody calls `refresh_solvency()`,
+    /// and it is NOT a soft yes. Branch on this field, never on the one below.
+    pub canister_solvency: SolvencyVerdict,
+    /// How many e8s short the canister is, when `canister_solvency` says it
+    /// cannot pay everyone. `null` in the other two states -- including `Unknown`,
+    /// which is why this is not the field to test.
+    pub canister_shortfall_e8s: Option<u64>,
     /// What to do next, in words, NAMING the method when a method is needed. A
     /// recovery path a player has to read the interface definition to find is not
     /// a recovery path.
@@ -8242,6 +9378,14 @@ fn get_custody_status() -> CustodyStatus {
     // where all of a player's money is.
     let (unfinished_ledger_ops, unfinished_sentence) = unfinished_ledger_ops_for(caller);
 
+    // FINDING 35: and whether the money is ACTUALLY THERE. Every field of this
+    // record can be exactly right on a canister that cannot pay any of them, which
+    // is the state mainnet table_1 was in when this was written. The sentence goes
+    // FIRST in `advice` below -- ahead of the pot and the deposit address -- because
+    // it is the only one that says the money might not exist.
+    let solvency = build_solvency_report();
+    let solvency_sentence = shortfall_sentence_from(&solvency);
+
     TABLE.with(|t| {
         let table = t.borrow();
         let Some(state) = table.as_ref() else {
@@ -8257,12 +9401,18 @@ fn get_custody_status() -> CustodyStatus {
                 total: escrow
                     .saturating_add(unswept_deposit)
                     .saturating_add(unfinished_ledger_ops),
-                advice: [deposit_advice, unfinished_sentence.clone()]
-                    .iter()
-                    .filter(|s| !s.is_empty())
-                    .cloned()
-                    .collect::<Vec<String>>()
-                    .join(" "),
+                canister_solvency: solvency.verdict,
+                canister_shortfall_e8s: solvency.shortfall_e8s,
+                advice: [
+                    solvency_sentence.clone(),
+                    deposit_advice,
+                    unfinished_sentence.clone(),
+                ]
+                .iter()
+                .filter(|s| !s.is_empty())
+                .cloned()
+                .collect::<Vec<String>>()
+                .join(" "),
             };
         };
 
@@ -8292,6 +9442,9 @@ fn get_custody_status() -> CustodyStatus {
         // of stranded money at a time is how the second kind stays invisible, and
         // that is how FINDING 28 and FINDING 29 each stayed invisible in turn.
         let advice = [
+            // FIRST, and ahead of every "where is my money" sentence: whether the
+            // money is there at all. FINDING 35.
+            solvency_sentence.clone(),
             committed_stake_sentence(committed_in_pot, committed_is_stuck, state.hand_number),
             deposit_advice.clone(),
             unfinished_sentence.clone(),
@@ -8316,6 +9469,8 @@ fn get_custody_status() -> CustodyStatus {
                 .saturating_add(committed_in_pot)
                 .saturating_add(unswept_deposit)
                 .saturating_add(unfinished_ledger_ops),
+            canister_solvency: solvency.verdict,
+            canister_shortfall_e8s: solvency.shortfall_e8s,
             advice,
         }
     })
@@ -10879,6 +12034,31 @@ struct PersistentState {
     /// safe reading, because the guard then refuses until somebody looks.
     #[serde(default)]
     deposit_custody: Option<Vec<(Principal, u64, u64, Principal)>>,
+
+    /// `MAIN_CUSTODY`: what the ledger last said about this canister's MAIN
+    /// account, as `(amount, observed_at_ns, ledger, credited_since,
+    /// debited_since)`.
+    ///
+    /// **A CUSTODY RECORD, and therefore persisted**, for the same reason
+    /// `deposit_custody` above is: dropping it across an upgrade would put
+    /// `get_solvency()`, `get_custody_status().canister_solvency` and the fifth
+    /// term of `total_liability()` straight back to "nobody has ever looked",
+    /// i.e. it would re-open docs/SECURITY-FINDINGS.md FINDING 35 once per
+    /// upgrade -- on a canister that was upgraded WHILE 2.00 ICP short.
+    ///
+    /// `opt` at the TOP LEVEL of this record, and a flat tuple inside it, for the
+    /// reason `deposit_watermark` documents at length (FINDING 14): Candid does
+    /// not honour serde defaults, and a bare field here would make
+    /// `stable_restore` fail for every upgrade from state written before this
+    /// field existed -- which for a fund-holding canister means it cannot be
+    /// upgraded at all.
+    ///
+    /// **`None` restores as "never observed", and that is the correct and the
+    /// safe reading**, not a zero. It leaves the verdict at `Unknown` and leaves
+    /// the currency guard shut until somebody takes a reading, which is exactly
+    /// what an upgrade that lost the record should do.
+    #[serde(default)]
+    main_custody: Option<(u64, u64, Principal, u64, u64)>,
 }
 
 /// `(pot, sum of seated players' chips)` for the live table, if there is one.
@@ -10950,6 +12130,21 @@ fn pre_upgrade() {
                 .map(|(p, o)| (*p, o.amount, o.observed_at_ns, o.ledger))
                 .collect()
         })),
+        // FINDING 35. `None` here means "never observed", so an observation that
+        // exists must be written as `Some`, and one that does not must stay
+        // `None`: mapping "no reading" to a zero would be the canister telling
+        // the next reader its main account is empty.
+        main_custody: MAIN_CUSTODY.with(|m| {
+            m.borrow().as_ref().map(|o| {
+                (
+                    o.amount,
+                    o.observed_at_ns,
+                    o.ledger,
+                    o.credited_since,
+                    o.debited_since,
+                )
+            })
+        }),
         // FINDING 29: an unfinished ledger movement must survive the upgrade that
         // interrupted it. See the field comments.
         ledger_intents: Some(LEDGER_INTENTS.with(|j| j.borrow().values().cloned().collect())),
@@ -11038,6 +12233,26 @@ fn post_upgrade() {
                 },
             );
         }
+    });
+
+    // MAIN-ACCOUNT custody (docs/SECURITY-FINDINGS.md FINDING 35). `None` -- state
+    // written before this field existed, or an upgrade that genuinely never had a
+    // reading -- restores as **never observed**, not as zero. That leaves
+    // `get_solvency()` answering Unknown and the currency guard shut until
+    // somebody calls `refresh_solvency()`, which is the correct behaviour for a
+    // canister that has just lost its only record of what it holds.
+    MAIN_CUSTODY.with(|m| {
+        *m.borrow_mut() = state.main_custody.map(
+            |(amount, observed_at_ns, ledger, credited_since, debited_since)| {
+                MainAccountObservation {
+                    amount,
+                    observed_at_ns,
+                    ledger,
+                    credited_since,
+                    debited_since,
+                }
+            },
+        );
     });
 
     // Restore the ledger-intent journal (docs/SECURITY-FINDINGS.md FINDING 29).

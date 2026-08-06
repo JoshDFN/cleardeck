@@ -26,12 +26,14 @@ pub mod outcome;
 pub mod reachability;
 pub mod record;
 pub mod relational;
+pub mod solvency;
 pub use attribution::*;
 pub use custody::*;
 pub use outcome::*;
 pub use reachability::*;
 pub use record::*;
 pub use relational::*;
+pub use solvency::*;
 
 use crate::table_api::{GamePhase, TableState};
 use crate::world::{Snapshot, World};
@@ -335,6 +337,29 @@ pub enum Severity {
     /// better than no record: it is the artifact a player would be pointed at to
     /// settle a dispute. docs/SECURITY-FINDINGS.md FINDING 30.
     FalseRecord,
+    /// **The canister cannot pay everyone, and cannot see or say so.**
+    ///
+    /// Its own solvency surface reports that it can pay, or reports nothing, or
+    /// reports figures that do not add up, while the LEDGER says it is short. Or
+    /// it claims to hold more in an account than the ledger says is there, which
+    /// is the same defect one step earlier: a written-down balance that can be too
+    /// HIGH is a false all-clear waiting to be issued.
+    ///
+    /// Its own severity and not a [`Severity::FundCreation`], because the two
+    /// convict different things. `FundCreation` is the shortfall itself, which can
+    /// have an honest cause -- mainnet table_1's 2.00 ICP is the residue of a
+    /// deposit double-credit that was fixed in the code and could not be unwound
+    /// in the books. This is the canister being unable to TELL anybody, which has
+    /// no honest cause at all. A canister custodying funds that cannot say it is
+    /// insolvent is the defect; the insolvency is only the occasion.
+    ///
+    /// Never excusable, and note that the shortfall itself may be simultaneously
+    /// reported as a `FundCreation` by the ledger-anchored leg -- the two are
+    /// deliberately separate rows, because fixing the books and fixing the
+    /// instrument are different jobs and this project has repeatedly shipped the
+    /// first while believing it had done the second.
+    /// docs/SECURITY-FINDINGS.md FINDING 35, docs/DEFECTS.md E-70.
+    InsolvencyUnreported,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -876,6 +901,13 @@ pub fn check_point_in_time(snap: &Snapshot, exempt: impl Into<Exemptions>) -> Ve
     ));
     // The one leg above that is NOT a statement about totals.
     out.extend(check_deposit_attribution(snap, &exempt));
+    // THE CANISTER'S OWN ANSWER TO "CAN I PAY EVERYONE", checked against the
+    // ledger and against itself. Every leg above reads the canister with the
+    // harness's authority and the harness's ledger access; these read what a
+    // PLAYER can read, which is the only thing that was ever going to convict
+    // docs/SECURITY-FINDINGS.md FINDING 35. Query-only, so it costs no round; the
+    // update-driven leg is `check_insolvency_is_reported`.
+    out.extend(solvency::check_solvency_surfaces(snap));
     out
 }
 

@@ -14,9 +14,16 @@ const isDevelopment = (() => {
       return true;
     }
   }
-  // Fall back to environment checks - only enable dev logging if explicitly local
-  return import.meta.env.DFX_NETWORK === 'local' ||
-         import.meta.env.MODE === 'development';
+  // Fall back to environment checks - only enable dev logging if explicitly local.
+  //
+  // Optional chaining, deliberately: `import.meta.env` is a vite construct and is
+  // UNDEFINED under plain Node, so `import.meta.env.DFX_NETWORK` threw a
+  // TypeError at import time and made every module that imports this logger
+  // -- which is most of $lib -- impossible to unit-test outside a bundler.
+  // Vite still statically replaces `import.meta.env`, so the built output is
+  // unchanged.
+  return import.meta.env?.DFX_NETWORK === 'local' ||
+         import.meta.env?.MODE === 'development';
 })();
 
 // Error tracking service (can be integrated with Sentry, etc.)

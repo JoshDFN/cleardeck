@@ -5,8 +5,39 @@
   import { Principal } from '@dfinity/principal';
   import { onMount } from 'svelte';
   import IcpLogo from './IcpLogo.svelte';
+  import SolvencyNotice from './SolvencyNotice.svelte';
+  import { readTableSolvency, refreshTableSolvency } from '$lib/solvency.js';
+  import { IS_MAINNET_BUILD, NETWORK } from '$lib/ic-config.js';
 
   const { tableActor, tableCanisterId, onClose, onDepositSuccess, currency = 'ICP' } = $props();
+
+  // ==========================================================================
+  // CAN THIS TABLE PAY BACK WHAT IT ALREADY HOLDS? ASKED BEFORE, NOT AFTER.
+  // ==========================================================================
+  //
+  // docs/SECURITY-FINDINGS.md FINDING 35 / docs/DEFECTS.md E-70. Mainnet table_1
+  // is 2.00 ICP short of its own books and no surface of the canister says so, so
+  // this screen -- the one screen a player commits real money from -- showed
+  // nothing at all. It now asks, and renders every answer except "covered".
+  //
+  // The read is a QUERY, so it costs nothing and still answers while the update
+  // path is refusing. It runs on mount rather than on submit: a warning that
+  // appears after the button is pressed is a receipt, not a warning.
+  let solvency = $state(null);
+  let solvencyRefreshing = $state(false);
+
+  async function loadSolvency() {
+    solvency = await readTableSolvency(tableActor);
+  }
+
+  async function refreshSolvency() {
+    solvencyRefreshing = true;
+    try {
+      solvency = await refreshTableSolvency(tableActor);
+    } finally {
+      solvencyRefreshing = false;
+    }
+  }
 
   // Subscribe to auth state to check if user is authenticated
   let authState = $state({ isAuthenticated: false });
@@ -496,6 +527,7 @@
   onMount(() => {
     loadWalletBalance();
     loadPrices();
+    loadSolvency();
     if (isBTC) {
       loadBtcDepositAddress();
     }
@@ -781,6 +813,33 @@
       No middleman, no house, 0% rake.
       No rake is taken from any pot on any table.
     </p>
+
+    <!-- WHERE THE MONEY IS ACTUALLY GOING, ON THE SCREEN IT LEAVES FROM.
+         Compiled in at build time (ic-config.js NETWORK), from the same constant
+         that chooses the gateway and the canister ids, so this line and the
+         destination can never disagree. -->
+    <p class="network-line" class:mainnet={IS_MAINNET_BUILD} data-network={NETWORK}>
+      {#if IS_MAINNET_BUILD}
+        <strong>Internet Computer mainnet.</strong> This moves REAL {currencySymbol}
+        to canister <code>{tableCanisterId ?? 'unknown'}</code>, and it is not reversible.
+      {:else}
+        <strong>{NETWORK} build.</strong> This moves test {currencySymbol} on your own
+        replica, to canister <code>{tableCanisterId ?? 'unknown'}</code>. No real funds
+        can be reached from this bundle.
+      {/if}
+    </p>
+
+    <!-- WHETHER THIS TABLE HOLDS WHAT IT OWES, BEFORE ANY AMOUNT IS TYPED.
+         In flow, directly under the notices it must never cover, and above every
+         control that can move money. docs/SECURITY-FINDINGS.md FINDING 35. -->
+    <SolvencyNotice
+      {solvency}
+      {currency}
+      context="deposit"
+      onRefresh={refreshSolvency}
+      refreshing={solvencyRefreshing}
+    />
+
     <!-- BTC Deposit Method Toggle -->
     {#if isBTC}
       <div class="deposit-method-toggle">
@@ -2356,5 +2415,34 @@
 
   .player-notice strong {
     color: #fecaca;
+  }
+
+  /* In flow, directly beneath the notices. No z-index and no fixed position:
+     nothing added to this dialog may become one more thing that can cover the
+     four protected phrases (HARD RULE 2). */
+  .network-line {
+    margin: 10px 0 0 0;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .network-line.mainnet {
+    border-color: rgba(248, 113, 113, 0.5);
+    background: rgba(185, 28, 28, 0.16);
+    color: #fecaca;
+  }
+
+  .network-line strong { color: #fff; }
+  .network-line.mainnet strong { color: #fca5a5; }
+
+  .network-line code {
+    font-family: 'Monaco', 'Menlo', monospace;
+    font-size: 11px;
+    word-break: break-all;
   }
 </style>

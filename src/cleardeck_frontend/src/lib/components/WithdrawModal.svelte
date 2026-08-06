@@ -1,7 +1,30 @@
 <script>
   import IcpLogo from './IcpLogo.svelte';
+  import SolvencyNotice from './SolvencyNotice.svelte';
+  import { readTableSolvency, refreshTableSolvency } from '$lib/solvency.js';
 
   const { tableActor, currentBalance, onClose, onWithdrawSuccess, currency = 'ICP' } = $props();
+
+  // WHETHER THERE IS ENOUGH ON THE LEDGER TO PAY THIS WITHDRAWAL.
+  // docs/SECURITY-FINDINGS.md FINDING 35. `Available Balance` below is a number
+  // the canister keeps for you; it is not evidence that the canister holds it. On
+  // a table that is short, the withdrawal queue is first come first served, and
+  // this is the screen where that fact is actionable.
+  let solvency = $state(null);
+  let solvencyRefreshing = $state(false);
+
+  async function loadSolvency() {
+    solvency = await readTableSolvency(tableActor);
+  }
+
+  async function refreshSolvency() {
+    solvencyRefreshing = true;
+    try {
+      solvency = await refreshTableSolvency(tableActor);
+    } finally {
+      solvencyRefreshing = false;
+    }
+  }
 
   let withdrawAmount = $state('');
   let processing = $state(false);
@@ -354,6 +377,7 @@
 
   $effect(() => {
     loadCustody();
+    loadSolvency();
   });
 
   // ONE dismissal contract for every dialog in this app (docs/DEFECTS.md T-13).
@@ -404,6 +428,17 @@
       No middleman, no house, 0% rake.
       No rake is taken from any pot on any table.
     </p>
+
+    <!-- Whether the ledger actually holds the balance below. In flow, above it,
+         and never an overlay. docs/SECURITY-FINDINGS.md FINDING 35. -->
+    <SolvencyNotice
+      {solvency}
+      {currency}
+      context="withdraw"
+      onRefresh={refreshSolvency}
+      refreshing={solvencyRefreshing}
+    />
+
     <div class="balance-info" class:btc={isBTC}>
       <span class="label">Available Balance</span>
       <span class="amount" class:btc={isBTC}>{formatWithUnit(currentBalance)}</span>

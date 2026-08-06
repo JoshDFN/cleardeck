@@ -29,7 +29,8 @@ use crate::invariants::reachability;
 use crate::invariants::outcome::{check_hand_outcome, OutcomeCoverage, OutcomeWatch};
 use crate::invariants::record::{check_archived_participants, ArchiveCoverage};
 use crate::invariants::{
-    check_custody_is_visible, check_hand_attribution, check_hand_payout_total, check_no_rake,
+    check_custody_is_visible, check_hand_attribution, check_hand_payout_total,
+    check_insolvency_is_reported, check_no_rake,
     check_no_settlement_trap, check_point_in_time, check_self_reported_inconsistency,
     check_upgrade_durability, Violation,
 };
@@ -620,6 +621,24 @@ pub fn run_sequence(
             i + 1,
             Some(op),
             check_custody_is_visible(&world, &after),
+        );
+
+        // M2 SOLVENCY, per step: OWES <= HOLDS across every account this canister
+        // owns, anchored to `icrc1_balance_of` -- and, when it is NOT, the canister
+        // must be able to say so to an ordinary player.
+        //
+        // The query-only legs run inside `check_point_in_time` above and cost
+        // nothing. This one takes an update call (`refresh_solvency`) and is
+        // therefore gated on there actually being a shortfall, which on a healthy
+        // run is never and on the state docs/SECURITY-FINDINGS.md FINDING 35
+        // describes is every step.
+        record(
+            &mut findings,
+            &mut all,
+            &mut max_stranded,
+            i + 1,
+            Some(op),
+            check_insolvency_is_reported(&world, &after),
         );
 
         // The engine's own testimony about its accounting.
