@@ -8,6 +8,12 @@
   import SolvencyNotice from './SolvencyNotice.svelte';
   import { readTableSolvency, refreshTableSolvency } from '$lib/solvency.js';
   import { IS_MAINNET_BUILD, NETWORK } from '$lib/ic-config.js';
+  import {
+    deriveDepositAddress,
+    checkAgainstCanister,
+    accountIdentifierHex,
+    depositSubaccount,
+  } from '$lib/depositAddress.js';
 
   const { tableActor, tableCanisterId, onClose, onDepositSuccess, currency = 'ICP' } = $props();
 
@@ -61,7 +67,13 @@
   let walletBalance = $state(null);
   let loadingBalance = $state(true);
   let copied = $state(false);
-  let accountId = $state('');
+  // YOUR table deposit address, derived locally. Empty until it is derived, and
+  // deliberately left empty when the canister's own answer disagrees with it: at
+  // that point this client cannot tell which of the two was tampered with, and
+  // showing either one would be guessing with the player's money.
+  let tableDepositAddress = $state('');
+  let depositAddressWarning = $state(null);
+  let claiming = $state(false);
   let copiedAddress = $state(false);
 
   // Wallet source: 'ii' (Internet Identity) or 'oisy' (OISY Wallet)
@@ -120,6 +132,15 @@
   // if any surface here states the floor or the fee as a literal.
   const TRANSFER_FEE = isBTC ? 10n : 10_000n;
   const MIN_DEPOSIT = isBTC ? 1_000n : 20_000n;
+  // THE ADDRESS ROUTE HAS A HIGHER FLOOR THAN THE APPROVE ROUTE, and printing the
+  // approve floor beside the address is what cost the fifth auditor 100% of a
+  // deposit. `deposit()` charges the ledger fee alongside the amount, so the floor
+  // arrives intact. `claim_external_deposit` pays the fee OUT OF the sweep, so a
+  // deposit of D is credited D - fee -- and at the approve floor that lands below
+  // the withdrawal floor and can never leave.
+  //   :134 ICP_MIN_EXTERNAL_DEPOSIT = ICP_MIN_WITHDRAWAL_AMOUNT + ICP_TRANSFER_FEE
+  //   :135 BTC_MIN_EXTERNAL_DEPOSIT = BTC_MIN_WITHDRAWAL_AMOUNT + CKBTC_TRANSFER_FEE
+  const MIN_EXTERNAL_DEPOSIT = isBTC ? 11n + 10n : 20_000n + 10_000n;
 
   const transferFee = TRANSFER_FEE;
   const minDeposit = MIN_DEPOSIT;
@@ -153,6 +174,7 @@
   }
 
   const minDepositDisplay = formatExact(MIN_DEPOSIT);
+  const minExternalDepositDisplay = formatExact(MIN_EXTERNAL_DEPOSIT);
   const feeDisplay = formatExact(TRANSFER_FEE);
   // The floor the LEDGER imposes, which is the floor that actually matters. An
   // ICRC-2 deposit costs the depositor TWO ledger fees, not one: one for
@@ -187,114 +209,22 @@
   const btcNativeMinterFeeDisplay = `${BTC_NATIVE_MINTER_FEE_SATS.toLocaleString('en-US')} sats`;
   // <<< MIRRORED-LIMITS-END
 
-  // CRC32 implementation
-  function crc32(data) {
-    let crc = 0xffffffff;
-    const table = new Uint32Array(256);
-    for (let i = 0; i < 256; i++) {
-      let c = i;
-      for (let j = 0; j < 8; j++) {
-        c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-      }
-      table[i] = c;
-    }
-    for (let i = 0; i < data.length; i++) {
-      crc = table[(crc ^ data[i]) & 0xff] ^ (crc >>> 8);
-    }
-    return (crc ^ 0xffffffff) >>> 0;
-  }
-
-  // SHA-224 implementation
-  function sha224Pure(message) {
-    const H = new Uint32Array([
-      0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939,
-      0xffc00b31, 0x68581511, 0x64f98fa7, 0xbefa4fa4
-    ]);
-    const K = new Uint32Array([
-      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-    ]);
-    const rotr = (x, n) => (x >>> n) | (x << (32 - n));
-    const ch = (x, y, z) => (x & y) ^ (~x & z);
-    const maj = (x, y, z) => (x & y) ^ (x & z) ^ (y & z);
-    const sigma0 = x => rotr(x, 2) ^ rotr(x, 13) ^ rotr(x, 22);
-    const sigma1 = x => rotr(x, 6) ^ rotr(x, 11) ^ rotr(x, 25);
-    const gamma0 = x => rotr(x, 7) ^ rotr(x, 18) ^ (x >>> 3);
-    const gamma1 = x => rotr(x, 17) ^ rotr(x, 19) ^ (x >>> 10);
-
-    const msgLen = message.length;
-    const bitLen = BigInt(msgLen) * 8n;
-    const totalBeforePad = msgLen + 9;
-    const padZeros = (64 - (totalBeforePad % 64)) % 64;
-    const paddedLen = msgLen + 1 + padZeros + 8;
-
-    const padded = new Uint8Array(paddedLen);
-    padded.set(message);
-    padded[msgLen] = 0x80;
-    const view = new DataView(padded.buffer);
-    view.setBigUint64(paddedLen - 8, bitLen, false);
-
-    for (let i = 0; i < padded.length; i += 64) {
-      const W = new Uint32Array(64);
-      for (let j = 0; j < 16; j++) {
-        W[j] = view.getUint32(i + j * 4, false);
-      }
-      for (let j = 16; j < 64; j++) {
-        W[j] = (gamma1(W[j - 2]) + W[j - 7] + gamma0(W[j - 15]) + W[j - 16]) >>> 0;
-      }
-      let [a, b, c, d, e, f, g, h] = H;
-      for (let j = 0; j < 64; j++) {
-        const T1 = (h + sigma1(e) + ch(e, f, g) + K[j] + W[j]) >>> 0;
-        const T2 = (sigma0(a) + maj(a, b, c)) >>> 0;
-        h = g; g = f; f = e; e = (d + T1) >>> 0;
-        d = c; c = b; b = a; a = (T1 + T2) >>> 0;
-      }
-      H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0;
-      H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0;
-      H[4] = (H[4] + e) >>> 0; H[5] = (H[5] + f) >>> 0;
-      H[6] = (H[6] + g) >>> 0; H[7] = (H[7] + h) >>> 0;
-    }
-    const result = new Uint8Array(28);
-    for (let i = 0; i < 7; i++) {
-      result[i * 4] = (H[i] >> 24) & 0xff;
-      result[i * 4 + 1] = (H[i] >> 16) & 0xff;
-      result[i * 4 + 2] = (H[i] >> 8) & 0xff;
-      result[i * 4 + 3] = H[i] & 0xff;
-    }
-    return result;
-  }
-
-  // Compute ICP Account ID from principal
-  function computeAccountId(principal) {
-    if (!principal) return '';
-    try {
-      const padding = new Uint8Array(32);
-      const domainSeparator = new TextEncoder().encode('\x0Aaccount-id');
-      const principalBytes = principal.toUint8Array();
-      const data = new Uint8Array(domainSeparator.length + principalBytes.length + padding.length);
-      data.set(domainSeparator, 0);
-      data.set(principalBytes, domainSeparator.length);
-      data.set(padding, domainSeparator.length + principalBytes.length);
-      const hash = sha224Pure(data);
-      const crc = crc32(hash);
-      const accountIdBytes = new Uint8Array(32);
-      accountIdBytes[0] = (crc >> 24) & 0xff;
-      accountIdBytes[1] = (crc >> 16) & 0xff;
-      accountIdBytes[2] = (crc >> 8) & 0xff;
-      accountIdBytes[3] = crc & 0xff;
-      accountIdBytes.set(hash, 4);
-      return Array.from(accountIdBytes).map(b => b.toString(16).padStart(2, '0')).join('');
-    } catch (e) {
-      console.error('Failed to compute account ID:', e);
-      return '';
-    }
-  }
+  // THE DEPOSIT ADDRESS IS DERIVED HERE, NOT FETCHED.
+  //
+  // docs/SECURITY-FINDINGS.md FINDING 40. `get_deposit_address()` is an ordinary
+  // query: one replica answers it and signs nothing this client checks, so a
+  // dishonest replica can hand the player another player's address and the player
+  // pays it. `$lib/depositAddress.js` computes the address from the table canister
+  // id and the signed-in principal with no network call at all, which is what
+  // removes the substitution rather than detecting it.
+  //
+  // 340 lines of hand-rolled SHA-224 and CRC-32 used to live here, computing the
+  // player's OWN WALLET account under the heading "Your Deposit Address". Money
+  // sent there does not reach the table; it reaches the wallet, and a second step
+  // nobody was told about was still required. One derivation, in one module,
+  // gated against the canister by
+  // tests/money_safety/tests/deposit_surface.rs::
+  // the_frontends_own_derivation_agrees_with_the_canister_for_every_principal.
 
   // Convert user input to smallest unit (sats or e8s)
   function inputToSmallestUnit(amount) {
@@ -331,6 +261,67 @@
     return formatted;
   }
 
+  // Derive YOUR deposit address locally, then ask the canister and compare.
+  //
+  // The comparison NEVER prefers the canister's answer. Its only job is to catch
+  // a substituted reply or a drift between this build's derivation and the
+  // canister's, and in either case the honest thing to show is no address at all.
+  async function deriveAndVerifyDepositAddress(principal) {
+    depositAddressWarning = null;
+    tableDepositAddress = '';
+    if (!tableCanisterId) {
+      depositAddressWarning = 'This table has no canister id in this build, so no deposit address can be derived.';
+      return;
+    }
+    let derived;
+    try {
+      derived = deriveDepositAddress(tableCanisterId, principal).address;
+    } catch (e) {
+      depositAddressWarning = e.message || 'Could not derive your deposit address.';
+      return;
+    }
+    // Show the derived address first: it is the trustworthy one, and a canister
+    // that will not answer must not be able to hide it.
+    tableDepositAddress = derived;
+    try {
+      const reported = await tableActor.get_deposit_address();
+      const shared = accountIdentifierHex(tableCanisterId, null);
+      const { agrees, safeToShow, reason } = checkAgainstCanister(derived, reported, shared);
+      if (!agrees) {
+        depositAddressWarning = reason;
+        // `safeToShow` is the whole judgement: a canister running the pre-FINDING-34
+        // build reports its shared account, and the address derived here is still
+        // the one its sweep reaches, so it is shown with the reason. Any OTHER
+        // disagreement means the derivations themselves differ and the address
+        // might be unreachable -- show nothing.
+        if (!safeToShow) tableDepositAddress = '';
+      }
+    } catch (e) {
+      console.error('could not cross-check the deposit address:', e);
+    }
+  }
+
+  // Sweep whatever is at YOUR deposit address into your table balance.
+  async function claimExternalDeposit() {
+    claiming = true;
+    error = null;
+    success = null;
+    try {
+      const result = await tableActor.claim_external_deposit();
+      if ('Ok' in result) {
+        success = `Claimed ${formatWithUnit(result.Ok)} into your table balance.`;
+        await loadWalletBalance();
+        onDepositSuccess?.();
+      } else {
+        error = result.Err;
+      }
+    } catch (e) {
+      console.error('claim_external_deposit failed:', e);
+      error = e.message || 'Could not claim your deposit.';
+    }
+    claiming = false;
+  }
+
   // Get user's balance from their wallet (ICP or ckBTC)
   async function loadWalletBalance() {
     loadingBalance = true;
@@ -338,9 +329,11 @@
       const agent = await auth.getAgent();
       const principal = await agent.getPrincipal();
 
-      // Compute account ID for display (for ICP deposits)
+      // YOUR table deposit address. Derived from the canister id and your own
+      // principal, then CHECKED against what the canister says -- never taken
+      // from it. docs/SECURITY-FINDINGS.md FINDING 34, FINDING 40.
       if (!isBTC) {
-        accountId = computeAccountId(principal);
+        await deriveAndVerifyDepositAddress(principal);
       }
 
       const ledgerIdlFactory = ({ IDL }) => {
@@ -572,9 +565,47 @@
       // Handle OISY wallet deposits via secure subaccount-based deposit
       if (walletSource === 'oisy') {
         try {
-          // Step 1: Get the user's unique deposit subaccount from the table canister
-          statusMessage = 'Getting your deposit address...';
-          const depositSubaccount = await tableActor.get_deposit_subaccount();
+          // Step 1: DERIVE the destination. Never fetch it.
+          //
+          // docs/SECURITY-FINDINGS.md FINDING 40. This branch used to read
+          //   `const depositSubaccount = await tableActor.get_deposit_subaccount();`
+          // and pay whatever came back. That is the SAME uncertified query the
+          // address panel forty lines above stopped trusting, in its 32-byte
+          // spelling: one replica answers it, signs nothing this client checks,
+          // and a substituted reply sends the player's OISY transfer to ANOTHER
+          // PLAYER'S deposit account -- who then sweeps it with an ordinary
+          // `claim_external_deposit()`. The ledger totals are right, the canister
+          // holds every e8, and no invariant in the project can see it, because
+          // nothing about the arithmetic is wrong. Only the recipient is.
+          //
+          // The subaccount is a pure function of the SESSION principal -- the one
+          // that will call `claim_external_deposit()` below and be credited, which
+          // is NOT the OISY wallet principal paying for it -- so it is computed
+          // here with no network call at all.
+          statusMessage = 'Deriving your deposit address...';
+          const sessionPrincipal = await (await auth.getAgent()).getPrincipal();
+          const depositSubaccountBytes = depositSubaccount(sessionPrincipal);
+
+          // The canister is asked ONLY to catch a drift between the two
+          // derivations, and its answer is never preferred. A disagreement here
+          // is not a warning to render: the very next statement moves real money,
+          // so it aborts.
+          try {
+            const reportedSub = await tableActor.get_deposit_subaccount();
+            const reportedHex = Array.from(reportedSub ?? [], b => b.toString(16).padStart(2, '0')).join('');
+            const derivedHex = Array.from(depositSubaccountBytes, b => b.toString(16).padStart(2, '0')).join('');
+            if (reportedHex !== derivedHex) {
+              error =
+                'Refusing to send: this table reported a different deposit subaccount from the ' +
+                'one derived from your principal, so one of the two answers is wrong and paying ' +
+                'either would be guessing with your money. Nothing has been sent.';
+              processing = false;
+              statusMessage = '';
+              return;
+            }
+          } catch (checkError) {
+            console.error('could not cross-check the deposit subaccount:', checkError);
+          }
 
           // Step 2: Transfer from OISY wallet directly to the canister's deposit subaccount
           statusMessage = 'Approve the transfer in the OISY popup...';
@@ -603,7 +634,7 @@
 
           // Transfer to the deposit subaccount (ckBTC uses params, ICP uses request)
           const destination = {
-            to: { owner: canisterPrincipal, subaccount: [depositSubaccount] },
+            to: { owner: canisterPrincipal, subaccount: [depositSubaccountBytes] },
             amount: amountSmallest,
           };
 
@@ -1077,7 +1108,10 @@
             <!-- Interpolated, never literal: docs/DEFECTS.md T-26 is what a
                  literal here becomes, and ui_limits.rs fails if one comes back. -->
             <span>
-              <strong>Minimum deposit: {minDepositDisplay}</strong>
+              <strong>Minimum to this address: {minExternalDepositDisplay}</strong>
+              <span class="min-why">Sweeping pays the network fee out of what you send, so
+              anything less would arrive too small to withdraw again. Sending from a
+              connected wallet instead has a lower minimum of {minDepositDisplay}.</span>
               (network fee {feeDisplay}, charged twice by the ledger, so you need
               {minWalletBalanceDisplay} in your wallet to deposit the minimum)
             </span>
@@ -1314,43 +1348,56 @@
     {#if !isBTC && !loadingBalance && !hasEnoughBalance}
       <div class="deposit-address-section">
         <h3>Your Deposit Address</h3>
-        <p class="address-hint">Send ICP to this address to fund your poker account:</p>
-        <div class="address-box">
-          <span class="address-value">{accountId}</span>
-        </div>
-        <button
-          class="copy-address-btn"
-          onclick={() => {
-            navigator.clipboard.writeText(accountId);
-            copiedAddress = true;
-            setTimeout(() => copiedAddress = false, 2000);
-          }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-          </svg>
-          {copiedAddress ? 'Copied!' : 'Copy Address'}
-        </button>
+        {#if depositAddressWarning && !tableDepositAddress}
+          <p class="address-mismatch">
+            No address is shown, on purpose: {depositAddressWarning}
+          </p>
+        {:else if tableDepositAddress}
+          {#if depositAddressWarning}
+            <p class="address-mismatch">Heads up: {depositAddressWarning}</p>
+          {/if}
+          <p class="address-hint">
+            Yours alone, at this table. Send ICP here from any wallet or exchange, then Claim:
+          </p>
+          <div class="address-box">
+            <span class="address-value">{tableDepositAddress}</span>
+          </div>
+          <button
+            class="copy-address-btn"
+            onclick={() => {
+              navigator.clipboard.writeText(tableDepositAddress);
+              copiedAddress = true;
+              setTimeout(() => copiedAddress = false, 2000);
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            {copiedAddress ? 'Copied!' : 'Copy Address'}
+          </button>
+        {:else}
+          <p class="address-hint">Deriving your address...</p>
+        {/if}
       </div>
 
       <div class="how-to-fund">
         <h3>How to fund:</h3>
         <ol>
-          <li>Copy the deposit address above</li>
-          <li>Send ICP from an exchange or another wallet</li>
-          <li>Wait for confirmation, then click Refresh</li>
+          <li>Copy your deposit address above</li>
+          <li>Send ICP to it from an exchange or another wallet</li>
+          <li>Wait for the transfer to confirm, then click Claim Deposit</li>
         </ol>
       </div>
       <div class="actions">
         <button class="btn-secondary" onclick={onClose}>
           Close
         </button>
-        <button class="btn-primary" onclick={loadWalletBalance}>
+        <button class="btn-primary" onclick={claimExternalDeposit} disabled={claiming || !tableDepositAddress}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
           </svg>
-          Refresh Balance
+          {claiming ? 'Claiming...' : 'Claim Deposit'}
         </button>
       </div>
     {/if}
@@ -2015,6 +2062,14 @@
   }
 
   /* ICP deposit address section */
+  .address-mismatch {
+    color: #ff9f43;
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0;
+    text-align: left;
+  }
+
   .deposit-address-section {
     background: linear-gradient(135deg, rgba(0, 212, 170, 0.1) 0%, rgba(0, 100, 80, 0.1) 100%);
     border: 1px solid rgba(0, 212, 170, 0.3);

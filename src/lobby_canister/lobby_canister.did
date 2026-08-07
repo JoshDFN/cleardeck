@@ -18,7 +18,12 @@ type TableConfig = record {
   max_players : nat8;
   big_blind : nat64;
   max_buy_in : nat64;
-  currency : opt Currency;
+  // Which token this table plays for. NOT optional: the canister has always
+  // exported a bare `Currency` here. This file declared `opt Currency` until
+  // 2026-08-06, so a generated client unwrapped one level too many and read
+  // the currency as null/undefined -- silently, because Candid's constituent
+  // subtyping decodes a bare value into an `opt` without complaining.
+  currency : Currency;
 };
 type TableInfo = record {
   id : nat64;
@@ -29,7 +34,8 @@ type TableInfo = record {
   created_at : nat64;
   created_by : principal;
   config : TableConfig;
-  currency : opt Currency;
+  // As above: a bare `Currency`, not `opt Currency`.
+  currency : Currency;
 };
 type TableStatus = variant { Paused; Closed; InProgress; WaitingForPlayers };
 service : () -> {

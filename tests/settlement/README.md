@@ -262,7 +262,21 @@ The plants are reproducible: `$SCRATCH/plant.py <worst-hand|rotate-winner|ignore
 
 Derived from the observed records, never from a scenario's intent, so a scenario that
 aimed at a three-way pot and produced a two-way one cannot count as three-way
-coverage. From the clean `make settlement` run (17 deliberate hands):
+coverage. From the clean `make settlement` run (18 deliberate hands as of wave 11;
+the figures below are the wave-2 run and the classes are unchanged):
+
+> **WAVE 11: THE DOOR THIS ORACLE HAD NEVER OPENED** (docs/DEFECTS.md
+> [H-49](../../docs/DEFECTS.md#h-49), docs/SECURITY-FINDINGS.md FINDING 08). Every
+> vacating scenario here was written as *"call `leave_table`, and fall back to
+> `cash_out` if that fails"* — and `leave_table` never fails for a seated player. So
+> across **53 compared hands in four benches, `cash_out` had never once executed
+> inside this crate, and neither had `check_timeouts`.** That is the route FINDING 08
+> is actually about: a player closes their tab, their own action clock folds them, and
+> they then vacate the chair with money still in the pot. `cash_out` is the only door
+> `suite::timed_out_seat_cashes_out_mid_hand` calls, so if it ever stops opening, the
+> fixture assertion in
+> `a_seat_folded_by_its_own_clock_and_cashed_out_mid_hand_settles_by_the_rules` goes
+> red rather than the coverage quietly going away. `seat vacated mid-hand` is 3 now.
 
 ```
      17  hands settled                          8  exact tie (a pot chopped)

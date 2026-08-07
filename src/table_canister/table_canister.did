@@ -2,6 +2,14 @@ type ActionRecord = record {
   action : PlayerAction;
   seat : nat8;
   timestamp : nat64;
+  // Which betting round the action happened in: "preflop", "flop", "turn",
+  // "river". Without it an action log is ambiguous -- the same seat calling
+  // the same amount twice is two different events -- so a replayer cannot
+  // reconstruct the hand from this record alone.
+  phase : text;
+  // The amount actually moved, which `action` alone does not carry for
+  // Call and AllIn.
+  amount : nat64;
 };
 type LastAction = variant {
   Fold;
@@ -40,6 +48,25 @@ type ShowdownPlayer = record {
   hand_rank : opt HandRank;
   amount_won : nat64;
 };
+// One seat that was dealt into a hand. The population a shuffle verifier
+// reconstructs the deal over.
+type DealtInSeat = record { "principal" : principal; seat : nat8 };
+// What one player did across one whole hand, kept even if they left the table
+// before it ended -- which is the case the payout basis used to lose.
+type HistoryPlayerHandRecord = record {
+  "principal" : principal;
+  seat : nat8;
+  position : text;
+  starting_chips : nat64;
+  ending_chips : nat64;
+  amount_won : nat64;
+  hole_cards : opt record { Card; Card };
+  final_hand_rank : opt HandRank;
+  // null means "not recorded for this hand", never "false".
+  dealt_in : opt bool;
+  left_mid_hand : opt bool;
+  contributed : opt nat64;
+};
 type HandHistory = record {
   hand_number : nat64;
   actions : vec ActionRecord;
@@ -47,6 +74,15 @@ type HandHistory = record {
   shuffle_proof : ShuffleProof;
   winners : vec Winner;
   showdown_players : vec ShowdownPlayer;
+  // Every principal dealt into this hand, by seat. `P` in the shuffle spec
+  // (docs/SHUFFLE-SPEC.md section 4) is this list's length, so a verifier
+  // recomputing the deal needs it. `opt` because hands recorded before the
+  // field existed have no value for it: null is "not recorded", NOT "nobody".
+  dealt_in : opt vec DealtInSeat;
+  // The full per-player record of the hand -- stacks before and after, what
+  // each contributed, what each won, whether they left mid-hand. `opt` for
+  // the same reason as `dealt_in`.
+  participants : opt vec HistoryPlayerHandRecord;
 };
 type HandRank = variant {
   StraightFlush : nat8;
@@ -76,6 +112,9 @@ type Player = record {
   broke_at : opt nat64;
   last_seen : nat64;
   is_all_in : bool;
+  // When this player started sitting out, for the auto-kick clock. null means
+  // they are not sitting out, or started before the field existed.
+  sitting_out_since : opt nat64;
 };
 type PlayerAction = variant {
   Bet : nat64;
@@ -264,9 +303,10 @@ type SolvencyVerdict = variant {
   // At least one account has never been read. NOT "probably fine".
   Unknown;
 };
-// One reading of this canister's MAIN ledger account -- the account
-// get_deposit_address() publishes, where every sweep and every pull lands, and
-// where essentially all of the money is. docs/SECURITY-FINDINGS.md FINDING 35.
+// One reading of this canister's MAIN ledger account -- where every sweep and
+// every pull lands, where essentially all of the money is, and where everything
+// sent to the shared address get_deposit_address() published until FINDING 34 is
+// still sitting. docs/SECURITY-FINDINGS.md FINDING 35, FINDING 34.
 type MainAccountObservation = record {
   // icrc1_balance_of((this canister, null)) exactly as the ledger returned it.
   amount : nat64;
@@ -409,6 +449,13 @@ type LedgerIntentView = record {
 type DepositAddressCustody = record {
   // The subaccount half of the address: (this canister, subaccount).
   subaccount : vec nat8;
+  // The other half. Carried so a client never has to guess it from context.
+  canister : principal;
+  // The SAME account as (canister, subaccount), in the legacy 64-hex
+  // account-identifier spelling: byte for byte what get_deposit_address()
+  // returns to this caller, refusals included (see get_deposit_address).
+  // ONE account, two spellings. Two accounts under one name was FINDING 34.
+  address : text;
   // The ledger `observed_amount` was read from.
   ledger : principal;
   // What the ledger reported at observed_at_ns. Zero WITH observed_at_ns = null
@@ -503,6 +550,30 @@ type TableState = record {
   config : TableConfig;
   side_pots : vec SidePot;
   shuffle_proof : opt ShuffleProof;
+  // The last action taken, for UI display.
+  last_action : opt LastActionInfo;
+  // Every stake recorded for a seat that LEFT MID-HAND. Money in the pot
+  // belongs to the hand, not to the chair: `leave_table` and `cash_out` set
+  // the seat to null, and before this field existed the record of who had
+  // already paid in vanished with the seat. The payout basis silently shrank
+  // and the difference was appended to the highest bet level, so an honest
+  // short-stacked all-in lost part of the main pot it was entitled to WITH
+  // EVERY CHIP CONSERVED -- which is why no conservation invariant saw it.
+  // See docs/DEFECTS.md E-05.
+  //
+  // `opt` and not a bare `vec` deliberately: Candid does not honour serde
+  // defaults, so only `opt`, `reserved` and `null` may be added to a record
+  // and still decode state written before the field existed. null and the
+  // empty vector mean the same thing -- no seat has left this hand.
+  departed_stakes : opt vec DepartedStake;
+};
+// One seat's stake in a hand it is no longer sitting in. Tagged with the hand
+// it belongs to, so a stale entry can never join a later hand's pot.
+type DepartedStake = record {
+  "principal" : principal;
+  seat : nat8;
+  hand_number : nat64;
+  contributed : nat64;
 };
 type TableView = record {
   id : nat64;
@@ -633,12 +704,25 @@ service : (TableConfig) -> {
   // Claim funds sent to your unique deposit subaccount by an external wallet
   // External wallets transfer to (canister_id, get_deposit_subaccount()), then call this to claim
   claim_external_deposit : () -> (Result_1);
-  // Get your unique deposit subaccount for external wallet transfers.
+  // Get your unique deposit subaccount for external wallet transfers: the ICRC-1
+  // spelling of the SAME account get_deposit_address() returns to you in the
+  // legacy 64-hex form. ONE account, two spellings -- pick whichever your wallet
+  // speaks. sha256("cleardeck-deposit:" || your principal).
+  //
   // A QUERY, so calling it leaves no record: this canister cannot know it
   // published an address to you until you call refresh_deposit_custody() or
   // claim_external_deposit() at least once. See "THE ENUMERABILITY LIMIT" in
   // src/table_canister/src/lib.rs.
+  //
+  // AND A QUERY IS NOT EVIDENCE: like get_deposit_address(), one replica answers
+  // it and signs nothing you check. Derive it yourself from your own principal.
+  // docs/SECURITY-FINDINGS.md FINDING 40.
   get_deposit_subaccount : () -> (vec nat8) query;
+  // Deposit replay-protection state: (watermark, recorded_block_count). A block
+  // index below the watermark, or already recorded, will be refused -- so this
+  // is how an operator or a user can tell whether a given block index is still
+  // claimable. A query, so asking costs nothing and changes nothing.
+  get_deposit_replay_state : () -> (nat64, nat64) query;
   // FINISH EVERY LEDGER OPERATION THIS CANISTER STARTED FOR YOU AND DID NOT
   // FINISH BOOKING. docs/SECURITY-FINDINGS.md FINDING 29.
   //
@@ -708,7 +792,35 @@ service : (TableConfig) -> {
   get_community_cards : () -> (vec Card) query;
   // Get all controllers
   get_controllers : () -> (vec principal) query;
-  // Get the canister's account for deposits
+  // YOUR deposit address, and nobody else's: the legacy 64-hex account-identifier
+  // spelling of the SAME account get_deposit_subaccount() names, i.e.
+  //
+  //   account_identifier(this canister, sha256("cleardeck-deposit:" || YOUR principal))
+  //
+  // Send ICP there from your own wallet, then call claim_external_deposit().
+  //
+  // THE REPLY IS A PAYABLE ADDRESS IF AND ONLY IF IT IS EXACTLY 64 LOWERCASE HEX
+  // CHARACTERS. There are two cases where no address exists -- an anonymous
+  // caller, and a ckBTC table, whose ledger has no account-identifier form at all
+  // -- and because the return type is `text` those are refusals in words. Every
+  // refusal begins "NO ADDRESS: ". Test that prefix; do not parse the prose.
+  //
+  // UNTIL 2026-08-06 THIS RETURNED THE CANISTER'S MAIN ACCOUNT: the same 64
+  // characters for every player, under the comment "Get the canister's account
+  // for deposits". The main account carries no name, so money sent there is
+  // attributable to nobody and claim_external_deposit() truthfully reports an
+  // empty address while the canister holds it. An auditor sent 1 ICP and no
+  // surface, player or controller, reported the gap.
+  // docs/SECURITY-FINDINGS.md FINDING 34.
+  //
+  // A CLIENT SHOULD NOT TRUST THIS REPLY. It is an ordinary query: one replica
+  // answers it alone and signs nothing the client checks, so a single dishonest
+  // replica can hand you another player's address and you will pay it. The
+  // derivation above is public and depends only on the canister id and your own
+  // principal, so a client can compute the address itself and never ask. That is
+  // what src/cleardeck_frontend/src/lib/depositAddress.js does; it calls this
+  // method only to CHECK its own answer and shows no address at all if the two
+  // disagree. docs/SECURITY-FINDINGS.md FINDING 40.
   get_deposit_address : () -> (text) query;
   get_hand_history : (nat64) -> (opt HandHistory) query;
   // Get the history canister ID
@@ -733,14 +845,37 @@ service : (TableConfig) -> {
   heartbeat : () -> (Result);
   // Check if dev mode is enabled (always returns false now)
   is_dev_mode : () -> (bool) query;
-  // Join table with minimum buy-in from escrow balance
-  // Requires sufficient ICP deposited first via notify_deposit
+  // Join table with minimum buy-in from escrow balance.
+  // Requires escrow funded first: deposit() (ICRC-2 approve + pull), or a
+  // transfer to get_deposit_address() followed by claim_external_deposit().
   join_table : (nat8) -> (Result);
   // Leave table and return chips to escrow balance
   // If mid-hand, this acts as a fold - pot contributions stay in the pot
   leave_table : () -> (Result_1);
-  // Verify and credit a deposit by checking the ledger transaction
-  // Players should first transfer ICP to the canister's account, then call this with the block index
+  // THE RECOVERY DOOR FOR MONEY AT THE CANISTER'S SHARED MAIN ACCOUNT. It is NOT
+  // the deposit path and stopped describing itself as one on 2026-08-06.
+  //
+  // Credits block `block_index` to you if and only if it is a Transfer TO this
+  // canister's main account, whose `from` is YOUR OWN principal's account, that
+  // is not an ICRC-2 pull this canister made itself, and that has never been
+  // credited before. It works: FINDING 06 (it could decode nothing, so it could
+  // credit nothing, so ICP sent that way was stranded) was fixed 2026-08-04 and
+  // is gated by tests/money_safety/tests/deposit_replay.rs::dr01 and
+  // tests/money_safety/tests/deposit_surface.rs.
+  //
+  // TWO LIMITS, STATED HERE BECAUSE A LIMIT YOU LEARN BY HITTING IT IS A TRAP:
+  //   * you must have the block index. The main account carries no name, so
+  //     nothing else can identify your transfer;
+  //   * the transfer must have come FROM your own principal's account. A
+  //     withdrawal straight from an exchange or a custodial wallet has somebody
+  //     else's `from`, and no caller can claim it -- not you, not a controller,
+  //     nobody. That is the price of the check that stops a stranger claiming
+  //     your block, and it is why the shared account is not a deposit route.
+  //
+  // THE ORDINARY DEPOSIT PATH IS get_deposit_address() + claim_external_deposit(),
+  // or deposit() for an ICRC-2 approve-and-pull. Both attribute money by the
+  // account it lands in and need no block index and no memory.
+  // docs/SECURITY-FINDINGS.md FINDING 06, FINDING 34.
   notify_deposit : (nat64) -> (Result_1);
   player_action : (PlayerAction) -> (Result);
   // Reload chips from escrow (for players already seated who need more chips)

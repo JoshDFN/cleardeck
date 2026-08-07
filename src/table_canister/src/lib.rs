@@ -116,6 +116,34 @@ const _: () = assert!(
     BTC_MIN_WITHDRAWAL_AMOUNT <= BTC_MIN_DEPOSIT_AMOUNT,
     "FLOOR INVARIANT BROKEN: the BTC withdrawal floor is above the BTC deposit floor."
 );
+// Rule 3: THE SWEEP ROUTE NETS THE FEE OUT OF THE DEPOSIT. Rules 1 and 2 are
+// about `deposit()`, where the depositor pays the ledger fee separately, so a
+// deposit of exactly the floor arrives as exactly the floor. The external
+// address route does not work that way: `claim_external_deposit` pays the fee
+// OUT OF the swept amount, so a deposit of D is credited D - fee.
+//
+// The fifth blind auditor sent exactly the advertised 20_000 e8s minimum to the
+// address the deposit modal prints, was credited 10_000, and could never get it
+// out: withdrawal needs 20_000, and the whole-balance sweep needs an amount the
+// ledger can still move after its own fee, which 10_000 is not. One e8 more
+// would have been recoverable. The same advertised number was safe through
+// `deposit()` and a total loss through the address beside it.
+//
+// So the amount that must clear the withdrawal floor is what SURVIVES the sweep.
+// This constant is the minimum a player may send to a published deposit address.
+const ICP_MIN_EXTERNAL_DEPOSIT: u64 = ICP_MIN_WITHDRAWAL_AMOUNT + ICP_TRANSFER_FEE;
+const BTC_MIN_EXTERNAL_DEPOSIT: u64 = BTC_MIN_WITHDRAWAL_AMOUNT + CKBTC_TRANSFER_FEE;
+const _: () = assert!(
+    ICP_MIN_EXTERNAL_DEPOSIT - ICP_TRANSFER_FEE >= ICP_MIN_WITHDRAWAL_AMOUNT,
+    "FLOOR INVARIANT BROKEN: an ICP deposit at the external-route minimum would be credited \
+     less than the withdrawal floor, so the canister would accept money it will not return."
+);
+const _: () = assert!(
+    BTC_MIN_EXTERNAL_DEPOSIT - CKBTC_TRANSFER_FEE >= BTC_MIN_WITHDRAWAL_AMOUNT,
+    "FLOOR INVARIANT BROKEN: a ckBTC deposit at the external-route minimum would be credited \
+     less than the withdrawal floor."
+);
+
 // Rule 2: the floor is one the ledger can actually deliver.
 const _: () = assert!(
     ICP_MIN_WITHDRAWAL_AMOUNT > ICP_TRANSFER_FEE,
@@ -181,6 +209,21 @@ impl Currency {
         match self {
             Currency::ICP => ICP_MIN_WITHDRAWAL_AMOUNT,
             Currency::BTC => BTC_MIN_WITHDRAWAL_AMOUNT,
+        }
+    }
+
+    /// The least a player may send to a PUBLISHED DEPOSIT ADDRESS.
+    ///
+    /// Not the same number as [`min_deposit`]. `deposit()` charges the ledger fee
+    /// to the depositor alongside the amount, so a deposit of the floor arrives as
+    /// the floor. `claim_external_deposit` pays the fee OUT OF what it sweeps, so a
+    /// deposit of D is credited D - fee. The figure that has to clear the
+    /// withdrawal floor is what survives the sweep, which is why this is
+    /// `min_withdrawal + transfer_fee` and not `min_deposit`.
+    pub fn min_external_deposit(&self) -> u64 {
+        match self {
+            Currency::ICP => ICP_MIN_EXTERNAL_DEPOSIT,
+            Currency::BTC => BTC_MIN_EXTERNAL_DEPOSIT,
         }
     }
 
@@ -1551,7 +1594,74 @@ fn hand_participants(
 }
 
 /// Record a completed hand to the history canister (fire and forget)
-fn record_hand_to_history(state: &TableState, winners: &[Winner], went_to_showdown: bool) {
+/// HOW A HAND ENDED, carried into the permanent record.
+///
+/// # Why this exists (docs/SECURITY-FINDINGS.md FINDING 22)
+///
+/// Three of the five endings below are not "somebody won the pot". They hand every
+/// stake back to the player who made it, they conserve to the e8, and until this
+/// enum existed the archived record of such a hand was indistinguishable from a
+/// hand that was played out and won: the same `winners` list shape, the same
+/// `went_to_showdown = false`, the same `pot_type = "main"` on every credit.
+///
+/// That mattered most for [`ControllerRecovery`](Self::ControllerRecovery). A
+/// controller can read every hole card through `get_table_state` and then reach for
+/// the recovery door, and the money moves back to its owners exactly as it does
+/// when a player calls the permissionless `abandon_stuck_hand`. **No conservation
+/// invariant in this project can tell those two apart, because there is nothing
+/// arithmetically wrong with either.** The only thing that can tell them apart is
+/// a record of WHO ended the hand and WHY, written at the moment it happens.
+///
+/// # Deliberately NOT a Candid type
+///
+/// It never crosses a wire as itself. It is rendered into the `pot_type` string
+/// that [`HistoryWinnerRecord`] already carries to the archive canister, which is
+/// the record that outlives this canister's 100-hand local ring. That keeps the
+/// whole change free of any interface addition: no new field on a persisted
+/// struct (docs/SECURITY-FINDINGS.md FINDING 14), no widening of the drift
+/// between the code and the committed `.did` (FINDING 03), and nothing for the
+/// archive canister to learn before it can store the answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandEnding {
+    /// Played out. The cards decided it.
+    Showdown,
+    /// Everybody else folded. The last claim standing took the pot.
+    FoldOut,
+    /// [`UnmovableReason::NoMessageCanMoveIt`] or
+    /// [`UnmovableReason::AnExitDoorFoundItUnmovable`]: nothing could advance the
+    /// hand, so every stake went home. Any principal can cause this, by calling
+    /// the public `abandon_stuck_hand`.
+    Unmovable,
+    /// The last seated player left. Nobody held cards, so nobody could win it.
+    NobodyLeftToWinIt,
+    /// **A CONTROLLER ENDED IT.** `admin_return_all_chips_to_escrow` or
+    /// `admin_reinit_table` was called on a live hand. Conserving, and still a
+    /// hand that did not happen because a privileged principal decided it would
+    /// not.
+    ControllerRecovery,
+}
+
+impl HandEnding {
+    /// What goes in `HistoryWinnerRecord::pot_type` for every credit this hand
+    /// made. The field is documented as *"main" or "side_1", "side_2"* and has
+    /// only ever been written as `"main"`; a credit that is not a share of a pot
+    /// at all now says so, and names what ended the hand.
+    fn pot_label(self) -> &'static str {
+        match self {
+            HandEnding::Showdown | HandEnding::FoldOut => "main",
+            HandEnding::Unmovable => "refund:hand-could-not-be-moved",
+            HandEnding::NobodyLeftToWinIt => "refund:nobody-left-to-win-it",
+            HandEnding::ControllerRecovery => "refund:ended-by-controller",
+        }
+    }
+}
+
+fn record_hand_to_history(
+    state: &TableState,
+    winners: &[Winner],
+    went_to_showdown: bool,
+    ending: HandEnding,
+) {
     // The record is built whether or not an archive is configured. An unwired
     // table used to return here and leave no trace at all, which is how a table
     // that had archived nothing for its whole life still looked healthy
@@ -1636,14 +1746,21 @@ fn record_hand_to_history(state: &TableState, winners: &[Winner], went_to_showdo
         }).collect()
     });
 
-    // Build winner records
+    // Build winner records.
+    //
+    // `pot_type` USED TO BE THE CONSTANT `"main"` on every credit of every hand,
+    // including the hands nobody won. It now carries [`HandEnding`], so the
+    // permanent record distinguishes a pot that was WON from a stake that was
+    // HANDED BACK, and says what handed it back -- including "a controller ended
+    // this hand" (docs/SECURITY-FINDINGS.md FINDING 22).
+    let pot_type = ending.pot_label().to_string();
     let history_winners: Vec<HistoryWinnerRecord> = winners.iter().map(|w| {
         HistoryWinnerRecord {
             seat: w.seat,
             principal: w.principal,
             amount: w.amount,
             hand_rank: w.hand_rank.clone(),
-            pot_type: "main".to_string(),
+            pot_type: pot_type.clone(),
         }
     }).collect();
 
@@ -2778,8 +2895,47 @@ fn journalled_incoming_total() -> u64 {
     })
 }
 
-/// Verify and credit a deposit by checking the ledger transaction
-/// Players should first transfer ICP to the canister's account, then call this with the block index
+/// THE RECOVERY DOOR FOR MONEY AT THE SHARED MAIN ACCOUNT. **Not the deposit
+/// path**, and it stopped claiming to be one on 2026-08-06.
+///
+/// # What it does
+///
+/// Reads block `block_index` from the ledger and credits it to the caller if, and
+/// only if, it is a `Transfer` **to this canister's main account** whose `from` is
+/// the caller's own principal account, is not an ICRC-2 pull this canister made
+/// itself, and has never been credited before.
+///
+/// # Why it exists at all
+///
+/// The main account is shared by every player and carries no name, so money that
+/// arrives there cannot be attributed by any surface: `claim_external_deposit()`
+/// looks at the caller's own address and correctly reports nothing. A block index
+/// is the only evidence of ownership such a transfer ever has, and this is the
+/// only door that reads one. It is a recovery, not a route:
+///
+/// * it is the door for ICP already sitting at the main account, including
+///   everything sent there while `get_deposit_address()` published that account
+///   (docs/SECURITY-FINDINGS.md FINDING 34);
+/// * it cannot help a player who did not keep the block index;
+/// * it cannot help a player whose transfer came from an exchange or any other
+///   account that is not their own principal's, because the `from` check is what
+///   stops a stranger claiming the same block. That limit is stated in the
+///   refusal, in this canister's `.did` and in the finding, because a limit a
+///   player learns about only by hitting it is a trap.
+///
+/// **The ordinary deposit path is `get_deposit_address()` +
+/// `claim_external_deposit()`, or `deposit()` for an ICRC-2 approve-and-pull.**
+/// Both attribute money by the account it arrives in, which needs no block index
+/// and no memory.
+///
+/// # It works, and that is not free history
+///
+/// FINDING 06 was that this path could never credit anything: it decoded the
+/// ledger reply as a one-element tuple and declared `AccountIdentifier` a record
+/// when the ledger's own `.did` says it is a bare blob, so every legitimate
+/// transfer was reported as "not a transfer" and the ICP was stranded. Both are
+/// fixed above and gated by `dr01_notify_deposit_credits_a_real_transfer_exactly_once`
+/// and by `deposit_surface::money_at_the_shared_main_account_is_recoverable_by_its_sender_and_by_nobody_else`.
 #[ic_cdk::update]
 async fn notify_deposit(block_index: u64) -> Result<u64, String> {
     let caller = ic_cdk::api::msg_caller();
@@ -2999,7 +3155,35 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
             .map_err(|_| "Invalid destination account length")?;
 
         if to_bytes != expected_to {
-            return Err("Transfer was not to this canister".to_string());
+            // "NOT TO THIS CANISTER" WAS FALSE FOR THE COMMONEST CASE.
+            //
+            // `expected_to` is the canister's MAIN account. A player who used the
+            // address `get_deposit_address()` gives them sent to their own deposit
+            // subaccount -- which IS this canister, at a different account -- and
+            // was told the transfer had nothing to do with it. That is FINDING 34's
+            // sentence pointing the other way: an error that sends somebody looking
+            // for a lost transfer that is sitting safely at their own address.
+            // docs/SECURITY-FINDINGS.md FINDING 34.
+            let own_deposit = compute_account_identifier(
+                &canister,
+                Some(compute_deposit_subaccount(&caller)),
+            );
+            if to_bytes == own_deposit {
+                return Err(format!(
+                    "This transfer went to YOUR OWN deposit address ({}), which is the right \
+                     place and the wrong door: notify_deposit only credits the canister's \
+                     shared main account. Nothing is lost and no block index is needed -- call \
+                     claim_external_deposit(), which sweeps that address into your balance.",
+                    hex::encode(own_deposit)
+                ));
+            }
+            return Err(
+                "Transfer was not to an account of this canister. notify_deposit credits only \
+                 the canister's shared main account; money at your own deposit address is \
+                 claimed with claim_external_deposit(). Check the destination against \
+                 get_deposit_address()."
+                    .to_string(),
+            );
         }
 
         // Verify the sender is the caller by computing their expected account identifier.
@@ -3008,7 +3192,28 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
         let from_bytes: [u8; 32] = transfer.from.clone().try_into()
             .map_err(|_| "Invalid source account length".to_string())?;
         if from_bytes != expected_from {
-            return Err("This transfer was not sent from your account. Only the sender can claim their deposit.".to_string());
+            // THE LIMIT OF THE SHARED ACCOUNT, SAID OUT LOUD.
+            //
+            // The main account carries no name, so the block's `from` is the only
+            // evidence of whose money it is, and this check is what stops anybody
+            // who can read the ledger from claiming a stranger's transfer. The
+            // cost of that is real and must not be hidden: a transfer that did NOT
+            // come from the caller's own principal account -- an exchange
+            // withdrawal, a custodial wallet, a friend paying on your behalf -- is
+            // not claimable by the caller through this door, and there is no other
+            // door. Saying "only the sender can claim" without saying that leaves
+            // the player believing a retry will work.
+            // docs/SECURITY-FINDINGS.md FINDING 34.
+            return Err(format!(
+                "This transfer was not sent from your account, so this canister cannot \
+                 attribute it to you. The account it was sent from is the only evidence of \
+                 whose money it is, and yours is {}. If you sent it from an exchange or a \
+                 custodial wallet, THIS CANISTER CANNOT CREDIT IT TO YOU AND NOBODY CAN: it \
+                 has no way to know it was yours. Deposit instead by sending from your own \
+                 wallet to the address get_deposit_address() gives you, which is unique to \
+                 you, and calling claim_external_deposit().",
+                hex::encode(expected_from)
+            ));
         }
 
         // An ICRC-2 pull whose spender is THIS canister was made by `deposit()`,
@@ -3236,6 +3441,37 @@ async fn claim_external_deposit() -> Result<u64, String> {
     // `record_deposit_observation`.
     record_deposit_observation(caller, ledger_id, balance, ic_cdk::api::time());
 
+    // THE SWEEP MUST NOT CREDIT AN AMOUNT THAT CAN NEVER LEAVE (FINDING 40).
+    // `balance <= transfer_fee` catches dust, but the money-losing case sits just
+    // above it: a balance that survives the sweep yet lands below the withdrawal
+    // floor. Refusing here, while the money is still at the player's OWN address
+    // and still entirely theirs, is strictly better than crediting an escrow
+    // balance the canister will not pay out. The top-up instruction is the same
+    // one the dust path already gives, and it works for the same reason: the
+    // sweep takes the WHOLE address balance, so anything added to it comes out
+    // with the rest.
+    let min_external = currency.min_external_deposit();
+    if balance > transfer_fee && balance < min_external {
+        let credited = balance - transfer_fee;
+        return Err(format!(
+            "NOT SWEPT, AND YOUR MONEY IS STILL YOURS AT YOUR OWN ADDRESS. You sent {} \
+             ({} e8s). Sweeping it costs the {} ledger fee ({} e8s), which would leave {} \
+             in your table balance -- and this table's withdrawal floor is {}, so that {} \
+             could never be withdrawn again. Rather than take it and refuse to give it \
+             back, nothing was moved. Send at least {} more to the SAME address and claim \
+             again; the sweep takes the whole balance, so the amount already there comes \
+             out with it. docs/SECURITY-FINDINGS.md FINDING 40.",
+            currency.format_amount(balance),
+            balance,
+            currency.symbol(),
+            transfer_fee,
+            currency.format_amount(credited),
+            currency.format_amount(currency.min_withdrawal()),
+            currency.format_amount(credited),
+            currency.format_amount(min_external - balance),
+        ));
+    }
+
     if balance <= transfer_fee {
         // THE REFUSAL MUST BE TRUE. It used to read "No claimable balance. Send
         // ICP to your deposit address first" for BOTH of the cases below, which
@@ -3265,11 +3501,15 @@ async fn claim_external_deposit() -> Result<u64, String> {
         return Err(if balance == 0 {
             format!(
                 "Your deposit address is empty: this canister asked the {} ledger just now and \
-                 it holds 0. Send {} to (canister {}, subaccount get_deposit_subaccount()) and \
-                 call this again.",
+                 it holds 0. Send {} to YOUR OWN deposit address -- (canister {}, subaccount \
+                 get_deposit_subaccount()), which is the same account as the 64-hex address \
+                 get_deposit_address() gives you [{}] -- and call this again. If you sent to \
+                 some other address of this canister, this sweep cannot see it: the shared \
+                 main account is recovered with notify_deposit(block_index) instead.",
                 currency.symbol(),
                 currency.symbol(),
                 canister,
+                deposit_address_for(caller, currency),
             )
         } else {
             format!(
@@ -3831,6 +4071,18 @@ pub struct DepositAddressCustody {
     /// The subaccount bytes, i.e. the second half of the address this canister
     /// published. Repeated here so one call answers "where is it" and "how much".
     pub subaccount: Vec<u8>,
+    /// The canister that owns the account. The other half of the ICRC-1 address,
+    /// carried so a client is never left to guess it from context.
+    pub canister: Principal,
+    /// The SAME account as `(canister, subaccount)` above, in the legacy 64-hex
+    /// account-identifier spelling -- byte for byte what `get_deposit_address()`
+    /// returns to this principal, including its refusals (see
+    /// `NO_DEPOSIT_ADDRESS`).
+    ///
+    /// Two spellings of ONE account is the FINDING 34 fix; two accounts under one
+    /// name was the defect. They are built here from one derivation so they cannot
+    /// drift apart.
+    pub address: String,
     /// The ledger the amount below was read from.
     pub ledger: Principal,
     /// The amount the ledger reported at `observed_at_ns`. Zero with
@@ -3918,6 +4170,8 @@ fn deposit_custody_of(who: Principal) -> DepositAddressCustody {
     let observed_at_ns = entry.as_ref().map(|o| o.observed_at_ns);
     DepositAddressCustody {
         subaccount: compute_deposit_subaccount(&who).to_vec(),
+        canister: canister_id(),
+        address: deposit_address_for(who, currency),
         ledger: entry
             .as_ref()
             .map(|o| o.ledger)
@@ -4463,11 +4717,103 @@ fn compute_account_identifier(principal: &Principal, subaccount: Option<[u8; 32]
     result
 }
 
-/// Get the canister's account identifier for deposits (hex format for NNS wallet)
+/// The marker every non-address reply from [`get_deposit_address`] begins with.
+///
+/// The method's Candid type is `text`, so it has no way to say "there is no
+/// address for you" other than in words. THE CONTRACT IS: the reply is a payable
+/// address **if and only if** it is exactly 64 lowercase hex characters. Anything
+/// else is a refusal, and every refusal starts with this marker so a client can
+/// test one prefix instead of parsing prose.
+pub const NO_DEPOSIT_ADDRESS: &str = "NO ADDRESS: ";
+
+/// The deposit address for one principal, on one currency, as a payable string or
+/// a refusal in words.
+///
+/// # This is the FINDING 34 fix, and it is one line of arithmetic
+///
+/// It used to be `compute_account_identifier(&canister_id(), None)` -- the
+/// canister's MAIN account, the same 64 characters for every player on earth,
+/// published under the name "deposit address". An auditor sent 1 ICP to it and no
+/// surface, player or controller, could attribute it to anybody, because **no
+/// surface can**: the main account carries no name. Meanwhile
+/// `get_deposit_subaccount()` was already handing out a per-player account. Two
+/// methods, two answers, one of them a fund trap.
+///
+/// Now there is ONE account with two spellings of the same address:
+///
+/// ```text
+///   get_deposit_subaccount()  ->  sha256("cleardeck-deposit:" || principal)
+///                                 the ICRC-1 spelling: (this canister, those bytes)
+///   get_deposit_address()     ->  account_identifier(this canister, those same bytes)
+///                                 the legacy 64-hex spelling of the SAME account
+/// ```
+///
+/// The ICP ledger resolves both spellings to one balance, which is a fact about
+/// the ledger and not about this canister, so it is proved on the real ledger
+/// module by `tests/money_safety/tests/deposit_surface.rs::
+/// the_hex_address_and_the_icrc1_account_are_one_account_on_the_real_ledger`
+/// rather than assumed from the specification. `claim_external_deposit()` sweeps
+/// that account, so money sent to either spelling reaches the sender's escrow.
+///
+/// # Why the two refusals are refusals and not addresses
+///
+/// * **anonymous.** The address is derived from the caller's principal, and
+///   `claim_external_deposit()` refuses an anonymous caller, so money sent to the
+///   anonymous principal's deposit account could never be swept by anybody.
+///   Publishing it would be publishing a hole.
+/// * **ckBTC.** The ckBTC ledger is ICRC-1 only: it has no account-identifier
+///   form and no `transfer` endpoint that takes one. A 64-hex string is not a
+///   ckBTC destination in any wallet, and the old code returned one anyway.
+fn deposit_address_for(caller: Principal, currency: Currency) -> String {
+    if caller == Principal::anonymous() {
+        return format!(
+            "{NO_DEPOSIT_ADDRESS}a deposit address is derived from YOUR principal, and you are \
+             calling anonymously. Sign in and call this again. Money sent to an anonymous \
+             principal's deposit account could never be claimed, because \
+             claim_external_deposit() refuses anonymous callers."
+        );
+    }
+    match currency {
+        Currency::ICP => hex::encode(compute_account_identifier(
+            &canister_id(),
+            Some(compute_deposit_subaccount(&caller)),
+        )),
+        Currency::BTC => format!(
+            "{NO_DEPOSIT_ADDRESS}this is a ckBTC table and the ckBTC ledger has no \
+             account-identifier form, so there is no hex address to give you. Send ckBTC with \
+             an ICRC-1 transfer to (owner {}, subaccount get_deposit_subaccount()) and then \
+             call claim_external_deposit().",
+            canister_id(),
+        ),
+    }
+}
+
+/// YOUR deposit address: the legacy 64-hex spelling of the account
+/// `get_deposit_subaccount()` names. Different for every caller.
+///
+/// See [`deposit_address_for`] for what this is and what it used to be
+/// (docs/SECURITY-FINDINGS.md FINDING 34).
+///
+/// # This is an ordinary query, and a client SHOULD NOT TRUST IT
+///
+/// docs/SECURITY-FINDINGS.md FINDING 40. A query reply is produced by a single
+/// replica and carries no certificate the client checks, so one dishonest replica
+/// can answer this call with somebody else's address and the player pays it. The
+/// canister cannot detect that: by the time the money moves, the substitution has
+/// already happened outside it, and the resulting transfer is indistinguishable
+/// from an honest deposit by the wrong person.
+///
+/// The address is a **pure function of (this canister id, your principal)**, both
+/// of which every client already holds, so the fix is not to certify this reply:
+/// it is to not need it. A client derives
+/// `account_identifier(canister, sha256("cleardeck-deposit:" || principal))`
+/// locally and never asks. This method stays so an operator can check a client's
+/// derivation against the canister's, and `DepositModal.svelte` uses it exactly
+/// that way -- it displays its OWN derivation and refuses to show an address at
+/// all if this reply disagrees.
 #[ic_cdk::query]
 fn get_deposit_address() -> String {
-    let account_id = compute_account_identifier(&canister_id(), None);
-    hex::encode(account_id)
+    deposit_address_for(ic_cdk::api::msg_caller(), get_table_currency())
 }
 
 /// DEV ONLY: Get free test chips for local development
@@ -5371,8 +5717,9 @@ fn table_claims() -> u64 {
 /// Money the canister has WATCHED ARRIVE in its own main account and credited to
 /// nobody. **The fifth term of [`total_liability`], and it is FINDING 35.**
 ///
-/// The main account is where an exchange withdrawal lands, where
-/// `get_deposit_address()` points, and where every sweep and every pull ends up.
+/// The main account is where an exchange withdrawal lands, where every sweep and
+/// every pull ends up, and where everything sent to the shared address
+/// `get_deposit_address()` published until FINDING 34 is still sitting.
 /// Value can arrive there with no message to this canister at all, so an e8 of it
 /// that no escrow balance, no chip stack, no pot and no open payout accounts for
 /// is money held for somebody this canister cannot yet name. It is a LIABILITY --
@@ -6066,18 +6413,20 @@ fn refuse_currency_change_while_funded(new_config: &TableConfig) -> Result<(), S
         // enumerable deposit account has a reading.
         //
         // THE MAIN ACCOUNT IS ONE OF THOSE ACCOUNTS (FINDING 35). It was not in
-        // this leg either, so a table that had never read the account
-        // `get_deposit_address()` publishes -- the account holding essentially all
-        // of the money -- read a liability of zero and the flip was accepted on a
+        // this leg either, so a table that had never read its own main account
+        // -- the account holding essentially all of the money, and the one
+        // `get_deposit_address()` published to every player until FINDING 34 --
+        // read a liability of zero and the flip was accepted on a
         // canister sitting on 5 ICP. `main_uncredited_observed()` covers the case
         // where the account HAS been read; this covers the case where it has not.
         if observed_main_entry().is_none() {
             return Err(format!(
                 "Refusing to change this table's currency from {} to {}: this canister has \
                  NEVER asked the {} ledger what its own main account holds, so it cannot say \
-                 that account is empty. That account is where get_deposit_address() points, \
-                 where every sweep and every pull lands, and where an exchange withdrawal \
-                 arrives with no message to this canister at all. The currency selects the \
+                 that account is empty. That account is where every sweep and every pull \
+                 lands, where an exchange withdrawal arrives with no message to this canister \
+                 at all, and where everything sent to the shared address this canister used to \
+                 publish is still sitting. The currency selects the \
                  LEDGER, so money sitting there becomes unreachable the moment every path \
                  starts looking at the new one. Call refresh_solvency() -- it is public, it \
                  moves no money -- or admin_audit_deposit_custody(), which now reads the main \
@@ -6148,12 +6497,70 @@ fn refuse_while_table_holds_custody(method: &str) -> Result<(), String> {
 /// Conservation is the post-condition, checked before anything is written: the
 /// credits must sum to exactly what the table held. Nothing here can change the
 /// canister's total liability, and nothing here touches the ledger.
+///
+/// # THE LIVE HAND (docs/SECURITY-FINDINGS.md FINDING 22)
+///
+/// This used to empty the pot **underneath a hand that was being played**. It
+/// zeroed every stack, the pot, the side pots and the departed stakes, handed
+/// every wager back to the player who made it, and left `phase`, `action_on` and
+/// every hole card exactly as they were. Two things were wrong with that, and they
+/// are different sizes.
+///
+/// **The design question.** A controller can read every hole card through
+/// `get_table_state` and could then decide whether the hand happened. It conserves
+/// to the e8, so no invariant in this project could see it; what is taken is not
+/// principal but the equity a player has already paid for. **The power is kept and
+/// narrowed, deliberately**: closing the door on a hand this canister cannot prove
+/// is dead is how FINDING 15 happened -- every exit shut at once over real money --
+/// and the recovery primitive is what `reset_table` and `admin_reinit_table` point
+/// at when they refuse. So the door now opens only on a hand that
+/// [`hand_cannot_move_right_now`] -- either the action clock has run out, or there
+/// is no clock at all. That predicate is pure state (`now > expires_at`), so no
+/// trap, no lost timer and no stall witness can stop it becoming true, which is why
+/// it cannot participate in a lock. A hand being actively played is refused, and
+/// the cost to an honest operator is bounded by one action timeout.
+///
+/// **The bug.** Whatever the door does to the money, leaving the hand OPEN is
+/// simply wrong: the table sat mid-street with cards on the board, every stack at
+/// zero and `reload` refusing "Cannot reload during a hand" until the zombie hand
+/// finished. The live hand is now CLOSED through [`settle_unmovable_hand`] -- the
+/// same routine the permissionless `abandon_stuck_hand` uses, so the money moves
+/// identically and the hand is recorded, archived and marked
+/// [`HandEnding::ControllerRecovery`] -- and only then are the stacks moved.
 fn return_all_table_custody_to_escrow() -> Result<u64, String> {
+    let now = ic_cdk::api::time();
     TABLE.with(|t| {
         let mut table = t.borrow_mut();
         let Some(state) = table.as_mut() else {
             return Ok(0); // No table, no custody.
         };
+
+        // ---- REFUSAL FIRST. Nothing below this line has changed the table. ----
+        if hand_in_progress(state) && !hand_cannot_move_right_now(state, now) {
+            return Err(format!(
+                "Refusing: hand {} is being played right now -- seat {} is on the clock with \
+                 {} in the pot -- and this is a RECOVERY door, not a way to end a hand. \
+                 Emptying the pot here would hand every wager back and take from whoever was \
+                 going to win it the equity they had already paid for, and it would conserve \
+                 to the e8 while doing so, which is why nothing else in this canister can see \
+                 it (docs/SECURITY-FINDINGS.md FINDING 22). Nothing has been moved. Wait for \
+                 the action clock to run out -- at most {} seconds -- or call check_timeouts, \
+                 and then try again; a hand nothing can move is one this door will close.",
+                state.hand_number,
+                state.action_on,
+                state.pot,
+                state.config.action_timeout_secs,
+            ));
+        }
+
+        // A live hand that nothing can move has exactly one lawful ending, and the
+        // permissionless door already performs it. Do it HERE rather than emptying
+        // the pot around it, so the hand is finished, recorded and archived instead
+        // of left open with cards on the board and every stack at zero.
+        if hand_in_progress(state) {
+            settle_unmovable_hand(state, now, UnmovableReason::AControllerReachedForRecovery);
+        }
+
         let custody = table_custody(state);
         if custody.is_empty() {
             return Ok(0);
@@ -8831,10 +9238,34 @@ fn settle_hand(state: &mut TableState) -> Vec<Winner> {
         })
         .collect();
 
-    // Update local history
+    record_local_hand_result(state, &winners, showdown_players);
+
+    winners
+}
+
+/// Write what a hand ended in into the LOCAL 100-hand ring and the "last hand"
+/// display slot.
+///
+/// # This used to be inline in [`settle_hand`], and that was the whole bug
+///
+/// [`settle_unmovable_hand`] does not run through [`settle_hand`] -- it builds its
+/// own refund plan and applies it -- so it never reached this block. Every hand
+/// closed by `abandon_stuck_hand`, by the on-chain clock, by an exit door or (now)
+/// by the recovery door therefore appeared in `get_hand_history` as
+/// `winners: [], community_cards: []`: a blank record of a hand in which real money
+/// had moved back to real people. The archive canister got the credits; the table's
+/// own record did not, so the two disagreed about every refunded hand.
+///
+/// It is a function with two callers instead of a block with one, so they cannot
+/// drift again.
+fn record_local_hand_result(
+    state: &TableState,
+    winners: &[Winner],
+    showdown_players: Vec<ShowdownPlayer>,
+) {
     HAND_HISTORY.with(|h| {
         if let Some(last) = h.borrow_mut().last_mut() {
-            last.winners = winners.clone();
+            last.winners = winners.to_vec();
             last.community_cards = state.community_cards.clone();
             if state.phase == GamePhase::Showdown {
                 last.showdown_players = showdown_players;
@@ -8848,10 +9279,8 @@ fn settle_hand(state: &mut TableState) -> Vec<Winner> {
     // Store winners for display (separate from HAND_HISTORY, which gets a new entry
     // when a new hand starts)
     LAST_HAND_WINNERS.with(|w| {
-        *w.borrow_mut() = winners.clone();
+        *w.borrow_mut() = winners.to_vec();
     });
-
-    winners
 }
 
 /// Close the hand out once the money has moved.
@@ -8886,7 +9315,7 @@ pub fn end_hand_single_winner(state: &mut TableState, now: u64) {
     let winners = settle_hand(state);
 
     // Record to history canister (no showdown - single winner by fold)
-    record_hand_to_history(state, &winners, false);
+    record_hand_to_history(state, &winners, false, HandEnding::FoldOut);
 
     finish_hand(state, now);
 }
@@ -8899,7 +9328,7 @@ pub fn determine_winners(state: &mut TableState, now: u64) {
     let winners = settle_hand(state);
 
     // Record to history canister (went to showdown)
-    record_hand_to_history(state, &winners, true);
+    record_hand_to_history(state, &winners, true, HandEnding::Showdown);
 
     finish_hand(state, now);
 }
@@ -9626,6 +10055,31 @@ pub enum UnmovableReason {
     /// win the pot -- not now and not ever, because the seats are empty and a
     /// new occupant is not in this hand.
     NobodyLeftToWinIt,
+    /// **A CONTROLLER REACHED FOR THE RECOVERY DOOR** while this hand was live:
+    /// `admin_return_all_chips_to_escrow`, or `admin_reinit_table`, which calls
+    /// it. docs/SECURITY-FINDINGS.md FINDING 22.
+    ///
+    /// The money moves exactly as it does for every other reason here -- every
+    /// stake to the player who put it in -- and the door only opens on a hand
+    /// nothing can move right now, so the controller is doing what any principal
+    /// could do. It is a separate reason anyway, because "this hand did not
+    /// happen, and a privileged principal is why" is a different fact about the
+    /// world from "this hand did not happen, and the clock is why", and the
+    /// permanent record has to be able to say which.
+    AControllerReachedForRecovery,
+}
+
+impl UnmovableReason {
+    /// How the permanent record describes a hand closed for this reason.
+    fn ending(self) -> HandEnding {
+        match self {
+            UnmovableReason::NoMessageCanMoveIt | UnmovableReason::AnExitDoorFoundItUnmovable => {
+                HandEnding::Unmovable
+            }
+            UnmovableReason::NobodyLeftToWinIt => HandEnding::NobodyLeftToWinIt,
+            UnmovableReason::AControllerReachedForRecovery => HandEnding::ControllerRecovery,
+        }
+    }
 }
 
 /// Hand every stake back and close a hand that can no longer produce a winner.
@@ -9730,6 +10184,27 @@ fn settle_unmovable_hand(
             plan.collected,
             plan.payouts.len()
         ),
+        // `CRITICAL:` ON PURPOSE, and it is the loudest thing this file says
+        // about an operation that is arithmetically perfect. A controller ending
+        // a hand conserves every e8 and moves every stake to its owner, so no
+        // conservation invariant, no settlement-oracle per-seat diff and no
+        // solvency reading can see it at all -- which is the whole of
+        // docs/SECURITY-FINDINGS.md FINDING 22. The money-safety classifier stops
+        // a run on every `CRITICAL:` line, so this cannot appear in a green run
+        // without somebody acknowledging it.
+        UnmovableReason::AControllerReachedForRecovery => ic_cdk::println!(
+            "CRITICAL: hand {} was ENDED BY A CONTROLLER at phase {}: the recovery door \
+             (admin_return_all_chips_to_escrow / admin_reinit_table) was called on a live \
+             hand that nothing could move. {} e8s across {} stakes returned to the players \
+             who put them in; NOBODY WON THIS HAND. Every credit is recorded with \
+             pot_type=\"{}\" so the permanent record distinguishes it from a hand that was \
+             played out. See docs/SECURITY-FINDINGS.md FINDING 22.",
+            state.hand_number,
+            phase_to_string(&state.phase),
+            plan.collected,
+            plan.payouts.len(),
+            HandEnding::ControllerRecovery.pot_label()
+        ),
     }
 
     reveal_seed_on_hand_end(state);
@@ -9738,7 +10213,11 @@ fn settle_unmovable_hand(
     // post-condition as a real settlement -- and it cannot trap there, because
     // the identical predicate was evaluated above.
     let winners = apply_payouts(state, &plan);
-    record_hand_to_history(state, &winners, false);
+    record_hand_to_history(state, &winners, false, reason.ending());
+    // THE LOCAL RECORD TOO. This call is the fix for a hand refunded here reading
+    // back from `get_hand_history` as an empty record while the archive held every
+    // credit; see [`record_local_hand_result`].
+    record_local_hand_result(state, &winners, Vec::new());
     finish_hand(state, now);
     Some(refunded)
 }

@@ -25,7 +25,14 @@ concurrency:
 
 env:
   RUST_TOOLCHAIN: '1.90.0'
-  ICP_CLI_VERSION: '1.0.0'
+  # These MUST equal the versions ci.yml proves the build reproducible with, and
+  # the versions the Dockerfile a stranger verifies with uses. Deploying with a
+  # different ic-wasm shrinks the module differently and MOVES THE MODULE HASH,
+  # which silently breaks "the deployed hash matches a reproducible build of
+  # main" -- the only claim that makes this code checkable.
+  # scripts/check-declarations.sh compares every copy of these.
+  ICP_CLI_VERSION: '1.0.2'
+  IC_WASM_VERSION: '0.9.9'
 
 jobs:
   ci:
@@ -49,10 +56,14 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Install pinned toolchain (icp-cli + ic-wasm)
+        # This step was called "pinned" while installing ic-wasm UNPINNED, so the
+        # module hash the deploy produced depended on whatever ic-wasm crates.io
+        # served that morning. The name asserted a property the code did not have.
         run: |
-          npm i -g @icp-sdk/icp-cli@${ICP_CLI_VERSION}
-          cargo install ic-wasm --locked
-          icp --version
+          set -euo pipefail
+          npm i -g "@icp-sdk/icp-cli@${ICP_CLI_VERSION}"
+          cargo install ic-wasm --version "${IC_WASM_VERSION}" --locked
+          icp --version && ic-wasm --version
 
       - name: Import deploy identity (encrypted secret; plaintext store in CI)
         env:
@@ -68,13 +79,31 @@ jobs:
         # icp does NOT emit a canister-id .env (unlike dfx). Supply the two IDs the
         # bundle needs; table IDs are fetched from the lobby at runtime. Add
         # VITE_BETA_PASSWORD_HASH here (from a secret) if you password-gate beta.
+        #
+        # `build:mainnet`, NOT the bare `build`. THIS STEP COULD NOT COMPLETE.
+        #
+        # Wave 9's T-01 fix made any build that does not STATE its target abort
+        # ("ABORT: the ClearDeck frontend build does not know which network it is
+        # for"), because a bare `npm run build` used to fall back to the repo-root
+        # .env holding the MAINNET ids. This step was never updated, so it aborted
+        # before the snapshot and before the backend deploy: nothing was deployed.
+        # It stayed invisible because ci.yml's frontend job sets DFX_NETWORK=ic --
+        # a gate proving the build works in an environment the deploy does not use.
+        #
+        # `build:mainnet` is the named path T-01's own fix file points at. It states
+        # the target in the command, refuses a contradictory ambient DFX_NETWORK,
+        # and VERIFIES the built bundle (13 checks) before exiting 0, deleting the
+        # dist if verification fails so `icp deploy` cannot upload an unverified
+        # one. It is also the gate docs/DEFECTS.md T-01 and T-38 name, which until
+        # now nothing in this repository invoked.
         env:
           VITE_CANISTER_ID_LOBBY: kpfcd-kyaaa-aaaaj-qor3a-cai
           VITE_CANISTER_ID_HISTORY: kggj7-4qaaa-aaaaj-qor2q-cai
         run: |
           npm ci
-          npm --workspace src/cleardeck_frontend run build
-          # Fail fast if the live lobby ID didn't make it into the bundle.
+          npm --workspace src/cleardeck_frontend run build:mainnet
+          # Belt and braces: the verifier above checks the id list, this checks the
+          # one id this workflow itself supplies.
           grep -rq 'kpfcd-kyaaa-aaaaj-qor3a-cai' src/cleardeck_frontend/dist \
             || { echo '::error::frontend bundle missing lobby canister ID — aborting deploy'; exit 1; }
 

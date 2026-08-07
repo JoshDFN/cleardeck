@@ -36,7 +36,7 @@
     "The reds below are what the sweep actually found. Three of them are NEW, because this is",
     "the first sweep in three waves that could reach a table scene at all."
   ],
-  "recorded_run": "artifacts/screens/latest/verdicts.json (sweep at 150a46b, dirty, 2026-08-06T10:00Z) -- 24 shots, 14 verified, 10 red",
+  "recorded_run": "artifacts/screens/latest/verdicts.json (sweep at 4ba4883, dirty, 2026-08-07T01:39Z, wave-11 reconciliation) -- 24 shots, 14 verified, 10 red. The previous line named the sweep at 150a46b; the reds are the same ten and the same four defect ids. This sweep was only possible after docs/DEFECTS.md E-74 was diagnosed: the lobby was empty, so the first attempt failed all 24 scenes with \"Lobby has no registered name for table_N\" and measured nothing.",
   "reds": [
     {
       "scene": "lobby",

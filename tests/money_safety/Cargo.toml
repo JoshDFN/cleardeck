@@ -113,3 +113,30 @@ path = "tests/ledger_boundary.rs"
 [[test]]
 name = "solvency"
 path = "tests/solvency.rs"
+
+# THE OLDEST OPEN CLUSTER IN THE REGISTER (docs/SECURITY-FINDINGS.md FINDING 02,
+# 05, 08, 09, 17, 22). Named explicitly for the reason `admin_custody` and
+# `solvency` are: an auto-discovered target is a target no human ever types, and
+# these six entries sat in the register with stale headers for three waves because
+# nothing ran at them as a group. If this file is renamed, this line fails rather
+# than the coverage silently going away.
+[[test]]
+name = "oldest_cluster"
+path = "tests/oldest_cluster.rs"
+
+# THE ONE DEPOSIT ADDRESS (docs/SECURITY-FINDINGS.md FINDING 06, 11, 34, 39).
+# Named explicitly for the reason `admin_custody` and `ledger_boundary` are: an
+# auto-discovered target is a target no human ever types. This one is also the
+# only target in the project that spends through the ICP ledger's LEGACY
+# `transfer` endpoint -- the only door a 64-hex address can be paid through, and
+# the door every other test assumed instead of executing.
+[[test]]
+name = "deposit_surface"
+path = "tests/deposit_surface.rs"
+
+# THE ACCOUNT CENSUS (docs/SECURITY-FINDINGS.md FINDING 28, 21, 11). It existed
+# from wave 8 and was named by NOTHING -- not here, not in scripts/dev.sh -- so
+# FINDING 11's only gate sat outside every target anyone runs. Both are wired now.
+[[test]]
+name = "deposit_subaccount_anchor"
+path = "tests/deposit_subaccount_anchor.rs"

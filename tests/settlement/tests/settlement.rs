@@ -278,6 +278,82 @@ fn a_chair_that_changes_hands_mid_hand_pays_the_person_and_not_the_chair() {
     );
 }
 
+/// FINDING 08's DOOR, WHICH THIS ORACLE HAD NEVER OPENED.
+///
+/// Every vacating scenario in `suite.rs` calls `leave_table` and only falls back to
+/// `cash_out` if that fails. `leave_table` never fails for a seated player, so
+/// **neither `cash_out` nor `check_timeouts` had ever executed inside this crate**
+/// -- and the disconnect route is the one docs/SECURITY-FINDINGS.md FINDING 08 is
+/// actually about: a player closes their tab, their own action clock folds them,
+/// and they then vacate the chair with money still in the pot.
+///
+/// The money-safety suite covers that state (`reg08`, M1b) by asking whether the
+/// pot is still fully ATTRIBUTED. This asks the other question, the one only an
+/// oracle can ask: was the right seat PAID. Those come apart exactly where
+/// FINDING 13 lives.
+#[test]
+fn a_seat_folded_by_its_own_clock_and_cashed_out_mid_hand_settles_by_the_rules() {
+    let mut bench = Bench::new(
+        TableConfig::micro_six_max(),
+        suite::ONE_SHORT_THREE_DEEP,
+        1_000_000,
+    );
+    println!(
+        "\ntable_canister wasm under test: {}\n",
+        bench.world.table_wasm_sha256
+    );
+
+    let cmp = suite::timed_out_seat_cashes_out_mid_hand(&mut bench)
+        .expect("the scenario must find a deal where the short all-in holds the best hand");
+    println!("{}", cmp.report());
+
+    // THE FIXTURE HAS TO HAVE DONE WHAT IT SAYS. `cash_out` is the only door this
+    // scenario calls, so a seat that ended the hand vacated with money in the pot
+    // is proof the timeout-then-cash-out route actually opened.
+    let vacated: Vec<&settlement_oracle::observe::SeatTrace> = cmp
+        .record
+        .seats
+        .iter()
+        .filter(|s| s.vacated && s.contributed > 0)
+        .collect();
+    assert_eq!(
+        vacated.len(),
+        1,
+        "exactly one seat must have been folded by its clock and cashed out with a stake in \
+         the pot, or this test is measuring an ordinary hand. seats: {:?}",
+        cmp.record
+            .seats
+            .iter()
+            .map(|s| (s.seat, s.contributed, s.folded, s.vacated))
+            .collect::<Vec<_>>()
+    );
+    // And there has to be a short all-in underneath it, or the departing stake has
+    // nowhere to move to and the measurement is vacuous.
+    assert!(
+        cmp.settlement.layers.iter().filter(|l| l.amount > 0).count() >= 2,
+        "the ladder must have at least two layers: {:?}",
+        cmp.settlement.layers
+    );
+
+    // THE ASSERTIONS. Per seat, per person, and not one chip collected and paid to
+    // nobody.
+    assert!(
+        cmp.agrees,
+        "the hand was settled differently from the rules of poker:\n{}",
+        cmp.report()
+    );
+    assert!(
+        cmp.misattributed().is_empty(),
+        "money reached the wrong PERSON: {:?}\n{}",
+        cmp.misattributed()
+            .iter()
+            .map(|p| (p.principal.to_text(), p.diff))
+            .collect::<Vec<_>>(),
+        cmp.report()
+    );
+    assert_eq!(cmp.destroyed, 0, "chips were collected and paid to nobody");
+}
+
 /// Same shapes at real ICP magnitudes, to show nothing depends on the one-e8s chip.
 #[test]
 fn the_findings_are_not_an_artefact_of_the_micro_chip_unit() {

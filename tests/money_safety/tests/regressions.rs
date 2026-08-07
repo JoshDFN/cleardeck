@@ -218,8 +218,9 @@ fn reg02_notify_deposit_can_read_the_real_ledger_and_never_fails_to_decode() {
     let credited = world.notify_deposit(alice, block).unwrap_or_else(|e| {
         panic!(
             "REGRESSION of E-04 / FINDING 06: notify_deposit({block}) failed with {e:?}. A user who \
-             followed the documented get_deposit_address + notify_deposit flow has just had real \
-             ICP stranded in the canister with no way to recover it."
+             sent to this canister's main account and kept the block index -- the only \
+             recovery there has ever been for that account -- has just had real ICP stranded in \
+             the canister with no way to get it back."
         )
     });
     world.note_raw_deposit_credited(sent);

@@ -210,6 +210,67 @@ pub fn vacate_after_the_flop(bench: &mut Bench) -> Option<HandComparison> {
     })
 }
 
+/// **THE DOOR THAT NEEDS NO DELIBERATE CALL** (docs/SECURITY-FINDINGS.md
+/// FINDING 08): a seat is folded by its own ACTION CLOCK and then cashes out with
+/// the hand still live.
+///
+/// # The hole in this oracle that this closes
+///
+/// Every other vacating scenario in this file calls `leave_table` and only falls
+/// back to `cash_out` if that fails -- and `leave_table` never fails for a seated
+/// player, so **`cash_out` had never once run inside the settlement oracle**, and
+/// neither had `check_timeouts`. That matters because FINDING 08's whole point is
+/// that the state is reachable by a DISCONNECT: a player who closes their tab is
+/// folded by the timer and can then vacate the chair, and the money-safety gates
+/// that cover it (`reg08`, M1b) ask whether the pot is still fully ATTRIBUTED, not
+/// whether the right seat was PAID. Attribution and payment are different
+/// questions, and FINDING 13 is what happens when only the first one is asked.
+///
+/// The shape is the one from the finding: a short all-in underneath, so the
+/// departing deep seat's stake is money that CAN move between layers, and the
+/// short stack must hold the best hand or a deep seat wins every layer and the
+/// move is invisible in the payout. Requires [`ONE_SHORT_THREE_DEEP`].
+pub fn timed_out_seat_cashes_out_mid_hand(bench: &mut Bench) -> Option<HandComparison> {
+    let timeout = bench.world.config.action_timeout_secs;
+    let target = target_short_stack_best(0, vec![1, 2, 3]);
+    bench.hand(
+        "seat_timed_out_then_cashed_out_mid_hand",
+        Some(&*target),
+        DEFAULT_ATTEMPTS,
+        &mut |w, r, _| {
+            // Short stack all-in, deep seats to 60, then stop on the flop.
+            drive::play_out_until_phase(
+                w,
+                r,
+                GamePhase::Flop,
+                drive::shove_one_else_raise_to(0, 60),
+                120,
+            );
+            let state = w.table_state();
+            if !state.phase.hand_in_progress() {
+                return;
+            }
+            // THE SEAT ON THE CLOCK GOES QUIET. Nobody calls anything on its
+            // behalf; its own action clock is what folds it.
+            let Some(quiet) = state.player_at(state.action_on).map(|p| p.principal) else {
+                return;
+            };
+            if quiet == state.player_at(0).map(|p| p.principal).unwrap_or(quiet) {
+                // The short all-in must stay in the hand: it is the seat whose
+                // main pot the departing stake would be taken out of.
+                return;
+            }
+            w.advance(std::time::Duration::from_secs(timeout + 5));
+            let _ = w.check_timeouts(w.actor("alice"));
+            r.observe(w);
+            // AND ONLY NOW does it come back and cash out, mid-hand.
+            let _ = w.cash_out(quiet);
+            r.observe(w);
+            drive::play_out(w, r, drive::passive(), 200);
+        },
+    )
+}
+
 /// A seat vacates BEFORE the side pots are built, with a real stake committed.
 ///
 /// The short stack is required to hold the best hand: if a deep seat wins every
@@ -376,6 +437,7 @@ pub fn run_all(bench: &mut Bench) {
     folded_money_above_a_short_all_in(bench);
     vacate_after_the_flop(bench);
     vacate_before_the_side_pots_are_built(bench);
+    timed_out_seat_cashes_out_mid_hand(bench);
 }
 
 /// The scenarios that need a bystander, so they cannot run on the ladder bench.

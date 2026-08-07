@@ -856,8 +856,8 @@ fn uncredited_money_at_the_main_account_is_a_liability_the_guard_can_see() {
     println!("flip with 5 ICP uncredited at the main account -> {funded}");
     assert!(
         funded.starts_with("REFUSED"),
-        "the guard read a liability of ZERO on a canister holding 5 ICP at the address its own \
-         get_deposit_address() publishes, and accepted the flip. {funded}"
+        "the guard read a liability of ZERO on a canister holding 5 ICP in its own main \
+         account, and accepted the flip. {funded}"
     );
 
     let r = solvency_of(&world);

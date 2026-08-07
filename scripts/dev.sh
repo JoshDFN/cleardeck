@@ -511,6 +511,35 @@ Controllers: $(icp_local canister status table_1 2>/dev/null | awk -F': ' '/Cont
     "(principal \"$(local_id table_1)\", principal \"$(local_id table_2)\", principal \"$(local_id table_3)\")" \
     --identity "$CONTROLLER" >/dev/null || warn "lobby init_microstakes_tables non-zero (already initialised?)"
   count="$(icp_local canister call lobby get_tables '()' --query 2>/dev/null | grep -c 'canister_id' || true)"
+  # POSTCONDITION, READ BACK, AND FATAL. docs/DEFECTS.md E-74.
+  #
+  # The two calls above are `|| warn`, and `icp canister call` exits 0 on a
+  # `variant { Err }` (docs/DEFECTS.md E-50), so BOTH can fail and this function
+  # still reported success. It did: on 2026-08-06 `local-up` printed
+  # `✓ lobby lists 0 table record(s)` and exited 0, and the ENTIRE screenshot
+  # harness -- the only gate in this project that measures the four protected
+  # notices on rendered pixels -- failed all 24 scenes with "Lobby has no
+  # registered name for table_N". A gate that cannot run is a gate that is off,
+  # and this one was off silently.
+  #
+  # Root cause when it happens: `set_admin` above is called AS $CONTROLLER, but
+  # the lobby's admin is whoever initialised it first. If that was a different
+  # identity, `set_admin` is refused ("Only current admin can set new admin") and
+  # `init_microstakes_tables` is then refused ("Only admin can initialize
+  # tables"). Recover by handing the admin over from the identity that holds it:
+  #
+  #   icp canister call lobby get_admin '()' --query -e local
+  #   icp canister call lobby set_admin "(principal \"<$CONTROLLER's principal>\")" \
+  #     --identity <the identity get_admin named> -e local
+  #
+  # then run this again.
+  if [ "${count:-0}" -lt 1 ]; then
+    icp_local canister call lobby get_admin '()' --query 2>/dev/null \
+      | sed 's/^/      lobby admin: /' >&2 || true
+    die "the lobby lists NO tables. local-up used to report success here; it does not any \
+more, because an empty lobby makes the whole screenshot harness unrunnable and nothing else \
+notices. See the recovery in up_wire (docs/DEFECTS.md E-74)."
+  fi
   ok "lobby lists $count table record(s)"
   # btc_table_1 has no lobby registration call in any deploy path. State it rather
   # than let it look intentional. docs/DEFECTS.md T-05.
@@ -682,6 +711,26 @@ cmd_test() {
     # which is exactly why it survived its own wave. Named explicitly for the
     # deposit_replay reason above.
     cargo test --test coherence_w8 -- --test-threads=2 &&
+    # deposit_surface is the gate on THE ONE DEPOSIT ADDRESS
+    # (docs/SECURITY-FINDINGS.md FINDING 06, 11, 34, 39). `get_deposit_address()`
+    # published the canister's MAIN account -- the same 64 characters to every
+    # player -- under the name "deposit address", and an auditor's 1 ICP arrived
+    # where no surface could attribute it to anybody. This target is the only one
+    # that spends through the LEGACY `transfer` endpoint, which is the only door a
+    # 64-hex address can be paid through and the door every existing test assumed
+    # instead of executing; it also runs the FRONTEND's own derivation in node and
+    # compares it with the canister, principal by principal, so a client that
+    # derives its address locally (which is what removes the uncertified query from
+    # the trust path) cannot silently derive a WRONG one. Named explicitly for the
+    # deposit_replay reason above.
+    cargo test --test deposit_surface -- --test-threads=2 &&
+    # deposit_subaccount_anchor is the gate on THE ACCOUNT CENSUS
+    # (docs/SECURITY-FINDINGS.md FINDING 28, FINDING 21, FINDING 11). Eleven tests,
+    # one per re-anchoring, each proved to go red on its own revert. It was
+    # cargo-auto-discovered and named by NOTHING, so FINDING 11's only gate --
+    # "dust is visible and recoverable by topping up" -- was outside every target
+    # that anyone runs. Named explicitly for the deposit_replay reason above.
+    cargo test --test deposit_subaccount_anchor -- --test-threads=2 &&
     # wave6_coherence carries probe1 (the first auditor's fund lock, reached by real
     # silence), probe4 (docs/SECURITY-FINDINGS.md FINDING 17: the fold-out winner
     # must be PAID the pot -- an OUTCOME assertion, because the totals were exact
@@ -690,6 +739,27 @@ cmd_test() {
     # defects, and a target that passes while the defect is present teaches nobody
     # anything. Named explicitly for the deposit_replay reason above.
     cargo test --test wave6_coherence -- --test-threads=1 &&
+    # oldest_cluster is the gate on THE OLDEST CLUSTER IN THE REGISTER
+    # (docs/SECURITY-FINDINGS.md FINDING 02, 05, 08, 09, 17 and 22). Five of the six
+    # were closed in waves 2, 7 and 8 and their headers never said so; this target is
+    # what turns each of those closures from a blockquote into something that goes
+    # red when it stops being true, and it carries FINDING 22 -- the recovery door
+    # that could void a live hand, conserving to the e8, which no invariant in this
+    # project could see. Named explicitly for the deposit_replay reason above, and
+    # wired in the same change that files the fix: a FIXED row whose gate no target
+    # runs is docs/DEFECTS.md H-45, which this wave is trying to shrink, not grow.
+    cargo test --test oldest_cluster -- --test-threads=2 &&
+    # fund_reachability, solvency and stall_agreement were cargo-auto-discovered and
+    # named by NOTHING -- 20 tests run by no target, no make rule and no CI job.
+    # That is docs/DEFECTS.md H-45, and it is not academic: fund_reachability is the
+    # gate on M9, the property added after an auditor locked ~420 ICP, and it sat RED
+    # for a whole wave without anyone seeing it, because the tests it holds were
+    # measuring the pre-on-chain-clock semantics. A gate nothing runs does not decay
+    # into a useless gate, it decays into a MISLEADING one: the register cites it as
+    # what holds a finding closed.
+    cargo test --test fund_reachability -- --test-threads=1 &&
+    cargo test --test solvency -- --test-threads=2 &&
+    cargo test --test stall_agreement -- --test-threads=1 &&
     # timers is the gate on THE ON-CHAIN CLOCK (docs/SECURITY-FINDINGS.md FINDING 19,
     # docs/DEFECTS.md E-54/E-55/E-56). Every test in it drives the table with NO
     # ingress message at all after setup -- only subnet ticks and queries -- so it is

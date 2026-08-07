@@ -1,0 +1,151 @@
+name: Deployed drift (mainnet vs main)
+
+# WHY THIS WORKFLOW EXISTS
+#
+#   Everything this repository claims about the running system is a claim about
+#   a moment in the past. Nothing about a canister changes when main moves on, so
+#   the deployment silently stops matching the source and no test anywhere
+#   notices -- CI only ever proves things about the tree, never about the fleet.
+#
+#   That gap has cost this project four separate defects (see
+#   docs/DECLARED-VS-STORED.md). The sharpest: btc_table_1 ran on blinds of
+#   10/200 sats and a buy-in range of 1,000-20,000 for its ENTIRE LIFE while
+#   icp.yaml declared 100/200 and 10,000-100,000 -- ten times larger across every
+#   field. `icp deploy --mode upgrade` does not re-run init args, so the manifest
+#   described an intention, not a canister. Nine upgrades, four blind audits and
+#   a full CI suite missed it. A player found it, from a strikethrough in the
+#   lobby.
+#
+#   So the repository now asks the question on a schedule instead of waiting for
+#   somebody to think of it.
+#
+# THIS WORKFLOW IS READ-ONLY AND MUST STAY THAT WAY
+#
+#   * It runs `scripts/check-deployed.sh`, whose only network operations are
+#     `icp canister metadata` (PUBLIC metadata sections: git:revision, git:dirty,
+#     candid:service) and `icp canister call --query`.
+#   * It needs NO identity and NO secrets: public metadata and query calls are
+#     open to anyone, and the mainnet id mapping is committed. Nothing here can
+#     authenticate as a controller even if it wanted to.
+#   * `permissions:` grants `contents: read` and `issues: write` only.
+#   * There is deliberately no `icp deploy`, `icp canister install`, `icp canister
+#     stop/start/delete` or any update call anywhere in this file, and the
+#     "prove it cannot deploy" step below fails the run if one ever appears.
+
+on:
+  schedule:
+    - cron: '17 6 * * *' # 06:17 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: deployed-drift
+  cancel-in-progress: false
+
+env:
+  # Same pin as ci.yml / deploy-ic.yml / Dockerfile; compared by
+  # scripts/check-declarations.sh.
+  ICP_CLI_VERSION: '1.0.2'
+
+jobs:
+  drift:
+    name: Does mainnet still match main?
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Prove this workflow cannot deploy
+        # A read-only claim that nothing enforces is just a comment. If anybody
+        # ever adds a mutating command to this file or to the script it runs,
+        # this step fails before the network is touched at all.
+        run: |
+          set -euo pipefail
+          bad=0
+          MUTATING='icp +(deploy|install)|icp +canister +(install|stop|start|delete|top-up|snapshot|settings)'
+          for f in .github/workflows/deployed-drift.yml \
+                   scripts/check-deployed.sh \
+                   scripts/check-deployed-config.sh; do
+            # Strip comments first: these files EXPLAIN why `icp deploy --mode
+            # upgrade` caused a defect, and a guard that cannot tell an
+            # explanation from an instruction is a guard nobody can keep green.
+            if sed 's/#.*//' "$f" | grep -nE "$MUTATING"; then
+              echo "::error::$f contains a mutating icp command"
+              bad=1
+            fi
+            # Every canister call that survives must be a query.
+            if sed 's/#.*//' "$f" | grep -n 'icp canister call' | grep -v -- '--query'; then
+              echo "::error::$f makes a non-query canister call"
+              bad=1
+            fi
+          done
+          # ...and the guard must be able to see a mutating command at all.
+          # Assembled from parts so the literal command never appears in this
+          # file -- otherwise the guard would flag its own self-test.
+          probe="$(mktemp)"; printf '%s %s -e ic lobby\n' 'icp' 'deploy' > "$probe"
+          if ! grep -qE "$MUTATING" "$probe"; then
+            echo "::error::the mutating-command pattern matches nothing -- this guard is vacuous"
+            bad=1
+          fi
+          rm -f "$probe"
+          [ "$bad" -eq 0 ] && echo "ok: read-only"
+          exit $bad
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+      - name: Install icp-cli
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq libdbus-1-3
+          npm i -g --no-fund --no-audit "@icp-sdk/icp-cli@${ICP_CLI_VERSION}"
+          icp --version
+
+      - name: Read mainnet and compare it with this commit
+        id: check
+        run: |
+          set -euo pipefail
+          # --require-clean: a module built from a dirty tree is one no commit
+          # describes, so it cannot be verified by anyone, ever.
+          ./scripts/check-deployed.sh --network ic --require-clean 2>&1 | tee /tmp/drift.txt
+
+      - name: Open or update an issue when the fleet has drifted
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = 'The scheduled drift check failed before it produced a report.';
+            try { body = fs.readFileSync('/tmp/drift.txt', 'utf8').slice(0, 60000); } catch (e) {}
+            const title = 'Deployed canisters no longer match main';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            // Untrusted-input note: `body` is the output of our own script, not
+            // user input, and it is passed as data, never interpolated into a
+            // shell command.
+            const issueBody = [
+              `The daily read-only check found the mainnet fleet disagreeing with \`main\`.`,
+              ``,
+              `Commit checked: ${context.sha}`,
+              `Run: ${run}`,
+              ``,
+              '```',
+              body,
+              '```',
+            ].join('\n');
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'deployed-drift',
+            });
+            if (existing.data.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number, body: issueBody,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body: issueBody, labels: ['deployed-drift'],
+              });
+            }

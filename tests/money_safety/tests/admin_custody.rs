@@ -309,6 +309,20 @@ fn admin_reinit_table_returns_every_chip_to_the_player_who_owns_it() {
 /// belong to somebody who has already left the chair. The recovery path uses the
 /// SAME payout basis settlement uses (`hand_stakes`), so a stake reaches its owner
 /// and not the occupant of its seat (FINDING 13).
+///
+/// # THIS TEST USED TO PIN FINDING 22 (rewritten in wave 11)
+///
+/// It asserted `admin_reinit_table mid-hand must succeed` against a hand somebody
+/// was on the clock for, which is exactly the power FINDING 22 is about: a
+/// controller who has read every hole card through `get_table_state` deciding
+/// whether the hand happens. The money conserves to the e8 either way, so this
+/// file's own `assert_all_invariants_green` was green while it happened.
+///
+/// The recovery power is KEPT — closing it on a hand the canister cannot prove is
+/// dead is how FINDING 15 shut every door at once — and narrowed to a hand nothing
+/// can move right now. So the test now drives both halves: the refusal while the
+/// clock is running, and the recovery once it has run out, which is what
+/// `reset_table`'s refusal points an operator at.
 #[test]
 fn admin_reinit_table_mid_hand_returns_the_pot_to_the_players_who_put_it_in() {
     let mut world = seated_world(&["alice", "bob", "carol"]);
@@ -344,10 +358,43 @@ fn admin_reinit_table_mid_hand_returns_the_pot_to_the_players_who_put_it_in() {
         mid.table.pot, mid.chips_total, mid.escrow_total
     );
 
+    // HALF ONE (docs/SECURITY-FINDINGS.md FINDING 22). Somebody is on the clock,
+    // so this hand is being played and the recovery door is not for it.
+    assert!(
+        mid.table.action_timer.is_some(),
+        "the refusal below is only meaningful while a clock is running"
+    );
+    let refused = admin_reinit_table(&world, &TableConfig::six_max_icp());
+    assert!(
+        !refused.is_ok() && refused.message().contains("being played right now"),
+        "FINDING 22: `admin_reinit_table` must refuse a hand that can still be played. \
+         A controller can read every hole card first, and voiding the hand conserves to the \
+         e8, so nothing else in this file can see it happen. Got: {refused:?}"
+    );
+    assert_eq!(
+        world.snapshot().table.pot,
+        mid.table.pot,
+        "a refused recovery must not have moved an e8"
+    );
+
+    // HALF TWO. The clock runs out with nobody resolving it. Now nothing can move
+    // the hand, and the recovery primitive `reset_table` points at must work — or
+    // a stuck table has no privileged escape at all.
+    world.advance_time_only(Duration::from_secs(
+        world.config.action_timeout_secs + 1,
+    ));
     let outcome = admin_reinit_table(&world, &TableConfig::six_max_icp());
-    assert!(outcome.is_ok(), "admin_reinit_table mid-hand must succeed: {outcome:?}");
+    assert!(
+        outcome.is_ok(),
+        "admin_reinit_table on a hand nothing can move must succeed: {outcome:?}"
+    );
 
     let after = world.snapshot();
+    assert!(
+        !after.table.phase.hand_in_progress(),
+        "the recovery must CLOSE the hand, not empty the pot underneath it. phase = {:?}",
+        after.table.phase
+    );
     assert_eq!(after.table.pot, 0);
     assert_eq!(after.chips_total, 0);
     assert_eq!(
@@ -788,8 +835,8 @@ fn currency_cannot_be_changed_while_the_canister_owes_anybody_anything() {
     //
     // docs/SECURITY-FINDINGS.md FINDING 35. This case used to pass with no reading
     // at all, which is exactly the hole: the guard read a liability of zero on a
-    // canister whose main account -- the one `get_deposit_address()` publishes,
-    // where an exchange withdrawal lands with no message -- it had never looked
+    // canister whose main account -- where every sweep lands, and where an
+    // exchange withdrawal arrives with no message -- it had never looked
     // at. An empty BOOK is not an empty ACCOUNT. The escape hatch is still there
     // and it is one public call, which is asserted here in both directions so a
     // future reader can see it is a guard and not a lock.
@@ -967,5 +1014,188 @@ fn the_auditors_sequence_leaves_nothing_that_belongs_to_nobody() {
         "FINDING 07 CLOSED: both doors ran, {} e8s stayed owed to their owners, and every e8 \
          reached a real wallet.",
         held
+    );
+}
+
+/// **THE SEAM NOTHING COVERED: A CHAIR THAT CHANGED HANDS, THEN THE CONTROLLER
+/// DOOR.**
+///
+/// docs/SECURITY-FINDINGS.md FINDING 22 x FINDING 13 / docs/DEFECTS.md E-36.
+/// Added in the wave-11 reconciliation.
+///
+/// # Why this shape and not another
+///
+/// Wave 11 routed `admin_return_all_chips_to_escrow` through
+/// `settle_unmovable_hand` so a live hand is CLOSED rather than emptied
+/// underneath. That put two independent pieces of machinery in series for the
+/// first time:
+///
+/// 1. `refund_every_stake` -> `apply_payouts`, which pays the OWNER of a stake and
+///    not the occupant of its seat, and
+/// 2. the stack sweep that follows, which credits each seat's CURRENT principal.
+///
+/// If a chair changed hands mid-hand, those two disagree about who seat *n* is.
+/// The departed player's stake is still in the pot; a different principal is
+/// sitting in their chair with their own money. Pay the stake to the chair and
+/// **the totals are still exact, every conservation invariant is still silent, and
+/// one player has been paid another player's money** -- this project's signature
+/// failure, at the exact intersection of the wave's largest change and its oldest
+/// misattribution defect.
+///
+/// Neither `admin_custody`'s existing mid-hand test (three seats, nobody moves)
+/// nor `oldest_cluster`'s two FINDING 22 tests drive it, and the settlement oracle
+/// -- the only instrument in the project that asks who was PAID -- has never
+/// opened the controller door at all.
+///
+/// The assertion is PER PRINCIPAL, because a total is exactly what this defect
+/// would leave correct.
+#[test]
+fn a_controller_ending_a_hand_pays_a_vacated_seats_stake_to_its_owner_not_its_new_occupant() {
+    // Four actors, three seated. `dave` is funded and NOT at the table: he is the
+    // one who takes the chair alice leaves, mid-hand, before the hand settles.
+    let mut world = World::new(TableConfig::six_max_icp(), &["alice", "bob", "carol", "dave"]);
+    for (i, name) in ["alice", "bob", "carol"].iter().enumerate() {
+        let who = world.actor(name);
+        world.fund_escrow(who, 20 * ICP).expect("deposit");
+        world.join_table(who, i as u8).expect("seat");
+    }
+    let dave = world.actor("dave");
+    world.fund_escrow(dave, 20 * ICP).expect("fund dave");
+
+    world.advance(Duration::from_secs(4));
+    world.start_new_hand(world.actor("alice")).expect("deal");
+
+    // Build a real pot, so the vacated seat's stake is money that can move.
+    for _ in 0..6 {
+        let t = world.table_state();
+        if !t.phase.hand_in_progress() {
+            break;
+        }
+        let Some(who) = t
+            .players
+            .get(t.action_on as usize)
+            .and_then(|p| p.as_ref())
+            .map(|p| p.principal)
+        else {
+            break;
+        };
+        if world.player_action(who, PlayerAction::Raise(ICP / 2)).is_err() {
+            let _ = world.player_action(who, PlayerAction::Call);
+        }
+        if world.pot() >= ICP {
+            break;
+        }
+    }
+    assert!(world.pot() > 0, "the reproduction needs a real pot");
+
+    // ALICE WALKS OUT MID-HAND. Her stake stays in the pot as a departed stake;
+    // her stack goes back to her escrow.
+    let alice = world.actor("alice");
+    let alice_seat = world
+        .table_state()
+        .players
+        .iter()
+        .position(|p| p.as_ref().map(|p| p.principal) == Some(alice))
+        .expect("alice is seated") as u8;
+    let staked_by_alice = world
+        .table_state()
+        .players
+        .get(alice_seat as usize)
+        .and_then(|p| p.as_ref())
+        .map(|p| p.total_bet_this_hand)
+        .unwrap_or(0);
+    world.leave_table(alice).expect("alice leaves mid-hand");
+    assert!(
+        staked_by_alice > 0,
+        "alice has to have money in the pot or this measures nothing"
+    );
+
+    // DAVE TAKES HER CHAIR, with his own money, before the hand settles. He is not
+    // in this hand (a mid-hand arrival is never dealt in, docs/DEFECTS.md E-36).
+    world
+        .join_table(dave, alice_seat)
+        .expect("dave takes the vacated chair");
+    assert_eq!(
+        world
+            .table_state()
+            .players
+            .get(alice_seat as usize)
+            .and_then(|p| p.as_ref())
+            .map(|p| p.principal),
+        Some(dave),
+        "seat {alice_seat} must now be dave's"
+    );
+
+    let mid = world.snapshot();
+    let dave_escrow_mid = escrow_of(&world, dave);
+    let alice_escrow_mid = escrow_of(&world, alice);
+    // `join_table` auto-buys-in at `min_buy_in`, so dave's own money is in his
+    // stack, not his escrow. That stack is the ONLY thing he may get back.
+    let dave_stack = world
+        .table_state()
+        .players
+        .get(alice_seat as usize)
+        .and_then(|p| p.as_ref())
+        .map(|p| p.chips)
+        .expect("dave is seated");
+    eprintln!(
+        "seat {alice_seat}: alice staked {staked_by_alice} and left; dave now sits there with \
+         a stack of {dave_stack}. alice escrow={alice_escrow_mid} dave escrow={dave_escrow_mid} \
+         pot={}",
+        mid.table.pot
+    );
+
+    // The clock runs out with nobody resolving it: nothing can move this hand, so
+    // the recovery door opens.
+    world.advance_time_only(Duration::from_secs(world.config.action_timeout_secs + 1));
+    let returned = admin_return_all_chips_to_escrow(&world);
+    assert!(returned.is_ok(), "the recovery door must open: {returned:?}");
+
+    let after = world.snapshot();
+    assert!(
+        !after.table.phase.hand_in_progress(),
+        "the recovery must CLOSE the hand: phase = {:?}",
+        after.table.phase
+    );
+    assert_eq!(
+        after.internal_total(),
+        mid.internal_total(),
+        "conservation -- and this is the number the defect would leave CORRECT"
+    );
+
+    // ---- THE ASSERTION THAT IS NOT A TOTAL ----
+    assert_eq!(
+        escrow_of(&world, alice),
+        alice_escrow_mid + staked_by_alice,
+        "alice's stake in the pot must come back to ALICE. She left the chair; the money \
+         did not. Paying it to whoever is sitting in seat {alice_seat} now conserves every \
+         e8 and is a completed transfer between two players -- FINDING 13 in the recovery \
+         door (docs/SECURITY-FINDINGS.md FINDING 22)."
+    );
+    assert_eq!(
+        escrow_of(&world, dave),
+        dave_escrow_mid + dave_stack,
+        "dave gets back exactly the stack he sat down with and not one e8 of alice's stake. \
+         He took the chair AFTER the deal, so he is not in this hand and has no claim on \
+         anything in the pot (docs/DEFECTS.md E-36)."
+    );
+
+    // Everybody ends holding what they walked in with: nobody won this hand.
+    for actor in &world.actors {
+        assert_eq!(
+            escrow_of(&world, actor.principal),
+            20 * ICP,
+            "{} must hold exactly their original 20 ICP",
+            actor.name
+        );
+    }
+    assert_all_invariants_green(&world, "after a controller ended a hand with a reseated chair");
+
+    let report = reachability::drain(&mut world);
+    assert!(
+        report.table_is_really_empty(),
+        "owed_after={} orphaned={}",
+        report.owed_after,
+        report.orphaned_e8s()
     );
 }

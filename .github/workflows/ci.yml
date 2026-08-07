@@ -112,6 +112,18 @@ jobs:
           grep -qx 'checked 2000 shuffle vectors, 0 mismatched' /tmp/py.txt
           grep -qx 'checked 2000 shuffle vectors, 0 mismatched' /tmp/js.txt
 
+  declarations-check:
+    name: Declarations agree with what they describe
+    runs-on: ubuntu-latest
+    # Pure file-against-file comparison: no build, no network, seconds to run.
+    # It exists because this repository has now been bitten four separate times
+    # by a declaration that disagreed with the thing it declared. The full
+    # inventory, and what does or does not guard each row, is in
+    # docs/DECLARED-VS-STORED.md.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - run: ./scripts/check-declarations.sh
+
   candid-check:
     name: Candid interface drift
     runs-on: ubuntu-latest
@@ -123,29 +135,36 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - run: cargo install candid-extractor --locked
-      - name: Extract candid from wasm and diff committed .did
-        # WARN-ONLY for now: the committed .did may differ cosmetically from
-        # candid-extractor output. Reconcile the committed .did once, then change
-        # the final line to `exit $fail` to HARD-FAIL on real interface drift:
-        # candid drift can trap a fund-holding canister at runtime.
-        run: |
-          cargo build --locked --release --target wasm32-unknown-unknown
-          fail=0
-          declare -A MAP=(
-            [lobby_canister]=src/lobby_canister/lobby_canister.did
-            [table_canister]=src/table_canister/table_canister.did
-            [history_canister]=src/history_canister/history_canister.did
-          )
-          for crate in "${!MAP[@]}"; do
-            candid-extractor "target/wasm32-unknown-unknown/release/$crate.wasm" > "/tmp/$crate.did"
-            if ! diff -u "${MAP[$crate]}" "/tmp/$crate.did"; then
-              echo "::warning::Candid drift in $crate -- committed .did differs from exported interface"
-              fail=1
-            fi
-          done
-          echo "candid drift status: $fail (0 = clean)"
-          exit 0   # TODO: change to `exit $fail` after one-time reconciliation
+      # Pinned on purpose: the extractor's output is an INPUT to this check, so
+      # an unpinned `cargo install` lets an upstream release move the gate.
+      - run: cargo install candid-extractor --version 0.1.6 --locked
+      - name: The committed .did must describe the built wasm
+        # THIS JOB USED TO BE DECORATION.
+        #
+        # It ran `diff -u committed.did extracted.did` and ended in `exit 0`
+        # behind a TODO, so it passed while the committed table_canister.did was
+        # missing seven fields and a whole method -- including
+        # TableState.departed_stakes, the record that stops a departed player's
+        # stake being reassigned to the deepest stack. The .did is not a comment:
+        # recipes/rust-reproducible.hbs embeds it as the module's PUBLIC
+        # candid:service metadata, so a stale one is a canister lying about
+        # itself on-chain, and every generated client believes it.
+        #
+        # It could never be switched on because it compared the WRONG THING.
+        # table_canister.did carries hundreds of lines of hand-written
+        # documentation the extractor does not emit -- documentation that ships
+        # on-chain in that same metadata -- and the extractor renumbers Result_N
+        # aliases freely. A byte diff was so loud it had to be muted, and muted
+        # it saw nothing. scripts/check-candid.sh compares fully-resolved method
+        # signatures instead: immune to comments, ordering, alias names and blob
+        # sugar, and unable to miss a dropped field or a missing method.
+        #
+        # The script self-tests before it judges: it asserts it does NOT flag two
+        # identical-but-differently-written interfaces, and that it DOES catch a
+        # dropped field, a widened integer, a vanished method, an extra method, a
+        # demoted update call and a changed argument type. A gate that cannot go
+        # red is worse than no gate, so this one proves it can, every run.
+        run: ./scripts/check-candid.sh --declarations
 
   reproducible-build:
     name: Reproducible build (two paths, byte-identical)

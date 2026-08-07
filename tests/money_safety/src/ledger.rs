@@ -152,6 +152,78 @@ pub struct ApproveArgs {
     pub created_at_time: Option<u64>,
 }
 
+// ---------------------------------------------------------------------------
+// the LEGACY (account-identifier) transfer
+// ---------------------------------------------------------------------------
+
+/// `transfer : (TransferArgs) -> (TransferResult)` from
+/// `rs/ledger_suite/icp/ledger.did`. The ONLY door on the ICP ledger that takes a
+/// 64-hex account identifier, which is the form every NNS-style wallet, every
+/// exchange withdrawal form and `get_deposit_address()` speak.
+///
+/// It exists in this harness because "the address the canister publishes" and
+/// "the account `icrc1_balance_of` reads" are two different addressing schemes
+/// for the same account, and NOTHING in this project had ever executed the first
+/// one. Without it, a test that sends with `icrc1_transfer` to
+/// `Account { owner, subaccount }` proves the ICRC-1 half and silently assumes
+/// the half a real player actually uses. docs/SECURITY-FINDINGS.md FINDING 34.
+#[derive(CandidType, Clone, Debug)]
+pub struct LegacyTimeStamp {
+    pub timestamp_nanos: u64,
+}
+
+#[derive(CandidType, Clone, Debug)]
+pub struct LegacyTransferArgs {
+    pub memo: u64,
+    pub amount: Tokens,
+    pub fee: Tokens,
+    pub from_subaccount: Option<Vec<u8>>,
+    /// A BARE 32-byte account identifier, not a record. FINDING 06 BUG B is what
+    /// happens when this is declared as `record { hash : blob }`.
+    pub to: Vec<u8>,
+    pub created_at_time: Option<LegacyTimeStamp>,
+}
+
+/// Build the argument for a legacy `transfer` to a 64-hex account identifier.
+///
+/// Returns `Err` when the hex is not exactly 32 bytes, so a test cannot silently
+/// send to a truncated address.
+pub fn legacy_transfer_args(to_hex: &str, amount: u64) -> Result<LegacyTransferArgs, String> {
+    let to = hex::decode(to_hex).map_err(|e| format!("address is not hex: {e}"))?;
+    if to.len() != 32 {
+        return Err(format!(
+            "an ICP account identifier is 32 bytes; this one is {}",
+            to.len()
+        ));
+    }
+    Ok(LegacyTransferArgs {
+        memo: 0,
+        amount: Tokens { e8s: amount },
+        fee: Tokens { e8s: TRANSFER_FEE },
+        from_subaccount: None,
+        to,
+        created_at_time: None,
+    })
+}
+
+/// The legacy endpoint's own result type. It is **not** `LedgerResult`: the
+/// legacy `transfer` returns `Ok : nat64` where ICRC-1 returns `Ok : nat`, and
+/// decoding one as the other fails with `wire_type: nat64, expect_type: nat`.
+#[derive(CandidType, Deserialize, Debug)]
+pub enum LegacyTransferResult {
+    Ok(u64),
+    Err(candid::Reserved),
+}
+
+impl LegacyTransferResult {
+    pub fn block(self) -> Result<u64, String> {
+        match self {
+            LegacyTransferResult::Ok(b) => Ok(b),
+            LegacyTransferResult::Err(_) => Err("legacy transfer returned Err".to_string()),
+        }
+    }
+}
+
 /// Errors are decoded as `candid::Reserved`-free opaque values: the harness only
 /// needs Ok/Err, and mirroring every error variant would couple it to ledger
 /// versions for no benefit.

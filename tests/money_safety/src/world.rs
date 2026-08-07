@@ -489,6 +489,59 @@ impl World {
         Ok(block)
     }
 
+    /// `get_deposit_address()` verbatim, as the caller sees it.
+    pub fn published_deposit_address(&self, who: Principal) -> String {
+        let bytes = self
+            .pic
+            .query_call(self.table, who, "get_deposit_address", Encode!().unwrap())
+            .expect("get_deposit_address");
+        decode_one::<String>(&bytes).expect("get_deposit_address reply decode")
+    }
+
+    /// Send `amount` to a 64-hex ICP account identifier with the LEGACY `transfer`
+    /// endpoint -- the door a player uses when a product hands them a hex string.
+    ///
+    /// This is the ONLY helper here that does not need to know what the address
+    /// means, which is the point: it takes whatever the canister published and
+    /// pays it, exactly as a wallet would, so where the money LANDS is measured
+    /// rather than assumed. docs/SECURITY-FINDINGS.md FINDING 34.
+    ///
+    /// `attribute_to` says which harness ledger-side accounting bucket the amount
+    /// belongs in, because the harness cannot infer it from a hex string:
+    /// `Some(p)` for "this is p's deposit subaccount", `None` for the shared main
+    /// account (which is `raw_transfer_to_canister`'s bucket).
+    pub fn legacy_transfer_to_address(
+        &mut self,
+        who: Principal,
+        to_hex: &str,
+        amount: u64,
+        attribute_to: Option<Principal>,
+    ) -> Result<u64, String> {
+        let args = ledger::legacy_transfer_args(to_hex, amount)?;
+        let bytes = self
+            .pic
+            .update_call(
+                self.ledger,
+                who,
+                "transfer",
+                Encode!(&args).expect("legacy transfer arg encode"),
+            )
+            .map_err(|r| format!("{r:?}"))?;
+        let block = Decode!(&bytes, ledger::LegacyTransferResult)
+            .map_err(|e| format!("legacy transfer reply decode: {e}"))?
+            .block()?;
+        match attribute_to {
+            Some(p) => {
+                let entry = self.unobserved_subaccount_deposits.entry(p).or_insert(0);
+                *entry = entry.saturating_add(amount);
+            }
+            None => {
+                self.uncredited_raw_deposits = self.uncredited_raw_deposits.saturating_add(amount);
+            }
+        }
+        Ok(block)
+    }
+
     // -----------------------------------------------------------------------
     // table canister: money
     // -----------------------------------------------------------------------

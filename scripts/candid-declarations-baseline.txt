@@ -1,0 +1,97 @@
+# Known drift between src/declarations/<n>/<n>.did and the canister .did it is
+# generated from. Every line here is a LIE THE TREE CURRENTLY TELLS, recorded so
+# that scripts/check-candid.sh --declarations can go red on anything NEW while
+# these are worked off. It is a ratchet, not an amnesty: the check also fails if
+# a line here stops being true, so the list can only shrink.
+#
+# These files are generated artifacts owned by the frontend. Regenerating them
+# is mechanical, but it changes the bindings the UI compiles against, so it
+# belongs to whoever owns src/declarations and src/cleardeck_frontend.
+#
+# NOTE: src/declarations/<n>/<n>.did.js -- the file the frontend ACTUALLY builds
+# actors from -- is a separate copy again, and is NOT covered by this baseline.
+# See docs/DECLARED-VS-STORED.md row D3.
+#
+# Format:  <declaration>\t<kind>\t<method>[\t<path>]
+lobby	signature	get_available_tables	ret0[].config.currency
+lobby	signature	get_available_tables	ret0[].currency
+lobby	signature	get_table	ret0?.config.currency
+lobby	signature	get_table	ret0?.currency
+lobby	signature	get_tables	ret0[].config.currency
+lobby	signature	get_tables	ret0[].currency
+lobby	signature	get_tables_by_currency	ret0[].config.currency
+lobby	signature	get_tables_by_currency	ret0[].currency
+lobby	signature	get_tables_by_stake	ret0[].config.currency
+lobby	signature	get_tables_by_stake	ret0[].currency
+table_1	method-missing-from-a	admin_audit_deposit_custody
+table_1	method-missing-from-a	admin_get_deposit_custody
+table_1	method-missing-from-a	admin_return_all_chips_to_escrow
+table_1	method-missing-from-a	get_all_ledger_intents
+table_1	method-missing-from-a	get_custody_status
+table_1	method-missing-from-a	get_cycle_status
+table_1	method-missing-from-a	get_deposit_custody
+table_1	method-missing-from-a	get_deposit_replay_state
+table_1	method-missing-from-a	get_my_ledger_intents
+table_1	method-missing-from-a	get_solvency
+table_1	method-missing-from-a	refresh_deposit_custody
+table_1	method-missing-from-a	refresh_main_account_custody
+table_1	method-missing-from-a	refresh_solvency
+table_1	method-missing-from-a	resolve_ledger_intent
+table_1	method-missing-from-a	resolve_my_ledger_intents
+table_1	signature	get_hand_history	ret0?.actions[].amount
+table_1	signature	get_hand_history	ret0?.actions[].phase
+table_1	signature	get_hand_history	ret0?.dealt_in
+table_1	signature	get_hand_history	ret0?.participants
+table_1	signature	get_table_state	ret0.Ok.departed_stakes
+table_1	signature	get_table_state	ret0.Ok.last_action
+table_1	signature	get_table_state	ret0.Ok.players[]?.sitting_out_since
+table_1	signature	get_table_view	ret0?.hand_is_unmovable
+table_1	signature	get_table_view	ret0?.my_committed_in_pot
+table_2	method-missing-from-a	admin_audit_deposit_custody
+table_2	method-missing-from-a	admin_get_deposit_custody
+table_2	method-missing-from-a	admin_return_all_chips_to_escrow
+table_2	method-missing-from-a	get_all_ledger_intents
+table_2	method-missing-from-a	get_custody_status
+table_2	method-missing-from-a	get_cycle_status
+table_2	method-missing-from-a	get_deposit_custody
+table_2	method-missing-from-a	get_deposit_replay_state
+table_2	method-missing-from-a	get_my_ledger_intents
+table_2	method-missing-from-a	get_solvency
+table_2	method-missing-from-a	refresh_deposit_custody
+table_2	method-missing-from-a	refresh_main_account_custody
+table_2	method-missing-from-a	refresh_solvency
+table_2	method-missing-from-a	resolve_ledger_intent
+table_2	method-missing-from-a	resolve_my_ledger_intents
+table_2	signature	get_hand_history	ret0?.actions[].amount
+table_2	signature	get_hand_history	ret0?.actions[].phase
+table_2	signature	get_hand_history	ret0?.dealt_in
+table_2	signature	get_hand_history	ret0?.participants
+table_2	signature	get_table_state	ret0.Ok.departed_stakes
+table_2	signature	get_table_state	ret0.Ok.last_action
+table_2	signature	get_table_state	ret0.Ok.players[]?.sitting_out_since
+table_2	signature	get_table_view	ret0?.hand_is_unmovable
+table_2	signature	get_table_view	ret0?.my_committed_in_pot
+table_3	method-missing-from-a	admin_audit_deposit_custody
+table_3	method-missing-from-a	admin_get_deposit_custody
+table_3	method-missing-from-a	admin_return_all_chips_to_escrow
+table_3	method-missing-from-a	get_all_ledger_intents
+table_3	method-missing-from-a	get_custody_status
+table_3	method-missing-from-a	get_cycle_status
+table_3	method-missing-from-a	get_deposit_custody
+table_3	method-missing-from-a	get_deposit_replay_state
+table_3	method-missing-from-a	get_my_ledger_intents
+table_3	method-missing-from-a	get_solvency
+table_3	method-missing-from-a	refresh_deposit_custody
+table_3	method-missing-from-a	refresh_main_account_custody
+table_3	method-missing-from-a	refresh_solvency
+table_3	method-missing-from-a	resolve_ledger_intent
+table_3	method-missing-from-a	resolve_my_ledger_intents
+table_3	signature	get_hand_history	ret0?.actions[].amount
+table_3	signature	get_hand_history	ret0?.actions[].phase
+table_3	signature	get_hand_history	ret0?.dealt_in
+table_3	signature	get_hand_history	ret0?.participants
+table_3	signature	get_table_state	ret0.Ok.departed_stakes
+table_3	signature	get_table_state	ret0.Ok.last_action
+table_3	signature	get_table_state	ret0.Ok.players[]?.sitting_out_since
+table_3	signature	get_table_view	ret0?.hand_is_unmovable
+table_3	signature	get_table_view	ret0?.my_committed_in_pot

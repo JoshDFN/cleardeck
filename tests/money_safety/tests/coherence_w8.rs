@@ -43,12 +43,14 @@ fn admin_update_config(world: &World, config: &TableConfig) -> String {
     }
 }
 
-fn deposit_address(world: &World, who: Principal) -> String {
-    let bytes = world
-        .pic
-        .query_call(world.table, who, "get_deposit_address", Encode!().unwrap())
-        .expect("get_deposit_address");
-    decode_one::<String>(&bytes).expect("decode")
+/// The canister's MAIN account, computed independently of the canister.
+///
+/// This used to read `get_deposit_address()`, which returned exactly this. It
+/// does not any more -- that method now names the CALLER's own account
+/// (docs/SECURITY-FINDINGS.md FINDING 34) -- and the reproduction below is about
+/// the MAIN account, so the address is derived here rather than asked for.
+fn main_account_address(world: &World) -> String {
+    money_safety::ledger::account_identifier_hex(&world.table, None)
 }
 
 // ===========================================================================
@@ -145,8 +147,11 @@ fn finding_33_an_open_sweep_keeps_the_currency_guard_shut_and_the_flip_is_revers
 // THE REPRODUCTION — FINDING 35, OPEN. No assertion pins a wrong number.
 // ===========================================================================
 
-/// `get_deposit_address()` publishes the canister's MAIN account, and NOTHING on
-/// the canister can read that account's balance.
+/// NOTHING on the canister can read its own MAIN account's balance.
+///
+/// (When this was written, `get_deposit_address()` published that account to
+/// every player, which is FINDING 34 and is fixed. The main account is still
+/// where every sweep and every pull lands, so the reproduction stands.)
 ///
 /// Every observation instrument this project has is anchored to the deposit
 /// SUBACCOUNTS. The main account has no `DEPOSIT_CUSTODY` entry, no
@@ -165,7 +170,7 @@ fn finding_35_reproduction_money_at_get_deposit_address() {
         ..TableConfig::six_max_icp()
     };
 
-    println!("get_deposit_address() -> {}", deposit_address(&world, alice));
+    println!("the canister's MAIN account -> {}", main_account_address(&world));
 
     // alice is an ordinary player: escrow, audited, then she cashes out and goes.
     world.fund_escrow(alice, 3 * ICP).expect("deposit");
@@ -202,7 +207,7 @@ fn finding_35_reproduction_money_at_get_deposit_address() {
     // The one thing that is true before and after the fix.
     assert!(
         snap.ledger_main >= 5 * ICP,
-        "the LEDGER must agree the canister received alice's transfer at the address \
-         its own get_deposit_address() handed her"
+        "the LEDGER must agree the canister received alice's transfer at its own \
+         main account"
     );
 }

@@ -13,7 +13,9 @@ permissions:
   contents: read
 
 env:
-  ICP_CLI_VERSION: '1.0.0'
+  # Kept equal to ci.yml / deploy-ic.yml / Dockerfile; every copy of this pin is
+  # compared by scripts/check-declarations.sh.
+  ICP_CLI_VERSION: '1.0.2'
   CYCLES_LOW_THRESHOLD: '1000000000000' # 1T
 
 jobs:

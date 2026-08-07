@@ -564,6 +564,13 @@ pub struct SolvencyReport {
 #[derive(Clone, Debug, CandidType, Deserialize, PartialEq, Eq)]
 pub struct DepositAddressCustody {
     pub subaccount: Vec<u8>,
+    /// MIRRORED IN FULL ON PURPOSE, and this is the field FINDING 36 is about:
+    /// a mirror that drops a field turns a reply the canister sends into a reply
+    /// the harness cannot see, and the harness then reports the canister is
+    /// silent about money it is in fact naming.
+    pub canister: Principal,
+    /// The 64-hex spelling of `(canister, subaccount)` -- see FINDING 34.
+    pub address: String,
     pub ledger: Principal,
     pub observed_amount: u64,
     pub observed_at_ns: Option<u64>,
