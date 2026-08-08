@@ -1,0 +1,46 @@
+[package]
+name = "thief_canister"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "NOT PART OF CLEARDECK. The module a controller installs when the goal is not to destroy a player's balance but to TAKE it. It exists so that the custody disclosure on the deposit screen is checked against something executed rather than against an argument."
+
+# WHY THIS CRATE EXISTS AT ALL
+#
+# docs/SECURITY-FINDINGS.md FINDING 23c. For one wave the deposit screen and the
+# README's decision table told a depositing player that the operator could destroy
+# their balance but could not take it -- "there is no method that pays a
+# controller". That argument is true of ClearDeck's code and irrelevant to a
+# controller, because `install_code` installs whatever module it is handed and the
+# canister's ledger account is spendable by whatever code is then running in it.
+#
+# A disclosure that is wrong in the operator's favour is worse than no disclosure,
+# so the correction is not allowed to rest on an argument either. This is the
+# smallest module that settles it: init with a ledger and a payee, one `steal`
+# method, one `icrc1_transfer`.
+#
+# DELIBERATELY DETACHED from the root workspace, same two reasons as
+# src/guardian_canister and tests/money_safety:
+#
+# 1. The root Cargo.lock is an input to `cargo build --locked` for the six
+#    fund-holding canisters, and mainnet matches a reproducible build 6 of 6. An
+#    empty `[workspace]` table here means that lockfile is never touched, so
+#    "wave 12 cannot have moved a deployed module hash" needs no argument.
+# 2. It must never be reachable from `icp build`. It is not in icp.yaml, it is not
+#    a workspace member, and it lives under tests/ so that no deploy path can pick
+#    it up by walking src/.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candid = "0.10"
+ic-cdk = "0.19"
+serde = { version = "1.0", features = ["derive"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"

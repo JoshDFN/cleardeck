@@ -2320,17 +2320,48 @@
 
     /* ---------------- the compact table-view header ---------------------- */
 
+    /* THE GAPS ARE CHROME TOO, AND THEY COST A PLAYER NOTHING.
+       Wave 5 recovered the brand row and the third header row. What it left
+       behind was pure EMPTY SPACE, and on a height-bound felt every pixel of it
+       is felt. Measured on the shipped build at 390x844, table view, with all
+       five protected phrases on screen:
+
+         header.compact padding-block   4 + 4 px   nothing is drawn in it
+         header.compact row gap             3 px   between the two header rows
+         .table-area padding-top            8 px   between the header and a table
+                                                   that is already full-bleed
+         ------------------------------------------------------------------
+                                           19 px
+
+       The 8 px of `.table-area` padding is the clearest of the three: in
+       portrait `.poker-table-wrapper` is `width: 100vw` with a negative margin
+       that cancels the horizontal padding outright, so the top 8 px is the only
+       part of it that has any effect at all, and its whole effect is to make the
+       felt smaller. Nothing here shortens, hides, restyles or moves a notice;
+       the strip above is untouched, and the header keeps both rows, both type
+       steps and every label. */
     header.compact {
       flex-wrap: wrap;
       align-items: center;
-      padding: 4px 8px;
-      gap: 3px;
+      padding: 2px 8px;
+      gap: 2px;
     }
 
     /* The brand mark and the tagline, on the one screen where the player is
        already inside the product. 44 px of row, recovered. */
     header.compact .logo {
       display: none;
+    }
+
+    /* The gutter the table already refuses. `.poker-table-wrapper` is
+       `width: 100vw` with `margin-inline: calc(50% - 50vw)` in portrait, so the
+       left and right padding here is cancelled by the table itself and only the
+       TOP has any effect -- and its whole effect is to push a height-bound felt
+       down. The bottom stays: `measureViewport()` reads it as `--cd-slack` and
+       cancels it deliberately, so changing it would move the wrapper's negative
+       margin rather than free anything. */
+    .table-area {
+      padding-top: 0;
     }
 
     /* Two deterministic rows: where you are, then what you can do. Left to the

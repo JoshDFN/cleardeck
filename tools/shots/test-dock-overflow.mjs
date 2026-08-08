@@ -150,7 +150,10 @@ async function measure(browser, { reintroduceTheDefect, viewport = VIEWPORT }) {
             const px = parseFloat(cs.fontSize);
             if (Number.isFinite(uiR) && uiR > 0 && Number.isFinite(px)) fw = px / uiR;
         }
+        const table = document.querySelector('.poker-table');
+        const gap = table ? parseFloat(getComputedStyle(table).rowGap) : NaN;
         return {
+            columnGap: Number.isFinite(gap) ? gap : NaN,
             dock: box('.action-dock'),
             stage: box('.stage'),
             panel: box('.wallet-panel'),
@@ -174,12 +177,20 @@ check('the fixture renders the dock', fixed.dock !== null, JSON.stringify(fixed)
 check('the fixture renders the committed money figure', fixed.committedValue !== null, JSON.stringify(fixed));
 // `.poker-table` is a flex column with `gap: 8px`, so the two boxes are adjacent
 // with exactly that gap between them and nothing else.
-const COLUMN_GAP = 8;
+//
+// THE GAP IS READ, NOT HARDCODED. It was written here as a literal `8`, and the
+// moment the portrait rule changed it the fixture went red on the ADJACENCY
+// claim -- which is still true -- instead of on anything that had broken. A
+// self-test that fails for a reason it is not testing is a self-test people
+// switch off, so the number comes from the same stylesheet the assertion is
+// about and only the ADJACENCY is asserted.
+const COLUMN_GAP = fixed.columnGap;
 check(
     'and the stage sits directly above the dock, as it does in the app',
-    fixed.stage && fixed.dock
+    fixed.stage && fixed.dock && Number.isFinite(COLUMN_GAP)
         && Math.abs((fixed.dock.top - fixed.stage.bottom) - COLUMN_GAP) < 1,
-    `stage.bottom=${fixed.stage?.bottom} dock.top=${fixed.dock?.top}`,
+    `stage.bottom=${fixed.stage?.bottom} dock.top=${fixed.dock?.top} `
+    + `(.poker-table row-gap ${COLUMN_GAP}px, read from the component's own stylesheet)`,
 );
 
 // ---------------------------------------------------------------------------

@@ -18,84 +18,115 @@
     "these, its entry here fails the gate until it is deleted. docs/DEFECTS.md HARD RULE 7 --",
     "a marker that pins a fixed defect is worse than no marker."
   ],
-  "rebased_2026_08_06_wave_8": [
-    "THIS LIST WAS REWRITTEN FROM A REAL SWEEP, not carried forward. Every entry before this",
-    "wave acknowledged a red recorded at 4af6dc6 with the note 'cannot be re-measured'. The",
-    "sweep has now run (docs/DEFECTS.md E-74 is why it could not), so each of those was checked",
-    "against rendered pixels rather than re-copied.",
+  "covers_added_2026_08_07_wave_12": [
+    "EVERY ENTRY NOW HAS TO SAY WHAT IT IS EXCUSING. docs/DEFECTS.md E-87.",
     "",
-    "WHAT WENT GREEN, measured, and is therefore deleted from this list:",
-    "  E-61  the no-rake gate: no RAKE TAKEN line on any of the 24 shots. The archived-hand",
-    "        read is correct on real canister output.",
-    "  E-63  the action dock occlusion: 'pixel gate: 25 money/equity/card figures on screen,",
-    "        25 with something overlapping them, 81 pairs pixel-tested, 0 occluded' on",
-    "        table-allin/mobile, the exact shot that carried it. FIXED ON PIXELS.",
-    "  E-64  the unasserted committed-stake readout: '0 unaccounted for' in the token census",
-    "        on every table scene, both viewports. FIXED ON PIXELS.",
+    "Until this wave an acknowledgement was granted per (scene, viewport). So once a shot was",
+    "red for ANY reason, every LATER failure on the same shot joined the same `problems` array",
+    "and was excused by an entry that had never been about it. That is exactly what happened:",
+    "tools/shots/lib/table-in-frame.mjs landed in wave 12 and its first real conviction -- the",
+    "Leave-table control rendering 6-7 px outside a 1440 px frame, which a player cannot reach",
+    "or scroll to (E-85) -- appeared on table-preflop/desktop and table-facing-bet/desktop.",
+    "Both were already acknowledged under E-76 for a felt shortfall of 0.2 points, and",
+    "`dev.sh shots-verdict` stayed green over a control nobody can press.",
     "",
-    "The reds below are what the sweep actually found. Three of them are NEW, because this is",
-    "the first sweep in three waves that could reach a table scene at all."
+    "So `covers` lists the substrings of the recorded problems each entry accounts for. Every",
+    "recorded problem must match one of them, and every cover must still match a recorded",
+    "problem -- rule 2 at the level of the problem, so a cover that stops applying fails the",
+    "way a stale acknowledgement does. `defect` may be an array when a shot carries more than",
+    "one distinct failure.",
+    "",
+    "WHAT WENT GREEN THIS SWEEP, measured, and is therefore deleted from this list:",
+    "  E-75  table-sidepots/mobile: the pod clock over the stack figure. 'pixel gate: 26",
+    "        figures on screen, 0 occluded' on the shot that carried it. FIXED ON PIXELS.",
+    "  E-86  deposit/desktop and deposit/mobile: both were red in the 134550e sweep with",
+    "        'DEPOSIT CHAIN DISAGREEMENT ... screen is 1.500x the chain' on a screen where",
+    "        every figure was correct. The GATE was wrong, not the screen; it read the",
+    "        notice's numbers positionally and the copy had grown a fourth. Both green."
   ],
-  "recorded_run": "artifacts/screens/latest/verdicts.json (sweep at 4ba4883, dirty, 2026-08-07T01:39Z, wave-11 reconciliation) -- 24 shots, 14 verified, 10 red. The previous line named the sweep at 150a46b; the reds are the same ten and the same four defect ids. This sweep was only possible after docs/DEFECTS.md E-74 was diagnosed: the lobby was empty, so the first attempt failed all 24 scenes with \"Lobby has no registered name for table_N\" and measured nothing.",
+  "recorded_run": "artifacts/screens/latest/verdicts.json (sweep at 134550e, dirty, 2026-08-08T00:44Z, wave-12 reconciliation) -- 24 shots, 15 verified, 9 red. The tree is dirty because the wave's changes are not committed yet; the deposit-screen custody correction and the label-anchored deposit check are both in this sweep. 5 of 5 protected notices measured on rendered pixels on ALL 24 shots, at both viewports, behind every modal, and under a real error toast raised by the app's own error path.",
   "reds": [
     {
       "scene": "lobby",
       "viewport": "desktop",
       "defect": "E-65",
-      "note": "LOBBY CHAIN DISAGREEMENT: every lobby row's NAME quotes 0.01/0.02 while the table canisters run 0.05/0.10 (table_2) and 0.10/0.20 (table_3), so a player picking '9-Max - 0.01/0.02' sits at TEN TIMES the advertised stake. The token-census failure on the same shot is the same two figures repeated in the join nudge. OPEN: init_microstakes_tables hardcodes small_blind 1_000_000 for all three tables and never reads the table's own config."
+      "covers": [
+        "LOBBY CHAIN DISAGREEMENT"
+      ],
+      "note": "every lobby row's NAME quotes 0.01/0.02 while the table canisters run 0.05/0.10 (table_2) and 0.10/0.20 (table_3), so a player picking '9-Max - 0.01/0.02' sits at TEN TIMES the advertised stake. OPEN: init_microstakes_tables hardcodes small_blind 1_000_000 for all three tables and never reads the table's own config."
     },
     {
       "scene": "lobby",
       "viewport": "mobile",
       "defect": "E-65",
-      "note": "the same two disagreements at 390x844."
+      "covers": [
+        "LOBBY CHAIN DISAGREEMENT"
+      ],
+      "note": "the same disagreement at 390x844."
     },
     {
       "scene": "toast-notices",
       "viewport": "desktop",
       "defect": "E-65",
+      "covers": [
+        "LOBBY CHAIN DISAGREEMENT"
+      ],
       "note": "the same lobby rows, under a real error toast raised by the app's own error path. The notices themselves are GREEN on this shot: 5/5 on screen and unoccluded under the toast."
     },
     {
       "scene": "toast-notices",
       "viewport": "mobile",
       "defect": "E-65",
+      "covers": [
+        "LOBBY CHAIN DISAGREEMENT"
+      ],
       "note": "as above at 390x844. Notices 5/5 under the toast."
     },
     {
       "scene": "table-preflop",
       "viewport": "desktop",
-      "defect": "E-76",
-      "note": "FELT: 27.8% of the 1440x900 frame (870x414.3), floor 28%. Marginal by 0.2 points and real. NEW this sweep."
+      "defect": ["E-76", "E-85"],
+      "covers": [
+        "the playing surface is 27.8% of the 1440x900 frame",
+        "a dock button is NOT fully inside the 1440x900 frame"
+      ],
+      "note": "TWO distinct failures, and until wave 12 only the first was written down. E-76: felt at 27.8% against a 28% floor, marginal by 0.2 points and real. E-85: the Leave-table control renders at x=1396 with its right edge at 1446 in a 1440 px frame, documentElement.scrollWidth 1440 and body overflow-x hidden, so its tail is off screen and cannot be scrolled to. Found by lib/table-in-frame.mjs; invisible to occlusion.mjs, which compares elements against each other and never against the frame."
     },
     {
       "scene": "table-facing-bet",
       "viewport": "desktop",
-      "defect": "E-76",
-      "note": "FELT: 27.8% of the 1440x900 frame, floor 28%. Same layout, same cause. NEW this sweep."
+      "defect": ["E-76", "E-85"],
+      "covers": [
+        "the playing surface is 27.8% of the 1440x900 frame",
+        "a dock button is NOT fully inside the 1440x900 frame"
+      ],
+      "note": "same two failures, same layout, same cause. The dock button is at x=1396, right edge 1447.2."
     },
     {
       "scene": "table-allin",
       "viewport": "mobile",
       "defect": "E-76",
-      "note": "FELT: 42.8% of the 390x844 frame (279.5x503.6), floor 45%, in the ring-crowded 9-pod layout. NEW this sweep. NOTE: this shot's OCCLUSION gate is now GREEN -- it is the shot that carried E-63, and 81 pixel pairs came back 0 occluded."
-    },
-    {
-      "scene": "table-sidepots",
-      "viewport": "mobile",
-      "defect": "E-75",
-      "note": "OCCLUSION FAILED: 9.8% of \"50.00\" (span.chips) painted over by span.pod-clock. NEW this sweep: same class as E-63, different pair of elements -- the action clock badge inside a player pod, over that pod's own stack figure."
+      "covers": [
+        "the playing surface is 42.9% of the 390x844 frame"
+      ],
+      "note": "FELT: 42.9% of the 390x844 frame (280x504.5), floor 45%, in the ring-crowded 9-pod layout. docs/DESIGN-BAR.md 11.3 shows this is at its GEOMETRIC ceiling minus the dock: the 9-max felt is width-capped at 78cqw = 304.2 px, so no vertical budget can move it and the honest options are to take furniture out of the dock or to set the floor per ring density. The occlusion gate on this shot is green (81 pixel pairs, 0 occluded)."
     },
     {
       "scene": "handhistory",
       "viewport": "desktop",
       "defect": "E-71",
-      "note": "HISTORY CHAIN DISAGREEMENT: 'hand 1: the TABLE canister paid 2400000000 e8s but the HISTORY canister recorded 5010000000 e8s paid'. Both numbers are true of A hand 1 and they are not the same hand 1: hand_number restarts at 1 on every table reset and the archive has no uniqueness on (table_id, hand_number). NEW this sweep. The E-61 rake red that used to be filed on this scene is GONE."
+      "covers": [
+        "HISTORY CHAIN DISAGREEMENT"
+      ],
+      "note": "'hand 1: the TABLE canister paid 2400000000 e8s but the HISTORY canister recorded 20000000 e8s paid'. Both numbers are true of A hand 1 and they are not the same hand 1: hand_number restarts at 1 on every table reset and the archive has no uniqueness on (table_id, hand_number)."
     },
     {
       "scene": "handhistory",
       "viewport": "mobile",
       "defect": "E-71",
+      "covers": [
+        "HISTORY CHAIN DISAGREEMENT"
+      ],
       "note": "the same disagreement at 390x844."
     }
   ]

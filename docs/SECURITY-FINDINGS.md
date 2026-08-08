@@ -3,6 +3,34 @@
 Findings that touch real user funds. Each entry states what was actually executed, so a
 reader can tell a demonstrated defect from a suspected one.
 
+> ## 🚨 WAVE 12 RECONCILIATION, 2026-08-07 — THE WORST CASE IS THEFT, AND THE DISCLOSURE SAID OTHERWISE
+>
+> **[FINDING 23c](#finding-23): a controller can pay this canister's entire ledger balance into
+> their own wallet, and for one wave every surface of this product said they could not.** The
+> deposit screen promised the money was "unreachable by anybody, including the operator"; the
+> README's decision table answered "Can the operator take the ICP out of the canister to their
+> own wallet?" with the single word **No**. Both rested on "there is no method that pays a
+> controller", which is true of ClearDeck's code and irrelevant to a controller, because a
+> controller replaces the code. **Executed: 39.99990000 ICP moved into a wallet the operator
+> owns, with one `install_code --mode reinstall` of a 500-byte module that is not ClearDeck** —
+> the same verb, the same privilege and the same single command as the wipe this finding is
+> already about. Graded `fund-theft` as [D-14](DEFECTS.md#d-14).
+>
+> **A disclosure that is wrong in the operator's favour is worse than no disclosure**, because a
+> player who reads it deposits with a false floor under them. Every presence check in the
+> hygiene gate was GREEN while the paragraph lied — the false sentence was *additional*
+> reassurance beside true ones — so the retraction is held by an INVERTED gate instead.
+>
+> **The eighth cross-agent defect is [E-86](DEFECTS.md#e-86), and it has the signature exactly:
+> correct totals, wrong recipients, every invariant silent.** The deposit modal's chain check
+> read four money figures off the screen positionally, the copy grew a fourth figure, and each
+> correct figure was then compared against the wrong chain quantity. The sweep reported
+> "DEPOSIT CHAIN DISAGREEMENT … screen is 1.500x the chain" on a screen where **every number was
+> right**, while the one genuinely new figure was asserted by nothing at all.
+>
+> Full accounting, every gate's result, and what the lead must do differently now that a guardian
+> canister exists: **[WAVE-10.md](WAVE-10.md)**.
+
 > ## 🚨 WAVE 11 RECONCILIATION, 2026-08-06 — THE SEVENTH CROSS-AGENT DEFECT, AND THE TWO THINGS THE FIFTH AUDITOR SAYS COST MONEY
 >
 > Four agents edited `src/table_canister/src/lib.rs` this wave. All four changes are present,
@@ -89,6 +117,10 @@ reader can tell a demonstrated defect from a suspected one.
 > ### Five findings have no DEFECTS.md id and are scheduled from [THE FINDINGS](#the-findings)
 >
 > 22, 23, 31, 32, 38. [FINDING 23](#finding-23) is `critical` and has been open since wave 7.
+>
+> **Wave 12 closed that for 23 specifically: it is now [E-84](DEFECTS.md#e-84).** Four remain
+> (22, 31, 32, 38), and the diagnosis in this box was right — FINDING 23 sat unscheduled from
+> wave 7 to wave 12 while being the worst thing in either file, and having no id is how.
 
 > ## 🚨 STATUS, WAVE 11, 2026-08-06: THE OLDEST CLUSTER IS TRUE AGAIN — FIVE WERE ALREADY DEAD AND SAID OTHERWISE
 >
@@ -368,11 +400,11 @@ reader can tell a demonstrated defect from a suspected one.
 **The single prioritised queue for all of this is [docs/DEFECTS.md](DEFECTS.md)**, which
 reconciles these findings with the harness and tooling defects found alongside them and gives most
 of them an id, a severity and a reproduce command. This file is the evidence; that file is the
-order of work. **Five findings have no DEFECTS.md id** — 22, 23, 31, 32 and 38 — and they are marked
+order of work. **Four findings have no DEFECTS.md id** — 22, 31, 32 and 38 — and they are marked
 `—` in the table below. That is not an oversight to tidy up later: it is exactly how
-[FINDING 23](#finding-23), the only item in either file graded `critical, unguarded by design`,
-sat unscheduled from wave 7 to now. **THE FINDINGS below is a queue in its own right and those
-rows are scheduled from it.**
+[FINDING 23](#finding-23), the item graded `fund-theft, unguarded by design`, sat unscheduled from
+wave 7 to wave 12. It is [E-84](DEFECTS.md#e-84) now, which is the first thing wave 12 did about
+it. **THE FINDINGS below is a queue in its own right and those rows are scheduled from it.**
 
 ## How to read this file
 
@@ -402,12 +434,12 @@ column.
 | finding | sev | status | wave | gate — what would catch it coming back | DEFECTS.md | one line |
 |---|---|---|---|---|---|---|
 | [FINDING 39](#finding-39) | high | OPEN | — | — | [E-41](DEFECTS.md#e-41) | **the canister owes 4,000,000 e8s it does not hold**, after a hostile sequence, on the exact wasm `./scripts/dev.sh test` builds. Filed as [E-41](DEFECTS.md#e-41) in wave 4 with no findings write-up and never re-run since; re-driven 2026-08-06 and it is twice the size the entry records. M1 CONSERVATION and M2 LEDGER REALITY, which are never excusable |
-| [FINDING 23](#finding-23) | fund-theft | OPEN | — | — | — | `uninstall_code` and `install_code --mode reinstall` are FINDING 07 at full scale and the wave-7 audit does not cover them. **Filed wave 7, untouched since. Raised from `critical` to `fund-theft` in wave 11: the fifth auditor EXECUTED it** — 5 ICP deposited as a player, one `icp canister install --mode reinstall` with the same wasm and no code change, and her balance read 0 while the ledger still held her 5 ICP at the canister's account. Every player-callable recovery told her she had nothing. No DEFECTS.md id; it is scheduled from this table |
+| [FINDING 23](#finding-23) | fund-theft | OPEN | — | — | [E-84](DEFECTS.md#e-84) | `uninstall_code` and `install_code --mode reinstall` are FINDING 07 at full scale and the wave-7 audit does not cover them. **The fifth auditor EXECUTED it** — 5 ICP deposited as a player, one `icp canister install --mode reinstall` with the same wasm and no code change, and her balance read 0 while the ledger still held her 5 ICP at the canister's account. **Wave 12: reproduced at 40.00000000 ICP by `./scripts/dev.sh custody`, given the DEFECTS.md id it never had ([E-84](DEFECTS.md#e-84)), disclosed in the README and on the deposit screen ([D-13](DEFECTS.md#d-13)), and mitigated by `src/guardian_canister/` — which is BUILT AND GATED BUT NOT DEPLOYED, so mainnet is unchanged and this stays OPEN.** The gate column stays `—` on purpose: the tests measure the defect, they do not stop it. **WAVE 12, AFTER THE DISCLOSURE LANDED: THE WORST CASE IS THEFT, NOT DESTRUCTION.** The disclosure told a depositor the operator could not pay the money to themselves. A controller is not bound to the ClearDeck wasm: a 500-byte module installed with the SAME verb as the wipe moved **39.99990000 ICP** of player deposits into a wallet the operator owns ([FINDING 23c](#finding-23), `finding23c_*`, [D-14](DEFECTS.md#d-14)) |
 | [FINDING 19](#finding-19) | high | OPEN | — | — | [E-54](DEFECTS.md#e-54), [E-55](DEFECTS.md#e-55) | **the clock half is FIXED (wave 7, gated by `timers`); the cycles half is OPEN and the fix made it worse.** Nothing on chain moved the game, so liveness was outsourced to whoever had a browser tab open. The on-chain clock closed that and raised idle burn ~630x, and **nothing tops a canister up**. Open until [FINDING 24](#finding-24) and [FINDING 26](#finding-26) are |
 | [FINDING 22](#finding-22) | high | FIXED | 11 | `dev.sh test` -> `oldest_cluster` -> `finding22_the_recovery_door_refuses_a_hand_that_can_still_be_played` + `finding22_a_hand_a_controller_does_end_is_closed_and_permanently_marked`; `dev.sh test` -> `admin_custody::admin_reinit_table_mid_hand_returns_the_pot_to_the_players_who_put_it_in` + `admin_custody::a_controller_ending_a_hand_pays_a_vacated_seats_stake_to_its_owner_not_its_new_occupant` (added in the wave-11 reconciliation: the chair-changed-hands seam, asserted PER PRINCIPAL) | [E-78](DEFECTS.md#e-78) | the FINDING 07 fix gave a controller a new power: **void any live hand after reading every hole card**, conserving to the e8 so no invariant could see it. Reproduced on this tree, then narrowed: the door refuses unless nothing can move the hand, closes it through the permissionless `settle_unmovable_hand`, and marks every credit `pot_type="refund:ended-by-controller"` in the permanent record |
 | [FINDING 24](#finding-24) | high | OPEN | — | — | [E-55](DEFECTS.md#e-55) | a frozen table answers **nothing**, not "queries only": the mitigation this project documented in four places does not exist, and the freezing reserve is about one hour, not 30 days |
 | [FINDING 26](#finding-26) | high | OPEN | — | — | [E-55](DEFECTS.md#e-55) | the 226-day runway assumes nobody is hostile: a free, permissionless ingress flood burns a table 65x faster, collapsing it to about three days |
-| [FINDING 31](#finding-31) | critical | OPEN | — | — | — | **FINDING 27 is only half closed.** A deposit of exactly the advertised minimum, made to the address the canister publishes, is still unwithdrawable: the sweep fee comes out of the money, so 20,000 sent becomes 10,000 in escrow and `withdraw` refuses it. Not one of `deposit_floor.rs`'s six tests sends anything to a deposit subaccount. **Raised from `high` to `critical` in wave 11: the fifth auditor re-derived it independently and it is a silent 100% loss at the number the product prints.** The dead band for the external route is `(10_000, 20_000]` e8s and the advertised minimum is the TOP of it — the largest fully unrecoverable deposit is exactly the number on the screen, while the in-app approve route at the identical number is safe. No DEFECTS.md id; it is scheduled from this table |
+| [FINDING 31](#finding-31) | critical | OPEN | — | — | — | **FINDING 27 is only half closed.** A deposit of exactly the advertised minimum, made to the address the canister publishes, is still unwithdrawable: the sweep fee comes out of the money, so 20,000 sent becomes 10,000 in escrow and `withdraw` refuses it. Not one of `deposit_floor.rs`'s six tests sends anything to a deposit subaccount. **Raised from `high` to `critical` in wave 11: the fifth auditor re-derived it independently and it is a silent 100% loss at the number the product prints.** The dead band for the external route is `(10_000, 20_000]` e8s and the advertised minimum is the TOP of it — the largest fully unrecoverable deposit is exactly the number on the screen, while the in-app approve route at the identical number is safe. **WAVE 12: THE FUZZER NOW CONVICTS IT.** `./scripts/dev.sh fuzz-default` is RED at seed `0xc1ea2dec0002`, twice, byte for byte: two players each send 10,001 e8s to their own published deposit address and 20,002 e8s ends up unreachable, with the drain transcript printing `sweepable=true` beside each one. Five-op minimal reproducer, filed as [E-89](DEFECTS.md#e-89). This is the gate this finding never had, and it is why `./scripts/dev.sh test` is red on `main` |
 | [FINDING 32](#finding-32) | high | OPEN | — | — | — | the screenshot harness's NO-RAKE gate cannot go red on any rake this canister is capable of taking. [E-61](DEFECTS.md#e-61) fixed the `rake=NaN` half and `test-rake.mjs` now proves the gate goes red on a 1-e8 rake read from `get_hand`; **the second clause was not re-examined in the wave-11 pass** and this finding's own "what would close it" — drive a rake-taking canister end to end — is still undone. No DEFECTS.md id; it is scheduled from this table |
 | [FINDING 38](#finding-38) | high | OPEN | — | — | — | `get_solvency()` counts an open `pull` on BOTH sides on the strength of the reading not yet containing the money, and wave 10 shipped a public button that makes the reading contain it: **one anonymous `refresh_solvency()` turns a real shortfall into a published SURPLUS.** Newest finding, wave-10 critic. No DEFECTS.md id; it is scheduled from this table |
 | [FINDING 04](#finding-04) | low | OPEN | — | — | [E-13](DEFECTS.md#e-13) | `detect_straight` prefers the wheel over a higher straight. Latent: unreachable today, a trap for the obvious optimisation. Watched by `dev.sh known-defects` |
@@ -1427,7 +1459,249 @@ left mid-hand with cards on the board and every stack at zero; `reload` refuses 
 during a hand") until the zombie hand finishes.
 
 <a id="finding-23"></a>
-## FINDING 23 (critical, unguarded by design) -- `uninstall_code` and `install_code --mode reinstall` are FINDING 07 at full scale, and the wave-7 audit does not cover them — STATUS: OPEN
+## FINDING 23 (fund-theft, unguarded by design) -- `uninstall_code` and `install_code --mode reinstall` are FINDING 07 at full scale, and the wave-7 audit does not cover them — STATUS: OPEN
+
+> # FINDING 23c — THE WORST CASE IS THEFT, AND IT PAYS THE OPERATOR
+>
+> **Read this before anything else in this entry, and before any deposit.** For one wave this
+> finding, the README's decision table and the notice on the deposit screen all said the same
+> thing: a controller can DESTROY a player's balance but cannot take it, because "there is no
+> method that pays a controller". **That is a true statement about ClearDeck's code and an
+> irrelevant one about a controller, because a controller replaces the code.** `install_code`
+> installs whatever module it is handed, and the canister's ledger account is spendable by
+> whatever is then running in it. The money never had to pass through a ClearDeck method.
+>
+> Executed on the local replica with the SAME verb as the wipe below
+> (`tests/money_safety/tests/controller_custody.rs`,
+> `finding23c_the_operator_can_pay_the_ledger_balance_to_themselves`, run by
+> `./scripts/dev.sh custody` and by `./scripts/dev.sh test`):
+>
+> ```text
+> --- FINDING 23c: the operator does not have to destroy it. They can TAKE it ---
+> BEFORE   ledger_at_canister=4000000000  escrow=2600000000  chips=1400000000
+>          operator_wallet=1000000000000
+> thief module sha256=4c3be308… (508924 bytes, NOT ClearDeck)
+> reinstall_canister(controller, thief_module) -> Ok
+> steal(3999990000) -> icrc1_transfer accepted
+> AFTER    ledger_at_canister=0  operator_wallet=1003999990000
+> MOVED    3999990000 e8s = 39.99990000 ICP of player deposits into a wallet the operator owns
+> ```
+>
+> `tests/thief_canister` is that module. A real attacker would use `--mode upgrade`, which
+> preserves state, so every player's balance would keep reading normally until the transfer
+> cleared; `reinstall` is used here only because it makes the ledger arithmetic unambiguous.
+>
+> **The guardian does not close this either, and §5 already said why without saying what it
+> meant.** The guardian removes `reinstall`, `uninstall`, `update_settings`, `delete_canister`,
+> the snapshot verbs and `stop`. It keeps a state-preserving **upgrade** path, behind a public
+> queue and 72 hours. New code is still new code, and new code can `icrc1_transfer` the ledger
+> balance as easily as it can zero a balance in `post_upgrade`. **What the guardian buys against
+> theft is 72 hours of public notice, not impossibility** — that is a real and large difference,
+> and it is not the same claim.
+>
+> Filed as [D-14](DEFECTS.md#d-14), graded `fund-theft`, and held by an INVERTED hygiene gate
+> (`the retracted custody claim has not come back`) because every presence check in
+> [D-13](DEFECTS.md#d-13)'s gate was green while the paragraph lied.
+
+> ## WAVE 12: REPRODUCED, MEASURED, DISCLOSED, AND MITIGATED BY SOMETHING THAT IS NOT DEPLOYED
+>
+> **Nothing below has changed for a real deposit.** Mainnet still has one key on the controller
+> seat of every fund-holding canister and that key can still do exactly what the fifth auditor
+> did. This entry stays `OPEN` and its gate column stays `—`, because a test that MEASURES a
+> defect is not a gate that STOPS it. What changed is that it is now countable
+> ([E-84](DEFECTS.md#e-84) — the id it never had, which is why it sat unscheduled from wave 7),
+> it is now disclosed ([D-13](DEFECTS.md#d-13), corrected by [D-14](DEFECTS.md#d-14)), and the
+> mitigation exists and has been driven.
+>
+> ### 1. The wipe, reproduced, on the real wasm and the real ICP ledger
+>
+> `tests/money_safety/tests/controller_custody.rs`, run by `./scripts/dev.sh custody` and by
+> `./scripts/dev.sh test`. Two players, 20 ICP each, seated:
+>
+> ```text
+> --- FINDING 23: install_code --mode reinstall, same wasm, no code change ---
+> wasm under test  sha256=cc47b16f91b343c992ddb44cb13d2c993969cf2dbc99ca7c5579f23eb46184ca
+> BEFORE   ledger_at_canister=4000000000  escrow=2600000000  chips=1400000000
+>          alice escrow=1300000000  bob escrow=1300000000
+> reinstall_canister(controller) -> Ok
+> AFTER    ledger_at_canister=4000000000  (unchanged: the ICP is still there)
+>          alice escrow=0   withdraw(5 ICP) -> Err("Insufficient balance. Have: 0.0000 ICP, requested: 5.0000 ICP")
+>          bob   escrow=0   withdraw(5 ICP) -> Err("Insufficient balance. Have: 0.0000 ICP, requested: 5.0000 ICP")
+> DESTROYED 4000000000 e8s = 40.00000000 ICP of player claims, with the ledger untouched
+>
+> --- FINDING 23: uninstall_code on a funded table ---
+> uninstall_canister(controller) -> Ok
+> AFTER    ledger_at_canister=4000000000  module_hash=None
+>          get_balance() as a player -> REJECTED ... the canister contains no Wasm module
+> STRANDED 4000000000 e8s = 40.00000000 ICP, at an address whose canister has no code
+> ```
+>
+> Both tests are written to **PASS while the defect is live**. That is deliberate: this entry
+> spent four waves as prose, and prose is what gets forgotten. If either ever fails, the defect
+> has been closed by some other route and the test must be rewritten to assert the new behaviour
+> — not deleted.
+>
+> ### 2. THE PREMISE OF THE FIX, MEASURED BEFORE ANYTHING WAS BUILT ON IT
+>
+> The proposal was a GUARDIAN CANISTER holding the controller seat and exposing an upgrade path
+> and no reinstall or uninstall path. That rests on one claim about the IC, and a fix built on an
+> unverified premise is worth less than no fix. **Controllership is NOT transitive.** With the
+> table's controllers set to `[guardian]`, every destructive verb submitted as a raw ingress
+> message to `aaaaa-aa` by the principal who controls the GUARDIAN:
+>
+> ```text
+>   as the OPERATOR (controller of the guardian, NOT of the table):
+>     install_code --mode reinstall              -> REJECTED CanisterInvalidController
+>     install_code --mode upgrade                -> REJECTED CanisterInvalidController
+>     upload_chunk (step 1 of a chunked install) -> REJECTED CanisterInvalidController
+>     uninstall_code                             -> REJECTED CanisterInvalidController
+>     update_settings(controllers=[operator])    -> REJECTED CanisterInvalidController
+>     stop_canister                              -> REJECTED CanisterInvalidController
+>     delete_canister                            -> REJECTED CanisterInvalidController
+>     take_canister_snapshot                     -> REJECTED CanisterInvalidController
+>     canister_status                            -> REJECTED CanisterInvalidController
+>   BOOKS AFTER  ledger_at_canister=4000000000  alice=1300000000   (unchanged: true)
+> ```
+>
+> Raw management calls, not PocketIC's convenience wrappers, because that is what
+> `icp canister install --mode reinstall` submits — and because
+> `PocketIc::reinstall_canister` silently switches to a chunked install for a module this size and
+> `unwrap()`s, so a REJECTION would have arrived as a harness panic instead of a result.
+>
+> **And the half that is bad news, measured too.** The guardian's own controller CAN replace the
+> guardian's code, so a guardian the operator controls is a TWO-command wipe rather than a fix.
+> The arrangement that closes it is `controllers = [guardian]` — the guardian controls itself:
+>
+> ```text
+>   operator reinstalls the GUARDIAN            -> Ok      <-- as created. worthless.
+>   ... after set_controllers(guardian, [guardian]) ...
+>     install_code --mode reinstall (guardian)   -> REJECTED CanisterInvalidController
+>     install_code --mode upgrade (guardian)     -> REJECTED CanisterInvalidController
+>     uninstall_code (guardian)                  -> REJECTED CanisterInvalidController
+>     update_settings(controllers=[operator])    -> REJECTED CanisterInvalidController
+> ```
+>
+> ### 3. A NEGATIVE RESULT THAT COST A REDESIGN: a canister cannot AWAIT its own upgrade
+>
+> The guardian's escape from its own bugs is `UpgradeSelf`. Written the obvious way —
+> `install_chunked_code(target = self).await` — it does not work and does not fail cleanly:
+>
+> ```text
+>   execute() at the SELF notice period ->
+>     Err("Canister called `ic0.trap` with message: 'Panicked at 'internal error: entered
+>     unreachable code: CallFutureState for in-flight calls should only be Executing or Trapped
+>     (callback)', ic-cdk-0.19.0/src/call.rs:984' ... call_on_cleanup also failed ...")
+>   guardian module_hash after = UNCHANGED
+> ```
+>
+> The upgrade replaces the module and with it the callback table the awaiting future lives in, so
+> the reply has nowhere to land, ic-cdk traps in its own callback, and the trap rolls the message
+> back. The fix is a ONE-WAY call: no callback registered, nothing for the upgrade to destroy.
+> `execute` therefore leaves an `UpgradeSelf` in `Executing`, and only `post_upgrade` — which runs
+> if and only if the new module really booted — marks it `Executed`. A one-hour
+> `EXECUTING_GRACE_SECS` un-wedges a self-upgrade the management canister refused.
+>
+> **The first version of the test could not see any of this.** It proposed the guardian's own
+> module and asserted the installed hash equalled the module it had proposed, which is true when
+> NOTHING HAPPENS. It printed the trap and reported `ok`. It now upgrades to a deliberately
+> different binary (`guardian_variant_module()`, `max_pending` 32 -> 31) and requires the module
+> hash to CHANGE, the behaviour on the wire to change with it, the operator and a pending proposal
+> to survive, and the proposal to reach `Executed`.
+>
+> ### 4. AND THE SAME BLINDNESS, FOUND AGAIN, IN THE GATE ITSELF
+>
+> `guardian_holds_the_seat_...` asks the guardian for fourteen destructive method names. Adding
+> ONE plausible method to the guardian — `emergency_reinstall(target, wasm_module_hash,
+> chunk_hashes, arg)` forwarding `install_chunked_code` with `mode = Reinstall`, i.e. the wipe
+> with a friendly name — left that test **green**. Only the census (which checks NAMES against a
+> classified list) went red, and a census is satisfied by the next author adding their method to
+> the allow-list.
+>
+> A wasm string scan does not help and that was measured too: the clean guardian's binary already
+> contains `uninstall_code`, `delete_canister` and `update_settings`, because `REFUSED_OPERATIONS`
+> publishes exactly those words.
+>
+> So `guardian_sweep_no_method_on_the_wire_can_touch_a_funded_table` parses the committed
+> `guardian_canister.did`, synthesises arguments for EVERY update method from the declared types —
+> filled with the real table principal, the real module hash, the real chunk hashes and a real
+> `TableConfig` — and after every single call requires that both players' escrow, the chips, the
+> ledger balance and the table's installed module hash are unchanged. Getting there took two more
+> rounds of the same lesson, both worth recording because both read GREEN:
+>
+> * the sweep drove methods in the .did's order, so `clear_chunk_store` emptied the chunk store
+>   before `emergency_reinstall` ran and the hostile call had nothing to install. The sweep now
+>   re-arms the materials before every call.
+> * one filling for all blob slots meant `wasm_module_hash` and `arg` always got the same bytes,
+>   so every attempt was rejected for the WRONG reason — bad hash, or an install argument the
+>   table's `canister_init` trapped on ("binary parser error: Unexpected bytes at byte offset 0").
+>   **The wipe was one valid argument away and the gate called it safe.** The sweep now drives the
+>   cross-product of fillings across blob slots.
+>
+> With that, the mutation is caught behaviourally and by name:
+>
+> ```text
+> assertion failed: guardian method `emergency_reinstall` (arm 0, blob = module hash + a valid
+> TableConfig install arg) CHANGED player escrow: [1300000000, 1300000000] -> [0, 0].
+> ```
+>
+> ### 5. WHAT THE GUARDIAN WOULD AND WOULD NOT PREVENT — the honest list
+>
+> **Would prevent, absolutely, while it holds the seat:** `install_code` in `reinstall` or
+> `install` mode, `uninstall_code`, `delete_canister`, `update_settings` (so the controller list
+> is frozen and nobody can be added back), `load_canister_snapshot` (a rollback that un-does a
+> withdrawal), `stop_canister` (a withdrawal freeze). None of those seven verbs exists on its
+> interface. It also removes the operator key's reach into every `require_controller()` method on
+> the table, including `reset_table` and `admin_reinit_table` — [FINDING 07](#finding-07)'s own
+> doors.
+>
+> **Would NOT prevent:**
+>
+> * **A malicious upgrade.** `--mode upgrade` preserves state, but new code can zero a balance in
+>   `post_upgrade`. The guardian does not make the operator honest. It converts *one key, one
+>   command, instant, silent, total* into *one key, a public unauthenticated proposal, 72 hours,
+>   then total* (7 days to replace the guardian or the operator key). A player who is watching
+>   gets three days to withdraw; a player who is not watching gets nothing from it. **State this
+>   way round in any summary, or it becomes the next overclaim.**
+> * **Cycle exhaustion.** A canister that reaches zero cycles is uninstalled by the protocol,
+>   which destroys exactly what `uninstall_code` destroys. No controller arrangement binds that.
+>   `deposit_cycles` is permissionless, so anybody can top up; the freezing threshold is the real
+>   defence and must be set high BEFORE the handover, because afterwards nobody can change it.
+>   See [E-55](DEFECTS.md#e-55), [FINDING 24](#finding-24).
+> * **The NNS**, which chooses subnet replica software.
+> * **The 61 open register entries in the table canister itself.**
+>
+> **And what it costs.** After the handover the operator's key reaches NO `require_controller()`
+> method on the table — including the AUDIT ones, `admin_get_all_balances`,
+> `admin_get_deposit_custody` and `admin_audit_deposit_custody`, which are the surface
+> [FINDING 21](#finding-21) and [FINDING 28](#finding-28) exist to have. The guardian exposes no
+> passthrough deliberately: a passthrough that could carry `admin_get_all_balances` could carry
+> `admin_reinit_table`. Measured, together with the fact that no PLAYER path is affected:
+>
+> ```text
+>   controller-gated methods, called with the OPERATOR key after the handover:
+>     reset_table                  -> Err("Unauthorized: controller access required")
+>     admin_reinit_table           -> Err("Unauthorized: controller access required")
+>     admin_get_all_balances       -> Err("Unauthorized: controller access required")
+>     admin_get_deposit_custody    -> Err("Unauthorized: controller access required")
+>     admin_get_table_chips        -> Err("Unauthorized: controller access required")
+>   the player's own path to their money, same moment:
+>     get_balance(alice)             -> 1300000000
+>     get_custody_status(alice)      -> escrow=1300000000 chips=700000000 total=2000000000
+>     refresh_deposit_custody(alice) -> true
+>     withdraw(alice, 5 ICP)         -> Ok(8)
+> ```
+>
+> A **bricked guardian is a loss of FIXABILITY, not of FUNDS**: the tables keep running and
+> players keep withdrawing, because none of that goes through the guardian.
+>
+> ### 6. WHAT WOULD ACTUALLY CLOSE THIS
+>
+> A mainnet operation this tree is forbidden from performing, in this order:
+> set a long freezing threshold on every fund-holding canister and on the guardian **first**
+> (after the handover nobody can ever change settings again) — deploy the guardian — for each
+> fund-holding canister, `update_settings controllers = [guardian]` — finally
+> `update_settings` the guardian to `controllers = [guardian]`. The last step is irreversible by
+> construction. Until it happens, this finding is exactly as open as it was in wave 7.
 
 **Severity:** CRITICAL. Controller-only, irreversible, 100% of the canister's funds.
 **Status:** OPEN. The reinstall half is acknowledged in the wave-7 handover; the `uninstall_code`

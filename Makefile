@@ -10,9 +10,10 @@
 DEV := ./scripts/dev.sh
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor local-up local-status wasm test fuzz fuzz-default diff-full \
-        diff-full-sevens settlement settlement-fast shots shots-verdict \
-        shots-selftest known-defects hygiene selftest phe-venv check
+.PHONY: help doctor local-up local-status wasm test custody archive fuzz \
+        fuzz-default diff-full diff-full-sevens settlement settlement-fast \
+        shots shots-verdict shots-selftest known-defects hygiene selftest \
+        no-peeking phe-venv check
 
 help:            ## show this help
 	@$(DEV) help
@@ -30,6 +31,15 @@ wasm:            ## build table_canister.wasm and print its sha256
 
 test:            ## FAST gate: workspace + differential fast + money-safety fast. No replica needed.
 	@$(DEV) test
+
+custody:         ## THE CONTROLLER SEAT with the transcript (SECURITY-FINDINGS FINDING 23). In `test` too.
+	@$(DEV) custody
+
+archive:         ## the offline archive analyser's own 39 gates (DEFECTS H-50). No replica. In `test` too.
+	@$(DEV) archive
+
+no-peeking:      ## the sealed-dealer spike's own 36 tests (DEFECTS H-53). A spike; in `test` too.
+	@$(DEV) no-peeking
 
 fuzz-default:    ## the fuzzer with NO environment: its own default seeds and steps (DEFECTS H-28)
 	@$(DEV) fuzz-default

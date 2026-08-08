@@ -1,0 +1,40 @@
+[package]
+name = "guardian_canister"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "ClearDeck controller-of-controllers. Holds the controller seat on the fund-holding canisters and exposes ONLY state-preserving, timelocked operations, so the key that used to be able to zero a player's balance in one command can no longer do it at all, and can no longer do anything at all without public notice."
+
+# DELIBERATELY DETACHED from the root workspace, for the same two reasons
+# tests/money_safety is:
+#
+# 1. THE SIX DEPLOYED CANISTERS MUST KEEP BUILDING BYTE-REPRODUCIBLY. The root
+#    Cargo.lock is an input to `cargo build --locked` for lobby, history and the
+#    four tables; mainnet currently matches a reproducible build 6 of 6. A new
+#    workspace member rewrites that lockfile. An empty `[workspace]` table here
+#    means the root lockfile is not touched at all, so "the tree still builds the
+#    deployed modules byte for byte" needs no argument.
+# 2. Different owner. src/table_canister/** is owned by another agent; this crate
+#    must not require an edit to a shared manifest to exist.
+#
+# It therefore carries its own Cargo.lock and its own target/. Build it with
+# `./scripts/build-guardian.sh`, which is what the gate uses.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candid = "0.10"
+ic-cdk = "0.19"
+serde = { version = "1.0", features = ["derive"] }
+hex = "0.4"
+
+# Same shape as the fund-holding canisters: small, optimised, panic=abort is NOT
+# set because ic-cdk turns a Rust panic into a clean trap (message rollback),
+# which is exactly the failure mode this canister wants.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"

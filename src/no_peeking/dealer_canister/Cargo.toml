@@ -1,0 +1,23 @@
+[package]
+name = "dealer_canister"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "ClearDeck SEALED DEALER (spike). Holds the shuffle seed and the hole cards for a live hand so the fund-holding table canister never does. Installed with an EMPTY controller list, so no principal on earth can install_code, stop, snapshot or re-control it, and its interface has no method that hands a live hole card to anyone but the seat that holds it."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# THE SAME SHUFFLE THE LIVE ENGINE RUNS, by path, never vendored. If this dealer
+# shuffled with its own copy, docs/SHUFFLE-SPEC.md would stop describing the hands
+# it deals and the five independent reproductions of that document would stop
+# applying. Pulled in as a plain path dependency exactly the way
+# tests/money_safety does it.
+poker_core = { path = "../../poker_core" }
+dealer_types = { path = "../dealer_types" }
+candid = "0.10"
+ic-cdk = "0.19"
+serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"
+hex = "0.4"

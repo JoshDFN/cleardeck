@@ -56,7 +56,35 @@ function problemsOf(shot) {
     // ` || ` separates the failure clauses from each other and from the scene's
     // descriptive notes; the INDEX table renders the same string with ` // `.
     const clauses = notes.split(/\s+\|\|\s+|\s+\/\/\s+/).map((c) => c.trim()).filter(Boolean);
-    const failures = clauses.filter((c) => /FAILED|DISAGREE|RAKE TAKEN|STRUCTURAL|MISSING|COVERED/i.test(c));
+    // THE VOCABULARY IS PART OF THE GATE, AND IT WAS SHORT BY TWO WHOLE CHECKS.
+    //
+    // docs/DEFECTS.md E-88. When at least one clause matches, the rest are
+    // DROPPED, so a failure phrased in words this pattern does not know is not
+    // just unrecognised -- it is deleted from the tracked verdict and can never be
+    // acknowledged. Neither the felt-area floor ("below the 45% floor") nor
+    // `table-in-frame.mjs` ("is NOT fully inside the 1440x900 frame") used any of
+    // the original six words. They survived only because they happened to be the
+    // ONLY clauses on their shots, so the `clauses` fallback fired; the first shot
+    // to fail an occlusion check AND the felt floor would have recorded the
+    // occlusion and silently lost the felt. Every phrase a check can emit belongs
+    // here, and a new check must add its own.
+    const failures = clauses.filter((c) => new RegExp(
+        [
+            'FAILED', 'DISAGREE', 'RAKE TAKEN', 'STRUCTURAL', 'MISSING', 'COVERED',
+            'below the \\d',        // lib/felt-area.mjs, the playing-surface floor
+            'NOT fully inside',     // lib/table-in-frame.mjs, anything off frame
+            'OFF FRAME',
+            'no pot readout',       // lib/table-in-frame.mjs, an empty required set
+            'no seat ring',
+            'paint nothing',
+            // NOT `unaccounted for`: the token census prints "0 unaccounted for" in
+            // its HEALTHY note, so that phrase classifies a scene's descriptive
+            // clause as a failure and drags it into the tracked verdict. The census
+            // says `TOKEN CENSUS FAILED` when it actually fails, which `FAILED`
+            // already covers. A marker that matches a passing message is the same
+            // defect as a marker that misses a failing one, pointed the other way.
+        ].join('|'), 'i',
+    ).test(c));
     const kept = (failures.length ? failures : clauses).slice(0, MAX_PROBLEMS);
     return kept.map(clip);
 }

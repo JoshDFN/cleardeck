@@ -1,0 +1,11 @@
+[package]
+name = "dealer_types"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The sealed dealer's Candid wire types, in their own crate so the table can link them WITHOUT linking the dealer's canister exports. One definition, two canisters, no mirror to drift."
+
+[dependencies]
+poker_core = { path = "../../poker_core" }
+candid = "0.10"
+serde = { version = "1.0", features = ["derive"] }

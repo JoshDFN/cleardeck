@@ -37,6 +37,7 @@
 #                                             #  prefer editing the .did by hand)
 #   ./scripts/check-candid.sh --declarations  # also check src/declarations
 #   ./scripts/check-candid.sh --selftest      # prove the gate can go red
+#   ./scripts/check-candid.sh --guardian-only # only src/guardian_canister
 #
 #   It only ever reads the local build. It never touches a network.
 set -euo pipefail
@@ -50,13 +51,18 @@ BUILD=1
 WRITE=0
 DECLARATIONS=0
 SELFTEST=0
+# --guardian-only exists so `./scripts/dev.sh custody` can check the one interface
+# its own tests parse without first building the three root canisters it does not
+# use. Same comparison, same script, no second copy of the logic.
+GUARDIAN_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --no-build)     BUILD=0; shift ;;
-    --write)        WRITE=1; shift ;;
-    --declarations) DECLARATIONS=1; shift ;;
-    --selftest)     SELFTEST=1; shift ;;
-    -h|--help)      sed -n '2,40p' "$0"; exit 0 ;;
+    --no-build)      BUILD=0; shift ;;
+    --write)         WRITE=1; shift ;;
+    --declarations)  DECLARATIONS=1; shift ;;
+    --selftest)      SELFTEST=1; shift ;;
+    --guardian-only) GUARDIAN_ONLY=1; shift ;;
+    -h|--help)       sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -138,7 +144,12 @@ fi
 
 fail=0
 checked=0
-echo "== committed .did vs the interface exported by the built wasm"
+if [ "$GUARDIAN_ONLY" -eq 1 ]; then
+  CRATES=""
+  DECLARATIONS=0
+else
+  echo "== committed .did vs the interface exported by the built wasm"
+fi
 for crate in $CRATES; do
   wasm="target/wasm32-unknown-unknown/release/$crate.wasm"
   did="src/$crate/$crate.did"
@@ -169,7 +180,53 @@ if [ "$WRITE" -eq 1 ]; then
   echo "rewrote $(echo $CRATES | wc -w | tr -d ' ') .did files -- re-read the diff before committing"
   exit 0
 fi
-[ "$checked" -eq 3 ] || { echo "::error::checked $checked interfaces, expected 3"; exit 1; }
+if [ "$GUARDIAN_ONLY" -eq 0 ] && [ "$checked" -ne 3 ]; then
+  echo "::error::checked $checked interfaces, expected 3"; exit 1
+fi
+
+# --- the GUARDIAN, whose whole safety claim is a statement about its interface --
+#
+# docs/SECURITY-FINDINGS.md FINDING 23. `src/guardian_canister` is safe only if it
+# has NO destructive verb, and the gate that asserts that -- the census and the
+# Candid-driven sweep in tests/money_safety/tests/controller_custody.rs -- reads
+# the COMMITTED `guardian_canister.did`. Nothing compared that file to the module.
+#
+# A wave-12 critic proved the hole with a mutation: compile a real
+# `install_chunked_code(mode = Reinstall)` into the guardian and leave the .did as
+# committed, and all nine custody tests pass GREEN over a canister that can wipe a
+# funded table. The same mutation WITH a regenerated .did goes red. The builder's
+# own mutation test regenerated the .did, so the divergent case was never tried.
+# That is this project's standing lesson reproduced inside the instrument: the
+# totals are right, the subject is wrong, every invariant silent.
+#
+# The guardian is not a root workspace member (deliberately -- see its Cargo.toml),
+# so it is built by its own script rather than by the `cargo build` above.
+GUARDIAN_CRATE=src/guardian_canister
+GUARDIAN_DID=$GUARDIAN_CRATE/guardian_canister.did
+GUARDIAN_WASM=$GUARDIAN_CRATE/target/wasm32-unknown-unknown/release/guardian_canister.wasm
+if [ -f "$GUARDIAN_CRATE/Cargo.toml" ]; then
+  echo
+  echo "== the guardian's committed .did vs the guardian wasm (FINDING 23)"
+  if [ "$BUILD" -eq 1 ] || [ "$GUARDIAN_ONLY" -eq 1 ] || [ ! -f "$GUARDIAN_WASM" ]; then
+    ./scripts/build-guardian.sh >/dev/null
+  fi
+  [ -f "$GUARDIAN_WASM" ] || { echo "::error::$GUARDIAN_WASM not built"; exit 1; }
+  [ -f "$GUARDIAN_DID" ]  || { echo "::error::$GUARDIAN_DID missing"; exit 1; }
+  candid-extractor "$GUARDIAN_WASM" > "$TMP/guardian.did"
+  glines=$(wc -l < "$TMP/guardian.did")
+  [ "$glines" -gt 5 ] || { echo "::error::extracted only $glines lines from $GUARDIAN_WASM"; exit 1; }
+  if python3 "$CMP" "$GUARDIAN_DID" "$TMP/guardian.did" --label-a COMMITTED --label-b WASM; then
+    echo "  ok  $GUARDIAN_DID"
+  else
+    echo "  ✗   $GUARDIAN_DID does not describe $GUARDIAN_WASM"
+    echo "      The custody gate reads the COMMITTED file, so a verb that is in the module and"
+    echo "      not in the .did is a verb no test in this repository can see."
+    fail=1
+  fi
+else
+  echo "::error::$GUARDIAN_CRATE is absent; FINDING 23's mitigation has no interface to check"
+  exit 1
+fi
 
 # --- the frontend's second copy of the same interface ------------------------
 # src/declarations/<n>/<n>.did is generated from the canister .did and committed.

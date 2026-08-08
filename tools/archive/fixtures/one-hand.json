@@ -1,0 +1,284 @@
+{
+  "cleardeck_archive_bundle": 1,
+  "fetched_at": "2026-08-07T22:03:39.437Z",
+  "source": {
+    "kind": "history_canister",
+    "canister_id": "46el7-ql777-77775-aaada-cai",
+    "gateway": "http://localhost:8077",
+    "network": "local",
+    "authorized_tables": [
+      "4caro-hl777-77775-aaaba-cai",
+      "4fbx2-kt777-77775-aaabq-cai",
+      "4xhad-gd777-77775-aaacq-cai",
+      "4qggx-l3777-77775-aaaca-cai"
+    ],
+    "retention_summary": "A hand recorded here is permanent for the life of this canister. There is no method that deletes, prunes, edits or expires a record, and no cap on how many are kept; re-sending a hand that is already stored returns the existing id instead of writing a second copy. What CAN still destroy the archive is a controller of this canister: reinstalling it wipes stable memory and deleting it takes everything, and no application code can prevent either. The admin principal reported here cannot remove a record, but can admit a new writer with authorize_table, which is how a record no real table produced could get in. Treat that principal, and this canister's controllers, as the people you are trusting for durability.",
+    "records_are_append_only": true,
+    "admin": "nsp5q-aelxk-xax2u-3sqxb-xeod6-fduhf-zmoir-qxpp3-xusb4-nez2q-5ae",
+    "hand_ids_missing": [],
+    "note": "A REAL hand, copied verbatim out of a local archive canister and normalised; nothing here was written by hand. Chosen because it exercises everything at once: three seats, a re-raise by a player who already had money in on that street (so raise-TO and raise-BY differ), an uncalled bet that comes back, a showdown that publishes two hands, and one player who folded and whose cards only the seed can recover. Gates that need a hand to FAIL mutate a copy of it."
+  },
+  "total_hands_reported": 1,
+  "hands": [
+    {
+      "hand_id": "181",
+      "table_id": "4fbx2-kt777-77775-aaabq-cai",
+      "hand_number": "81",
+      "timestamp": "1786140049673206000",
+      "small_blind": "5000000",
+      "big_blind": "10000000",
+      "ante": "0",
+      "shuffle_proof": {
+        "seed_hash": "c01fdae7f01714d72a35f57b2c099c1c85a1871df6e09bdea4a7e502827e7e5d",
+        "revealed_seed": "180e63c5893320c3c5d9e9f402fafd6183e64b908ffadabe3d6b32bbc09cdc68",
+        "timestamp": "1786140049673206000"
+      },
+      "dealt_in": [
+        {
+          "seat": 0,
+          "principal": "wufmv-ee35x-h6maj-t5vkr-wjebc-xd3cr-uggmi-ytjag-cn5xh-lqkfp-yae"
+        },
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe"
+        },
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae"
+        }
+      ],
+      "dealer_seat": 0,
+      "players": [
+        {
+          "seat": 0,
+          "principal": "wufmv-ee35x-h6maj-t5vkr-wjebc-xd3cr-uggmi-ytjag-cn5xh-lqkfp-yae",
+          "starting_chips": "1809500000",
+          "ending_chips": "1799500000",
+          "hole_cards": null,
+          "final_hand_rank": null,
+          "amount_won": "0",
+          "position": "BTN",
+          "dealt_in": true,
+          "contributed": "10000000",
+          "left_mid_hand": false
+        },
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe",
+          "starting_chips": "901500000",
+          "ending_chips": "1813000000",
+          "hole_cards": [
+            "Kc",
+            "2h"
+          ],
+          "final_hand_rank": {
+            "kind": "Flush",
+            "payload": [
+              13,
+              12,
+              9,
+              8,
+              5
+            ]
+          },
+          "amount_won": "1813000000",
+          "position": "SB",
+          "dealt_in": true,
+          "contributed": "901500000",
+          "left_mid_hand": false
+        },
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae",
+          "starting_chips": "1045000000",
+          "ending_chips": "143500000",
+          "hole_cards": [
+            "7c",
+            "2d"
+          ],
+          "final_hand_rank": {
+            "kind": "Flush",
+            "payload": [
+              12,
+              9,
+              8,
+              7,
+              5
+            ]
+          },
+          "amount_won": "0",
+          "position": "BB",
+          "dealt_in": true,
+          "contributed": "901500000",
+          "left_mid_hand": false
+        }
+      ],
+      "flop": [
+        "9c",
+        "5c",
+        "8c"
+      ],
+      "turn": "8h",
+      "river": "Qc",
+      "actions": [
+        {
+          "seat": 0,
+          "principal": "wufmv-ee35x-h6maj-t5vkr-wjebc-xd3cr-uggmi-ytjag-cn5xh-lqkfp-yae",
+          "kind": "Call",
+          "amount": "10000000",
+          "phase": "preflop",
+          "timestamp": "1786140049907478000"
+        },
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe",
+          "kind": "Call",
+          "amount": "5000000",
+          "phase": "preflop",
+          "timestamp": "1786140050137107000"
+        },
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae",
+          "kind": "Check",
+          "amount": "0",
+          "phase": "preflop",
+          "timestamp": "1786140050372725000"
+        },
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe",
+          "kind": "Check",
+          "amount": "0",
+          "phase": "flop",
+          "timestamp": "1786140050596754000"
+        },
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae",
+          "kind": "Check",
+          "amount": "0",
+          "phase": "flop",
+          "timestamp": "1786140050821039000"
+        },
+        {
+          "seat": 0,
+          "principal": "wufmv-ee35x-h6maj-t5vkr-wjebc-xd3cr-uggmi-ytjag-cn5xh-lqkfp-yae",
+          "kind": "Check",
+          "amount": "0",
+          "phase": "flop",
+          "timestamp": "1786140051045549000"
+        },
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe",
+          "kind": "Check",
+          "amount": "0",
+          "phase": "turn",
+          "timestamp": "1786140051268216000"
+        },
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae",
+          "kind": "Check",
+          "amount": "0",
+          "phase": "turn",
+          "timestamp": "1786140051501067000"
+        },
+        {
+          "seat": 0,
+          "principal": "wufmv-ee35x-h6maj-t5vkr-wjebc-xd3cr-uggmi-ytjag-cn5xh-lqkfp-yae",
+          "kind": "Check",
+          "amount": "0",
+          "phase": "turn",
+          "timestamp": "1786140051726719000"
+        },
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe",
+          "kind": "Bet",
+          "amount": "18000000",
+          "phase": "river",
+          "timestamp": "1786140051958753000"
+        },
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae",
+          "kind": "Raise",
+          "amount": "51600000",
+          "phase": "river",
+          "timestamp": "1786140052180564000"
+        },
+        {
+          "seat": 0,
+          "principal": "wufmv-ee35x-h6maj-t5vkr-wjebc-xd3cr-uggmi-ytjag-cn5xh-lqkfp-yae",
+          "kind": "Fold",
+          "amount": "0",
+          "phase": "river",
+          "timestamp": "1786140052413774000"
+        },
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe",
+          "kind": "Raise",
+          "amount": "121320000",
+          "phase": "river",
+          "timestamp": "1786140052637171000"
+        },
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae",
+          "kind": "Raise",
+          "amount": "263364000",
+          "phase": "river",
+          "timestamp": "1786140052860202000"
+        },
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe",
+          "kind": "Raise",
+          "amount": "553642800",
+          "phase": "river",
+          "timestamp": "1786140053084408000"
+        },
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae",
+          "kind": "Raise",
+          "amount": "1035000000",
+          "phase": "river",
+          "timestamp": "1786140053341223000"
+        },
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe",
+          "kind": "Call",
+          "amount": "337857200",
+          "phase": "river",
+          "timestamp": "1786140053593107000"
+        }
+      ],
+      "total_pot": "1813000000",
+      "rake": "0",
+      "winners": [
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe",
+          "amount": "1813000000",
+          "hand_rank": {
+            "kind": "Flush",
+            "payload": [
+              13,
+              12,
+              9,
+              8,
+              5
+            ]
+          },
+          "pot_type": "main"
+        }
+      ],
+      "went_to_showdown": true
+    }
+  ]
+}

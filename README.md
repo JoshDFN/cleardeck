@@ -4,7 +4,13 @@
 
 > **This entire project was built 100% by AI** (Claude Code) to demonstrate what's possible with AI-assisted development and the Internet Computer blockchain.
 
-ClearDeck is a fully decentralized Texas Hold'em poker application running entirely on the Internet Computer. Every card shuffle is cryptographically verifiable, ensuring fair play without requiring trust. No middleman, no house edge—just pure poker.
+ClearDeck is a Texas Hold'em poker application running entirely on the Internet Computer. Every card shuffle is cryptographically verifiable: you can predict the turn and the river yourself from a commitment you copied mid-hand, on your own machine, and independent auditors have. There is no rake and no house edge.
+
+It is **not** trustless, and it is not fully decentralized. One key holds the controller seat on the
+canisters that custody your deposit, and today that key can destroy your balance with a single
+command while the ledger still shows the money at the canister's address. That is measured, not
+hypothetical — see **[Who can take your money](#who-can-take-your-money)** before you deposit
+anything. The shuffle needs no trust. The custody does.
 
 ## Screenshots
 
@@ -55,6 +61,172 @@ ClearDeck is a fully decentralized Texas Hold'em poker application running entir
 ## Disclaimer
 
 > ⚠️ **WARNING**: This is unaudited alpha software with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk—your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
+
+---
+
+<a id="who-can-take-your-money"></a>
+
+## Who can take your money
+
+Read this before you deposit. It is the part of "decentralized" that this software does not have,
+and it was described here as a hand-history problem for nine waves while it was really a balance
+problem.
+
+### The operator can zero your balance with one command, today
+
+Every ClearDeck canister has **one controller principal**. A controller can call
+`install_code --mode reinstall` or `uninstall_code` on a funded table. Neither is a bug and neither
+needs a bug: they are ordinary Internet Computer management calls, they are the same two calls used
+to deploy the software in the first place, and the second one does not even need a new build.
+
+An independent auditor executed this. She deposited 5 ICP as an ordinary player, ran **one** command
+as the controller with the **same wasm and no code change**, and her balance read zero while the
+ledger still held her 5 ICP at the canister's account. Every player-callable recovery told her she
+had nothing.
+
+Reproduced on a local replica, with numbers, by
+[`tests/money_safety/tests/controller_custody.rs`](tests/money_safety/tests/controller_custody.rs)
+(`./scripts/dev.sh custody`):
+
+```text
+--- FINDING 23: install_code --mode reinstall, same wasm, no code change ---
+wasm under test  sha256=cc47b16f91b343c992ddb44cb13d2c993969cf2dbc99ca7c5579f23eb46184ca
+BEFORE   ledger_at_canister=4000000000  escrow=2600000000  chips=1400000000
+         alice escrow=1300000000  bob escrow=1300000000
+reinstall_canister(controller) -> Ok
+AFTER    ledger_at_canister=4000000000  (unchanged: the ICP is still there)
+         alice escrow=0   withdraw(5 ICP) -> Err("Insufficient balance. Have: 0.0000 ICP, requested: 5.0000 ICP")
+         bob   escrow=0   withdraw(5 ICP) -> Err("Insufficient balance. Have: 0.0000 ICP, requested: 5.0000 ICP")
+DESTROYED 4000000000 e8s = 40.00000000 ICP of player claims, with the ledger untouched
+```
+
+`uninstall_code` is the same thing with no canister left to ask:
+
+```text
+--- FINDING 23: uninstall_code on a funded table ---
+BEFORE   ledger_at_canister=4000000000  escrow=2600000000  chips=1400000000
+uninstall_canister(controller) -> Ok
+AFTER    ledger_at_canister=4000000000  module_hash=None
+         get_balance() as a player -> REJECTED ... the canister contains no Wasm module
+STRANDED 4000000000 e8s = 40.00000000 ICP, at an address whose canister has no code
+```
+
+**Nothing in this repository prevents that today.** It is
+[docs/SECURITY-FINDINGS.md FINDING 23](docs/SECURITY-FINDINGS.md#finding-23), the only `fund-theft`
+item that no in-canister check can reach: `require_controller()` lives inside the table, and these
+are calls to the *management* canister, so the table never sees them and cannot refuse them.
+
+### And the operator can KEEP it. This section said otherwise for one wave, and that was wrong
+
+Until wave 12 this section answered "Can the operator take the ICP out of the canister to their own
+wallet?" with the single word **No**, and told a depositing player the worst case was "destruction,
+not theft". **That was false, and it was false in the direction that flatters the operator.** The
+argument behind it was "there is no method that pays a controller", which is a true statement about
+*this* code and an irrelevant one about a controller: **a controller is not bound to the ClearDeck
+wasm.** `install_code` installs whatever module it is handed, and the canister's ledger account is
+spendable by whatever code is then running in it. The money never needed a ClearDeck method.
+
+Executed on the local replica, same privilege as the wipe above, by
+[`tests/money_safety/tests/controller_custody.rs`](tests/money_safety/tests/controller_custody.rs)
+(`./scripts/dev.sh custody`):
+
+```text
+--- FINDING 23c: the operator does not have to destroy it. They can TAKE it ---
+BEFORE   ledger_at_canister=4000000000  operator_wallet=<their own principal>
+reinstall_canister(controller, a 500-byte module that is not ClearDeck) -> Ok
+steal(3999990000) -> icrc1_transfer accepted
+AFTER    ledger_at_canister=0
+MOVED    3999990000 e8s = 39.99990000 ICP of player deposits into a wallet the operator owns
+```
+
+The worst case for a depositor is **theft, and it pays the operator**. Nothing about it is subtle,
+it needs no bug in ClearDeck, and the same door is the one the wipe uses.
+
+### What that means for a deposit
+
+| Question | Answer, today |
+|---|---|
+| Can the operator take the ICP out of the canister to their own wallet? | **Yes.** Not through any ClearDeck method: by replacing ClearDeck with code of their own, which the controller seat allows in one command. Demonstrated at 39.99990000 ICP. |
+| Can the operator make your balance zero? | **Yes.** One command, no code change, instantly, with no warning and no on-chain notice. |
+| Where does the money go? | Wherever that new code sends it. Left alone it sits at the canister's ledger account with nothing able to claim it; taken, it goes to the operator. Both outcomes are one command away and you cannot tell in advance which you are exposed to. |
+| Can you get it back? | No. There is no restore path and there is deliberately no method that lets a controller set a balance — adding one would be a far larger hole. |
+| Does the shuffle proof depend on any of this? | No. The shuffle is verifiable by you, on your machine, and does not trust the operator. |
+
+### The fix, and exactly how far it goes
+
+`src/guardian_canister/` is a **controller-of-controllers**: a canister that holds the controller
+seat on the fund-holding canisters and exposes only state-preserving, publicly-queued operations.
+It is built (`./scripts/build-guardian.sh`) and gated
+(`./scripts/dev.sh custody`) but **is not deployed to mainnet yet**, so nothing above has changed
+for a real deposit. Do not read the rest of this section as protection you have.
+
+It works because controllership on the Internet Computer is **not transitive**: whoever controls the
+guardian is *not* thereby a controller of the tables, and the management canister rejects their
+calls outright. That was measured before anything was built on it, in both directions:
+
+```text
+--- THE PREMISE: controllership is not transitive ---
+AFTER HANDOVER  table controllers = [guardian]
+
+  as the OPERATOR (controller of the guardian, NOT of the table):
+    install_code --mode reinstall              -> REJECTED CanisterInvalidController
+    install_code --mode upgrade                -> REJECTED CanisterInvalidController
+    upload_chunk (step 1 of a chunked install) -> REJECTED CanisterInvalidController
+    uninstall_code                             -> REJECTED CanisterInvalidController
+    update_settings(controllers=[operator])    -> REJECTED CanisterInvalidController
+    stop_canister                              -> REJECTED CanisterInvalidController
+    delete_canister                            -> REJECTED CanisterInvalidController
+    take_canister_snapshot                     -> REJECTED CanisterInvalidController
+    canister_status                            -> REJECTED CanisterInvalidController
+```
+
+The guardian's own controller list is `[guardian]` — it controls itself and nobody else controls it.
+A guardian that the operator controlled would be worth nothing, because the operator could simply
+replace its code with a version that forwards `reinstall`; that is measured too, and it is why the
+self-controlled arrangement is the design rather than an afterthought.
+
+**What the guardian would prevent, absolutely:** `reinstall`, `install`, `uninstall_code`,
+`delete_canister`, `update_settings` (so the controller list itself is frozen),
+`load_canister_snapshot` (a state rollback that could un-do a withdrawal) and `stop_canister` (a
+withdrawal freeze). None of those seven verbs exists anywhere in its interface, so there is no
+argument, no role and no emergency in which it emits one. It also closes the table's
+`require_controller()` surface to the operator's key entirely, including `reset_table` and
+`admin_reinit_table`.
+
+**What it would NOT prevent, stated plainly:**
+
+* **A malicious upgrade — and that includes THEFT, not only destruction.** `install_code --mode
+  upgrade` preserves state, but the code that runs afterwards is new code, and new code can zero a
+  balance in `post_upgrade` *or* `icrc1_transfer` the canister's whole ledger balance into the
+  operator's wallet. That is the same capability demonstrated above at 39.99990000 ICP, arriving by
+  a slower door. The guardian does not make the operator honest. What it does is force every code
+  change through a **public proposal that anybody can read without authentication and that cannot
+  execute for 72 hours** (7 days to change the guardian itself, or the operator key). **So what the
+  guardian buys against theft is 72 hours of public notice, not impossibility.** That is a real and
+  large difference and it is not the same claim: a player who is watching gets three days to
+  withdraw; a player who is not watching gets nothing from it.
+* **Cycle exhaustion.** A canister that runs out of cycles is uninstalled by the protocol, which
+  destroys exactly what `uninstall_code` destroys. No controller arrangement can stop that.
+  `deposit_cycles` is callable by *any* principal, so anybody can top the canisters up.
+* **The NNS.** Subnet replica software is chosen by NNS proposal and no application canister binds
+  it.
+* **Bugs in the table canister.** Run `./scripts/register-stats.sh` for today's count (69 open
+  across both registers at the close of wave 12), and the guardian touches none of them.
+
+**And what it would cost.** Once the guardian holds the seat, the operator's key stops reaching
+every `require_controller()` method on the table — including the *audit* ones
+(`admin_get_all_balances`, `admin_get_deposit_custody`, `admin_audit_deposit_custody`). The guardian
+deliberately exposes no passthrough, because a passthrough that could carry
+`admin_get_all_balances` could carry `admin_reinit_table`. No player-facing path is affected:
+`get_balance`, `get_custody_status`, `refresh_deposit_custody`, `claim_external_deposit`, `cash_out`
+and `withdraw` are all caller-scoped and all still work — asserted, not assumed, by
+`guardian_handover_closes_the_controller_gated_surface_including_the_audit_half`.
+
+A bricked guardian would be a permanent loss of *fixability*, not of *funds*: the tables keep
+running and players keep withdrawing, because none of that goes through the guardian. Its escape
+from its own bugs is `UpgradeSelf`, which is tested against a genuinely different module — the first
+version of that test upgraded the guardian to the module it was already running and reported `ok`
+while the upgrade was in fact trapping and never landing.
 
 ---
 
@@ -171,7 +343,9 @@ reader to work it out and one of them worked out something false.
 
 The last row is not a formality. Verification answers "is this the code in the repository?"
 and nothing else. This code is unaudited alpha software with known bugs, listed in
-[docs/DEFECTS.md](docs/DEFECTS.md) and [docs/SECURITY-FINDINGS.md](docs/SECURITY-FINDINGS.md).
+[docs/DEFECTS.md](docs/DEFECTS.md) and [docs/SECURITY-FINDINGS.md](docs/SECURITY-FINDINGS.md);
+the most recent wave's accounting, including every gate's result, is
+[docs/WAVE-10.md](docs/WAVE-10.md).
 A perfect `VERIFIED` on a canister full of defects verifies the defects.
 
 ### What you need
@@ -790,8 +964,16 @@ table's account with `icp token transfer` (or your wallet).
 
 1. **Unaudited Code**: This is alpha software—expect bugs
 2. **Stable Storage**: Uses stable memory for upgrades, but bugs can still cause data loss
-3. **Canister Cycles**: Monitor cycles—if depleted, canisters stop
-4. **Key Security**: Controller identity must be secured
+3. **Canister Cycles**: Monitor cycles—if depleted, canisters stop. A canister that reaches zero
+   cycles is uninstalled by the protocol, which destroys every balance exactly as `uninstall_code`
+   does. Anybody can top a canister up with `deposit_cycles`; no permission is required
+4. **The Controller Seat**: one key holds the controller principal on every canister, and a
+   controller can zero every player's balance with a single `install_code --mode reinstall` or
+   `uninstall_code` — no bug required, no code change required, no notice, no restore path. The
+   money stays at the canister's ledger account and becomes unreachable by everybody, including the
+   operator. This is [FINDING 23](docs/SECURITY-FINDINGS.md#finding-23), it is open, and it is
+   measured in [Who can take your money](#who-can-take-your-money). "Secure the controller identity"
+   is not a mitigation; it is the whole of the current defence
 5. **No Rake**: There's no house edge—this is purely peer-to-peer
 
 ---
@@ -804,6 +986,12 @@ table's account with `icp token transfer` (or your wallet).
   ([docs/DEFECTS.md T-34](docs/DEFECTS.md#t-34))
 - A controller of the archive canister can still destroy every proof by reinstalling or deleting it.
   No application code can prevent that
+- **The same call destroys BALANCES, not only proofs.** One `install_code --mode reinstall` or
+  `uninstall_code` on a funded table zeroes every player's escrow and chips while the ledger keeps
+  the ICP at the canister's address. Measured at 40.00000000 ICP in
+  [Who can take your money](#who-can-take-your-money);
+  [FINDING 23](docs/SECURITY-FINDINGS.md#finding-23), OPEN. `src/guardian_canister/` is the
+  mitigation and is **not deployed**
 - BTC deposits require 6 confirmations (~1 hour)
 - Large pots may have rounding issues (e8s precision)
 - UI may lag on slow connections (polling-based updates)

@@ -628,12 +628,32 @@ cmd_local_status() { cmd_doctor; }
 # rewind-and-re-deal search is unbounded, so a deck that stops varying spins
 # forever). A gate that hangs is worse than one that fails, because a hang looks
 # like a slow job.
+# THE WATCHDOG USED TO OUTLIVE THE RUN, AND THAT IS docs/DEFECTS.md H-42 (H-54).
+#
+# `kill "$wd"` kills the SUBSHELL. The `sleep` it forked is a separate process and
+# survives, orphaned to init, still holding the stdout and stderr it inherited. So
+# `./scripts/dev.sh test` would EXIT NORMALLY and any consumer of its output --
+# `| tail`, `| tee`, `$( )`, a CI log collector -- would then block for up to the
+# remaining 900 seconds with zero CPU anywhere, because the pipe's write end was
+# still open. Measured: `dev.sh test` finished, and `sleep 900` sat at PPID 1
+# holding the pipe for another fourteen minutes. H-42 recorded the symptom ("hung
+# for 33 minutes with zero CPU on both the test binary and its own PocketIC") and
+# blamed the step BEFORE this one for having no time bound; the cause is the two
+# steps that DO have one. 900 + 300 is the 20 minutes, and it is entirely
+# post-hoc: every gate had already passed or failed.
+#
+# Two independent fixes, because either alone would do and both are one line:
+#   * the watchdog's own output goes to /dev/null, so a leak cannot hold the pipe;
+#   * its children are killed before it is, so there is nothing left to leak.
 with_timeout() {
   local secs="$1"; shift
   ( "$@" ) & local pid=$!
-  ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) & local wd=$!
+  ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) >/dev/null 2>&1 & local wd=$!
   wait "$pid"; local rc=$?
-  kill "$wd" 2>/dev/null
+  # Children first: killing the subshell first is what orphans the `sleep`.
+  pkill -P "$wd" 2>/dev/null || true
+  kill "$wd" 2>/dev/null || true
+  wait "$wd" 2>/dev/null || true
   if [ "$rc" -ge 128 ]; then
     printf '    %sTIMED OUT%s after %ss: %s\n' "$E" "$R" "$secs" "$*" >&2
   fi
@@ -643,16 +663,16 @@ with_timeout() {
 cmd_test() {
   local failed=()
 
-  step "[1/6] cargo test --workspace"
+  step "[1/8] cargo test --workspace"
   cargo test --workspace || failed+=("cargo test --workspace")
 
-  step "[2/6] table_canister wasm build"
+  step "[2/8] table_canister wasm build"
   cmd_wasm || failed+=("wasm build")
 
-  step "[3/6] differential fast subset (tools/differential)"
+  step "[3/8] differential fast subset (tools/differential)"
   ( cd tools/differential && cargo test ) || failed+=("differential fast subset")
 
-  step "[4/6] money-safety fast subset + the fuzzer at its own defaults"
+  step "[4/8] money-safety fast subset + the fuzzer at its own defaults"
   announce_wasm
   (
     cd tests/money_safety
@@ -773,6 +793,20 @@ cmd_test() {
     # idle-table cycle burn the clock adds. Named explicitly for the deposit_replay
     # reason above.
     cargo test --test timers -- --test-threads=1 &&
+    # controller_custody is the gate on THE CONTROLLER SEAT
+    # (docs/SECURITY-FINDINGS.md FINDING 23). One controller principal per canister,
+    # and `install_code --mode reinstall` or `uninstall_code` on a funded table
+    # destroys every balance while the ledger keeps the ICP -- the fifth auditor
+    # executed it for 5 ICP of her own. NOTHING in this project could see it and
+    # nothing could see it by construction: admin_custody's subject is methods that
+    # call `require_controller()` INSIDE the canister, and these two are calls to the
+    # MANAGEMENT canister. Two halves: `finding23_*` PIN the defect with numbers
+    # (they pass while it is live, which is the point -- an unmeasured critical is a
+    # forgotten critical), and `guardian_*` measure the fix and, first, its PREMISE,
+    # that controllership is not transitive. Named explicitly for the deposit_replay
+    # reason above; wired in the same change that files the guardian, because a
+    # mitigation whose gate no target runs is docs/DEFECTS.md H-45.
+    cargo test --test controller_custody -- --test-threads=2 &&
     MONEY_FUZZ_SEEDS="${CLEARDECK_SMOKE_FUZZ_SEEDS:-1}" \
     MONEY_FUZZ_STEPS="${CLEARDECK_SMOKE_FUZZ_STEPS:-40}" \
     MONEY_FUZZ_SHRINK=10 \
@@ -804,7 +838,7 @@ cmd_test() {
   # leaves money-safety `invariants` at 30/30 green and `regressions` at 6/6 green,
   # and is caught here. For the whole of wave 2 this suite lived behind its own
   # `make settlement` that no default target and no CI job invoked.
-  step "[5/6] settlement oracle (tests/settlement)"
+  step "[5/8] settlement oracle (tests/settlement)"
   with_timeout 900 sh -c 'cd tests/settlement && cargo test --test settlement -- --test-threads=1' \
     || failed+=("settlement oracle")
   with_timeout 300 sh -c 'cd tests/settlement && cargo test --test disagreements -- --test-threads=1' \
@@ -817,8 +851,32 @@ cmd_test() {
   # cannot run without a replica, so its self-tests are the ONLY part of it a
   # default gate can execute. They need ~20 s and no replica. Among them is the
   # no-rake gate's own failing case (docs/DEFECTS.md E-61).
-  step "[6/6] screenshot-harness self-tests (no replica)"
+  step "[6/8] screenshot-harness self-tests (no replica)"
   cmd_shots_selftest || failed+=("screenshot-harness self-tests")
+
+  # THE ARCHIVE ANALYSER'S 39 GATES, WHICH NOTHING RAN (docs/DEFECTS.md H-50).
+  #
+  # `tools/archive/**` shipped in wave 12 with 39 offline self-tests and NO dev.sh
+  # target, no make rule and no CI job -- stated as held by them in the very section
+  # of docs/ARCHIVE.md that opens "A gate nothing runs is worse than no gate". They
+  # need no replica and no network: every population's truth is set by construction.
+  # ~85 s.
+  #
+  # It is in the DEFAULT gate rather than only in its own target because the tool
+  # reconstructs hole cards from the published seed and prices folds in ICP: it is a
+  # second, independent implementation of docs/SHUFFLE-SPEC.md, which makes it the
+  # only thing in the tree that can catch poker_core and the canister being wrong
+  # together. A second opinion nobody runs is one opinion.
+  step "[7/8] archive analyser self-tests (no replica, no network)"
+  cmd_archive || failed+=("archive analyser self-tests")
+
+  # THE SEALED-DEALER SPIKE'S HARNESS, WHICH NOTHING RAN (docs/DEFECTS.md H-53).
+  # Five [[test]] targets, 36 tests, named in their own Cargo.toml so that nothing
+  # would be auto-discovered -- and then named by no target at all, in the wave that
+  # closed H-45. ~30 s once built. See cmd_no_peeking for why a spike is in the
+  # default gate.
+  step "[8/8] sealed-dealer spike harness (no replica needed: PocketIC)"
+  cmd_no_peeking || failed+=("no-peeking harness")
 
   step "result"
   if [ ${#failed[@]} -eq 0 ]; then
@@ -964,22 +1022,14 @@ cmd_shots_selftest() {
     info "installing playwright in tools/shots"
     ( cd tools/shots && npm install --no-audit --no-fund )
   fi
-  local failed=()
-  # the pixel gate, on overlaps whose answer is written into the fixture
-  node tools/shots/test-occlusion.mjs      || failed+=("test-occlusion")
-  # the inverted money gate: a token nothing asserts must fail a scene
-  node tools/shots/test-census.mjs         || failed+=("test-census")
-  # the display-vs-e8s parser
-  node tools/shots/test-money.mjs          || failed+=("test-money")
-  # THE NO-RAKE GATE (docs/DEFECTS.md E-61): it must go red on a rake of 1 e8,
-  # and a missing field must be a structural failure and never a silent NaN
-  node tools/shots/test-rake.mjs           || failed+=("test-rake")
-  # the action dock's containment (docs/DEFECTS.md E-63), measured against
-  # PokerTable.svelte's own stylesheet
-  node tools/shots/test-dock-overflow.mjs  || failed+=("test-dock-overflow")
-  if [ ${#failed[@]} -eq 0 ]; then ok "all screenshot-harness self-tests green"; return 0; fi
-  warn "FAILED: ${failed[*]}"
-  return 1
+  # ONE LIST, NOT TWO (docs/DEFECTS.md H-47). This used to name the self-tests
+  # again, in a second copy that had already drifted from tools/shots/package.json:
+  # `test-solvency` was in neither this list nor `make test`, and `test-dock-overflow`
+  # -- the E-63 gate -- was missing from the package file's. Both callers now invoke
+  # tools/shots/selftest.mjs, which DISCOVERS every `test-*.mjs` (so a new gate cannot
+  # be unwired) and REQUIRES the named ones to exist (so an old gate cannot vanish).
+  node tools/shots/selftest.mjs || { warn "screenshot-harness self-tests FAILED"; return 1; }
+  ok "all screenshot-harness self-tests green"
 }
 
 # ---------------------------------------------------------------------------
@@ -1068,6 +1118,62 @@ declare -a FRONTEND_NOTICES=(
   "your funds are NOT safe"
   "18+ only"
   "illegal in many jurisdictions"
+)
+
+# THE CUSTODY DISCLOSURE (docs/SECURITY-FINDINGS.md FINDING 23).
+#
+# Separate from the four above because it is a separate promise and must be able
+# to fail on its own. The four say the software is unsafe; these say WHO can take
+# your money, which the project did not disclose at all for nine waves while the
+# README sold "fully decentralized" and "fair play without requiring trust" and
+# disclosed only that a controller can destroy the HAND HISTORY. A controller can
+# destroy your BALANCE, an auditor did it for 5 ICP of her own, and neither
+# document said so.
+#
+# Presence checks, like the four: making the disclosure MORE prominent is always
+# allowed. The phrases are chosen to be the load-bearing CLAIM rather than any
+# particular sentence, so a rewrite that keeps the meaning keeps the gate green
+# and a rewrite that drops the meaning cannot.
+#
+# `## Who can take your money` carries its `## ` on purpose. Without it the check
+# was satisfied by the two cross-REFERENCES to the section further down the file,
+# so deleting the section itself and leaving the links dangling read green --
+# measured, not guessed. A gate that a broken link can satisfy is not a gate.
+declare -a README_CUSTODY=(
+  "install_code --mode reinstall"
+  "uninstall_code"
+  "It is **not** trustless"
+  "## Who can take your money"
+  # WAVE 12. The disclosure has to say THEFT, not only destruction. See below.
+  "into a wallet the operator owns"
+)
+declare -a FRONTEND_CUSTODY=(
+  "One key can zero this balance"
+  "no restore path"
+  "The shuffle needs no trust. Custody does."
+  # WAVE 12. Same reason, on the screen the money leaves from.
+  "into a wallet the operator owns"
+)
+
+# THE TWO SENTENCES THAT MUST NEVER COME BACK (docs/SECURITY-FINDINGS.md FINDING 23c).
+#
+# Wave 12 shipped a custody disclosure whose last clause was FALSE and false in the
+# operator's favour: it told a depositing player, on the deposit screen and in the
+# README's decision table, that the operator "cannot pay it to themselves" and that
+# the worst case was destruction rather than theft. It is theft. A controller is not
+# bound to the ClearDeck wasm: `install_code` installs whatever module it is handed
+# and that module can spend the canister's ledger account. Reproduced at
+# 39.99990000 ICP by tests/money_safety/tests/controller_custody.rs.
+#
+# A presence check cannot catch this, because the false sentence was ADDITIONAL
+# reassurance sitting next to four true ones -- every phrase the gate looked for was
+# present while the paragraph as a whole lied. So the retraction needs its own,
+# INVERTED check, the same shape as the "fully decentralized" one below: these exact
+# strings, case-sensitive, must not appear in player-facing copy. Case-sensitive on
+# purpose, so this file and the finding can still discuss the retraction in prose.
+declare -a RETRACTED_CUSTODY_CLAIMS=(
+  "cannot pay it to themselves"
+  "Destruction, not theft"
 )
 
 cmd_hygiene() {
@@ -1161,6 +1267,55 @@ cmd_hygiene() {
   if grep -qF "No Rake" README.md; then ok "README.md: no-rake property stated"
   else warn "README.md no longer states the no-rake property"; bad=1; fi
 
+  # WHO CAN TAKE YOUR MONEY, AS A GATE (docs/SECURITY-FINDINGS.md FINDING 23).
+  #
+  # This is a check on a DISCLOSURE, not on a fix: FINDING 23 is open, mainnet
+  # still has one key on the controller seat, and the only thing standing between
+  # a player and that is being told. A disclosure nothing checks is a disclosure
+  # that gets tidied away in a copy pass -- which is exactly how the README came
+  # to say "fully decentralized" over a canister one command could empty.
+  step "custody disclosure present (FINDING 23)"
+  local phrase
+  for phrase in "${README_CUSTODY[@]}"; do
+    if grep -qF "$phrase" README.md; then ok "README.md: \"$phrase\""
+    else warn "README.md is MISSING the custody disclosure phrase \"$phrase\""; bad=1; fi
+  done
+  for phrase in "${FRONTEND_CUSTODY[@]}"; do
+    if grep -rqF "$phrase" src/cleardeck_frontend/src; then ok "frontend:  \"$phrase\""
+    else warn "the deposit screen is MISSING the custody disclosure \"$phrase\""; bad=1; fi
+  done
+
+  # The RETRACTION, as its own gate. A disclosure that is wrong in the operator's
+  # favour is worse than none: the presence checks above were all green while the
+  # paragraph promised a depositor the operator could not take the money.
+  step "the retracted custody claim has not come back (FINDING 23c)"
+  local claim hits
+  for claim in "${RETRACTED_CUSTODY_CLAIMS[@]}"; do
+    hits="$(grep -rnF "$claim" README.md src/cleardeck_frontend/src || true)"
+    if [ -n "$hits" ]; then
+      warn "player-facing copy claims \"$claim\" again; a controller CAN pay the ledger"
+      warn "balance to their own wallet (39.99990000 ICP, controller_custody.rs):"
+      printf '%s\n' "$hits" | sed 's/^/      /'
+      bad=1
+    else
+      ok "not claimed: \"$claim\""
+    fi
+  done
+  # The claim the disclosure replaced must not come back. "fully decentralized"
+  # over a canister one key can empty is the largest unbacked claim this project
+  # has shipped.
+  # The DENIAL ("it is not fully decentralized") is the disclosure itself, so the
+  # check has to distinguish the claim from the retraction. Anything else and the
+  # gate fires on the sentence it exists to protect, which is how a gate gets
+  # switched off.
+  if grep -inE 'fully decentraliz(ed|sed)' README.md | grep -viE 'not fully decentraliz' >/dev/null; then
+    warn "README.md claims \"fully decentralized\" again; one key still holds the controller seat:"
+    grep -inE 'fully decentraliz(ed|sed)' README.md | grep -viE 'not fully decentraliz' | sed 's/^/      /'
+    bad=1
+  else
+    ok "README.md does not claim \"fully decentralized\""
+  fi
+
   step "notices not weakened since $BASELINE_COMMIT"
   local removed
   removed="$(git diff "$BASELINE_COMMIT" -- README.md src/cleardeck_frontend/src \
@@ -1232,6 +1387,105 @@ cmd_selftest() {
 }
 
 # ---------------------------------------------------------------------------
+# cmd: custody   (owner: tests/money_safety/**, src/guardian_canister/**)
+# ---------------------------------------------------------------------------
+#
+# THE CONTROLLER SEAT, on its own. docs/SECURITY-FINDINGS.md FINDING 23.
+#
+# `dev.sh test` runs this too; this target exists so the FINDING 23 evidence can
+# be produced in about twenty seconds instead of inside a twenty-minute gate, and
+# so the transcript -- the auditor's wipe with numbers, then every management verb
+# the operator can and cannot reach once the guardian holds the seat -- is
+# READABLE. Every claim in the README's custody section is a line of this output.
+
+cmd_custody() {
+  step "build the table canister wasm (the module the wipe is measured against)"
+  cmd_wasm
+
+  step "build the guardian canister"
+  ./scripts/build-guardian.sh
+
+  # THE CENSUS READS THE COMMITTED .did, SO THE COMMITTED .did HAS TO BE TRUE.
+  #
+  # The guardian's entire safety claim is "no destructive verb is on its wire",
+  # and the three gates that assert it -- the census, the name list and the
+  # Candid-driven sweep -- all parse src/guardian_canister/guardian_canister.did.
+  # Nothing compared that file to the module. A wave-12 critic compiled a real
+  # `install_chunked_code(mode = Reinstall)` into the guardian, left the .did as
+  # committed, and all nine tests passed GREEN over a canister that can wipe a
+  # funded table. Checking the interface FIRST is what makes the rest of this
+  # target a statement about the module rather than about a text file.
+  step "the guardian's committed interface describes the guardian wasm"
+  ./scripts/check-candid.sh --guardian-only \
+    || die "the guardian's committed .did does not describe its wasm; every custody test below \
+would be reading an interface the module does not have"
+
+  step "controller custody: the defect, the premise, and the guardian"
+  announce_wasm
+  (
+    cd tests/money_safety
+    export CLEARDECK_TABLE_WASM="$WASM_PATH"
+    cargo test --test controller_custody -- --test-threads=2 --nocapture
+  ) || die "controller custody gate FAILED"
+  ok "controller custody gate passed"
+}
+
+# ---------------------------------------------------------------------------
+# cmd: archive  -- the offline hand-history analyser's own gates
+# ---------------------------------------------------------------------------
+#
+# docs/DEFECTS.md H-50. `tools/archive/**` is an independent reimplementation of
+# docs/SHUFFLE-SPEC.md: it reconstructs any archived hand from its seed, recovers
+# the hole cards no record publishes, replays the betting and cross-checks the
+# money five ways, and it shares no line with poker_core, the canister or
+# src/declarations -- so it can catch them being wrong. It shipped with 39 offline
+# self-tests and nothing that ran them.
+#
+# NO REPLICA AND NO NETWORK. `selftest/run.mjs` builds every population it judges,
+# so each answer is known by construction. The fetch step is the only networked
+# file in the tool and it is not on this path.
+cmd_archive() {
+  step "archive analyser self-tests (no replica, no network)"
+  require_cmd node
+  node tools/archive/selftest/run.mjs || die "archive analyser self-tests FAILED"
+  ok "archive analyser self-tests passed"
+}
+
+# ---------------------------------------------------------------------------
+# cmd: no-peeking  -- the sealed-dealer spike's own harness
+# ---------------------------------------------------------------------------
+#
+# docs/DEFECTS.md H-53. `src/no_peeking/**` and `tests/no_peeking/**` arrived with
+# docs/NO-PEEKING-FEASIBILITY.md §10: a sealed dealer canister with an EMPTY
+# controller list, a table that holds no cards, and 36 tests that attack them --
+# every exported method of both canisters called as the controller, as an opponent,
+# as a stranger and anonymously, plus the canister-snapshot read that defeats the
+# obvious fix. Five `[[test]]` targets, named in their own Cargo.toml precisely so
+# nothing would be auto-discovered, and then **named by no target, no make rule and
+# no CI job** -- H-45's shape for the third time, in the wave that closed H-45.
+#
+# It is a SPIKE. Nothing here is deployed, nothing is in icp.yaml, and the crate is
+# detached from the root workspace, so it cannot move a deployed module hash. It is
+# in `test` anyway, because the document that cites it makes design claims about
+# where ClearDeck's cards could live, and a claim held by an unrun harness is a
+# claim held by nothing.
+#
+# Several of its tests are the FINDING 23 pattern: they PASS while a defect in the
+# spike is live (`two_concurrent_try_advance_calls_pay_the_pot_out_twice`,
+# `a_zero_in_the_install_argument_reopens_the_whole_hole`). Read the names.
+cmd_no_peeking() {
+  if [ ! -f tests/no_peeking/Cargo.toml ]; then
+    warn "tests/no_peeking is absent; the sealed-dealer spike has no harness to run"
+    return 0
+  fi
+  step "sealed-dealer spike: build the two modules it attacks"
+  ./src/no_peeking/build.sh >/dev/null || die "no-peeking spike build FAILED"
+  step "sealed-dealer spike: 36 tests, every door, every caller (docs/NO-PEEKING-FEASIBILITY.md)"
+  ( cd tests/no_peeking && cargo test --release ) || die "no-peeking harness FAILED"
+  ok "no-peeking harness passed"
+}
+
+# ---------------------------------------------------------------------------
 # cmd: settlement   (appended -- owner: tests/settlement/**)
 # ---------------------------------------------------------------------------
 #
@@ -1289,6 +1543,24 @@ ${B}ClearDeck dev entry point${R}   (make <target> works for all of these)
                   subset + money-safety invariants/regressions/ui_limits + a short
                   fuzz run AND the fuzzer at its own defaults (docs/DEFECTS.md H-28).
                   No replica needed.
+  ${B}custody${R}         THE CONTROLLER SEAT, on its own, with the transcript
+                  (docs/SECURITY-FINDINGS.md FINDING 23). Reproduces the auditor's
+                  wipe -- one 'install_code --mode reinstall' with the same wasm
+                  destroying 40 ICP of player claims while the ledger keeps every
+                  e8 -- then measures what the guardian canister can and cannot
+                  stop. Included in 'test'; separate because the evidence is worth
+                  reading and takes about 20 s. Also checks the guardian's
+                  committed .did against the guardian wasm FIRST, because every
+                  test below it parses that file (docs/DEFECTS.md H-52).
+  ${B}archive${R}         the offline hand-history analyser's own 39 gates
+                  (tools/archive, docs/ARCHIVE.md). An independent reimplementation
+                  of docs/SHUFFLE-SPEC.md that reconstructs hole cards no record
+                  publishes. No replica, no network. Included in 'test';
+                  docs/DEFECTS.md H-50 is why it has a target.
+  ${B}no-peeking${R}      the sealed-dealer spike's own 36 tests
+                  (docs/NO-PEEKING-FEASIBILITY.md §10). A SPIKE: nothing here is
+                  deployed and nothing is in icp.yaml. Included in 'test';
+                  docs/DEFECTS.md H-53 is why it has a target.
   ${B}fuzz-default${R}    the fuzzer exactly as a developer runs it: no environment at
                   all, so the DEFAULT seeds and DEFAULT step count are what runs.
                   docs/DEFECTS.md H-28 -- this invocation was red for a whole wave
@@ -1310,8 +1582,10 @@ ${B}ClearDeck dev entry point${R}   (make <target> works for all of these)
                   has to answer for what it last said (docs/DEFECTS.md E-63).
   ${B}shots-selftest${R}  the screenshot harness's own gates, on fixtures whose answer is
                   known by construction: the pixel gate, the token census, the
-                  money parser, the NO-RAKE gate and the action dock's
-                  containment. No replica.
+                  money parser, the NO-RAKE gate, the action dock's containment,
+                  the solvency reader and the table-in-frame verdict. ONE list,
+                  discovered from disk and cross-checked against a required set,
+                  shared with 'npm run selftest' (docs/DEFECTS.md H-47). No replica.
   ${B}known-defects${R}   run the markers that are RED on purpose; succeeds while the
                   engine defects are still present, shouts when one is fixed
   ${B}hygiene${R}         no large/binary files added, no tracked artifact blob, every
@@ -1338,6 +1612,9 @@ main() {
     local-status)   cmd_local_status ;;
     wasm)           cmd_wasm ;;
     test)           cmd_test ;;
+    custody)        cmd_custody ;;
+    archive)        cmd_archive ;;
+    no-peeking)     cmd_no_peeking ;;
     fuzz)           cmd_fuzz ;;
     fuzz-default)   cmd_fuzz_default ;;
     settlement)     cmd_settlement "$@" ;;

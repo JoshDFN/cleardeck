@@ -492,6 +492,270 @@ fn build_table_canister() -> TableModule {
     }
 }
 
+// ---------------------------------------------------------------------------
+// the GUARDIAN module (docs/SECURITY-FINDINGS.md FINDING 23)
+// ---------------------------------------------------------------------------
+
+/// Where `scripts/build-guardian.sh` puts the guardian module, relative to the
+/// repo root.
+///
+/// `src/guardian_canister` is a DETACHED crate (its own `[workspace]`, its own
+/// Cargo.lock, its own target/), so unlike every other module here it does not
+/// land in the root `target/`. That detachment is deliberate and is documented in
+/// its Cargo.toml: mainnet's six backend modules currently reproduce byte for
+/// byte from `cargo build --locked` at the root, and the root lockfile is an
+/// input to that build, so a crate that cannot rewrite the root lockfile cannot
+/// change those hashes.
+pub const GUARDIAN_WASM_REL: &str =
+    "src/guardian_canister/target/wasm32-unknown-unknown/release/guardian_canister.wasm";
+
+static GUARDIAN_MODULE: OnceLock<TableModule> = OnceLock::new();
+
+/// `scripts/build-guardian.sh`, with the build environment PINNED rather than
+/// inherited (docs/DEFECTS.md H-21).
+///
+/// The script rather than `cargo build` directly, because the script sets the
+/// reproducibility RUSTFLAGS (`-Cstrip=symbols` and two `--remap-path-prefix`es)
+/// that the fund-holding canisters are built with. Running plain `cargo` here
+/// produced a DIFFERENT module from the one the script produces, so the gate was
+/// green about a binary no build command in this repository emits — the same
+/// shape as docs/DEFECTS.md H-01. One script, one artifact.
+fn pinned_guardian_build(root: &Path, crate_dir: &Path) -> Command {
+    let mut cmd = Command::new(root.join("scripts").join("build-guardian.sh"));
+    cmd.current_dir(root);
+    for key in SCRUBBED_EXACT {
+        cmd.env_remove(key);
+    }
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy().to_string();
+        if SCRUBBED_PREFIXES.iter().any(|p| name.starts_with(p)) {
+            cmd.env_remove(&name);
+        }
+    }
+    cmd.env("RUSTUP_TOOLCHAIN", pinned_toolchain(root));
+    cmd.env("CLEARDECK_GUARDIAN_CRATE", crate_dir);
+    cmd
+}
+
+/// The GUARDIAN module, built from the checked-out source.
+///
+/// Same rule as the table module and the archive module: BUILT, never resolved
+/// from whatever happens to be on disk (docs/DEFECTS.md H-01). A gate that
+/// reports "the guardian refuses to reinstall" while running a binary that is not
+/// in this tree is a statement about nothing.
+pub fn guardian_canister_module() -> &'static TableModule {
+    GUARDIAN_MODULE.get_or_init(|| {
+        let root = repo_root();
+        let crate_dir = root.join("src").join("guardian_canister");
+        let path = root.join(GUARDIAN_WASM_REL);
+        assert!(
+            crate_dir.join("Cargo.toml").exists(),
+            "src/guardian_canister/Cargo.toml is absent, so there is no guardian to test. \
+             docs/SECURITY-FINDINGS.md FINDING 23."
+        );
+        let status = pinned_guardian_build(&root, &crate_dir)
+            .status()
+            .expect("could not run scripts/build-guardian.sh");
+        assert!(
+            status.success(),
+            "building guardian_canister for wasm32-unknown-unknown FAILED, so the FINDING 23 \
+             gate has nothing to run against."
+        );
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+            panic!(
+                "cargo reported success but {} could not be read: {e}",
+                path.display()
+            )
+        });
+        let sha256 = sha256_hex(&bytes);
+        announce(&format!(
+            "MONEY-SAFETY: guardian wasm sha256={sha256} bytes={} path={}",
+            bytes.len(),
+            path.display()
+        ));
+        TableModule {
+            bytes,
+            sha256,
+            path,
+        }
+    })
+}
+
+static GUARDIAN_VARIANT: OnceLock<TableModule> = OnceLock::new();
+
+/// A guardian module that is a DIFFERENT BINARY from the one under test, with one
+/// constant changed so the difference is visible on the wire.
+///
+/// # Why the self-upgrade test needs this
+///
+/// The obvious self-upgrade test proposes the guardian's own module, executes, and
+/// asserts the installed module hash equals the module it proposed. That assertion
+/// passes when NOTHING HAPPENED, because the module it proposed is the module that
+/// was already installed. Written that way it reported `ok` on a build whose
+/// self-upgrade trapped in `ic-cdk`'s callback and never landed — the CORRECT
+/// TOTALS, WRONG RECIPIENTS signature, in the gate rather than in the canister.
+///
+/// So the self-upgrade is tested against a module that is not the one installed:
+/// the hash must CHANGE, and `max_pending` — visible through `get_config()` — must
+/// change with it. Neither can happen unless the upgrade really executed.
+///
+/// Built by copying the crate into `target/money-safety/`, patching one line and
+/// compiling, rather than by checking a binary in: a fixture nobody can rebuild
+/// rots into a story about a lost file (same rule as `previous_release`).
+pub fn guardian_variant_module() -> &'static TableModule {
+    GUARDIAN_VARIANT.get_or_init(|| {
+        let root = repo_root();
+        let src = root.join("src").join("guardian_canister");
+        let tree = cache_dir().join("guardian-variant");
+        let path = tree.join("target/wasm32-unknown-unknown/release/guardian_canister.wasm");
+
+        // Fresh copy every time: a stale variant tree that no longer matches the
+        // guardian under test would make this a comparison against a ghost.
+        let _ = std::fs::remove_dir_all(tree.join("src"));
+        std::fs::create_dir_all(tree.join("src")).expect("cannot create the variant tree");
+        std::fs::copy(src.join("Cargo.toml"), tree.join("Cargo.toml"))
+            .expect("cannot copy the guardian manifest");
+        // The lockfile too: a variant that resolves its own dependency versions is
+        // a variant that differs from the module under test in ways this test does
+        // not control, and it needs the network to do it.
+        let _ = std::fs::copy(src.join("Cargo.lock"), tree.join("Cargo.lock"));
+        let lib = std::fs::read_to_string(src.join("src").join("lib.rs"))
+            .expect("cannot read the guardian source");
+        const FROM: &str = "pub const MAX_PENDING: usize = 32;";
+        const TO: &str = "pub const MAX_PENDING: usize = 31;";
+        assert!(
+            lib.contains(FROM),
+            "the guardian variant patches the line `{FROM}`, which is no longer in \
+             src/guardian_canister/src/lib.rs. Update the patch, or the self-upgrade gate is \
+             comparing a module against itself and cannot fail."
+        );
+        std::fs::write(tree.join("src").join("lib.rs"), lib.replacen(FROM, TO, 1))
+            .expect("cannot write the variant source");
+
+        let status = pinned_guardian_build(&root, &tree)
+            .status()
+            .expect("could not run scripts/build-guardian.sh for the variant");
+        assert!(status.success(), "building the guardian variant FAILED");
+
+        let bytes = std::fs::read(&path).expect("variant guardian wasm unreadable");
+        let sha256 = sha256_hex(&bytes);
+        assert_ne!(
+            sha256,
+            guardian_canister_module().sha256,
+            "the guardian variant compiled to the SAME module as the guardian under test, so \
+             the self-upgrade gate would pass without anything happening"
+        );
+        announce(&format!(
+            "MONEY-SAFETY: guardian VARIANT wasm sha256={sha256} bytes={}",
+            bytes.len()
+        ));
+        TableModule {
+            bytes,
+            sha256,
+            path,
+        }
+    })
+}
+
+/// The committed guardian interface, as text. The gate parses this rather than
+/// the Rust source, because the `.did` is what a client is generated from and
+/// what `icp` installs as `candid:service` metadata: if a destructive verb ever
+/// appears there, it is reachable by every client in the world.
+pub fn guardian_candid_text() -> String {
+    let path = repo_root()
+        .join("src")
+        .join("guardian_canister")
+        .join("guardian_canister.did");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read {}: {e}. Regenerate it with `./scripts/build-guardian.sh --did`.",
+            path.display()
+        )
+    })
+}
+
+// ---------------------------------------------------------------------------
+// the THIEF module (docs/SECURITY-FINDINGS.md FINDING 23c)
+// ---------------------------------------------------------------------------
+
+static THIEF_MODULE: OnceLock<TableModule> = OnceLock::new();
+
+/// A module that is NOT ClearDeck, for the one question the wipe tests cannot
+/// answer: can the operator KEEP the money, or only destroy it?
+///
+/// For one wave the deposit screen and the README both answered "only destroy",
+/// on the argument that no ClearDeck method pays a controller. That argument is
+/// true of this code and irrelevant to a controller, because a controller
+/// replaces the code. `tests/thief_canister` is the smallest module that settles
+/// it, and this builds it rather than resolving whatever is on disk, for the same
+/// reason as every other module here (docs/DEFECTS.md H-01).
+///
+/// It is a detached crate under `tests/`, so it touches neither the root
+/// Cargo.lock nor `icp.yaml`, and no deploy path can reach it.
+///
+/// Unlike the guardian there is no build SCRIPT: the guardian needs one because
+/// its reproducibility flags have to match the fund-holding canisters' exactly,
+/// and this module ships nowhere and is compared to nothing. The build
+/// environment is still scrubbed and the toolchain still pinned, so the gate
+/// cannot pass or fail because of an inherited `RUSTFLAGS`.
+pub fn thief_canister_module() -> &'static TableModule {
+    THIEF_MODULE.get_or_init(|| {
+        let root = repo_root();
+        let crate_dir = root.join("tests").join("thief_canister");
+        let path = crate_dir.join("target/wasm32-unknown-unknown/release/thief_canister.wasm");
+        assert!(
+            crate_dir.join("Cargo.toml").exists(),
+            "tests/thief_canister/Cargo.toml is absent, so the theft half of FINDING 23 has \
+             nothing to run against and the custody disclosure would rest on an argument again."
+        );
+
+        let mut cmd = Command::new("cargo");
+        cmd.current_dir(&crate_dir);
+        for key in SCRUBBED_EXACT {
+            cmd.env_remove(key);
+        }
+        for (key, _) in std::env::vars_os() {
+            let name = key.to_string_lossy().to_string();
+            if SCRUBBED_PREFIXES.iter().any(|p| name.starts_with(p)) {
+                cmd.env_remove(&name);
+            }
+        }
+        cmd.env("RUSTUP_TOOLCHAIN", pinned_toolchain(&root));
+        cmd.env("RUSTFLAGS", "-Cstrip=symbols");
+        cmd.args([
+            "build",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--release",
+            "--locked",
+        ]);
+        let status = cmd.status().expect("could not run cargo for tests/thief_canister");
+        assert!(
+            status.success(),
+            "building tests/thief_canister for wasm32-unknown-unknown FAILED, so the FINDING 23c \
+             gate has nothing to run against."
+        );
+
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+            panic!(
+                "cargo reported success but {} could not be read: {e}",
+                path.display()
+            )
+        });
+        let sha256 = sha256_hex(&bytes);
+        announce(&format!(
+            "MONEY-SAFETY: thief wasm sha256={sha256} bytes={} path={}",
+            bytes.len(),
+            path.display()
+        ));
+        TableModule {
+            bytes,
+            sha256,
+            path,
+        }
+    })
+}
+
 /// Emit a line that survives `cargo test`'s per-test output capture.
 ///
 /// libtest replaces the capture target used by `print!`/`eprint!`, so a banner

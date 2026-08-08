@@ -1,0 +1,94 @@
+type Action = variant {
+  // Hand the operator key to a different principal.
+  TransferOperator : record { new_operator : principal };
+  // `install_code --mode upgrade` on a guarded canister, from chunks already
+  // in that canister's own chunk store.
+  UpgradeGuarded : record {
+    arg : blob;
+    wasm_module_hash : blob;
+    chunk_hashes : vec blob;
+    target : principal;
+  };
+  // `install_code --mode upgrade` on THIS canister.
+  UpgradeSelf : record {
+    arg : blob;
+    wasm_module_hash : blob;
+    chunk_hashes : vec blob;
+  };
+};
+type GuardianConfig = record {
+  max_pending : nat64;
+  operator_delay_secs : nat64;
+  operator : principal;
+  // The verbs this canister will never emit. See `REFUSED_OPERATIONS`.
+  refused_operations : vec text;
+  guarded : vec principal;
+  guarded_delay_secs : nat64;
+  self_delay_secs : nat64;
+};
+type GuardianInit = record {
+  // The key holder. May propose, cancel and execute. May do nothing else.
+  operator : principal;
+  // The canisters this guardian is (or is about to become) the controller of.
+  // Informational: listing a canister here grants nothing. The management
+  // canister decides, from the target's own controller list, whether a call
+  // from this canister is allowed.
+  guarded : vec principal;
+};
+type Proposal = record {
+  id : nat64;
+  ready_at_secs : nat64;
+  // Why the last `execute` attempt failed, if one did. A failed attempt returns
+  // the proposal to `Pending` with the same `ready_at_secs`, so an operator can
+  // retry a transient failure without buying another notice period, and a
+  // reader can see that it happened.
+  last_error : opt text;
+  status : ProposalStatus;
+  action : Action;
+  // When the current `Executing` claim was taken. `None` in every other status.
+  // See `EXECUTING_GRACE_SECS`.
+  executing_since_secs : opt nat64;
+  kind : text;
+  attempts : nat32;
+  proposed_at_secs : nat64;
+  proposed_by : principal;
+};
+type ProposalStatus = variant {
+  // An `execute` is in flight. Set BEFORE the await, cleared after, so a second
+  // `execute` on the same id cannot run the same management call twice.
+  Executing;
+  Executed : record { at_secs : nat64 };
+  Cancelled : record { at_secs : nat64 };
+  // Waiting for `ready_at_secs`, or waiting to be executed after it.
+  Pending;
+};
+type Result = variant { Ok; Err : text };
+type Result_1 = variant { Ok : nat64; Err : text };
+type Result_2 = variant { Ok : vec blob; Err : text };
+type Result_3 = variant { Ok : blob; Err : text };
+service : (GuardianInit) -> {
+  cancel : (nat64) -> (Result);
+  clear_chunk_store : (principal) -> (Result);
+  // Execute a proposal whose notice period has elapsed.
+  // 
+  // Everything this canister can make the management canister do happens here, and
+  // nowhere else, and it is three verbs long.
+  execute : (nat64) -> (Result);
+  get_config : () -> (GuardianConfig) query;
+  get_proposal : (nat64) -> (opt Proposal) query;
+  history : () -> (vec Proposal) query;
+  list_proposals : () -> (vec Proposal) query;
+  // Declare a canister as guarded. Grants NOTHING: controllership is decided by the
+  // target's own controller list, which this canister cannot write. Its only effect
+  // is that a proposal naming this canister can be opened, and that
+  // `get_config().guarded` names it for a reader.
+  note_guarded : (principal) -> (Result);
+  propose : (Action) -> (Result_1);
+  // The verbs this canister will never emit, as data.
+  refused_operations : () -> (vec text) query;
+  // Seconds remaining before `id` may execute. `Some(0)` means it is ready now;
+  // `None` means there is no such open proposal.
+  seconds_until_ready : (nat64) -> (opt nat64) query;
+  stored_chunks : (principal) -> (Result_2);
+  upload_chunk : (principal, blob) -> (Result_3);
+}

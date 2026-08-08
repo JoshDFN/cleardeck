@@ -93,6 +93,34 @@ canisters:
     init_args:
       value: '(record { small_blind = 100 : nat64; big_blind = 200 : nat64; min_buy_in = 10000 : nat64; max_buy_in = 100000 : nat64; max_players = 2 : nat8; action_timeout_secs = 30 : nat64; ante = 0 : nat64; time_bank_secs = 30 : nat64; currency = variant { BTC } })'
 
+  # --- THE GUARDIAN IS DELIBERATELY NOT HERE --------------------------------
+  #
+  # docs/SECURITY-FINDINGS.md FINDING 23 / docs/DEFECTS.md E-84. `src/guardian_canister`
+  # is a controller-of-controllers: it holds the controller seat on the fund-holding
+  # canisters and exposes only state-preserving, timelocked operations, so the key
+  # that can zero a player's balance today could no longer do it at all. It is built
+  # by `./scripts/build-guardian.sh` and gated by `./scripts/dev.sh custody`.
+  #
+  # It is absent from this file on purpose, for two reasons, and both are reversible
+  # only by a deliberate decision:
+  #
+  # 1. REPRODUCIBILITY. `recipes/rust-reproducible.hbs` runs `cargo build --package
+  #    <p> --locked` at the repo root, so a canister listed here must be a root
+  #    workspace member — which rewrites the root Cargo.lock, an input to the build
+  #    that mainnet's six backend modules currently match 6 of 6. The guardian
+  #    carries its own `[workspace]` and its own lockfile so that cannot happen, and
+  #    the cost of that choice is exactly this: `icp build` cannot see it.
+  # 2. DECLARED VS DEPLOYED. A seventh backend canister here would make
+  #    `scripts/check-deployed-config.sh` and `scripts/check-deployed.sh` report a
+  #    fleet that does not match the manifest, on a LIVE system, before anything is
+  #    deployed — a false red on the two gates whose whole job is to be believed.
+  #
+  # Deploying it is therefore a deliberate two-step (build here, then
+  # `icp canister create` + `icp canister install --mode install` the artifact),
+  # followed by the irreversible handover described in
+  # docs/SECURITY-FINDINGS.md FINDING 23 §6. Adding it to this file is the LAST
+  # step of that operation, not the first.
+
   # --- SvelteKit frontend (asset canister; `npm run build` -> dist) ----------
   - name: frontend
     recipe:

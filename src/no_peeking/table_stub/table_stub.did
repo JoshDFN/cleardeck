@@ -1,0 +1,159 @@
+type Action = variant {
+  Call;
+  Fold;
+  AllIn;
+  Check;
+  // Raise TO this total for the street (the same convention the live engine
+  // uses for `Raise`).
+  RaiseTo : nat64;
+};
+type Card = record { rank : Rank; suit : Suit };
+// One seat the deal fed, in the order the deck was consumed.
+// 
+// Same field names and same meaning as the live engine's `DealtInSeat`, because
+// `docs/SHUFFLE-SPEC.md` §4 says `P = length of dealt_in` and
+// `hole cards of dealt_in[k] = deck[2k], deck[2k+1]`. A verifier reproducing a
+// hand this dealer dealt reads the same field under the same name.
+type DealtInSeat = record { "principal" : principal; seat : nat8 };
+type HandRank = variant {
+  StraightFlush : nat8;
+  Straight : nat8;
+  Pair : record { nat8; blob };
+  FullHouse : record { nat8; nat8 };
+  TwoPair : record { nat8; nat8; nat8 };
+  HighCard : blob;
+  ThreeOfAKind : record { nat8; blob };
+  Flush : blob;
+  RoyalFlush;
+  FourOfAKind : record { nat8; nat8 };
+};
+type Phase = variant { Flop; Idle; Turn; Complete; River; Showdown; PreFlop };
+type Rank = variant {
+  Ace;
+  Six;
+  Ten;
+  Two;
+  Eight;
+  Seven;
+  Five;
+  Four;
+  Jack;
+  King;
+  Nine;
+  Three;
+  Queen;
+};
+type Result = variant { Ok; Err : text };
+type Result_1 = variant { Ok : text; Err : text };
+type Result_2 = variant { Ok : vec Winner; Err : text };
+type Result_3 = variant { Ok : nat64; Err : text };
+type Result_4 = variant { Ok : Phase; Err : text };
+// A seat.
+// 
+// **Read the fields.** There is no `hole_cards` here and there is nowhere else in
+// this canister for one to hide. In `src/table_canister/src/lib.rs` the
+// equivalent struct carries `pub hole_cards: Option<(Card, Card)>`, and that
+// field, plus `TableState::deck`, plus `CURRENT_SEED`, are the three things the
+// auditor read.
+type Seat = record {
+  in_hand : bool;
+  "principal" : principal;
+  has_folded : bool;
+  chips : nat64;
+  seat : nat8;
+  total_bet_this_hand : nat64;
+  current_bet : nat64;
+  has_acted_this_round : bool;
+  is_all_in : bool;
+};
+// A seat's two cards, once they are public and only once they are public.
+type SeatCards = record { cards : record { Card; Card }; seat : nat8 };
+type SidePot = record { eligible_players : blob; amount : nat64 };
+type StubConfig = record { small_blind : nat64; big_blind : nat64 };
+type StubInit = record { dealer : principal; config : StubConfig };
+type Suit = variant { Diamonds; Hearts; Clubs; Spades };
+// Everything this canister knows, returned to anybody who asks.
+// 
+// The auditor's finding was against a method of exactly this shape. Run it
+// mid-hand and count the cards: `board` holds only what the dealer has already
+// made public to everyone, and `showdown` is empty until the showdown is public
+// too.
+type TableView = record {
+  pot : nat64;
+  dealt_in : vec DealtInSeat;
+  min_raise : nat64;
+  last_error : opt text;
+  action_on : opt nat8;
+  dealer_seat : nat8;
+  hand_id : opt nat64;
+  seats : vec Seat;
+  dealer_canister : principal;
+  current_bet : nat64;
+  seed_hash : opt text;
+  revealed_seed : opt text;
+  board : vec Card;
+  showdown : vec SeatCards;
+  phase : Phase;
+  side_pots : vec SidePot;
+  winners : vec Winner;
+};
+type Winner = record {
+  "principal" : principal;
+  rank : opt HandRank;
+  seat : nat8;
+  amount : nat64;
+};
+service : (StubInit) -> {
+  act : (Action) -> (Result);
+  // Whether this table currently believes the hand can move on. Public so a test —
+  // and a client — can see the same thing the table sees.
+  betting_round_closed : () -> (bool) query;
+  chips_of : (principal) -> (nat64) query;
+  // The analogue of `get_table_state`. It returns EVERYTHING this canister knows.
+  // 
+  // That is the claim under test: run it as the controller, mid-hand, at
+  // `phase = PreFlop`, and there is no deck in it and no hole card in it, because
+  // there is no deck in this canister and no hole card in this canister.
+  get_table_state : () -> (opt TableView) query;
+  // A player who folded or went all-in tells the dealer to stop waiting for them.
+  // 
+  // Cannot be done on their behalf: the dealer only accepts `stand_down` from the
+  // seat's own principal, which is what makes an early reveal impossible rather than
+  // merely visible. The table's route is [`nudge_timeout`], and that one costs a
+  // full action clock of measured silence.
+  how_a_player_stands_down : () -> (text) query;
+  // Ask the dealer to time a silent seat out, so a disconnect cannot stall the
+  // street.
+  // 
+  // The dealer refuses unless that seat has been silent for a full action clock BY
+  // ITS OWN CLOCK, so this is not a "the table says so" door. Permissionless,
+  // because any player has the same interest in the hand moving.
+  nudge_timeout : (nat8) -> (Result_1);
+  // Settle a hand nobody can otherwise close, from the dealer's last-resort reveal.
+  // 
+  // Permissionless, and this is the door that keeps the two failures this project
+  // has already shipped out of the design: the pot is NOT stuck forever, and
+  // everybody is NOT refunded so that the winner is robbed. The dealer publishes the
+  // seed, the board and every hole card once the hand is older than its
+  // `force_finalize_after_ns`, and the real winner is paid from the real cards.
+  rescue_hand : () -> (Result_2);
+  // Spike shortcut: chips are minted on request. There is no ledger here on
+  // purpose — this canister must never be mistaken for something that could hold
+  // money, and the money path is explicitly out of scope for this wave.
+  sit : (nat8, nat64) -> (Result);
+  // Ask the sealed dealer for a hand.
+  // 
+  // The whole exchange with the dealer is: "here are the seats". The reply is a
+  // commitment and a seat order. No card crosses this boundary, so there is nothing
+  // for this canister to store even if it wanted to, and nothing for its controller
+  // to find.
+  start_hand : () -> (Result_3);
+  total_chips : () -> (nat64) query;
+  // Move the hand on if the betting round has closed.
+  // 
+  // Permissionless on purpose. Nothing here is privileged, because nothing here can
+  // see a card that the dealer has not already published to everybody; and a
+  // permissionless advance is one fewer thing that stalls when the operator's
+  // process is not running (FINDING 19).
+  try_advance : () -> (Result_4);
+}

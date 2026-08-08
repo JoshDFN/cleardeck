@@ -11,6 +11,32 @@ cargo test --test regressions  -- --test-threads=2   # minimal reproducers for w
 cargo test --test fuzz                               # seeded hostile-sequence fuzzer
 ```
 
+**`controller_custody` is the odd one out and is best run through its own target**, because its
+output is the evidence rather than a pass/fail:
+
+```
+./scripts/dev.sh custody       # from the repo root: builds both wasms, prints the transcript
+```
+
+It is the gate on docs/SECURITY-FINDINGS.md FINDING 23 / docs/DEFECTS.md E-84 — the one
+`fund-theft` item that **no in-canister check can reach**, because `install_code --mode reinstall`
+and `uninstall_code` are calls to the MANAGEMENT canister and `require_controller()` lives inside
+the table. Two halves:
+
+* `finding23_*` REPRODUCE the wipe (40.00000000 ICP of player claims destroyed by one command
+  with the same wasm and no code change, ledger untouched). **They pass while the defect is
+  live.** That is deliberate: an unmeasured critical is a forgotten critical, and this one sat in
+  the register as prose from wave 7 to wave 12.
+* `guardian_*` test the mitigation in `src/guardian_canister/`, and first test its PREMISE — that
+  controllership on the IC is not transitive — in both directions, including the direction where
+  the answer is bad news.
+
+`guardian_sweep_no_method_on_the_wire_can_touch_a_funded_table` is the one that catches the NEXT
+door: it parses the committed `guardian_canister.did` and drives EVERY update method on it with
+arguments synthesised from the declared types, so it does not depend on anybody having thought of
+the method name. It exists because the name-based test read GREEN against a guardian carrying a
+working `emergency_reinstall`.
+
 There is also `src/table_canister/tests/money_safety.rs`, which carries the
 host-checkable subset (the payout-basis arithmetic) and runs under a plain
 `cargo test --workspace` with no replica.

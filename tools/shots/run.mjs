@@ -38,6 +38,7 @@ import { assertNothingCoversAFigure } from './lib/occlusion.mjs';
 import { foldProtectedNotices, probeProtectedNotices } from './lib/protected-notices.mjs';
 import { assertNoticesSurviveAToast } from './lib/toast-notices.mjs';
 import { foldFeltArea, measureFelt } from './lib/felt-area.mjs';
+import { foldTableInFrame, measureTableInFrame } from './lib/table-in-frame.mjs';
 
 const log = (msg) => console.log(msg);
 
@@ -379,6 +380,31 @@ async function runScene(scene, viewportName, ctx, browser, dirs, claimLatestDir 
     };
     if (feltArea.felt) log(`  ▪ ${feltArea.notes}`);
     for (const p of feltArea.problems) log(`  ⚠ FELT: ${p}`);
+
+    // THE FELT IS NOT THE TABLE. The floor above is satisfied by one rectangle
+    // being large and inside the frame; the pot, the five board slots, the seat
+    // pods and the action row are all positioned OFF that rectangle and can each
+    // leave the frame without moving it. Bar 23 exists because that is not
+    // hypothetical: at 390x844 the pot, the whole board and four of six pods were
+    // once above the top of the frame while every DOM assertion passed.
+    //
+    // It runs centrally, next to the felt floor it completes, for the same reason
+    // the census and the pixel gate do: a per-scene opt-in is a gate the next
+    // scene forgets. It also RECORDS the vertical budget, which is the arithmetic
+    // any claim about the achievable playing surface rests on and which had only
+    // ever been done by hand, once, by the author of the change.
+    const inFrame = foldTableInFrame(await measureTableInFrame(page), {
+      viewport: viewportName, scene: scene.name,
+    });
+    verification = {
+      verified: verification.verified && inFrame.ok,
+      checks: { ...verification.checks, tableInFrame: inFrame },
+      notes: inFrame.ok
+        ? `${verification.notes}; ${inFrame.notes}`
+        : `${inFrame.problems.join(' | ')} || ${verification.notes}`,
+    };
+    if (inFrame.measurement) log(`  ▪ ${inFrame.notes}`);
+    for (const p of inFrame.problems) log(`  ⚠ OFF FRAME: ${p}`);
 
     // A PNG under the canonical name is EVIDENCE: someone browsing artifacts/
     // will read `table-showdown-desktop.png` as proof of a verified showdown. A

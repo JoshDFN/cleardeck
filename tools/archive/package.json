@@ -1,0 +1,16 @@
+{
+  "name": "cleardeck-archive",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Offline hand-history analyser over the ClearDeck archive. Reconstructs every hand from its seed, prices decisions with the cards face up, and screens for collusion.",
+  "bin": {
+    "cdarchive": "./bin/cdarchive.mjs"
+  },
+  "scripts": {
+    "selftest": "node selftest/run.mjs",
+    "power": "node selftest/power.mjs"
+  },
+  "//": "The ANALYSIS half has no dependencies at all: node:crypto and nothing else. Only fetch/ and session/ need @dfinity/*, and they are the only files that touch a network.",
+  "dependencies": {}
+}

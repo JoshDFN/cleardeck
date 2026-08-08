@@ -1256,3 +1256,315 @@ The four gaps in §9.6 all stand. One is now sharper: **the harness photographs 
 only**, so the two viewports this wave had to fix by hand, 844×390 landscape phone (felt
 400.0×190.5 = 23.1%) and 320×568, have numbers, no bar, and no scene. A felt floor that no scene
 evaluates at those sizes is not protecting them.
+
+---
+
+## 11. The phone table, re-measured from scratch — and what §10 got wrong
+
+Everything in this section was measured on a live local replica at 390×844, in the **only legal
+configuration** (all five protected phrases on screen and hit-tested on their own pixels by
+`tools/shots/lib/protected-notices.mjs`, on every shot, including under an error toast). Nothing was
+hidden to obtain any number here. Two independent instruments were used and they agree:
+
+- **DOM**: `tools/shots/lib/felt-area.mjs`, `.felt`'s `getBoundingClientRect`.
+- **Pixels**: an independent hue-mask + largest-4-connected-component + bounding box over the
+  written PNG — the same method §1.1 used on the four reference clients, so our number and theirs
+  are comparable rather than merely both called "felt".
+
+| scene (390×844) | DOM `.felt` | pixel mask | agreement |
+|---|---|---|---|
+| `table-showdown` 6-max | 331.6×597.6 = **60.2%** | 332×598 = **60.3%** | 0.1 pt |
+| `table-preflop` 6-max | 308.5×555.9 = **52.1%** | 309×556 = **52.2%** | 0.1 pt |
+| `table-empty` 9-max | 304.2×548.1 = **50.7%** | 304×565 = 52.2%\* | mask leaks into the rail |
+| `table-facing-bet` 6-max | 295.6×532.7 = **47.8%** | 296×534 = **48.0%** | 0.2 pt |
+| `table-sidepots` 9-max | 291.7×525.6 = **46.6%** | 292×552 = 49.0%\* | mask leaks into the rail |
+| `table-allin` 9-max | 279.5×503.6 = **42.8%** | 280×521 = 44.3%\* | mask leaks into the rail |
+
+\* On the three 9-max shots the hue mask picks up the lit rail, so the DOM box is the tighter and
+more honest figure. Where the two disagree the DOM number is used below.
+
+### 11.1 §10.2 and §10.4 report one number for six scenes that differ by 17.4 points
+
+§10.2 tabulates the portrait 6-max felt as a single value, **60.6%**, for `table-preflop`,
+`table-facing-bet` and `table-showdown` together, and §10.4 says it "reproduces exactly, three
+times, on three separate runs and on two independent probes."
+
+**It does not reproduce, and the three scenes are not one number.** Measured above: 60.2%, 52.1%
+and 47.8% — a 12.4-point spread inside the 6-max set alone, and 17.4 points across all six table
+scenes. The reason is not noise and not the replica:
+
+> **The portrait felt is HEIGHT-BOUND in every state except the showdown, and the thing above it in
+> the flow that varies is the ACTION DOCK.** `--fw: min(86cqw, 55cqh)` at 6-max and
+> `min(78cqw, 52cqh)` at 9-max; the stage is `--cd-avail` minus the dock, so every pixel the dock
+> takes is felt. The dock is **92 px** with no committed stake and no pot-odds line (the showdown),
+> **134 px** with a committed stake (pre-flop), and **157.5 px** with both (facing a bet, and the
+> all-in). That 65.5 px swing is the entire spread.
+
+60.6% is therefore the **emptiest** dock state generalised to the whole table view. The state a
+player is in when the hand matters most — money committed, facing a bet — is the smallest felt, not
+the largest, and at 9-max it is **42.8%, below the 45% floor `felt-area.mjs` asserts**. The floor's
+own file says it was "set below the worst legal measured value with margin"; the worst legal value
+was never measured, because the scene that produces it was not among the ones the number came from.
+
+### 11.2 The vertical budget, measured block by block
+
+> **WAVE-12 CORRECTION, TWICE. Read this before acting on the table below.**
+>
+> **(a) It is not "identical on every table scene", and the run's own record says so.** The
+> budget block in `artifacts/screens/latest/manifest.json` (gitignored build output, regenerated
+> by `./scripts/dev.sh shots`) gives `aboveFeltPx` at 390×844 as
+> **130.0 / 130.1 / 131.9 / 144.6 / 145.3 / 160.0** for `table-facing-bet`, `table-preflop`,
+> `table-showdown`, `table-allin`, `table-sidepots` and `table-empty` — a 30 px spread. The
+> mechanism is in §11.3: the 9-max felt is **width**-capped, so it is shorter than the space
+> available and gets vertically centred, and the leftover appears above it. §11.6's "chrome above
+> the felt is identical (130 px) on all of them" is wrong for four of the six, `table-allin`
+> included, and `table-allin` is the scene §11.6 names.
+>
+> **(b) `.table-area` padding-top was already 4 px, not 8 px, and the new rule that sets it to 0
+> is DEAD CSS.** `+page.svelte:2363` adds `.table-area { padding-top: 0 }` inside
+> `@media (max-aspect-ratio: 1/1), (max-height: 560px)`. Later in the **same** media block,
+> `+page.svelte:2481` carries the pre-existing `main[data-view='table'] .table-area
+> { padding-top: 4px }`, which is more specific **and** later in source, so on the table view it
+> wins and the computed value is 4 px before the pass and 4 px after it.
+>
+> The row therefore contributes **nothing**, and the recovery was **5 px** (4 px of header padding
+> plus 1 px of header row gap), not 19 px. **The builder's own after-figures prove it**: this table
+> records 135.6 px above the stage before the pass and the manifest records 130.1 px after it on
+> `table-preflop`. That is 5.5 px. A 19 px recovery would have put it at ~116.6 px.
+>
+> **The felt percentages in §11.6 are measured and are right. The explanation of where they came
+> from is wrong by a factor of about four**, and anybody acting on this table would go hunting for
+> 13 px that was never there. The correct remaining statement is the one that matters anyway: what
+> is left above the felt is 59.6 px of protected notices plus two header rows, and none of it is
+> free.
+
+Recorded on every shot by `tools/shots/lib/table-in-frame.mjs` rather than by hand, so it is
+re-derivable and cannot drift silently. At 390×844, on `table-preflop`
+(**not** on every table scene — see the correction above):
+
+| block | height | protected? |
+|---|---|---|
+| `.alpha-warning-banner` compact strip (all five phrases + FULL TERMS) | **59.6 px** | **YES — HARD RULE 2** |
+| gap, banner → header | 4 px | no |
+| `header.compact` padding-block | 4 + 4 px | no |
+| `header.compact` row 1 (`← Lobby`, stakes pill) | 27 px | no |
+| `header.compact` row gap | 3 px | no |
+| `header.compact` row 2 (mute, History, Verify Fair, wallet) | 30 px | no |
+| `.table-area` padding-top | **4 px, and unchanged by this pass** | no |
+| **above the stage** | **135.6 px before, 130.1 px after** | 59.6 of it |
+| `.poker-table` row gap | 8 px | no |
+| `.action-dock` | **92 – 157.5 px** | FINDING 18 protects the committed figure and Withdraw |
+| bottom margin | 8 px | no |
+
+The three items wave 5 named as "roughly 120 px available at zero cost" are **all already spent**,
+and this pass verified each on the shipped build rather than taking the claim:
+
+1. `app.html` carries `<meta name="viewport" content="width=device-width, initial-scale=1">`. ✔
+2. `documentElement.scrollWidth` is **390** on all six mobile table scenes, so nothing forces the
+   layout viewport wider and the 0.918 zoom-out of [DEFECTS.md T-19](DEFECTS.md#t-19) is gone. ✔
+3. The table header is **two rows**, 27 + 30 px. ✔
+
+What was left was **5 px of pure empty space above the stage** (4 px of `header.compact` padding-block
+and 1 px of its row gap), plus about 3–5 px of layout gap between the stage and the dock and inside
+the dock. The `.table-area` row is not part of that: see correction (b) above, it was 4 px before
+and is 4 px now. Nothing else above the felt is free: the remaining 59.6 px is the notices, and the
+two header rows carry the stakes pill, Verify Fair, History and the wallet.
+
+> The claim first published here was 19 px, and it was arrived at by reading the stylesheet rather
+> than the computed style. That is the same class of error as §10.2's 60.6%: a number taken from
+> the source of a layout instead of from the layout. The felt figures in §11.6 were measured twice
+> with two independent instruments and are unaffected.
+
+### 11.3 The ceiling, stated honestly
+
+The felt is `--fw` wide by `--fw / 0.555` tall, and `--fw` is capped on BOTH axes. The width cap is
+set by the seat ring, not by taste: it is `1 / (ring-kx + pod-w-r)` of the stage width, because the
+pods hang off the felt on each side and must stay in the frame.
+
+| ring | width cap | ceiling felt | ceiling area | needs stage height |
+|---|---|---|---|---|
+| 6-max (`--ring-kx: 0.70`, `--pod-w-r: 0.46`) | `86cqw` = 335.4 px | 335.4 × 604.3 | **61.6%** | ≥ 610 px |
+| 9-max (`--ring-kx: 0.90`, `--pod-w-r: 0.38`) | `78cqw` = 304.2 px | 304.2 × 548.1 | **50.7%** | ≥ 585 px |
+
+So, against the references measured in §5 at the identical 390×844:
+
+- **6-max: the ceiling is 61.6% and PokerNow is 52.1%. We can beat the best reference, and on the
+  showdown we now do.**
+- **9-max: the ceiling is 50.7% and PokerNow's 52.1% is NOT REACHABLE** at nine seats with this
+  ring. It is 1.4 points short, and no vertical budget moves it: the cap is horizontal. The only
+  levers are `--ring-kx` (0.90 is already the value at which the two plates either side of top
+  centre stop overlapping) and `--pod-w-r` (0.38 gives a ~116 px pod carrying an avatar, a name and
+  a stack figure). Buying 3.4 points by taking `--pod-w-r` to 0.34 would take 12 px off the pod that
+  the **stack figure** would pay for. **That trade is refused here and recorded so it is not made by
+  accident.**
+
+> **BAR 34 (new).** State the ceiling per ring density, not per client. A 9-max phone table and a
+> 6-max phone table are different geometry problems and one number for both hides which one is
+> failing — which is exactly how §10.2 came to publish 60.6% for a set containing a 42.8%.
+
+### 11.4 The felt is not the table: pot, board, seat pods and the action row
+
+`felt-area.mjs` asserts one rectangle. The four things a player actually reads are positioned
+**off** that rectangle and can each leave the frame without moving it. `table-in-frame.mjs` now
+asserts, centrally, on every scene at every viewport: the pot readout (or the winner line that
+replaces it), exactly five `.community-cards` slots, every seat pod, and every dock button, each
+fully inside the frame — and fails when any of those sets is EMPTY, because a probe that matches
+nothing reports no problems.
+
+It has convicted twice already, and both were invisible to everything else in the repo:
+
+1. **Its own first version.** `.seat` is `width: 0; height: 0` — a point on the ring, with the
+   plate, cards, chips and badge positioned off it. Measuring `.seat` measures a zero-size box that
+   is inside the frame by construction, and the gate reported *"0 seat pods, all in frame"* on all
+   six mobile scenes. It now measures the **union of each seat's painted descendants**.
+2. **The split-pot winner line ran off both edges of the phone.** In portrait `.winner-display` was
+   `flex-wrap: nowrap; white-space: nowrap` with no `max-width`, and its content is not fixed — a
+   split pot adds `.split-info`. Measured: `You won 12.00 ICP · PAIR · Split pot · 2 winners ·
+   Complete` at **401.7 × 30.4 at x = −5.9** on a 390 px frame. The felt gate passed (the felt was
+   at its 61.6% ceiling on that very shot), the pixel gate passed (nothing covers it), and the token
+   census and chain-agreement checks passed because they read `textContent`, which is correct and
+   complete whether or not it is on the screen.
+
+> **BAR 35 (new).** Every readout whose content is CHAIN DATA rather than a design constant — the
+> winner line, the pot decomposition, the side-pot row — needs a width cap and a wrap, not a
+> `nowrap` and an assumption. The number of side pots and the number of winners are the canister's
+> to choose.
+
+### 11.5 Thumb reach
+
+Recorded, not asserted, because a landscape phone legally runs a shorter dock. On the primary action
+row (`.actions .action-btn` — Fold / Check / Call / Raise / All In) at 390×844:
+
+- row top at **86–93%** down the frame, **8.4 px** above the bottom edge on every scene where it is
+  the hero's turn;
+- smallest button **53.8 × 48 px**, clearing the 44 px touch target on both axes;
+- the row is the BOTTOM row of the dock, below the wallet strip, which is the arrangement wave 5
+  put in and this pass confirms is still true.
+
+**The action row is not the problem on this phone.** It is already in the thumb zone by every
+measure the references set.
+
+### 11.6 What this pass changed, and what it measured afterwards
+
+Two full sweeps, both in the legal configuration.
+
+> **WAVE-12 CORRECTION: "desktop is untouched" is true at 1440×900 and false in general.** The 11
+> changed declarations in `PokerTable.svelte` are inside `@media (max-aspect-ratio: 1/1)`, which is
+> portrait only. The 4 in `+page.svelte` — `header.compact` padding 4→2 px, its gap 3→2 px, and the
+> dead `.table-area` rule — are inside `@media (max-aspect-ratio: 1/1), (max-height: 560px)`, and
+> the second arm is **not** a portrait condition. Any landscape window under 560 px tall gets the
+> new values: measured at 1440×540, `header.compact` computes to `padding: 2px 8px; gap: 2px`. The
+> effect is small and arguably right (that arm exists precisely because height is scarce there),
+> but the sweep photographs one desktop size and the claim was made about all of them. **What the
+> shots prove is that the 1440×900 numbers are unchanged.**
+
+| scene (390×844) | ring | before | after | |
+|---|---|---|---|---|
+| `table-showdown` | 6-max | 60.2% | **61.6%** | **at the 6-max ceiling** |
+| `handreplay` (2 seats, `ring-sparse`) | 2 | 60.2% | **62.2%** | |
+| `deposit`, `shuffleproof` (behind a dialog) | 6-max | 60.2% | **61.6%** | **not comparable — see below** |
+| `table-preflop` | 6-max | 52.1% | **52.3%** | |
+| `table-empty` | 9-max | 50.7% | **50.7%** | **at the 9-max ceiling** |
+| `table-facing-bet` | 6-max | 47.8% | **48.0%** | |
+| `table-sidepots` | 9-max | 46.6% | **46.7%** | |
+| `table-allin` | 9-max | 42.8% | **42.9%** | **STILL BELOW THE 45% FLOOR** |
+
+**Protected notices: 5 of 5 on screen on all 24 shots at both viewports, hit-tested on their own
+pixels, and 5 of 5 again with an error toast raised on every one of them.** No number in this
+section was obtained with anything hidden.
+
+> **The two dialog rows are not comparable with the table rows, and wave 12 made that visible.**
+> On `deposit`/mobile the page behind the modal is scrolled, so `aboveFeltPx` is **−27.1**: the
+> top 27 px of the felt box is outside the frame and the 61.6% is the size of a box that is not
+> entirely on screen. `felt-area.mjs` does not assert on those shots — it records, because
+> `.modal-backdrop` is up — so nothing is claiming more than it measured, and
+> `table-in-frame.mjs` still requires the pot, every seat pod and every dock button to be inside
+> the frame there, and they are. But **`deposit` and `shuffleproof` belong in this table as
+> evidence that the dialogs do not break the table behind them, not as playing-surface results.**
+> Wave 12's custody correction lengthened the deposit dialog, which is what pushed
+> `aboveFeltPx` from +0.9 to −27.1 and is the reason this is now written down.
+
+**Why the gain is 0.1–0.2 points on the states with a committed stake, and 1.4 on the ones without.**
+About 5 px of empty chrome was recovered above the stage (see the correction in §11.2 — the figure
+first published here was 19 px and is wrong) and 3–5 px of layout gap below it. On the states
+with money in the pot, almost all of that was spent immediately on a correctness fix in the same
+dock: `.wallet-balance` was a flex column with `min-width: 0` inside an over-subscribed panel, so
+`.balance-value` (`white-space: nowrap`) painted its glyphs OUTSIDE its own box — measured on
+`table-facing-bet-mobile.png`, the "ICP" of "11.90 ICP" runs across the amber `.wallet-committed`
+border and over the "0" of "0.10 ICP". `flex: 0 0 auto` fixes it and moves the squeeze to the
+committed block, which takes one more wrapped line. Net on those states: +0.2. On the states with no
+committed stake there is nothing to pay for, and the whole ~9 px lands on the felt — corroborated by
+`handreplay`, whose felt grew 597.6 → 607.5 px, 9.9 px.
+
+> **The overflow is worth recording on its own, because of WHICH gate missed it.**
+> `tools/shots/lib/occlusion.mjs` compares element RECTANGLES, and a squeezed flex item reports the
+> squeezed rect while its text paints outside it. `table-facing-bet` at 390×844 reported
+> *"21 figures on screen, 0 occluded"* in the same run that produced that PNG. An ellipsis would
+> have been worse than the overflow: `textContent` stays correct, so the chain-agreement check and
+> the token census would both stay green while a player read a truncated balance — a money figure
+> that lies only in pixels.
+
+**The 9-max all-in is still red, and the arithmetic says why.** It needs the stage at ≥551 px to
+clear the 45% floor and ≥585 px to reach its 50.7% ceiling; it has 538. The dock in that state is
+164.5 px — the wallet strip (balance, the FINDING 18 committed figure and its sentence, Deposit,
+Withdraw) plus the pot-odds line plus a 48 px action row. (Its recorded `aboveFeltPx` is 144.6, not
+130: the 9-max felt is width-capped, so it is shorter than the space it has and the slack shows up
+above it. Closing that slack does not make the felt bigger — the cap is horizontal.) **There is no
+remaining chrome above the felt that is not the notices**: 59.6 px of the chrome above the stage is
+the notice strip, and the
+rest is two header rows of 27 and 30 px carrying the stakes pill, Verify Fair, History and the
+wallet. Closing the last 13 px has to come out of the dock, and everything in the dock is either a
+protected figure or a control. **Stated plainly: with the four notices on screen and FINDING 18's
+committed-stake panel in the dock, the worst legal 9-max phone state is 42.9%, not 45%, and the
+honest options are to move `.sit-controls`-style furniture out of the dock, or to set the floor per
+ring density instead of one number for both.**
+
+### 11.7 Two desktop reds this pass did NOT take, and why
+
+Both are pre-existing at `134550e` and both are recorded rather than papered over.
+
+1. **`table-preflop` / `table-facing-bet` at 1440×900 measure 27.8% against a 28.0% floor.** §10.3
+   already names the sanctioned recovery: the non-protected marketing clause in the banner
+   ("Built to demonstrate the power of the Internet Computer… fully transparent, and completely
+   decentralized" — a sentence FINDING 23 contradicts). Taking it trips `./scripts/dev.sh hygiene`,
+   whose notice check greps REMOVED lines for `unaudited|18+|jurisdiction|rake`, and that clause
+   shares a line with the no-rake sentence. Moving that guard's baseline is a deliberate act by
+   whoever owns the notices, not a side effect of a felt fix.
+2. **The Leave-table control is 6–7 px outside a 1440 px window.**
+   `.sit-controls > button.control-btn.destructive` renders at `51.2×28 at x=1396`, with
+   `documentElement.scrollWidth == 1440` and `<body>` at `overflow-x: hidden`, so its tail is simply
+   not on screen and cannot be scrolled to. Found by `table-in-frame.mjs`; invisible to every other
+   gate. The fix attempted and reverted, with the measurement, is in the comment on `.dock-aux` in
+   `PokerTable.svelte`: wrapping that row does put the button inside the frame and costs 43 px of
+   dock, dropping the desktop felt from 27.8% to 23.2% and from 30.7% to 24.2%. The structural fix
+   is to move `.sit-controls` into the left dock cell, which has ~435 px of unused width — a
+   deliberate relocation of a control, not a bug fix, and therefore not taken here.
+
+### 11.8 The reference figure this whole comparison hangs on, reconciled
+
+Three different numbers for the same PokerNow portrait capture are in circulation, and every
+"are we there yet" judgement depends on which one is used:
+
+| stated | where | check |
+|---|---|---|
+| **52.1%** | §5's table: `mobile-portrait-1`, 313×548 at 390×844 | 313 × 548 = 171 524 ÷ 329 160 = **52.1%** ✔ |
+| 49.1% | §10.4, "PokerNow's real portrait capture" | does not follow from any measurement in this file |
+| 47.1% | carried in briefs into this wave | does not appear in this file at all |
+
+**52.1% is the one with arithmetic behind it and it is the number §11 uses.** The other two are
+restatements that drifted. The reference corpus itself lives in a per-session scratchpad
+(`$SCRATCH/reference/`, §0) and is **not in this repo**, so none of the three can be re-derived from
+a clone — a standing weakness of every cross-client figure here, and the reason the ClearDeck side
+of §11 is measured twice with two independent instruments rather than once.
+
+Against 52.1%, at 390×844, with all five protected phrases on screen:
+
+- `table-showdown` (6-max): **61.6%** — ahead. (`deposit` and `shuffleproof` measure the same
+  61.6% behind a dialog; see the note in §11.6 — they are evidence about the dialogs, not
+  playing-surface results.)
+- `handreplay` (2 seats): **62.2%** — ahead.
+- `table-preflop` (6-max): **52.3%** — level.
+- `table-empty` (9-max): **50.7%** — at its ceiling, 1.4 points short, and unreachable by design.
+- `table-facing-bet` (6-max): **48.0%** — behind, by the dock's pot-odds row.
+- `table-sidepots` (9-max): **46.7%** — behind.
+- `table-allin` (9-max): **42.9%** — behind, and below this repo's own 45% floor.

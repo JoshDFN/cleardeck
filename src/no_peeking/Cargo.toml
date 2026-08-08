@@ -1,0 +1,27 @@
+# ClearDeck NO-PEEKING SPIKE. Nothing here is deployed and nothing here is in
+# `icp.yaml`. See README.md in this directory.
+
+[workspace]
+members = ["dealer_types", "dealer_canister", "table_stub"]
+resolver = "2"
+
+# DELIBERATELY DETACHED from the root workspace, for the same reason
+# `src/guardian_canister` and `tests/money_safety` are:
+#
+# THE SIX DEPLOYED CANISTERS MUST KEEP BUILDING BYTE-REPRODUCIBLY. The root
+# Cargo.lock is an input to `cargo build --locked` for lobby, history and the four
+# tables; mainnet currently matches a reproducible build 6 of 6. A new member of
+# the ROOT workspace rewrites that lockfile. This tree carries its own Cargo.lock
+# and its own target/, so the root lockfile is not touched at all and "the tree
+# still builds the deployed modules byte for byte" needs no argument.
+#
+# `poker_core` is pulled in by PATH (`../poker_core`), not vendored. That is
+# load-bearing: the dealer must shuffle with the SAME function the live engine
+# shuffles with, or `docs/SHUFFLE-SPEC.md` and the five independent verifications
+# of it stop applying to hands this dealer deals.
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"

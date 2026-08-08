@@ -140,3 +140,14 @@ path = "tests/deposit_surface.rs"
 [[test]]
 name = "deposit_subaccount_anchor"
 path = "tests/deposit_subaccount_anchor.rs"
+
+# THE CONTROLLER SEAT (docs/SECURITY-FINDINGS.md FINDING 23). Named explicitly for
+# the reason `admin_custody` and `deposit_subaccount_anchor` are: an
+# auto-discovered target is a target no human ever types, and this is the gate on
+# the only `fund-theft` item in the register that no in-canister audit surface can
+# reach -- `install_code --mode reinstall` and `uninstall_code` are calls to the
+# MANAGEMENT canister, so `require_controller()` never sees them. It is also named
+# by `scripts/dev.sh test` and by `scripts/dev.sh custody`.
+[[test]]
+name = "controller_custody"
+path = "tests/controller_custody.rs"

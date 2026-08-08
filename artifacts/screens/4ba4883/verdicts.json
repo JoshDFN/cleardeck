@@ -49,8 +49,7 @@
       "verified": false,
       "file": "UNVERIFIED-table-preflop-desktop.png",
       "problems": [
-        "the playing surface is 27.8% of the 1440x900 frame (870x414.3), below the 28% floor for desktop. A shrinking felt with the notices still on screen is the regression no other gate in this repo can see; see docs/WAVE-05.md and lib/felt-area.mjs",
-        "action buttons: Fold / Check / Raise / All In / +30s; action clock visible; chain agreement: 13 money figures on screen all equal the canister's; token census: 34 numeric tokens on screen, 13 matched to a canister figure, 21 allowlisted non-monetary (17 rules), 0 unaccounted for; pixel gate: 18 money/equity/card figures on screen, 18 with something overlapping them, 48 pairs pixel-tested, 0 occlu…"
+        "the playing surface is 27.8% of the 1440x900 frame (870x414.3), below the 28% floor for desktop. A shrinking felt with the notices still on screen is the regression no other gate in this repo can see; see docs/WAVE-05.md and lib/felt-area.mjs"
       ]
     },
     {
@@ -66,8 +65,7 @@
       "verified": false,
       "file": "UNVERIFIED-table-facing-bet-desktop.png",
       "problems": [
-        "the playing surface is 27.8% of the 1440x900 frame (870x414.3), below the 28% floor for desktop. A shrinking felt with the notices still on screen is the regression no other gate in this repo can see; see docs/WAVE-05.md and lib/felt-area.mjs",
-        "facing a call: button \"Call 0.10\"; chain agreement: 20 money figures on screen all equal the canister's; bet presets: 6 sizing figure(s) match get_pot(); token census: 44 numeric tokens on screen, 21 matched to a canister figure, 23 allowlisted non-monetary (17 rules), 0 unaccounted for; pixel gate: 24 money/equity/card figures on screen, 24 with something overlapping them, 57 pairs pixel-tested,…"
+        "the playing surface is 27.8% of the 1440x900 frame (870x414.3), below the 28% floor for desktop. A shrinking felt with the notices still on screen is the regression no other gate in this repo can see; see docs/WAVE-05.md and lib/felt-area.mjs"
       ]
     },
     {
@@ -90,8 +88,7 @@
       "verified": false,
       "file": "UNVERIFIED-table-allin-mobile.png",
       "problems": [
-        "the playing surface is 42.8% of the 390x844 frame (279.5x503.6), below the 45% floor for mobile. A shrinking felt with the notices still on screen is the regression no other gate in this repo can see; see docs/WAVE-05.md and lib/felt-area.mjs",
-        "2 ALL IN badges rendered, pot \"All in · 2 at risk Pre Flop 110.20\"; chain agreement: 24 money figures on screen all equal the canister's; token census: 46 numeric tokens on screen, 24 matched to a canister figure, 22 allowlisted non-monetary (17 rules), 0 unaccounted for; pixel gate: 25 money/equity/card figures on screen, 25 with something overlapping them, 82 pairs pixel-tested, 0 occluded; 5/5…"
+        "the playing surface is 42.8% of the 390x844 frame (279.5x503.6), below the 45% floor for mobile. A shrinking felt with the notices still on screen is the regression no other gate in this repo can see; see docs/WAVE-05.md and lib/felt-area.mjs"
       ]
     },
     {

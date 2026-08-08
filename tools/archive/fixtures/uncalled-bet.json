@@ -1,0 +1,163 @@
+{
+  "cleardeck_archive_bundle": 1,
+  "fetched_at": "2026-08-07T21:44:13.318Z",
+  "source": {
+    "kind": "history_canister",
+    "canister_id": "46el7-ql777-77775-aaada-cai",
+    "gateway": "http://localhost:8077",
+    "network": "local",
+    "authorized_tables": [
+      "4caro-hl777-77775-aaaba-cai",
+      "4fbx2-kt777-77775-aaabq-cai",
+      "4xhad-gd777-77775-aaacq-cai",
+      "4qggx-l3777-77775-aaaca-cai"
+    ],
+    "retention_summary": "A hand recorded here is permanent for the life of this canister. There is no method that deletes, prunes, edits or expires a record, and no cap on how many are kept; re-sending a hand that is already stored returns the existing id instead of writing a second copy. What CAN still destroy the archive is a controller of this canister: reinstalling it wipes stable memory and deleting it takes everything, and no application code can prevent either. The admin principal reported here cannot remove a record, but can admit a new writer with authorize_table, which is how a record no real table produced could get in. Treat that principal, and this canister's controllers, as the people you are trusting for durability.",
+    "records_are_append_only": true,
+    "admin": "nsp5q-aelxk-xax2u-3sqxb-xeod6-fduhf-zmoir-qxpp3-xusb4-nez2q-5ae",
+    "hand_ids_missing": [],
+    "note": "A REAL hand where a bet went uncalled, so the chips wagered exceed the pot. Copied verbatim out of a local archive canister."
+  },
+  "total_hands_reported": 1,
+  "hands": [
+    {
+      "hand_id": "19",
+      "table_id": "4fbx2-kt777-77775-aaabq-cai",
+      "hand_number": "1",
+      "timestamp": "1786139034274225000",
+      "small_blind": "5000000",
+      "big_blind": "10000000",
+      "ante": "0",
+      "shuffle_proof": {
+        "seed_hash": "1c2302772fb0d4b87d8812c78556a67035628783e0e7f18654a1a08197b530bc",
+        "revealed_seed": "23b758b31d905f19f403f59045f102bf305aa019c316ebce386a7a6a521ac182",
+        "timestamp": "1786139034274225000"
+      },
+      "dealt_in": [
+        {
+          "seat": 0,
+          "principal": "wufmv-ee35x-h6maj-t5vkr-wjebc-xd3cr-uggmi-ytjag-cn5xh-lqkfp-yae"
+        },
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe"
+        },
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae"
+        }
+      ],
+      "dealer_seat": 1,
+      "players": [
+        {
+          "seat": 0,
+          "principal": "wufmv-ee35x-h6maj-t5vkr-wjebc-xd3cr-uggmi-ytjag-cn5xh-lqkfp-yae",
+          "starting_chips": "1000000000",
+          "ending_chips": "990000000",
+          "hole_cards": null,
+          "final_hand_rank": null,
+          "amount_won": "0",
+          "position": "BB",
+          "dealt_in": true,
+          "contributed": "10000000",
+          "left_mid_hand": false
+        },
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe",
+          "starting_chips": "1000000000",
+          "ending_chips": "990000000",
+          "hole_cards": null,
+          "final_hand_rank": null,
+          "amount_won": "0",
+          "position": "BTN",
+          "dealt_in": true,
+          "contributed": "10000000",
+          "left_mid_hand": false
+        },
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae",
+          "starting_chips": "1000000000",
+          "ending_chips": "1020000000",
+          "hole_cards": null,
+          "final_hand_rank": null,
+          "amount_won": "30000000",
+          "position": "SB",
+          "dealt_in": true,
+          "contributed": "10000000",
+          "left_mid_hand": false
+        }
+      ],
+      "flop": [
+        "9s",
+        "Th",
+        "Jc"
+      ],
+      "turn": null,
+      "river": null,
+      "actions": [
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe",
+          "kind": "Call",
+          "amount": "10000000",
+          "phase": "preflop",
+          "timestamp": "1786139034498020000"
+        },
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae",
+          "kind": "Call",
+          "amount": "5000000",
+          "phase": "preflop",
+          "timestamp": "1786139034720139000"
+        },
+        {
+          "seat": 0,
+          "principal": "wufmv-ee35x-h6maj-t5vkr-wjebc-xd3cr-uggmi-ytjag-cn5xh-lqkfp-yae",
+          "kind": "Check",
+          "amount": "0",
+          "phase": "preflop",
+          "timestamp": "1786139034940583000"
+        },
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae",
+          "kind": "Bet",
+          "amount": "18000000",
+          "phase": "flop",
+          "timestamp": "1786139035171658000"
+        },
+        {
+          "seat": 0,
+          "principal": "wufmv-ee35x-h6maj-t5vkr-wjebc-xd3cr-uggmi-ytjag-cn5xh-lqkfp-yae",
+          "kind": "Fold",
+          "amount": "0",
+          "phase": "flop",
+          "timestamp": "1786139035399198000"
+        },
+        {
+          "seat": 1,
+          "principal": "75qvt-xbg2k-o4v4o-fpveu-whvxu-pxd4d-rhzlv-bdjsr-txn4x-4mjkc-uqe",
+          "kind": "Fold",
+          "amount": "0",
+          "phase": "flop",
+          "timestamp": "1786139035624351000"
+        }
+      ],
+      "total_pot": "30000000",
+      "rake": "0",
+      "winners": [
+        {
+          "seat": 2,
+          "principal": "ougln-xm7bw-vgre4-zcnzf-z3pga-k4sjf-7q6zv-vovbd-tjm3p-g4smy-lae",
+          "amount": "30000000",
+          "hand_rank": null,
+          "pot_type": "main"
+        }
+      ],
+      "went_to_showdown": false
+    }
+  ]
+}

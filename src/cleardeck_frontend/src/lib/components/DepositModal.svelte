@@ -845,6 +845,57 @@
       No rake is taken from any pot on any table.
     </p>
 
+    <!-- WHO CAN TAKE THIS MONEY, ON THE SCREEN IT LEAVES FROM.
+         docs/SECURITY-FINDINGS.md FINDING 23. The README sold "fully decentralized"
+         and "fair play without requiring trust" and disclosed only that a
+         controller can destroy the HAND HISTORY. It never said that a controller
+         can destroy your BALANCE -- which an auditor then did, with one
+         `install_code --mode reinstall`, the same wasm and no code change, for 5
+         ICP of her own money, while the ledger still held it at the canister's
+         address and every player-callable recovery told her she had nothing.
+         Reproduced at 40.00000000 ICP by
+         tests/money_safety/tests/controller_custody.rs.
+
+         PLACED AFTER the four protected notices and BEFORE every control that can
+         move money. After, because HARD RULE 2 says nothing may cover them and
+         nothing may push them off the screen -- this block is not allowed to be
+         the reason a player stops seeing "your funds are NOT safe". Before the
+         controls, because a disclosure a player reads after pressing the button is
+         a receipt.
+
+         It is deliberately NOT one of the protected phrases and deliberately does
+         not restate them: it is an ADDITION. Its own visibility is asserted by
+         tools/shots/lib/protected-notices.mjs only insofar as the four above must
+         still measure unobstructed with this here.
+
+         WAVE 12 CORRECTION, AND IT IS THE WHOLE POINT OF THIS BLOCK.
+         The first version of this paragraph promised a depositor that the money
+         was unreachable by the operator too, and named the worst case as
+         destruction rather than theft. That was FALSE, and false in the direction
+         that flatters the operator: it understated a fund-THEFT capability, on the
+         one screen where a player decides to hand over money. The reasoning behind
+         it was "there is no ClearDeck method that pays a controller", which is
+         true of this code and irrelevant to a controller, because a controller
+         replaces the code. A 500-byte module that is not ClearDeck, installed with
+         the SAME command as the wipe, moved 39.99990000 ICP of player deposits
+         into a wallet the operator owns
+         (tests/money_safety/tests/controller_custody.rs, the `finding23c_` test).
+         A disclosure that is wrong in the operator's favour is worse than no
+         disclosure, because a player who reads it deposits with a false floor
+         under them. `./scripts/dev.sh hygiene` now fails if either retracted
+         sentence comes back (RETRACTED_CUSTODY_CLAIMS in scripts/dev.sh). -->
+    <p class="custody-notice">
+      <strong>One key can zero this balance, and the same key can take it.</strong>
+      Every ClearDeck canister has a single controller principal. That key can erase
+      every player's balance with one ordinary management call
+      (<code>install_code --mode reinstall</code> or <code>uninstall_code</code>), and
+      because the same call installs any code it is handed, it can also pay this
+      canister's whole ledger balance into a wallet the operator owns. Both have been
+      done on a test replica. No bug in ClearDeck is needed, there is no warning and
+      there is no restore path. Depositing means trusting one key with the whole balance.
+      The shuffle needs no trust. Custody does.
+    </p>
+
     <!-- WHERE THE MONEY IS ACTUALLY GOING, ON THE SCREEN IT LEAVES FROM.
          Compiled in at build time (ic-config.js NETWORK), from the same constant
          that chooses the gateway and the canister ids, so this line and the
@@ -2475,6 +2526,38 @@
   /* In flow, directly beneath the notices. No z-index and no fixed position:
      nothing added to this dialog may become one more thing that can cover the
      four protected phrases (HARD RULE 2). */
+  /* THE CUSTODY DISCLOSURE (docs/SECURITY-FINDINGS.md FINDING 23).
+     Amber rather than red so it reads as a SECOND, different warning next to the
+     red alpha notice above it, instead of looking like more of the same sentence
+     and being skipped. Same 12px/1.5 as its neighbours: this is a notice, not a
+     decoration, and it has to survive the same 390x844 as they do. */
+  .custody-notice {
+    margin: 10px 0 0 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    color: #fcd34d;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .custody-notice strong {
+    display: block;
+    margin-bottom: 3px;
+    color: #fde68a;
+  }
+
+  .custody-notice code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.3);
+    color: #fde68a;
+    white-space: nowrap;
+  }
+
   .network-line {
     margin: 10px 0 0 0;
     padding: 8px 12px;

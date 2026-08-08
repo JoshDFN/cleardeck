@@ -1,0 +1,21 @@
+[package]
+name = "table_stub"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "ClearDeck NO-PEEKING SPIKE: a minimal table that runs a real hand -- blinds, betting, all-ins, side pots, showdown, settlement -- while holding NO deck, NO seed and NO hole card. Its whole job is to be the thing the auditor's attack is run against and fail to find anything in. It is NOT a replacement for src/table_canister and nothing here is deployed."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The REAL settlement code, by path. The point of the spike is that moving the
+# cards out of the table does not require touching any of this: `build_side_pots_from_contributions`,
+# `split_pot_clockwise` and `try_evaluate_hand` are called here exactly as
+# `src/table_canister/src/lib.rs` calls them, with the showdown cards arriving as
+# an argument instead of being read out of the table's own state.
+poker_core = { path = "../../poker_core" }
+dealer_types = { path = "../dealer_types" }
+candid = "0.10"
+ic-cdk = "0.19"
+serde = { version = "1.0", features = ["derive"] }

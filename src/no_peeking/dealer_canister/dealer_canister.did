@@ -1,0 +1,269 @@
+// The state a caller needs to know whether the street can close yet.
+type AckState = record {
+  street : Street;
+  waiting_on : blob;
+  can_advance : bool;
+  ready : vec SeatReadiness;
+};
+type Card = record { rank : Rank; suit : Suit };
+// Runway. `docs/NO-PEEKING-FEASIBILITY.md` §6 Option A: the freezing threshold of
+// a zero-controller canister can never be raised, so the balance is the entire
+// safety margin and it has to be legible to everybody. Anyone may top the dealer
+// up with `deposit_cycles`; that call is open to all principals and needs no
+// controller.
+type DealerHealth = record {
+  min_open_balance : nat;
+  can_open_hand : bool;
+  cycle_balance : nat;
+  hands_dealt : nat64;
+  live_hand : opt nat64;
+};
+// The frozen facts about a dealer. Everything here was fixed at install and none
+// of it can be changed by anyone, because there is nobody who could.
+type DealerIdentity = record {
+  table : principal;
+  min_open_balance : nat;
+  build : text;
+  action_timeout_ns : nat64;
+  force_finalize_after_ns : nat64;
+  street_grace_ns : nat64;
+};
+type DealerInit = record {
+  // The ONE canister allowed to drive a hand. Frozen at install: there is no
+  // method to change it and no controller who could install one.
+  table : principal;
+  min_open_balance : opt nat;
+  action_timeout_ns : opt nat64;
+  force_finalize_after_ns : opt nat64;
+  street_grace_ns : opt nat64;
+};
+// One seat the deal fed, in the order the deck was consumed.
+// 
+// Same field names and same meaning as the live engine's `DealtInSeat`, because
+// `docs/SHUFFLE-SPEC.md` §4 says `P = length of dealt_in` and
+// `hole cards of dealt_in[k] = deck[2k], deck[2k+1]`. A verifier reproducing a
+// hand this dealer dealt reads the same field under the same name.
+type DealtInSeat = record { "principal" : principal; seat : nat8 };
+type FinalizeKind = variant {
+  // Somebody — anybody — opened it after `force_finalize_after_ns` because it
+  // had been left in flight.
+  Forced;
+  // The table closed the hand normally.
+  Table;
+};
+// What `force_finalize` gives back: enough to settle the hand correctly without
+// anybody's co-operation.
+type ForcedFinalize = record {
+  at_ns : nat64;
+  hand_id : nat64;
+  community : vec Card;
+  hole_cards : vec SeatCards;
+  forced_by : principal;
+  revealed_seed : text;
+};
+// What `open_hand` gives back to the table. **No cards.**
+type HandOpened = record {
+  dealt_in : vec DealtInSeat;
+  hand_id : nat64;
+  opened_at_ns : nat64;
+  seed_hash : text;
+};
+// Everything about a hand that is public. Readable by anyone, including
+// anonymously, and identical for every caller.
+type HandPublic = record {
+  dealt_in : vec DealtInSeat;
+  table : principal;
+  street : Street;
+  reveals : vec RevealRecord;
+  hand_id : nat64;
+  community : vec Card;
+  opened_at_ns : nat64;
+  seed_hash : text;
+  revealed_seed : opt text;
+  street_opened_at_ns : nat64;
+  showdown : vec SeatCards;
+  ready : vec SeatReadiness;
+  finalized_by : opt FinalizeKind;
+};
+type Rank = variant {
+  Ace;
+  Six;
+  Ten;
+  Two;
+  Eight;
+  Seven;
+  Five;
+  Four;
+  Jack;
+  King;
+  Nine;
+  Three;
+  Queen;
+};
+type Readiness = variant {
+  // The table called `table_stand_down` after the DEALER measured a full action
+  // clock of silence from that seat. The table cannot shorten that clock and
+  // cannot use this against a seat that is still heartbeating.
+  TimedOutByTable;
+  // The seat called `stand_down` itself (folded, or all in).
+  StoodDownSelf;
+  // The table called `table_stand_down` after the street had been open for the
+  // whole GRACE period, which applies to a seat that is present and heartbeating
+  // but will not say it is ready.
+  // 
+  // This is the escape hatch for the griefer, and it is deliberately a separate
+  // variant so it is legible on the public record: a hand full of these is a
+  // table stalling on purpose, and a hand with one is a player who would not
+  // move. See the dealer's `table_stand_down` for why both clocks have to exist.
+  GraceExpired;
+  // The seat called `ack` itself, on this street.
+  Acked;
+};
+type Result = variant { Ok : AckState; Err : text };
+type Result_1 = variant { Ok : vec Card; Err : text };
+type Result_2 = variant { Ok : DealerIdentity; Err : text };
+type Result_3 = variant { Ok : text; Err : text };
+type Result_4 = variant { Ok : ForcedFinalize; Err : text };
+type Result_5 = variant { Ok : record { Card; Card }; Err : text };
+type Result_6 = variant { Ok : HandOpened; Err : text };
+type Result_7 = variant { Ok : vec SeatCards; Err : text };
+// One line of the append-only public reveal log.
+// 
+// Every card the dealer has ever made public has a row here saying WHO asked and
+// WHEN, by the dealer's own clock, and how each seat came to be ready. A player
+// who suspects the table advanced a street early does not have to take anyone's
+// word for it.
+type RevealRecord = record {
+  street : Street;
+  at_ns : nat64;
+  requested_by : principal;
+  readiness : vec SeatReadiness;
+};
+// A seat's two cards, once they are public and only once they are public.
+type SeatCards = record { cards : record { Card; Card }; seat : nat8 };
+type SeatReadiness = record { how : Readiness; seat : nat8 };
+// Streets, in the only order they may be revealed.
+// 
+// `Dealt` means hole cards exist and nothing else does. There is no variant for
+// "the deck", because the deck is not a thing the dealer will ever name.
+type Street = variant { Flop; Turn; Complete; Dealt; River };
+type Suit = variant { Diamonds; Hearts; Clubs; Spades };
+service : (DealerInit) -> {
+  // "I am here, and I am ready for the next card."
+  // 
+  // Player-signed and idempotent. Calling it again refreshes the liveness clock,
+  // which is what makes [`table_stand_down`] unusable against a player whose client
+  // is running. The live engine already heartbeats (`last_seen`,
+  // `DISCONNECT_TIMEOUT_SECS = 90`), so this is not a new class of traffic.
+  ack : (nat64) -> (Result);
+  ack_status : (nat64) -> (opt AckState) query;
+  // Reveal the next street. Public and simultaneous: the cards this returns to the
+  // table are the same cards [`community`] returns to every other caller, including
+  // anonymous ones, from this message onward. There is no private-reveal path in
+  // this canister for the same reason there is no `get_deck`.
+  // 
+  // Refuses until every dealt-in seat is ready — acked in its own name, stood down
+  // in its own name, or timed out on this canister's own clock.
+  advance_street : (nat64) -> (Result_1);
+  // The board, as it stands, to anybody who asks. Identical for every caller.
+  community : (nat64) -> (vec Card) query;
+  dealer_health : () -> (DealerHealth) query;
+  dealer_identity : () -> (Result_2) query;
+  // Close the hand and publish the seed.
+  // 
+  // After this the whole hand is reproducible by a stranger from
+  // `docs/SHUFFLE-SPEC.md`, including the hole cards of seats that folded — which is
+  // exactly what the live engine already does and what one auditor already
+  // demonstrated. Post-hand privacy is not what this spike buys and pretending
+  // otherwise would be the sort of overstatement the feasibility doc warns about.
+  // (The fix for THAT is Option C, vetKD for the archive, and it belongs to the
+  // history canister.)
+  // 
+  // **The gate matters.** Publishing the seed publishes every card, so
+  // `finish_hand` is the most dangerous method here. It is refused unless the hand
+  // is genuinely over: either a showdown was published, or **every** seat has stood
+  // down — each of those in its own name or on a full action clock of silence. A
+  // table that wanted to open the seed early would have to wait out a real clock
+  // against every attentive player, and an attentive player's heartbeat stops it
+  // outright.
+  finish_hand : (nat64) -> (Result_3);
+  // **Anyone at all** may force a stale hand open, and the pot is then settleable to
+  // its real winner.
+  // 
+  // This is the answer to the failure this project has already shipped twice and
+  // fixed twice: a hand that can never be closed, or a hand that is closed by
+  // refunding everybody so the winner is robbed. Neither is reachable here. Once a
+  // hand is older than `force_finalize_after_ns` — an hour by default, twelve times
+  // the table's own `STUCK_HAND_GRACE_NS` — any principal on the internet can
+  // publish the seed, the full board and every hole card, and the table can then
+  // award the pot to whoever actually won it.
+  // 
+  // It is safe precisely because the only gate is a wall clock that no caller
+  // controls, and it is set far beyond any hand that could still be live. It is
+  // also the recovery for the one failure a zero-controller canister cannot
+  // otherwise survive: if this dealer freezes mid-hand, anybody may
+  // `deposit_cycles` (open to all principals, no controller needed — measured) and
+  // then call this.
+  force_finalize : (nat64) -> (Result_4);
+  hand_public : (nat64) -> (opt HandPublic) query;
+  // Instruction counter for the CURRENT message, so a harness can price a deal
+  // against the live engine without guessing.
+  // 
+  // `performance_counter(0)` counts instructions within the current message
+  // execution and an `await` starts a new slice, which is why
+  // `docs/NO-PEEKING-FEASIBILITY.md` §7.1 is careful about what its numbers mean.
+  // This one is a plain query with no await, so it is the whole thing.
+  instructions_to_read_my_cards : (nat64) -> (nat64) query;
+  // **The only method in this canister that returns a live hole card, and it
+  // returns exactly two of them, to the one principal holding the seat.**
+  // 
+  // A query, so it costs the caller nothing and costs the dealer no consensus
+  // round. Queries are not certified, so a malicious node could lie to you about
+  // your own cards; that lie is detectable after the fact from the revealed seed,
+  // which is precisely the guarantee `docs/SHUFFLE-SPEC.md` already provides and
+  // the reason the seed is published at all.
+  my_hole_cards : (nat64) -> (Result_5) query;
+  // Open a hand: draw a seed, commit to it, and deal.
+  // 
+  // The reply carries `seed_hash` and `dealt_in` and **nothing else**. The table
+  // learns which seats are in and what to publish as its commitment; it does not
+  // learn a card and it does not learn the seed. That is the entire difference
+  // between this design and the one the auditor found.
+  // 
+  // Refuses if the dealer's own balance is below the floor: see
+  // [`DEFAULT_MIN_OPEN_BALANCE`] for why a hand that cannot be finished must never
+  // be started.
+  open_hand : (vec DealtInSeat) -> (Result_6);
+  // Publish the hole cards of the seats that reached showdown.
+  // 
+  // This is where the table gets cards, and it is the ONLY place, and it is after
+  // the river with every seat's betting closed. The cards become public to
+  // everybody in the same message — `hand_public` carries them from here on — so the
+  // table has no window in which it knows something the players do not.
+  // 
+  // **Feasibility §8 question (a), the showdown split.** The table keeps
+  // `evaluate_hand` and the side-pot code exactly as they are; it just receives the
+  // cards as an INPUT here instead of reading them out of its own state. Nothing in
+  // `poker_core` changes, so the golden vectors, the settlement oracle and the
+  // money-safety invariants all still bind.
+  reveal_showdown : (nat64, blob) -> (Result_7);
+  // "I have folded, or I am all in. Stop waiting for me on every street from here."
+  // 
+  // Player-signed and permanent. Nothing about it reveals a card.
+  stand_down : (nat64) -> (Result);
+  // The table may stand a seat down **only after that seat has been silent for a
+  // full action clock, measured here**.
+  // 
+  // THE DISCONNECT CASE. A player who goes offline mid-hand must not stall the
+  // table, and this is the door for that — the same door the live engine's action
+  // clock already is. The clock is measured against `max(street_opened_at,
+  // last_ack)`, so:
+  // 
+  // * a player whose client is heartbeating can NEVER be stood down, which is what
+  // stops the table from manufacturing an early reveal;
+  // * a player who has genuinely gone silent is stood down after one clock, and the
+  // reveal that follows is public, simultaneous, and logged with
+  // `Readiness::TimedOutByTable` next to that seat, so the coercion is on the
+  // record rather than invisible.
+  table_stand_down : (nat64, nat8) -> (Result);
+}

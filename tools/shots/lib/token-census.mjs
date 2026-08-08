@@ -237,9 +237,16 @@ export const CHAIN_SITES = [
         // by the ledger, so you need 0.0004 ICP in your wallet"). The copy grew and
         // this label did not, so the census reported that token as asserted by
         // nothing and BOTH deposit shots were filed UNVERIFIED (docs/DEFECTS.md H-41).
+        //
+        // There are now FOUR figures in this notice, not three: 134550e split the
+        // minimum into the ADDRESS floor and the connected-wallet floor, which are
+        // different numbers with different consequences (docs/DEFECTS.md E-86). Both
+        // are labelled `deposit modal "Minimum deposit"`, disambiguated in the rest
+        // of the label, so this pattern still matches all four.
         label: /^deposit modal "(Minimum deposit|Network fee|you need N in your wallet)"/,
-        why: 'the minimum deposit, the network fee, and the wallet balance the modal '
-            + 'says is needed to deposit that minimum — all three stated as fact',
+        why: 'the address minimum, the connected-wallet minimum, the network fee, and '
+            + 'the wallet balance the modal says is needed to deposit that minimum — '
+            + 'all four stated as fact',
     },
     {
         id: 'history-row-pot',

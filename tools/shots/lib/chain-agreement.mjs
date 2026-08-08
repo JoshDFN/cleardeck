@@ -1440,44 +1440,70 @@ export async function assertDepositAgreement(ctx, page, opts) {
         ));
     }
 
-    // THE FEE AND THE MINIMUM ARE MONEY FIGURES TOO.
-    // `.minimum-notice` states "Minimum deposit: 0.0002 ICP (Network fee: 0.0001
-    // ICP)". Both numbers are typed into DepositModal.svelte as literals, and a
-    // player uses them to decide how much to send: quote a fee below the real one
-    // and their deposit silently costs more than the screen said. The fee is read
-    // LIVE from the ledger (`icrc1_fee`), and the minimum is checked against the
-    // constant the table canister actually enforces
-    // (src/table_canister/src/lib.rs:1525, mirrored in lib/config.mjs).
+    // THE FEE AND THE MINIMUMS ARE MONEY FIGURES TOO, AND THERE ARE FOUR OF THEM.
+    //
+    // A player uses these to decide how much to send, and one of them (the address
+    // minimum) is the number that FINDING 31 was about: send less and the sweep fee
+    // eats the deposit and `withdraw` refuses what is left, a silent 100% loss at
+    // the number the product prints. So each has to be compared with the quantity
+    // it actually claims to be.
+    //
+    // READ BY LABEL, NOT BY POSITION. docs/DEFECTS.md E-86. This check used to take
+    // `.minimum-notice`'s numbers in DOM order and assign them (minimum, fee,
+    // minimum + 2 fee). At 134550e the copy grew a FOURTH figure and reordered the
+    // rest, so nums[0] became the ADDRESS minimum (30 000 e8s) and was compared
+    // against the canister's `min_deposit` (20 000), and nums[1] became the wallet
+    // -route minimum (20 000) and was compared against `icrc1_fee()` (10 000). Both
+    // deposit shots went red as "DEPOSIT CHAIN DISAGREEMENT ... screen is 1.500x the
+    // chain", the screen was right and every quoted figure was correct: the
+    // comparison had simply been re-pointed at the wrong quantity by a copy edit.
+    // Correct totals, wrong recipients, and the fourth number asserted by nothing at
+    // all. Anchoring on the labels makes a copy edit that moves a figure a MISSING
+    // LABEL (a structural failure) instead of a silent re-pointing.
     if (dom.minimumNotice && /\d/.test(dom.minimumNotice)) {
-        const nums = dom.minimumNotice.match(/-?\d[\d.,]*\s*[KM]?/g) || [];
         const fee = await ledgerTransferFee();
         const minimum = truth.currency === 'BTC' ? BTC_MIN_DEPOSIT : ICP_MIN_DEPOSIT;
-        if (nums.length >= 2) {
-            figures.push(checkFigure(
-                'deposit modal "Minimum deposit" vs the minimum the table canister enforces',
-                minimum, nums[0], { currency: truth.currency },
-            ));
-            figures.push(checkFigure(
-                'deposit modal "Network fee" vs the ledger\'s own icrc1_fee()',
-                Number(fee), nums[1], { currency: truth.currency },
-            ));
-            // THE THIRD NUMBER, ADDED BY T-30 AND ASSERTED BY NOTHING UNTIL NOW.
-            // The notice now reads "... charged twice by the ledger, so you need
-            // 0.0004 ICP in your wallet to deposit the minimum". That figure is
-            // `MIN_DEPOSIT + 2 x TRANSFER_FEE` (DepositModal.svelte:125-127) and it
-            // is the number a player with a nearly-empty wallet acts on. Before this
-            // check the scene scraped nums[0] and nums[1] and dropped nums[2], so the
-            // token census reported it as unaccounted for and BOTH deposit shots were
-            // filed as UNVERIFIED — a real money figure going ungated because the
-            // copy grew and the assertion did not (docs/DEFECTS.md H-41).
-            if (nums.length >= 3) {
-                figures.push(checkFigure(
-                    'deposit modal "you need N in your wallet" vs minimum + 2 x icrc1_fee()',
-                    minimum + 2 * Number(fee), nums[2], { currency: truth.currency },
-                ));
+        // The sweep route's floor: what arrives has one ledger fee taken out of it
+        // before it is credited, so the address minimum is the withdrawal floor plus
+        // one fee (src/table_canister/src/lib.rs ICP_MIN_EXTERNAL_DEPOSIT).
+        const externalMinimum = minimum + Number(fee);
+        const N = '(-?\\d[\\d.,]*)';
+        const claims = [
+            {
+                label: 'deposit modal "Minimum deposit" (to the address) vs the canister\'s external-deposit floor',
+                re: new RegExp(`Minimum to this address:\\s*${N}`, 'i'),
+                expected: externalMinimum,
+            },
+            {
+                label: 'deposit modal "Minimum deposit" (from a connected wallet) vs the minimum the table canister enforces',
+                re: new RegExp(`lower minimum of\\s*${N}`, 'i'),
+                expected: minimum,
+            },
+            {
+                label: 'deposit modal "Network fee" vs the ledger\'s own icrc1_fee()',
+                re: new RegExp(`network fee\\s*${N}`, 'i'),
+                expected: Number(fee),
+            },
+            {
+                label: 'deposit modal "you need N in your wallet" vs minimum + 2 x icrc1_fee()',
+                re: new RegExp(`you need\\s*${N}`, 'i'),
+                expected: minimum + 2 * Number(fee),
+            },
+        ];
+        for (const claim of claims) {
+            const m = claim.re.exec(dom.minimumNotice);
+            if (!m) {
+                // NOT a silent skip. A label that stopped matching means the copy
+                // moved and this figure is now compared with nothing, which is the
+                // exact state that let the fourth number ship unasserted.
+                structural.push(
+                    `the deposit modal's minimum/fee notice no longer carries the label for `
+                    + `${claim.label}; the figure it names is now checked by nothing. `
+                    + `Notice text: "${dom.minimumNotice}"`,
+                );
+                continue;
             }
-        } else {
-            structural.push(`the deposit modal's minimum/fee notice has fewer than two numbers: "${dom.minimumNotice}"`);
+            figures.push(checkFigure(claim.label, claim.expected, m[1], { currency: truth.currency }));
         }
     }
 

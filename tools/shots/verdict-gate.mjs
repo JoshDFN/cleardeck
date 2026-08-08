@@ -26,6 +26,26 @@
 //      list of permanently-excused failures, which is how a suite everybody
 //      expects red teaches everybody to ignore red -- the wave-6 REG-09 lesson,
 //      and HARD RULE 7.
+//
+// RULE 3, ADDED IN WAVE 12 (docs/DEFECTS.md E-87), because rules 1 and 2 were
+// both green over a defect nobody had ever seen.
+//
+//   An acknowledgement used to be granted per (scene, viewport). So once a shot
+//   was red for ANY reason, every OTHER failure that later appeared on the same
+//   shot was absorbed in silence. That is not hypothetical: `table-in-frame.mjs`
+//   landed in wave 12 and its first real conviction was a Leave-table control
+//   rendering 6-7 px outside a 1440 px window on `table-preflop` and
+//   `table-facing-bet` at desktop -- a control a player cannot reach. Both shots
+//   were already acknowledged under E-76 for a felt-area shortfall of 0.2 points.
+//   The new failure joined the same `problems` array and this gate stayed green.
+//   Correct count of reds, wrong reds, every invariant silent.
+//
+//   So an entry must now list `covers`: the substrings of the recorded problems
+//   it actually accounts for. Every recorded problem on an acknowledged shot must
+//   match at least one of them, and every `covers` string must match at least one
+//   recorded problem. The second half is rule 2 at the level of the problem
+//   rather than the shot: a cover that stops matching is a cover that is excusing
+//   nothing, and it fails rather than lingering.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -84,18 +104,69 @@ if (verdicts && ledger) {
             continue;
         }
         used.add(entry);
-        if (!entry.defect) {
+        // `defect` may name more than one id, because one shot can carry more than
+        // one distinct failure -- which is the whole of rule 3 below.
+        const ids = Array.isArray(entry.defect) ? entry.defect
+            : (entry.defect ? [entry.defect] : []);
+        if (ids.length === 0) {
             problems.push(
                 `${shot.scene} / ${shot.viewport} is acknowledged with no defect id. An entry `
                 + 'without one is a shrug, not an acknowledgement.',
             );
-        } else if (defectsText && !defectsText.includes(`### ${entry.defect},`)
-            && !defectsText.includes(`### ${entry.defect} `)) {
+        }
+        for (const id of ids) {
+            if (defectsText && !defectsText.includes(`### ${id},`)
+                && !defectsText.includes(`### ${id} `)
+                && !defectsText.includes(`### ${id} —`)) {
+                problems.push(
+                    `${shot.scene} / ${shot.viewport} is acknowledged under ${id}, which `
+                    + 'docs/DEFECTS.md does not carry. Filing the defect is the point of the '
+                    + 'acknowledgement.',
+                );
+            }
+        }
+
+        // RULE 3. What, exactly, is being excused.
+        const recorded = shot.problems || [];
+        const covers = Array.isArray(entry.covers) ? entry.covers : null;
+        if (!covers || covers.length === 0) {
             problems.push(
-                `${shot.scene} / ${shot.viewport} is acknowledged under ${entry.defect}, which `
-                + 'docs/DEFECTS.md does not carry. Filing the defect is the point of the '
-                + 'acknowledgement.',
+                `${shot.scene} / ${shot.viewport} (${ids.join(', ')}) has no "covers" list. An `
+                + 'acknowledgement is granted per PROBLEM, not per shot: without one, the next '
+                + 'failure to appear on this shot is excused by an entry that was never about it '
+                + '(docs/DEFECTS.md E-87). Recorded problems:\n        - '
+                + (recorded.length ? recorded.join('\n        - ') : '(none recorded)'),
             );
+            continue;
+        }
+        // A cover so short it matches anything is an acknowledgement of nothing.
+        for (const c of covers) {
+            if (typeof c !== 'string' || c.trim().length < 12) {
+                problems.push(
+                    `${shot.scene} / ${shot.viewport} (${ids.join(', ')}) has the cover ${
+                        JSON.stringify(c)}, which is too short to identify a failure. Quote enough `
+                    + 'of the recorded problem to name it (12 characters minimum).',
+                );
+            }
+        }
+        for (const p of recorded) {
+            if (!covers.some((c) => typeof c === 'string' && c.length >= 12 && p.includes(c))) {
+                problems.push(
+                    `UNCOVERED PROBLEM on an acknowledged shot: ${shot.scene} / ${shot.viewport} `
+                    + `is acknowledged under ${ids.join(', ')}, and this recorded problem is not `
+                    + `accounted for by any of its "covers":\n        - ${p}`,
+                );
+            }
+        }
+        for (const c of covers) {
+            if (typeof c === 'string' && c.length >= 12
+                && !recorded.some((p) => p.includes(c))) {
+                problems.push(
+                    `STALE COVER: ${shot.scene} / ${shot.viewport} (${ids.join(', ')}) lists the `
+                    + `cover ${JSON.stringify(c)}, and no recorded problem on that shot contains `
+                    + 'it. Rule 2 at the level of the problem: delete it.',
+                );
+            }
         }
     }
 

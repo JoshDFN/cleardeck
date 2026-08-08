@@ -3026,6 +3026,45 @@
     padding: 0 4px;
   }
 
+  /* `overflow: hidden` HERE MEANS A CONTROL CAN LEAVE THE WINDOW AND LOOK FINE.
+     The dock is a three-column grid whose outer tracks are `minmax(0, 1fr)`, so
+     they are sized by SYMMETRY (to keep the action row centred in the window),
+     never by what is in them. The left track holds a 67.5 px Log button in 503 px
+     of track; the right track holds the panel toggle, the wallet panel, Deposit,
+     Withdraw and the two sit controls — 514 px of content in the same 503 px.
+
+     Measured at 1440x900 on `table-preflop` and `table-facing-bet`:
+     `.sit-controls > button.control-btn.destructive` — LEAVE TABLE, the control
+     a player uses to get their chips back to escrow — rendered at
+     `51.2x28 at x=1396`, i.e. 7 px past the right edge of the window, with
+     `documentElement.scrollWidth == 1440` so it cannot be scrolled to. `<body>`
+     is `overflow-x: hidden`, so the tail of it is simply not on the screen.
+     Nothing in the repo could see it: the felt gate measures the felt, the pixel
+     gate asks what COVERS a figure rather than whether a control is in the
+     frame, and the census reads text. tools/shots/lib/table-in-frame.mjs is what
+     caught it.
+
+     IT IS LEFT AS IT IS, DELIBERATELY, AND HERE IS WHAT WAS TRIED.
+     `flex-wrap: wrap` on this element does fix it — the sweep confirms the
+     button comes inside the frame — and it costs FAR more than it buys, because
+     the wallet panel is ~50 px tall and wrapping puts it on its own row: the
+     dock grows 43 px and the desktop felt falls from 27.8% to 23.2% on
+     `table-preflop` and `table-facing-bet`, and from 30.7% to 24.2% on
+     `table-allin`, against a 28% floor. That is one gate paid for with another,
+     which is the trade this project keeps rediscovering, so it was reverted.
+
+     The cheap alternatives are worse than they look. Narrowing the two sit
+     controls or the gaps buys the 11 px back by tuning to today's content, and
+     the width of this row is CHAIN DATA (the balance figure), so it is one
+     longer number away from being wrong again. Splitting the outer tracks
+     unevenly (`0.95fr / 1.05fr`) works and shifts the action row off the
+     window's centre.
+
+     The structural fix is to stop the right cell carrying five controls and a
+     money panel in a track sized by symmetry: move `.sit-controls` to the left
+     cell, which has ~435 px of unused width. That MOVES A CONTROL on desktop, so
+     it is a deliberate design decision rather than a bug fix, and it is recorded
+     in docs/DESIGN-BAR.md §11.6 rather than taken here. */
   .dock-aux {
     display: flex;
     align-items: center;
@@ -3550,16 +3589,45 @@
        above it is only 127, so height is the scarce axis here and width is not
        -- the readout may run the width of the felt as long as it stays out of
        the two flank plates' rows. */
+    /* ...BUT "the width of the felt" HAS TO BE A CAP, NOT A HOPE.
+       `flex-wrap: nowrap` with `white-space: nowrap` and no `max-width` is an
+       element that grows without bound, and the winner line's content is not
+       fixed: a SPLIT POT adds `.split-info`. Measured at 390x844 on a two-way
+       split, `You won 12.00 ICP · PAIR · Split pot · 2 winners · Complete` came
+       out 401.7 px wide at x=-5.9, hanging off BOTH edges of a 390 px phone —
+       the pot readout, the one figure that says what the hand was worth, partly
+       off screen at the exact moment it matters.
+
+       Nothing in the repo could see it. The felt gate passes (the felt is inside
+       the frame and was at its 61.6% ceiling on that very shot), the pixel gate
+       passes (nothing covers it), and the census and chain-agreement checks read
+       `textContent`, which is correct and complete whether or not it is on the
+       screen. tools/shots/lib/table-in-frame.mjs is what caught it.
+
+       `flex-wrap: wrap` keeps each span unbroken (`white-space: nowrap` is still
+       on the container, so no word splits) and wraps the ROW instead. The line
+       stays wide and short when it fits, and takes a second row rather than the
+       rail when it does not: two rows at the 1.15 portrait leading is ~45 px in
+       the 127 px gap between the flank plates. */
     .winner-display {
       flex-direction: row;
-      flex-wrap: nowrap;
+      flex-wrap: wrap;
+      justify-content: center;
       align-items: baseline;
       column-gap: 0.5em;
+      row-gap: 0.1em;
       padding: 0.26em 0.7em;
-      gap: 0.5em;
       white-space: nowrap;
       text-align: center;
+      max-width: var(--fw);
     }
+
+    /* The same cap on the pot readout, for the same reason and before it is
+       needed: `.side-pots` is one row per layer, so a three-way all-in prints
+       `MAIN 0.60  SIDE 1 79.60  SIDE 2 30.00` on one line and grows with the
+       number of layers, which is chain data and not a design constant. */
+    .pot-display { max-width: var(--fw); }
+    .side-pots { flex-wrap: wrap; justify-content: center; }
     .winner-display .phase-indicator { font-size: 0.56em; }
 
     /* The pot's footnote rows -- the collected/betting decomposition and the
@@ -3611,10 +3679,18 @@
     .action-dock {
       grid-template-columns: 1fr auto;
       grid-template-rows: auto auto;
-      gap: 6px 8px;
+      gap: 4px 8px;
       min-height: var(--dock-h);
       padding: 0 8px;
     }
+
+    /* EVERY PIXEL BETWEEN THE STAGE AND THE DOCK IS FELT.
+       In portrait `--fw` is `min(86cqw, 55cqh)` at 6-max and `min(78cqw, 52cqh)`
+       at 9-max, and the HEIGHT term binds in every state except the showdown, so
+       the stage's height is the felt's size and this gap is subtracted from it
+       directly. 8 px between two blocks that already have their own padding is
+       separation nobody reads. */
+    .poker-table { gap: 5px; }
 
     /* THUMB REACH. The action row is the BOTTOM row on a phone -- it used to be
        the top one, furthest from the thumb, with the LOG button and the wallet
@@ -3650,6 +3726,59 @@
 
     .wallet-panel { padding: 4px 8px; gap: 7px; }
     .balance-label { display: none; }
+
+    /* THE TABLE BALANCE WAS PAINTING OVER THE COMMITTED PANEL, AND NO GATE COULD
+       SEE IT.
+       `.wallet-balance` is a flex COLUMN with `min-width: 0` inside a
+       `.wallet-panel` that is over-subscribed at 390 px: balance + committed +
+       Deposit + Withdraw want ~344 px of a ~264 px box. So the column was
+       squeezed to ~74 px while `.balance-value` keeps `white-space: nowrap`, and
+       the glyphs ran outside their own box: measured on
+       `table-facing-bet-mobile.png`, the "ICP" of "11.90 ICP" is painted across
+       the amber `.wallet-committed` border and over the "0" of "0.10 ICP".
+
+       WHY THE PIXEL GATE MISSED IT, which is the part worth keeping. The
+       occlusion gate compares element RECTANGLES, and a flex item that has been
+       squeezed reports the SQUEEZED rect while its text paints outside it. The
+       overflowing glyphs therefore intersect nothing as far as the gate is
+       concerned: `table-facing-bet` at 390x844 reported "21 figures on screen,
+       0 occluded" in the same run that produced that PNG. Text overflow is a
+       blind spot of any gate that reasons about boxes.
+
+       `flex: 0 0 auto` is the fix rather than an ellipsis: truncating would
+       leave `textContent` correct, so the chain-agreement check and the token
+       census would BOTH stay green while a player read a shortened balance --
+       a money figure lying only in pixels, which is the exact failure this
+       repo keeps finding. */
+    .wallet-balance { flex: 0 0 auto; }
+
+    /* AND THE SQUEEZE HAS TO GO SOMEWHERE, SO SEND IT TO A SECOND LINE RATHER
+       THAN INTO THE FELT. With the balance no longer shrinkable, the pressure
+       moved to `.wallet-committed`, whose sentence then wrapped to a third line
+       and put 8.5 px back on the dock — and the dock's height comes straight off
+       a height-bound felt (preflop 52.1% -> 51.5% when this was left alone).
+
+       Wrapping the panel gives the committed block a full-width line of its own,
+       where the label and the figure sit side by side and the sentence fits on
+       ONE line. Nothing is hidden, shortened or restyled: the same label, the
+       same money figure and the same whole sentence, on a shape that fits 390 px
+       instead of a shape that does not. */
+    /* AND THE SQUEEZE HAS TO GO SOMEWHERE. With the balance no longer
+       shrinkable, the pressure moves to `.wallet-committed`, whose sentence
+       takes one more wrapped line. Two declarations pay for it without hiding a
+       word: a tighter column gap gives the sentence back the width, and a
+       leading of 1.2 (the app's own figure leading) instead of 1.35 costs the
+       10 px note ~1.5 px per line.
+
+       WHAT WAS TRIED AND MEASURED WORSE, so nobody re-tries it: giving
+       `.wallet-committed` `flex-basis: 100%` so it always takes its own line
+       forces a second row even at widths where it fitted beside the balance, and
+       `tools/shots/test-dock-overflow.mjs` measures that as 37.4 px of stage
+       taken becoming 59.7 px — the fixture's felt falling from 46.4% to 43.3%
+       against a 45% floor. The dock's height is the felt's height; a layout that
+       is merely tidier is not free here. */
+    .wallet-panel { gap: 5px; }
+    .committed-note { line-height: 1.2; }
 
     /* THE DOCK'S EXTRA ROOM COMES OUT OF THE STAGE'S SLACK, NOT OUT OF THE FELT
        (docs/DEFECTS.md E-63). Letting the dock size to its contents fixes the

@@ -1,0 +1,67 @@
+[package]
+name = "no_peeking"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The no-peeking harness. Runs a full ClearDeck hand against the SEALED DEALER on PocketIC and then attacks it: every exported method of both canisters, called as the controller, as an opponent, as a stranger and anonymously, plus the canister-snapshot read that docs/NO-PEEKING-FEASIBILITY.md used to defeat the obvious fix. A green run is the claim 'no principal can peek, and no controller key exists that could'."
+
+# DETACHED from the root workspace, for the reasons tests/money_safety and
+# src/guardian_canister are: `pocket-ic` drags in tokio + reqwest + rustls, and the
+# root Cargo.lock is an input to the reproducible build of six canisters that
+# custody real ICP and ckBTC on mainnet. Its own lockfile, its own target/.
+[workspace]
+
+[lib]
+name = "no_peeking"
+path = "src/lib.rs"
+
+[dependencies]
+# The dealer's wire types, by path, linked rather than mirrored. The harness
+# decodes what the canister actually sends with the same definitions the canister
+# encodes it with, so a mismatch is a compile error and not a green test.
+dealer_types = { path = "../../src/no_peeking/dealer_types" }
+# The REAL engine, used as an ORACLE: the harness re-derives the whole deck from
+# the seed the dealer publishes and checks every card the hand showed, exactly the
+# way an outside verifier following docs/SHUFFLE-SPEC.md would.
+poker_core = { path = "../../src/poker_core" }
+pocket-ic = "11.0.0"
+# `value` turns on IDLArgs/IDLValue: `src/peek.rs` decodes a reply whose type it
+# has never seen, using the message's OWN type table, so a method added after this
+# harness was written is still checked for cards.
+candid = { version = "0.10", features = ["value"] }
+sha2 = "0.10"
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+
+# PocketIC instances are heavy (one replica per instance). Keep test binaries from
+# fighting over CPU by default.
+[profile.test]
+opt-level = 1
+
+# THE NEGATIVE. Named explicitly for the reason every target in
+# tests/money_safety/Cargo.toml is named explicitly: an auto-discovered target is a
+# target no human ever types.
+[[test]]
+name = "no_peek"
+path = "tests/no_peek.rs"
+
+# A whole hand, with side pots, settled from cards the table never held.
+[[test]]
+name = "full_hand"
+path = "tests/full_hand.rs"
+
+# THE DISCONNECT CASE, which is where these protocols die.
+[[test]]
+name = "disconnect"
+path = "tests/disconnect.rs"
+
+# Cycles per hand and rounds per deal, against the live engine's own numbers.
+[[test]]
+name = "measurements"
+path = "tests/measurements.rs"
+
+# ADVERSARIAL REVIEW. The operator who holds the table's controller key, trying
+# every route to a live hole card that the four files above did not try.
+[[test]]
+name = "operator_attack"
+path = "tests/operator_attack.rs"

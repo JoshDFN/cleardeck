@@ -6,7 +6,7 @@
   "description": "Deterministic screenshot harness for ClearDeck (real canisters, real UI).",
   "scripts": {
     "shots": "node run.mjs",
-    "selftest": "node test-occlusion.mjs && node test-census.mjs && node test-money.mjs && node test-rake.mjs && node test-solvency.mjs",
+    "selftest": "node selftest.mjs",
     "verify-mainnet-bundle": "node verify-mainnet-bundle.mjs"
   },
   "dependencies": {
