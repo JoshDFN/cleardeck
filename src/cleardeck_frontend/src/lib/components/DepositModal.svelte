@@ -7,6 +7,8 @@
   import IcpLogo from './IcpLogo.svelte';
   import SolvencyNotice from './SolvencyNotice.svelte';
   import { readTableSolvency, refreshTableSolvency } from '$lib/solvency.js';
+  import CycleRunwayNotice from './CycleRunwayNotice.svelte';
+  import { readCycleRunway } from '$lib/cycleRunway.js';
   import { IS_MAINNET_BUILD, NETWORK } from '$lib/ic-config.js';
   import {
     deriveDepositAddress,
@@ -43,6 +45,38 @@
     } finally {
       solvencyRefreshing = false;
     }
+  }
+
+
+  // ==========================================================================
+  // HOW LONG CAN THIS TABLE KEEP HONOURING WITHDRAWALS? ASKED HERE, NOT LATER.
+  // ==========================================================================
+  //
+  // docs/DEFECTS.md E-55. A canister below its freezing threshold rejects EVERY
+  // update call at once -- `deposit`, `withdraw`, `cash_out`, `player_action`,
+  // `abandon_stuck_hand` -- so every player at the table loses access to their
+  // own money at the same instant, with no attacker and no in-application
+  // remedy. Nothing in this project tops a canister up.
+  //
+  // >>> CORRECTION, wave-13 reconciliation (docs/DEFECTS.md E-92). THE FIGURE
+  // >>> BELOW IS STILL OPTIMISTIC. 0.4994 T/day is idle + 500 hands + six
+  // >>> 10-second HEARTBEAT streams and nothing else. The same page also drives
+  // >>> `check_timeouts` -- an UPDATE call -- from a 500 ms setInterval, at a
+  // >>> measured 6,573,911 cycles each: 0.28-1.14 T/day PER OPEN TAB against the
+  // >>> heartbeat's 0.0618. Six tabs is 1.7-6.8 T/day before a hand is dealt.
+  // >>> The canister's own get_cycle_status is unaffected: its sliding window
+  // >>> measures real consumption and already includes these calls.
+  // Measured (`tests/money_safety/tests/cycles_runway.rs`): an EMPTY table burns
+  // 0.0442 T/day, which is 225 days on 10 T. A table with 500 hands a day and six
+  // open tabs burns 0.4994 T/day, which is TWENTY days on the same balance. The
+  // reassuring number in the register is the number for a table nobody is using.
+  //
+  // Read on mount, before any amount is typed: a warning that appears after the
+  // button is pressed is a receipt, not a warning.
+  let runway = $state(null);
+
+  async function loadRunway() {
+    runway = await readCycleRunway(tableActor);
   }
 
   // Subscribe to auth state to check if user is authenticated
@@ -521,6 +555,7 @@
     loadWalletBalance();
     loadPrices();
     loadSolvency();
+    loadRunway();
     if (isBTC) {
       loadBtcDepositAddress();
     }
@@ -921,6 +956,14 @@
       onRefresh={refreshSolvency}
       refreshing={solvencyRefreshing}
     />
+
+    <!-- AND HOW LONG IT CAN KEEP PAYING ANYBODY AT ALL. docs/DEFECTS.md E-55.
+         Solvency asks "does it hold what it owes"; this asks "will it still be
+         accepting the withdrawal call at all". They are different failures and
+         they are both reasons not to deposit. In flow, below the four protected
+         notices and above every control that can move money, with no position
+         and no z-index of its own so it cannot cover anything. -->
+    <CycleRunwayNotice {runway} context="deposit" canisterId={tableCanisterId} />
 
     <!-- BTC Deposit Method Toggle -->
     {#if isBTC}

@@ -78,10 +78,18 @@ const check = (name, condition, detail) => cases.push({ name, ok: Boolean(condit
     }
 }
 
+// The hand's NAME (docs/DEFECTS.md E-71). Both shapes carry it, and the fold
+// requires it: an archived record that cannot be matched to the hand it is a
+// record OF is a structural failure, because joining on `hand_number` is what
+// made the sweep compare two different hands' money.
+const UID = 'aaaaa-aa:'
+    + '5f2d9c6a1b7e4038af52c1d09e63b874aa10ff2356cd8b91e07a4f6d2c93b5e1';
+
 /** A `HandSummary` as `get_hands_by_table` returns it. Note: no `rake`. */
 const summary = (over = {}) => ({
     hand_id: 7n,
     hand_number: 1n,
+    hand_uid: UID,
     table_id: 'aaaaa-aa',
     player_count: 2,
     timestamp: 0n,
@@ -95,6 +103,7 @@ const summary = (over = {}) => ({
 const full = (over = {}) => ({
     hand_id: 7n,
     hand_number: 1n,
+    hand_uid: [UID],
     table_id: 'aaaaa-aa',
     total_pot: 2_400_000_000n,
     rake: 0n,

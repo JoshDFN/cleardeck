@@ -45,6 +45,13 @@ const REQUIRED = {
     'test-solvency.mjs': 'the solvency banner\'s own arithmetic',
     'test-table-in-frame.mjs':
         'the pot, board, seat pods and dock buttons in frame (docs/DEFECTS.md H-51)',
+    'test-cycle-runway.mjs':
+        'THE CYCLE-RUNWAY WARNING (docs/DEFECTS.md E-55): red when a null runway, an '
+        + 'unreachable canister or a reply from the older module deployed on mainnet reads as '
+        + '"fine" on the screen a player deposits from',
+    'test-hand-identity.mjs':
+        'THE HISTORY-CHAIN JOIN (docs/DEFECTS.md E-71): red when a hand is matched to the '
+        + 'archive by hand_number, which answers to 70 records',
 };
 
 const discovered = fs.readdirSync(HERE)

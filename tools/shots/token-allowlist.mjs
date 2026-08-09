@@ -214,4 +214,36 @@ export const ALLOWLIST = [
             + '`input-placeholder` when the field has no value at all, so a number the '
             + 'player has actually typed is never excused by this rule',
     },
+
+    // ---- cycles, which are not player money ----------------------------------
+    {
+        id: 'cycle-runway-days',
+        selector: '.runway-notice',
+        tokens: '^\\d{1,6}$',
+        why: 'DAYS of measured cycle runway, and the warning threshold in days, in the '
+            + 'CycleRunwayNotice banner (docs/DEFECTS.md E-55). A duration, never an '
+            + 'amount of anybody\'s money. The number itself comes from the canister\'s '
+            + '`get_cycle_status().runway_days` and is gated by '
+            + 'tools/shots/test-cycle-runway.mjs (32 checks, including that a null runway '
+            + 'can never read as healthy) and by '
+            + 'tests/money_safety/tests/cycles_runway.rs, which measures the burn the '
+            + 'canister divides by against an external cycle-balance read',
+    },
+    {
+        id: 'cycle-runway-trillions',
+        selector: '.runway-notice',
+        tokens: '^\\d+(?:\\.\\d+)?$',
+        context: 'T ',
+        moneyShaped: true,
+        why: 'CYCLES, in trillions ("4.299 T spendable · burning 0.555 T/day"). Decimal '
+            + 'and therefore money-SHAPED, and deliberately declared as such -- but cycles '
+            + 'are not player money and are on no ledger: '
+            + 'src/table_canister/src/lib.rs says so in as many words ("CYCLES. Not player '
+            + 'money and not on any ledger"). No player balance, pot, stake, blind or '
+            + 'buy-in can reach this selector: `.runway-notice` renders only the two '
+            + 'figures `formatCycles()` produces from get_cycle_status, and the `context` '
+            + 'pattern requires the unit T to be in the element text. The escrow and '
+            + 'wallet figures in the same modal are asserted against the ledger by '
+            + 'chain-agreement.mjs and are untouched by this rule',
+    },
 ];

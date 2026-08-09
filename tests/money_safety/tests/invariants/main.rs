@@ -785,3 +785,98 @@ fn m6_a_pot_is_awarded_exactly_once() {
         "starting the next hand must not change the total value at the table"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M3's WINDOW -- the guard that decides whether M3 may speak at all
+// docs/SECURITY-FINDINGS.md FINDING 44
+// ---------------------------------------------------------------------------
+
+/// **THE ACCOUNTS M3'S WINDOW GUARD ASKS ABOUT MUST BE THE ACCOUNTS ITS TOTAL IS
+/// BUILT FROM.**
+///
+/// `Snapshot::internal_total()` counts `canister_unswept_deposits` -- money sitting
+/// at a published DEPOSIT SUBACCOUNT that the canister has acknowledged. The
+/// fuzzer's M3 window guard used to ask only whether `ledger_main` had moved. Those
+/// are two different sets of accounts, so a deposit into a subaccount raised the
+/// total M3 measures without moving the balance M3 watched, and M3 convicted the
+/// canister of creating money that had just arrived from outside.
+///
+/// That is not hypothetical: it is FINDING 44, filed as a `high` FUND CREATION
+/// against a clean module, and its shrunk 7-op reproducer is exactly the sequence
+/// below. This test measures all three facts at once -- the blind basis does not
+/// move, the sound basis does, and the total moves with it -- so reverting
+/// `external_money_moved` to `ledger_main` turns it red.
+#[test]
+fn m3s_window_is_closed_by_money_arriving_at_a_deposit_subaccount_not_only_at_the_main_account() {
+    let mut world = World::new(TableConfig::heads_up_icp(), &["alice", "bob", "carol"]);
+    seat_players(&world, &["alice", "bob"], 8 * ICP);
+
+    let before = world.snapshot();
+    world.start_new_hand(world.actor("alice")).expect("deal");
+
+    // Carol is not in the hand. Mid-hand she pays ONE LEDGER FEE of ICP into the
+    // deposit address this canister published for her, and asks it to look.
+    let carol = world.actor("carol");
+    world
+        .transfer_to_deposit_subaccount(carol, FEE)
+        .expect("a real ledger transfer into carol's own published deposit address");
+    let claimed = world.claim_external_deposit(carol);
+
+    play_out_passively(&world, 60);
+    let after = world.snapshot();
+    assert_eq!(
+        after.table.phase,
+        GamePhase::HandComplete,
+        "the hand must have completed for M3's window to close"
+    );
+
+    println!(
+        "carol's claim: {claimed:?}; ledger_main {} -> {}; ledger_holdings {} -> {}; \
+         unswept {} -> {}; internal_total {} -> {}",
+        before.ledger_main,
+        after.ledger_main,
+        before.ledger_holdings(),
+        after.ledger_holdings(),
+        before.canister_unswept_deposits,
+        after.canister_unswept_deposits,
+        before.internal_total(),
+        after.internal_total(),
+    );
+
+    // 1. THE BLINDNESS. The main account did not move, so the old guard admitted
+    //    this window and let M3 speak about it.
+    assert_eq!(
+        before.ledger_main, after.ledger_main,
+        "the deposit went to a SUBACCOUNT, so the main account must be unchanged -- that is \
+         precisely why a guard reading ledger_main alone cannot see it"
+    );
+
+    // 2. THE FACT. Real ICP crossed the boundary, and the ledger says so.
+    assert_eq!(
+        after.ledger_holdings(),
+        before.ledger_holdings() + FEE,
+        "one fee of ICP really did arrive in the canister's accounts"
+    );
+
+    // 3. THE CONSEQUENCE. M3's own total moved by exactly that money, so had the
+    //    window stayed open M3 would have reported FundCreation about a deposit.
+    assert_eq!(
+        after.internal_total(),
+        before.internal_total() + FEE,
+        "internal_total counts unswept deposits, so it moved with the arrival"
+    );
+    let would_have_convicted = check_no_rake(&before, &after);
+    assert!(
+        !would_have_convicted.is_empty(),
+        "the false conviction this guard exists to prevent must still be reachable, or this \
+         test is measuring nothing"
+    );
+
+    // 4. THE GUARD. It must refuse the window.
+    assert!(
+        external_money_moved(&before, &after),
+        "FINDING 44: money arriving at a deposit subaccount MUST close M3's window. It does \
+         not when the guard reads ledger_main alone, and then M3 convicts the canister of \
+         creating {FEE} e8s somebody had just deposited"
+    );
+}

@@ -1,0 +1,111 @@
+name: Fund safety (deep tier)
+
+# THE OTHER HALF OF docs/DEFECTS.md H-23.
+#
+# `.github/workflows/ci.yml` carries the FAST tier: the fund-safety suites that
+# convict a money defect in seconds each, run on every pull request, required.
+# This workflow carries the runs whose value is DEPTH rather than breadth, and
+# whose cost makes them a bad required check:
+#
+#   * the hostile-sequence fuzzer at 9 seeds x 600 real IC messages. E-39 was
+#     found at exactly these settings and by nothing shorter, and the wave that
+#     ran a third of it reported "0 blocking findings".
+#   * the fuzzer with NOTHING in the environment (H-28). Every caller in the repo
+#     passed MONEY_FUZZ_SEEDS, so the harness's own default arm was executed by
+#     nothing and `cargo test --test fuzz` was RED for a whole wave at seed
+#     0xC1EA_2DEC_0003.
+#   * M13 ONE BELIEF: 138 forked worlds, one per row (E-59 / FINDING 25).
+#   * the on-chain clock (FINDING 19 / E-54..E-56). Slow because it WAITS: every
+#     test drives the table with no ingress message at all after setup.
+#   * the cycles runway (E-55 / FINDING 24 / 26): how long until the canister
+#     freezes and every player loses access to their own money at once.
+#   * the settlement oracle's full 24-hand randomised sweep, which is where a
+#     betting shape nobody thought of turns up.
+#
+# WHY IT IS A SEPARATE WORKFLOW AND NOT A LONGER `ci` JOB. A required check that
+# takes an hour gets marked non-required, and then the fast half stops being
+# required either. Splitting the cost keeps the fast tier something a human will
+# actually wait for, and keeps the deep tier free to be slow.
+#
+# WHAT IS IN WHICH TIER, AND WHY, is one line per suite in
+# scripts/test-suites.list. scripts/check-suite-wiring.sh fails the build if a
+# test target exists that no tier runs, so nothing can fall between the two.
+
+on:
+  schedule:
+    # 07:00 UTC daily. Nightly rather than weekly on purpose: the fuzzer is the
+    # only instrument here that explores sequences nobody wrote down, and a
+    # week-old fuzz result is a week of merges it has not seen.
+    - cron: '0 7 * * *'
+  # No inputs. The seeds and the step count live in scripts/test-suites.list, and
+  # a dispatch input that steers the fuzzer is how docs/DEFECTS.md H-28 happened:
+  # every caller passed MONEY_FUZZ_SEEDS, so the configuration a developer
+  # actually types was executed by nothing and was red for a whole wave.
+  workflow_dispatch:
+  # Also on a push to main, so a merge that breaks a deep suite is attributed to
+  # the merge rather than discovered by a nightly the next morning with a day of
+  # commits to bisect.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fund-safety-deep-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN: '1.90.0'
+
+jobs:
+  deep:
+    name: Fund safety (deep tier)
+    runs-on: ubuntu-latest
+    # Generous, but not unbounded: a deep tier that hangs is worse than one that
+    # fails, because a hang looks like a slow job. The harness has hung before
+    # (docs/DEFECTS.md H-22: the oracle's rewind-and-re-deal search is unbounded).
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: |
+            . -> target
+            tests/money_safety -> target
+            tests/settlement -> target
+      - name: Cache the pinned PocketIC server and ICP ledger module
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/cleardeck
+          key: cleardeck-fixtures-${{ hashFiles('tests/money_safety/Cargo.lock', 'tests/money_safety/src/wasms.rs') }}
+
+      # The wiring gate runs here too. The deep tier is exactly where an unwired
+      # suite would hide -- nobody reads a nightly log that says "ok" -- and this
+      # costs a second.
+      - name: Every test target in the tree is run by something
+        run: ./scripts/check-suite-wiring.sh
+
+      - name: The deep fund-safety tier
+        run: CLEARDECK_CACHE_DIR="$HOME/.cache/cleardeck" ./scripts/ci-fund-safety.sh deep
+
+      # The fuzzer writes a machine-readable report of every sequence it explored
+      # and every violation it shrank. Keeping it is the difference between "the
+      # nightly was green" and being able to say what it actually covered.
+      - name: Keep the fuzzer's report and every suite log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fund-safety-deep-logs
+          path: |
+            target/ci-fund-safety/*.log
+            target/money-safety/money-fuzz-report.json
+          retention-days: 14
+          # `warn`, not `error`: a run that fails in the build step has no fuzz
+          # report to keep, and turning that into a SECOND red step buries the
+          # first one.
+          if-no-files-found: warn

@@ -1161,6 +1161,7 @@
 {#if showWithdrawModal}
   <WithdrawModal
     {tableActor}
+    tableCanisterId={currentTableInfo?.canister_id?.[0]}
     currentBalance={myBalance}
     currency={getTableCurrency(currentTableInfo)}
     onClose={() => { showWithdrawModal = false; }}

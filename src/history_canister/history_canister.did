@@ -5,6 +5,35 @@ type ActionRecord = record {
   timestamp : nat64;
   phase : text;
 };
+// The archive's own statement about whether a hand's NAME identifies a hand.
+// See `get_archive_integrity` and docs/DEFECTS.md E-71.
+//
+// `name_collisions`, `records_without_a_usable_commitment` and
+// `index_disagrees_with_records` are the uniqueness claim itself, recounted from
+// the records (not from the index) on every call. All three must be zero/false.
+// `ambiguous_hand_number_citations` is EXPECTED to be large: hand numbers restart
+// at 1 on every reset_table, which is exactly why they are not names.
+// `records_with_a_nonzero_rake` / `rake_recorded_total` are the NO-RAKE property
+// over EVERY record ever archived. The screenshot sweep's gate can only afford to
+// fetch a window of the newest twenty, so a rake on an older record was checked by
+// nothing at all: it only had to wait twenty hands to become invisible.
+type ArchiveIntegrity = record {
+  distinct_hand_number_citations : nat64;
+  records_without_a_usable_commitment : nat64;
+  index_disagrees_with_records : bool;
+  name_collisions : nat64;
+  worst_hand_number_citation : opt text;
+  records_under_a_colliding_name : nat64;
+  records_with_a_name : nat64;
+  summary : text;
+  first_record_with_a_rake : opt text;
+  records_with_a_nonzero_rake : nat64;
+  ambiguous_hand_number_citations : nat64;
+  rake_recorded_total : nat64;
+  records_held : nat64;
+  distinct_names : nat64;
+  records_under_an_ambiguous_hand_number : nat64;
+};
 type Card = record { rank : Rank; suit : Suit };
 type DealtInSeat = record { "principal" : principal; seat : nat8 };
 type HandHistoryRecord = record {
@@ -23,10 +52,29 @@ type HandHistoryRecord = record {
   players : vec PlayerHandRecord;
   big_blind : nat64;
   timestamp : nat64;
+  // THE PERMANENT NAME OF THIS HAND: "<table canister id>:<seed_hash>".
+  //
+  // DERIVED on the way out from `table_id` and `shuffle_proof.seed_hash`, never
+  // accepted from a writer, so every record ever archived -- including every one
+  // stored before this field existed -- is named by the same code and nothing had
+  // to be rewritten or renumbered. `hand_number` is NOT a name: it restarts at 1
+  // on every reset_table. docs/DEFECTS.md E-71.
+  hand_uid : opt text;
   went_to_showdown : bool;
   shuffle_proof : ShuffleProofRecord;
   river : opt Card;
   winners : vec WinnerRecord;
+};
+// What an old "(table, hand number)" citation actually names: the WHOLE SET of
+// records that answer to it, oldest first, each carrying its own name.
+// `match_count` is exact even when `matches` is truncated.
+type HandNumberCitation = record {
+  is_unique : bool;
+  hand_number : nat64;
+  table_id : principal;
+  matches : vec HandSummary;
+  match_count : nat64;
+  advice : text;
 };
 type HandRank = variant {
   StraightFlush : nat8;
@@ -47,6 +95,8 @@ type HandSummary = record {
   table_id : principal;
   total_pot : nat64;
   timestamp : nat64;
+  // THE NAME TO CITE. Unique over this archive; `hand_number` above is not.
+  hand_uid : text;
   went_to_showdown : bool;
   dealt_in_count : opt nat8;
   winners : vec WinnerRecord;
@@ -106,14 +156,18 @@ type RecordedHandCheck = record {
   seed_hash : text;
   revealed_seed : text;
   this_does_not_prove : text;
+  // The hand this answer is about, by its permanent name. Quote this, not
+  // `hand_number`.
+  hand_uid : text;
   this_proves : text;
   verify_it_yourself : text;
   problem : opt text;
 };
 type Result = variant { Ok; Err : text };
 type Result_1 = variant { Ok : RecordedHandCheck; Err : text };
-type Result_2 = variant { Ok : nat64; Err : text };
-type Result_3 = variant { Ok : bool; Err : text };
+type Result_2 = variant { Ok : HandHistoryRecord; Err : text };
+type Result_3 = variant { Ok : nat64; Err : text };
+type Result_4 = variant { Ok : bool; Err : text };
 type RetentionPolicy = record {
   admin : opt principal;
   max_age_before_discard : opt nat64;
@@ -143,8 +197,29 @@ service : () -> {
   // into this archive that no real table produced, so a player is entitled to
   // see who can make it without asking anyone's permission.
   get_admin : () -> (opt principal) query;
+  // IS THE ARCHIVE'S IDENTITY ACTUALLY A KEY? Computed from the RECORDS.
+  //
+  // Deliberately not computed from the name index: an index cannot be used to
+  // check itself, and the failure this canister is most likely to have is an
+  // index that disagrees with the records it indexes. Everything is recounted
+  // from the records on every call and `index_disagrees_with_records` compares
+  // the two.
+  //
+  // This is the query that makes the fix to docs/DEFECTS.md E-71 checkable on a
+  // running canister -- including one nobody may call from a test -- instead of
+  // believed.
+  get_archive_integrity : () -> (ArchiveIntegrity) query;
   get_authorized_tables : () -> (vec principal) query;
   get_hand : (nat64) -> (opt HandHistoryRecord) query;
+  // THE HAND WITH THIS NAME, or a sentence saying why there isn't one.
+  //
+  // Accepts "<table canister id>:<seed_hash>" or a bare commitment, in any case,
+  // with surrounding whitespace. `Result`, not `opt`, because the three ways this
+  // can fail to answer are three different facts about the world -- a malformed
+  // name, a name no record answers to, and a bare commitment that names records
+  // on two tables -- and a bare `null` for all three is how a verifier concludes
+  // the archive lost their hand.
+  get_hand_by_uid : (text) -> (Result_2) query;
   get_hands_by_player : (principal, nat64, nat64) -> (vec HandSummary) query;
   get_hands_by_table : (principal, nat64, nat64) -> (vec HandSummary) query;
   get_player_stats : (principal) -> (opt PlayerStats) query;
@@ -152,12 +227,28 @@ service : () -> {
   get_retention_policy : () -> (RetentionPolicy) query;
   get_table_hand_count : (principal) -> (nat64) query;
   get_total_hands : () -> (nat64) query;
-  record_hand : (HandHistoryRecord) -> (Result_2);
+  // Store a hand, or return the id of the copy already stored.
+  //
+  // REFUSES a record whose shuffle commitment is not a SHA-256 digest, with a
+  // sentence saying so. Such a record cannot be named, and storing it would mean
+  // every unnamable record from one table sharing one name and the second being
+  // de-duplicated into the first -- a genuine hand discarded with an `Ok`, which
+  // is docs/DEFECTS.md E-49. The caller keeps the record and retries.
+  record_hand : (HandHistoryRecord) -> (Result_3);
+  // WHAT "TABLE X, HAND N" ACTUALLY NAMES.
+  //
+  // The migration path for every citation written before hands had names. It
+  // resolves to the whole SET of records that answer to it and says in
+  // `is_unique` whether it identifies a hand at all. Nothing is renumbered and
+  // nothing is orphaned: an old report citing "table_2 hand 1" still resolves,
+  // now to a labelled set with each candidate's pot, timestamp and permanent
+  // name. docs/DEFECTS.md E-71.
+  resolve_hand_number : (principal, nat64) -> (HandNumberCitation) query;
   revoke_table : (principal) -> (Result);
   // Deprecated in favour of `check_recorded_hand`, which says WHICH check failed.
   // 
   // Kept so an existing caller keeps working. `Ok(false)` here still cannot
   // distinguish "no seed revealed yet" from "the commitment is broken"; that is
   // the reason it is deprecated, not a reason to trust it.
-  verify_hand_shuffle : (nat64) -> (Result_3) query;
+  verify_hand_shuffle : (nat64) -> (Result_4) query;
 }

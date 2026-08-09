@@ -2,8 +2,20 @@
   import IcpLogo from './IcpLogo.svelte';
   import SolvencyNotice from './SolvencyNotice.svelte';
   import { readTableSolvency, refreshTableSolvency } from '$lib/solvency.js';
+  import CycleRunwayNotice from './CycleRunwayNotice.svelte';
+  import { readCycleRunway } from '$lib/cycleRunway.js';
 
-  const { tableActor, currentBalance, onClose, onWithdrawSuccess, currency = 'ICP' } = $props();
+  const {
+    tableActor,
+    // Only so the cycle-runway banner can print a top-up command that names a
+    // canister. `icp canister top-up` needs no controller rights, so the command
+    // is only useful if it says WHICH canister.
+    tableCanisterId = null,
+    currentBalance,
+    onClose,
+    onWithdrawSuccess,
+    currency = 'ICP',
+  } = $props();
 
   // WHETHER THERE IS ENOUGH ON THE LEDGER TO PAY THIS WITHDRAWAL.
   // docs/SECURITY-FINDINGS.md FINDING 35. `Available Balance` below is a number
@@ -24,6 +36,37 @@
     } finally {
       solvencyRefreshing = false;
     }
+  }
+
+
+  // ==========================================================================
+  // HOW LONG CAN THIS TABLE KEEP HONOURING WITHDRAWALS? ASKED HERE, NOT LATER.
+  // ==========================================================================
+  //
+  // docs/DEFECTS.md E-55. A canister below its freezing threshold rejects EVERY
+  // update call at once -- `deposit`, `withdraw`, `cash_out`, `player_action`,
+  // `abandon_stuck_hand` -- so every player at the table loses access to their
+  // own money at the same instant, with no attacker and no in-application
+  // remedy. Nothing in this project tops a canister up.
+  //
+  // >>> CORRECTION, wave-13 reconciliation (docs/DEFECTS.md E-92). THE FIGURE
+  // >>> BELOW IS STILL OPTIMISTIC. 0.4994 T/day is idle + 500 hands + six
+  // >>> 10-second HEARTBEAT streams and nothing else. The same page also drives
+  // >>> `check_timeouts` -- an UPDATE call -- from a 500 ms setInterval, at a
+  // >>> measured 6,573,911 cycles each: 0.28-1.14 T/day PER OPEN TAB against the
+  // >>> heartbeat's 0.0618. What this modal READS is unaffected: the canister's
+  // >>> sliding window measures real burn and already includes those calls.
+  // Measured (`tests/money_safety/tests/cycles_runway.rs`): an EMPTY table burns
+  // 0.0442 T/day, which is 225 days on 10 T. A table with 500 hands a day and six
+  // open tabs burns 0.4994 T/day, which is TWENTY days on the same balance. The
+  // reassuring number in the register is the number for a table nobody is using.
+  //
+  // Read on mount, before any amount is typed: a warning that appears after the
+  // button is pressed is a receipt, not a warning.
+  let runway = $state(null);
+
+  async function loadRunway() {
+    runway = await readCycleRunway(tableActor);
   }
 
   let withdrawAmount = $state('');
@@ -378,6 +421,7 @@
   $effect(() => {
     loadCustody();
     loadSolvency();
+    loadRunway();
   });
 
   // ONE dismissal contract for every dialog in this app (docs/DEFECTS.md T-13).
@@ -438,6 +482,12 @@
       onRefresh={refreshSolvency}
       refreshing={solvencyRefreshing}
     />
+
+    <!-- AND WHETHER THIS CALL WILL BE ACCEPTED AT ALL. docs/DEFECTS.md E-55.
+         `withdraw` is an UPDATE, and a canister below its freezing threshold
+         rejects every update at the boundary. This is the screen where that is
+         about to matter. -->
+    <CycleRunwayNotice {runway} context="withdraw" canisterId={tableCanisterId} />
 
     <div class="balance-info" class:btc={isBTC}>
       <span class="label">Available Balance</span>

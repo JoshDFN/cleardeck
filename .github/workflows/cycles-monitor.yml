@@ -1,66 +1,171 @@
 name: Cycles monitor
 
-# Daily low-balance check. Opens an `incident` issue if any canister is below
-# threshold. Reading `icp canister status` is controller-only, so it reuses the
-# IC_DEPLOY_IDENTITY secret read-only.
+# WHY THIS WORKFLOW EXISTS
+#
+#   docs/DEFECTS.md E-55. A canister below its freezing threshold rejects EVERY
+#   update call at once -- `deposit`, `withdraw`, `cash_out`, `player_action`,
+#   `abandon_stuck_hand` -- so every player at a table loses access to their own
+#   money at the same instant, with no attacker involved and no in-application
+#   remedy. It is fully recoverable by a top-up and NOTHING IN THIS REPOSITORY
+#   TOPS ANYTHING UP. A canister allowed to run all the way to zero is
+#   uninstalled by the IC and its state is gone.
+#
+#   Measured on the real module this wave (tests/money_safety/tests/cycles_runway.rs):
+#   an EMPTY table burns 0.0442 T/day, a table dealing ~500 hands a day with six
+#   tabs open burns 0.4994 T/day, and one dealing continuously burns 3.68 T/day.
+#   On 10 T that is 225 days, 20 days and 2 days respectively.
+#
+# WHAT CHANGED, AND WHY THE PREVIOUS VERSION OF THIS FILE WAS WRONG
+#
+#   The workflow this replaces did two things it should not have:
+#
+#   1. IT IMPORTED A DEPLOY KEY TO READ A NUMBER. `icp canister status` is
+#      controller-only, so it base64-decoded `secrets.IC_DEPLOY_IDENTITY` into
+#      /tmp and made it the default identity -- every day, on a schedule, for a
+#      read. A scheduled job holding a credential that can `install_code` on a
+#      canister custodying real ICP is docs/SECURITY-FINDINGS.md FINDING 23's
+#      attack surface widened for the sake of a status line. This version
+#      authenticates as NOBODY: `get_cycle_status` is a public query, which is
+#      the entire reason the canister publishes its own runway.
+#
+#   2. IT ALARMED ON A CYCLES FIGURE (a flat 1 T floor). The burn rate moves by
+#      two orders of magnitude with load, so 1 T is 22 days on an idle table and
+#      under seven hours on a busy one. The threshold is RUNWAY DAYS now, computed
+#      by the canister from its own measured burn.
+#
+#   It also parsed `icp canister status --json` for a `.cycles` key with a comment
+#   saying to "confirm the cycles key on first run", and silently `continue`d when
+#   the parse produced nothing -- so a wrong key name would have reported
+#   "all canisters above threshold" forever. This version fails when it reads
+#   nothing.
+#
+# THIS WORKFLOW IS READ-ONLY AND MUST STAY THAT WAY
+#
+#   * The only network operation is `icp canister call ... --query`.
+#   * It needs NO identity and NO secrets. It cannot authenticate as a controller
+#     even if it wanted to, because it has no key to authenticate with.
+#   * `permissions:` grants `contents: read` and `issues: write` only.
+#   * The "prove it cannot deploy" step below fails the run if a mutating command
+#     or an identity ever appears in this file or in the script it runs.
+
 on:
   schedule:
-    - cron: '0 14 * * *'
+    # Twice a day. The freezing RESERVE is worth about 1.2 hours of real burn on
+    # this canister, not the 30 days it is nominally sized at (FINDING 24), so
+    # once the warning fires there is no cushion underneath it -- but the warning
+    # fires at 60 days, which is what makes twice a day enough.
+    - cron: '0 6,18 * * *'
   workflow_dispatch:
+    inputs:
+      warn_days:
+        description: 'Warn below this many days of runway'
+        required: false
+        default: '60'
 
 permissions:
-  issues: write
   contents: read
+  issues: write
+
+concurrency:
+  group: cycles-monitor
+  cancel-in-progress: false
 
 env:
-  # Kept equal to ci.yml / deploy-ic.yml / Dockerfile; every copy of this pin is
-  # compared by scripts/check-declarations.sh.
+  # Kept equal to ci.yml / deploy-ic.yml / deployed-drift.yml / Dockerfile; every
+  # copy of this pin is compared by scripts/check-declarations.sh.
   ICP_CLI_VERSION: '1.0.2'
-  CYCLES_LOW_THRESHOLD: '1000000000000' # 1T
 
 jobs:
-  check:
+  runway:
+    name: How long before a canister stops honouring withdrawals?
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Prove this workflow cannot deploy and holds no credential
+        # A read-only claim that nothing enforces is just a comment, and the
+        # version of this file that was here before described itself as read-only
+        # in its second line while importing a deploy key. The guard lives in its
+        # own script because a guard that scans itself always trips on its own
+        # patterns; it self-tests first, so a vacuous guard fails rather than
+        # passing quietly.
+        run: ./scripts/assert-read-only.sh
+              .github/workflows/cycles-monitor.yml
+              scripts/cycles-runway.sh
+
+      - name: Prove the threshold logic can go red, before trusting a green run
+        # No network. Drives the parser and the comparison over fixtures whose
+        # answer is known by construction, including the one that matters most:
+        # a canister whose LIFETIME burn average still says 225 days while its
+        # RECENT burn says 20 (docs/DEFECTS.md E-55).
+        run: ./scripts/cycles-runway.sh --selftest
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
+
       - name: Install pinned icp-cli
-        run: npm i -g @icp-sdk/icp-cli@${ICP_CLI_VERSION}
-      - name: Import identity (read-only status queries)
-        env:
-          IC_DEPLOY_IDENTITY: ${{ secrets.IC_DEPLOY_IDENTITY }}
         run: |
           set -euo pipefail
-          printf '%s' "$IC_DEPLOY_IDENTITY" | base64 -d > /tmp/monitor.pem
-          icp identity import --from-pem /tmp/monitor.pem --storage plaintext monitor
-          icp identity default monitor
-      - name: Check balances and open incident if low
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          THRESHOLD: ${{ env.CYCLES_LOW_THRESHOLD }}
+          sudo apt-get update -qq && sudo apt-get install -y -qq libdbus-1-3
+          npm i -g --no-fund --no-audit "@icp-sdk/icp-cli@${ICP_CLI_VERSION}"
+          icp --version
+
+      - name: Read the runway of every mainnet canister
+        id: check
         run: |
           set -euo pipefail
-          report=""; any_low=0
-          for c in lobby table_1 table_2 table_3 btc_table_1 history frontend; do
-            # Parse the structured JSON (robust vs scraping human output). Confirm
-            # the cycles key against `icp canister status --json` on first run.
-            bal=$(icp canister status "$c" -e ic --identity monitor --json 2>/dev/null \
-              | jq -r '(.cycles // .status.cycles // .moduleHash_cycles // empty)' | tr -d '_,"')
-            [ -z "${bal:-}" ] && { echo "::warning::no cycles parsed for $c"; continue; }
-            row="- $c: $bal cycles"
-            if [ "$bal" -lt "$THRESHOLD" ]; then any_low=1; row="$row — BELOW THRESHOLD"; fi
-            report="$report"$'\n'"$row"
-          done
-          if [ "$any_low" = "0" ]; then echo "all canisters above threshold"; exit 0; fi
-          printf 'Canister cycles below %s:\n%s\n' "$THRESHOLD" "$report" > /tmp/body.md
-          gh issue create --repo "$REPO" \
-            --title "incident: canister cycles low ($(date -u +%F))" \
-            --label incident --body-file /tmp/body.md
-      - name: Shred identity
-        if: always()
-        run: |
-          rm -f /tmp/monitor.pem || true
-          icp identity delete monitor || true
+          ./scripts/cycles-runway.sh \
+            --network ic \
+            --warn-days "${{ github.event.inputs.warn_days || '60' }}" \
+            2>&1 | tee /tmp/runway.txt
+
+      - name: Open or update an incident when a canister is running out
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = 'The scheduled cycles check failed before it produced a report.';
+            try { body = fs.readFileSync('/tmp/runway.txt', 'utf8').slice(0, 60000); } catch (e) {}
+            const title = 'Canister cycles: a table is running out of runway';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            // Untrusted-input note: `body` is our own script's output, not user
+            // input, and it is passed as data, never interpolated into a shell.
+            const issueBody = [
+              'A canister below its freezing threshold rejects EVERY update call at once:',
+              '`deposit`, `withdraw`, `cash_out`, `player_action`, `abandon_stuck_hand`.',
+              'Every player at that table loses access to their own money at the same moment,',
+              'with no attacker involved. It is fully recoverable by a top-up, and only by a',
+              'top-up; a canister that reaches true zero is uninstalled and its state is gone.',
+              '',
+              '**Anybody can top a canister up. It needs no controller rights.**',
+              '',
+              '```',
+              '$ icp canister top-up <canister-id> --amount 20t -e ic',
+              '```',
+              '',
+              `Run: ${run}`,
+              '',
+              '```',
+              body,
+              '```',
+              '',
+              'docs/DEFECTS.md E-55.',
+            ].join('\n');
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'cycles',
+            });
+            const open = existing.data.find((i) => i.title === title);
+            if (open) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open.number, body: issueBody,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body: issueBody, labels: ['cycles', 'incident'],
+              });
+            }

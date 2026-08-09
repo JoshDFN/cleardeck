@@ -260,6 +260,21 @@ export interface CommitmentCheckArgs {
   'seed_hash' : string,
   'revealed_seed' : string,
 }
+export interface CycleStatus {
+  'balance' : bigint,
+  'liquid_balance' : bigint,
+  'reserved_for_freezing' : bigint,
+  'observed_burn_per_day' : bigint,
+  'recent_burn_per_day' : [] | [bigint],
+  'runway_days' : [] | [bigint],
+  'sample_window_secs' : bigint,
+  'recent_window_secs' : [] | [bigint],
+  'measurement_is_meaningful' : boolean,
+  'clock_ticks' : bigint,
+  'clock_last_tick_at' : bigint,
+  'clock_watchdog_armed' : boolean,
+  'next_wake_at' : [] | [bigint],
+}
 export interface FairnessRetention {
   'table_keeps_last_n_hands' : bigint,
   'table_copy_is_destructible_by_controller' : boolean,
@@ -490,6 +505,7 @@ export interface _SERVICE {
    */
   'use_time_bank' : ActorMethod<[], Result_1>,
   'check_shuffle_commitment' : ActorMethod<[CommitmentCheckArgs], CommitmentCheck>,
+  'get_cycle_status' : ActorMethod<[], CycleStatus>,
   'get_fairness_retention' : ActorMethod<[], FairnessRetention>,
   'get_history_status' : ActorMethod<[], HistoryStatus>,
   'flush_unrecorded_hands' : ActorMethod<[], Result_1>,

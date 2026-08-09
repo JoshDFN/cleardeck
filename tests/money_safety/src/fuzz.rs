@@ -30,7 +30,7 @@ use crate::invariants::outcome::{check_hand_outcome, OutcomeCoverage, OutcomeWat
 use crate::invariants::record::{check_archived_participants, ArchiveCoverage};
 use crate::invariants::{
     check_custody_is_visible, check_hand_attribution, check_hand_payout_total,
-    check_insolvency_is_reported, check_no_rake,
+    check_insolvency_is_reported, check_no_rake, external_money_moved,
     check_no_settlement_trap, check_point_in_time, check_self_reported_inconsistency,
     check_upgrade_durability, Violation,
 };
@@ -241,7 +241,7 @@ fn live_actor(rng: &mut Rng, gen: &GenState, actors: usize) -> usize {
 fn next_op(rng: &mut Rng, gen: &mut GenState, config: &TableConfig, actors: usize) -> Op {
     // The weights matter: the sequence has to make real progress through hands,
     // or every invariant check runs against an idle table.
-    let kinds: [(u64, u8); 26] = [
+    let kinds: [(u64, u8); 27] = [
         (18, 0),  // ActInTurn (hostile amounts, often illegal)
         (30, 24), // ActLegalInTurn -- the engine of progress
         (6, 1),   // ActAs (frequently out of turn)
@@ -262,7 +262,17 @@ fn next_op(rng: &mut Rng, gen: &mut GenState, config: &TableConfig, actors: usiz
         (5, 15),  // SitIn
         (2, 16),  // SitOutNextHand
         (2, 17),  // Heartbeat
-        (2, 18),  // UseTimeBank
+        (2, 18),  // UseTimeBank -- a RANDOM actor, so it is nearly always refused
+        // UseTimeBankOnClock -- the same call by the seat the engine's pointer
+        // names, so it LANDS. Weighted well above the random-actor form because
+        // that form measured nothing: `use_time_bank` refuses anybody who is not
+        // `action_on`, and a call that is always refused is not coverage. This is
+        // the op that reaches docs/DEFECTS.md E-41 / FINDING 39 -- the only
+        // canister surface that armed an action clock with no hand in progress --
+        // and it is deliberately generated at every point of the sequence, not
+        // only inside a live hand, because the stale-pointer states BETWEEN hands
+        // are the ones nothing could reach. See docs/DEFECTS.md H-26.
+        (6, 26),  // UseTimeBankOnClock
         (2, 19),  // ShowCards
         (3, 20),  // RawTransferThenNotify
         (3, 21),  // NotifyBlock (double-claim / forged)
@@ -272,6 +282,7 @@ fn next_op(rng: &mut Rng, gen: &mut GenState, config: &TableConfig, actors: usiz
     let actor = live_actor(rng, gen, actors);
     match *rng.weighted(&kinds) {
         24 => Op::ActLegalInTurn,
+        26 => Op::UseTimeBankOnClock,
         25 => Op::FundAndSeat { actor },
         0 => Op::ActInTurn {
             act: hostile_act(rng, config),
@@ -399,7 +410,41 @@ pub fn generate(seed: u64, steps: usize, config: &TableConfig, actors: usize) ->
             ops.push(Op::GoSilent { actor: victim });
             continue;
         }
-        ops.push(next_op(&mut rng, &mut gen, config, actors));
+        let op = next_op(&mut rng, &mut gen, config, actors);
+        // LET THE CLOCK HAVE A GO AT WHAT THE SEQUENCE JUST ARMED.
+        //
+        // Every clock defect in this register has the same two-part shape: one
+        // message ARMS a deadline or changes who the table can deal to, and a LATER
+        // deadline-crossing acts on it. E-54 (no clock at all), E-56 (a stalled
+        // hand voided instead of played out), E-59 (two beliefs about one stall),
+        // E-41 (an action clock armed on a finished hand). A generator that emits
+        // `AdvanceTime` and `CheckTimeouts` independently of the ops that arm
+        // something has to draw the pair in the right order by luck, and across 220
+        // steps at three seeds it mostly does not.
+        //
+        // So a state-arming op sometimes carries its own deadline crossing. This is
+        // a SHAPE, not a recipe: it knows nothing about what the crossing will find,
+        // only that a deadline nobody crosses is a deadline nobody tests. The ops it
+        // adds are counted against the same step budget, so a run costs the same.
+        let arms_a_deadline_or_changes_who_can_be_dealt_to = matches!(
+            op,
+            Op::UseTimeBankOnClock
+                | Op::UseTimeBank { .. }
+                | Op::SitOut { .. }
+                | Op::SitOutNextHand { .. }
+                | Op::LeaveTable { .. }
+                | Op::CashOut { .. }
+        );
+        ops.push(op);
+        if arms_a_deadline_or_changes_who_can_be_dealt_to
+            && rng.chance(1, 2)
+            && ops.len() + 2 <= steps
+        {
+            ops.push(Op::AdvanceTime {
+                nanos: 31_000_000_000,
+            });
+            ops.push(Op::CheckTimeouts { actor: 0 });
+        }
     }
     ops
 }
@@ -734,9 +779,14 @@ pub fn run_sequence(
         let idle_now = !after.table.phase.hand_in_progress() && after.table.pot == 0;
         if after.table.hand_number > watch.last_hand_number && idle_now {
             if let Some(idle_before) = watch.idle.clone() {
-                // Only meaningful when nothing external moved money. The cheap,
-                // sound test for that: the ledger position did not change.
-                if idle_before.ledger_main == after.ledger_main {
+                // Only meaningful when nothing external moved money, and the test
+                // for that has to cover EVERY ledger account the canister owns --
+                // its main account AND its published deposit subaccounts -- because
+                // `internal_total()` counts both. This read `ledger_main` alone and
+                // therefore convicted a table of creating the 10,000 e8s somebody
+                // had just deposited into a subaccount mid-hand. See
+                // `external_money_moved` and docs/SECURITY-FINDINGS.md FINDING 44.
+                if !external_money_moved(&idle_before, &after) {
                     record(
                         &mut findings,
                         &mut all,

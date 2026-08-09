@@ -490,12 +490,26 @@ type CycleStatus = record {
   // number that reaches zero when deposit/withdraw/cash_out start being rejected.
   liquid_balance : nat;
   reserved_for_freezing : nat;
-  // Measured on this instance, not taken from a price list.
+  // Measured on this instance, not taken from a price list. LIFETIME average,
+  // from the first tick (or the last observed top-up).
   observed_burn_per_day : nat;
-  // null means the measurement window is too short to say, which is NOT the same
-  // as "plenty".
+  // The same measurement over the LAST HOUR only. A lifetime average is not a
+  // fuel gauge: a table that sat empty for months and has just got busy -- or is
+  // being flooded with free permissionless ingress, FINDING 26 -- would go on
+  // reporting the burn rate of the months it was empty.
+  // `opt` on a field this module always sets: a client built from this tree must
+  // still be able to decode a reply from the OLDER module running on mainnet, and
+  // Candid refuses a record missing a non-optional field. Measured: as a bare
+  // `nat` the UI rendered "this table is not answering" for a healthy table.
+  recent_burn_per_day : opt nat;
+  // liquid_balance divided by the LARGER of the two rates above, because reading
+  // low costs an operator a top-up and reading high costs every player at this
+  // table access to their own money.
+  // null means neither window could measure a burn, which is NOT the same as
+  // "plenty": a reader must treat it as UNKNOWN and alarm on it.
   runway_days : opt nat64;
   sample_window_secs : nat64;
+  recent_window_secs : opt nat64;
   measurement_is_meaningful : bool;
   // Ticks the on-chain clock has run since this instance started. Zero on a
   // canister that has been up for minutes means the clock is NOT running.

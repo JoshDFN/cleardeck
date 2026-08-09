@@ -35,7 +35,14 @@
 import { Principal } from '@dfinity/principal';
 import { ledgerBalance, ledgerTransferFee, tableActorFor } from './table-driver.mjs';
 import { BTC_MIN_DEPOSIT_SATS as BTC_MIN_DEPOSIT, ICP_MIN_DEPOSIT_E8S as ICP_MIN_DEPOSIT } from './config.mjs';
-import { historyActor, lobbyActor, optional, variantKey } from './agent.mjs';
+import { lobbyActor, optional, variantKey } from './agent.mjs';
+// The archive and the table's hand record are read through the HARNESS's own
+// Candid mirrors, not through `src/declarations`. See the headers of both files;
+// the app's declarations are stale (docs/DEFECTS.md E-08, E-67) and Candid
+// subtyping drops undeclared fields in silence, which is how a gate ends up
+// asserting against a field it cannot see.
+import { archiveActor } from './archive-wire.mjs';
+import { handRecordActor } from './hand-record-wire.mjs';
 import {
   checkFigure, checkPlainNumber, foldFigures, parseDisplayedAmount,
   RANK_BY_GLYPH, SUIT_BY_SYMBOL, cardToText, fmt,
@@ -1653,6 +1660,23 @@ function awardedTotal(record, where, problems) {
 export function foldArchivedHand(summary, full) {
     const structural = [];
     const handId = strictNumber(summary, 'hand_id', 'HandSummary', structural);
+    // THE NAME OF THE HAND THIS RECORD IS OF (docs/DEFECTS.md E-71). Read off the
+    // summary, cross-checked against the full record below, and carried through
+    // so the caller's join can be ASSERTED rather than assumed.
+    const handUid = typeof summary?.hand_uid === 'string' ? summary.hand_uid : null;
+    if (handUid === null) {
+        structural.push(
+            'STRUCTURAL: HandSummary has no `hand_uid`, so the archived record cannot be matched '
+            + 'to the hand it is a record OF. Either this archive predates docs/DEFECTS.md E-71 '
+            + 'or the harness is decoding through a declaration that drops the field.',
+        );
+    } else if (handUid === '') {
+        structural.push(
+            'STRUCTURAL: this archived record has an EMPTY name, which means its shuffle '
+            + 'commitment is not a SHA-256 digest. `record_hand` refuses such a record, so one '
+            + 'that is stored got in some other way.',
+        );
+    }
 
     if (!full) {
         structural.push(
@@ -1660,12 +1684,40 @@ export function foldArchivedHand(summary, full) {
             + 'hand the archive itself lists cannot be read. The no-rake assertion needs '
             + '`HandHistoryRecord.rake`, which is the only place a rake is recorded.',
         );
-        return { handId, totalPot: null, rake: null, awarded: null, structural };
+        return { handId, handUid, handNumber: null, totalPot: null, rake: null, awarded: null, structural };
+    }
+
+    // The name must be the same on both read paths, and it must be the name the
+    // record's own contents produce. `hand_uid` is derived by the canister from
+    // `table_id` and `shuffle_proof.seed_hash`; recomputing it here means a
+    // canister that ever starts publishing a name that does not follow from the
+    // hand is caught by the gate rather than trusted by it.
+    const fullUid = Array.isArray(full.hand_uid)
+        ? (full.hand_uid.length ? full.hand_uid[0] : null)
+        : (full.hand_uid ?? null);
+    if (handUid && fullUid !== null && fullUid !== handUid) {
+        structural.push(
+            `the archive disagrees with itself about this hand's NAME: get_hands_by_table says `
+            + `${handUid} and get_hand says ${fullUid}`,
+        );
+    }
+    const seedHash = full?.shuffle_proof?.seed_hash;
+    if (handUid && typeof seedHash === 'string' && full.table_id?.toText) {
+        const derived = `${full.table_id.toText()}:${seedHash.trim().toLowerCase()}`;
+        if (derived !== handUid) {
+            structural.push(
+                `the archive's published name for this hand does not follow from the hand: it `
+                + `publishes ${handUid} and its own table_id and commitment give ${derived}`,
+            );
+        }
     }
 
     const totalPot = strictNumber(full, 'total_pot', 'HandHistoryRecord', structural);
     const rake = strictNumber(full, 'rake', 'HandHistoryRecord', structural);
     const awarded = awardedTotal(full, 'HandHistoryRecord', structural);
+    // Carried for the MESSAGES, never for the join: "the archive calls this hand
+    // number 3" is useful context and is not an identity.
+    const handNumber = 'hand_number' in full ? Number(full.hand_number) : null;
 
     // The archive's two read paths must agree. A summary that says one pot and a
     // full record that says another means the modal's number depends on which
@@ -1685,12 +1737,151 @@ export function foldArchivedHand(summary, full) {
         );
     }
 
-    return { handId, totalPot, rake, awarded, structural };
+    return { handId, handUid, handNumber, totalPot, rake, awarded, structural };
+}
+
+// ---------------------------------------------------------------------------
+// JOINING THE TABLE'S OWN RECORD TO THE PERMANENT ARCHIVE  (docs/DEFECTS.md E-71)
+// ---------------------------------------------------------------------------
+//
+// WHAT THIS GATE USED TO DO, AND WHY IT WAS RED FOR THE WRONG REASON.
+// `assertHandHistoryAgreement` built `byHandNumber` with
+// `byHandNumber.set(Number(summary.hand_number), …)` over a NEWEST-FIRST window of
+// twenty archived records, then compared the table's hand *n* against whatever
+// survived under key *n*. `hand_number` restarts at 1 on every `reset_table`, so
+// that map is a collision: measured on the local archive on 2026-08-08, the
+// twenty-record window for `table_2` collapsed to TEN keys, and the record left
+// under "hand 1" was `hand_id 3173` — a hand from an earlier life of the table,
+// with a pot of 0.2 ICP — while the hand the table had just played was
+// `hand_id 3218`, with a pot of 24 ICP. The gate then reported
+//
+//     hand 1: the TABLE canister paid 2400000000 e8s but the HISTORY canister
+//             recorded 20000000 e8s paid
+//
+// which reads as "the archive lost 22 ICP" and is really "the gate compared two
+// different hands". Both numbers were true; they were true of different hands.
+//
+// TWO SEPARATE DEFECTS, BOTH FIXED HERE.
+//
+//   1. THE JOIN. Hands are matched on the hand's NAME — `table_id:seed_hash`, the
+//      shuffle commitment, which is unique per hand and identical on both sides
+//      because both sides got it from the same deal. The join is then ASSERTED:
+//      whatever record comes back must carry the name of the hand it is being
+//      compared against, so a future edit that reverts the lookup to
+//      `hand_number` fails on the join instead of producing a plausible-looking
+//      money mismatch. That assertion is what `tools/shots/test-hand-identity.mjs`
+//      exercises with no replica at all.
+//
+//   2. THE RAKE HOLE. The no-rake loop iterated the COLLAPSED map, so on that same
+//      window it checked ten of the twenty archived records for a rake and the
+//      other ten were never looked at — and which ten was decided by insertion
+//      order. The product's headline property was asserted over an arbitrary half
+//      of the evidence. It now iterates the records themselves.
+
+/**
+ * The hand's permanent name, from either side of the comparison.
+ *
+ * @param {string} tableId
+ * @param {string|null|undefined} seedHash
+ * @returns {string|null} `table_id:seed_hash`, or null if that is not a commitment
+ */
+export function handUidFrom(tableId, seedHash) {
+    if (typeof tableId !== 'string' || !tableId) return null;
+    if (typeof seedHash !== 'string') return null;
+    const c = seedHash.trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(c)) return null;
+    return `${tableId}:${c}`;
+}
+
+/**
+ * Match the table's own hand records to the archive's, BY NAME, and check the
+ * match.
+ *
+ * Pure, and exported, for the reason `foldArchivedHand` is: the gate it belongs to
+ * only runs inside a full screenshot sweep against a live replica with archived
+ * hands on it, and a gate whose failure mode nobody has ever seen is not a gate.
+ *
+ * @param {object} opts
+ * @param {string} opts.tableId the table canister id, as text
+ * @param {Array<{handNumber:number, seedHash:string|null, awardedByTable:number}>} opts.tableHands
+ * @param {Array<{handId:number|null, handUid:string|null, totalPot:number|null,
+ *                rake:number|null, awarded:number|null, structural:string[]}>} opts.archived
+ * @param {(hand:object, index:object) => object|null} [opts.lookup] how a record is
+ *        found for a table hand. Defaults to lookup by NAME. Injectable so the
+ *        self-test can hand in the defective by-`hand_number` lookup and require
+ *        the join assertion to catch it.
+ * @returns {{pairs: Array<{hand:object, hist:object|null, uid:string|null}>,
+ *            structural: string[]}}
+ */
+export function joinTableHandsToArchive({ tableId, tableHands, archived, lookup }) {
+    const structural = [];
+
+    const byUid = new Map();
+    const byHandNumber = new Map();
+    for (const rec of archived) {
+        if (rec.handUid) {
+            if (byUid.has(rec.handUid)) {
+                structural.push(
+                    `THE ARCHIVE HAS TWO RECORDS NAMED ${rec.handUid}. A name identifies exactly `
+                    + 'one hand or it is not a name; see the archive\'s own get_archive_integrity.',
+                );
+            }
+            byUid.set(rec.handUid, rec);
+        }
+        // Kept ONLY so the self-test can inject the defective lookup, and built
+        // exactly the way the defect built it -- an unconditional `set` over a
+        // newest-first list, so the OLDEST colliding record wins. Nothing in the
+        // default path reads it.
+        byHandNumber.set(rec.handNumber, rec);
+    }
+    const index = { byUid, byHandNumber };
+    const find = lookup || ((hand) => (hand.uid ? byUid.get(hand.uid) || null : null));
+
+    const pairs = [];
+    for (const hand of tableHands) {
+        const uid = handUidFrom(tableId, hand.seedHash);
+        if (!uid) {
+            structural.push(
+                `STRUCTURAL: the table's own record of hand ${hand.handNumber} carries no usable `
+                + `shuffle commitment (${JSON.stringify(hand.seedHash)}), so this hand cannot be `
+                + 'matched to its archived record by anything except its hand number, and hand '
+                + 'numbers restart at 1 on every reset_table.',
+            );
+            pairs.push({ hand, hist: null, uid: null });
+            continue;
+        }
+
+        const hist = find({ ...hand, uid }, index) || null;
+
+        // THE JOIN, ASSERTED. This is the line that makes the gate go red when
+        // the join is reverted rather than merely produce a wrong-looking number.
+        if (hist && hist.handUid !== uid) {
+            structural.push(
+                `JOIN BROKEN: hand ${hand.handNumber} of this table committed to ${uid}, but the `
+                + `archived record being compared against it is ${hist.handUid || '(unnamed)'} `
+                + `(hand_id ${hist.handId}, pot ${hist.totalPot}). Those are two different hands. `
+                + 'A hand is identified by its commitment, never by its hand number: hand numbers '
+                + 'restart at 1 on every reset_table and one of them answers to 70 records on the '
+                + 'local archive. docs/DEFECTS.md E-71.',
+            );
+        }
+
+        pairs.push({ hand, hist, uid });
+    }
+
+    return { pairs, structural };
 }
 
 export async function assertHandHistoryAgreement(ctx, page, opts) {
     const tableId = ctx.tableIds[opts.table];
-    const table = await tableActorFor(opts.asPlayer, tableId);
+    // THE HAND RECORD IS READ THROUGH THE HARNESS'S OWN MIRROR, not through
+    // `src/declarations`. `lib/hand-record-wire.mjs` explains why at length; the
+    // short version is that the app's declaration of `HandHistory` is stale
+    // (docs/DEFECTS.md E-08) and Candid subtyping drops what it does not declare.
+    // This gate now depends on `shuffle_proof.seed_hash` off the table's own
+    // record — it is the hand's identity, and a decoder that dropped it would
+    // send the join silently back to `hand_number`.
+    const table = await handRecordActor(opts.asPlayer, tableId);
     const truth = await readTableTruth(tableId, opts.asPlayer);
     const structuralPre = [];
 
@@ -1718,26 +1909,35 @@ export async function assertHandHistoryAgreement(ctx, page, opts) {
         const winners = rec.winners.map((w) => ({ seat: Number(w.seat), amount: Number(w.amount) }));
         hands.push({
             handNumber: Number(rec.hand_number),
+            // THE HAND'S IDENTITY, from the table's own copy of the proof. This
+            // is what the archive is joined on. docs/DEFECTS.md E-71.
+            seedHash: rec.shuffle_proof?.seed_hash ?? null,
             awardedByTable: winners.reduce((n2, w) => n2 + w.amount, 0),
             winners,
         });
     }
 
-    // The history canister's own copy of the same hands, keyed by hand_number.
+    // The history canister's own copy of the same hands.
     //
     // TWO CALLS, NOT ONE. `get_hands_by_table` returns `vec HandSummary`, which
-    // has `total_pot` and `winners` and NO `rake` (src/declarations/history/
-    // history.did). `rake` lives only on `HandHistoryRecord`, which `get_hand`
-    // returns. See `foldArchivedHand` for what reading the wrong one cost.
+    // has `total_pot` and `winners` and NO `rake`. `rake` lives only on
+    // `HandHistoryRecord`, which `get_hand` returns. See `foldArchivedHand` for
+    // what reading the wrong one cost.
     //
     // AND EVERY WAY OF NOT READING IT IS A FAILURE, NOT A SKIP. Both branches
-    // below used to leave `byHandNumber` empty, which made `hist` undefined for
+    // below used to leave the archive side empty, which made `hist` undefined for
     // every row, which made every assertion in the loop below -- including the
     // no-rake one -- silently not run. A scene could therefore go GREEN with the
     // product's headline property asserted by nothing, and the only trace was an
     // `error` key in the manifest that no code ever read. That is the same class
     // of hole as E-61 itself, one level up: not a wrong answer, an absent one.
-    const byHandNumber = new Map();
+    //
+    // A LIST, NOT A MAP KEYED ON `hand_number`. That map was docs/DEFECTS.md
+    // E-71: on the local archive the twenty-record window for `table_2` collapsed
+    // to ten entries, so ten archived records went unchecked for a rake and the
+    // ten that survived were compared against the wrong hands.
+    const archived = [];
+    let integrity = null;
     if (!ctx.ids?.history) {
         structuralPre.push(
             'STRUCTURAL: no history canister id in this run, so the archive was never read and '
@@ -1745,13 +1945,86 @@ export async function assertHandHistoryAgreement(ctx, page, opts) {
         );
     } else {
         try {
-            const history = await historyActor(ctx.ids.history);
+            const history = await archiveActor(ctx.ids.history);
+
+            // THE ARCHIVE'S IDENTITY, ASSERTED AGAINST THE ARCHIVE ITSELF.
+            // `get_archive_integrity` recounts, from the records rather than from
+            // the index, whether a name identifies exactly one hand. If it does
+            // not, every join below is meaningless and the scene must say so
+            // rather than compare things.
+            integrity = await history.get_archive_integrity();
+            if (Number(integrity.name_collisions) !== 0) {
+                structuralPre.push(
+                    `THE ARCHIVE'S NAMES ARE NOT UNIQUE: ${integrity.name_collisions} name(s) are `
+                    + `carried by ${integrity.records_under_a_colliding_name} record(s). A hand `
+                    + 'that cannot be uniquely named cannot be cited. docs/DEFECTS.md E-71.',
+                );
+            }
+            if (Number(integrity.records_without_a_usable_commitment) !== 0) {
+                structuralPre.push(
+                    `${integrity.records_without_a_usable_commitment} archived record(s) have no `
+                    + 'usable shuffle commitment, so they have no name and cannot be verified by '
+                    + 'anyone. record_hand refuses such a record; one that is stored got in some '
+                    + 'other way.',
+                );
+            }
+            if (integrity.index_disagrees_with_records) {
+                structuralPre.push(
+                    'THE ARCHIVE\'S NAME INDEX DISAGREES WITH ITS OWN RECORDS: it holds a '
+                    + 'different number of names than the records themselves produce, so a lookup '
+                    + 'by name can miss a record that is present.',
+                );
+            }
+            // NO RAKE, OVER EVERY RECORD THE ARCHIVE HOLDS, not over the window
+            // this gate can afford to fetch. The loop further down still checks
+            // each fetched record -- it names the offending hand and does not
+            // trust the canister's own arithmetic -- but a rake on a record older
+            // than the newest twenty was checked by NOTHING before this line, so
+            // a rake only had to wait twenty hands to become invisible.
+            if (Number(integrity.records_with_a_nonzero_rake) !== 0
+                || Number(integrity.rake_recorded_total) !== 0) {
+                structuralPre.push(
+                    `RAKE TAKEN, ARCHIVE-WIDE: ${integrity.records_with_a_nonzero_rake} of `
+                    + `${integrity.records_held} archived record(s) record a rake, totalling `
+                    + `${integrity.rake_recorded_total} e8s`
+                    + `${optional(integrity.first_record_with_a_rake)
+                        ? ` (first: ${optional(integrity.first_record_with_a_rake)})` : ''}`
+                    + '. ClearDeck publishes a no-rake property; a non-zero rake contradicts it.',
+                );
+            }
+
             const recs = await history.get_hands_by_table(
                 Principal.fromText(tableId), BigInt(0), BigInt(20),
             );
             for (const summary of recs) {
                 const full = optional(await history.get_hand(BigInt(summary.hand_id)));
-                byHandNumber.set(Number(summary.hand_number), foldArchivedHand(summary, full));
+                archived.push(foldArchivedHand(summary, full));
+            }
+
+            // A hand the table played is not necessarily inside the newest-twenty
+            // window, so anything the window did not cover is fetched BY NAME
+            // before it is called missing. This is also the only thing in the
+            // sweep that exercises `get_hand_by_uid`, which is the call a verifier
+            // makes.
+            const known = new Set(archived.map((a) => a.handUid).filter(Boolean));
+            for (const hand of hands) {
+                const uid = handUidFrom(tableId, hand.seedHash);
+                if (!uid || known.has(uid)) continue;
+                const answer = await history.get_hand_by_uid(uid);
+                if ('Ok' in answer) {
+                    const full = answer.Ok;
+                    archived.push(foldArchivedHand(
+                        {
+                            hand_id: full.hand_id,
+                            hand_uid: optional(full.hand_uid) ?? '',
+                            hand_number: full.hand_number,
+                            total_pot: full.total_pot,
+                            winners: full.winners,
+                        },
+                        full,
+                    ));
+                    known.add(uid);
+                }
             }
         } catch (e) {
             structuralPre.push(
@@ -1760,6 +2033,12 @@ export async function assertHandHistoryAgreement(ctx, page, opts) {
             );
         }
     }
+
+    // THE JOIN. By the hand's name, and checked. See `joinTableHandsToArchive`.
+    // `joined.pairs[i]` is `hands[i]`, positionally: nothing downstream is keyed
+    // on a hand number, which is the whole point.
+    const joined = joinTableHandsToArchive({ tableId, tableHands: hands, archived });
+    structuralPre.push(...joined.structural);
 
     const dom = await scrapeHandHistory(page);
     const figures = [];
@@ -1772,7 +2051,8 @@ export async function assertHandHistoryAgreement(ctx, page, opts) {
     }
 
     // NO RAKE IS A PROPERTY OF THE ARCHIVE, NOT OF THE MODAL, so it is asserted
-    // over EVERY hand the archive returned rather than inside the row loop below.
+    // over EVERY archived record the gate fetched rather than inside the row loop
+    // below.
     //
     // The row loop walks `min(dom.rows.length, hands.length)` — at most the ten
     // most recent hands, and only those the modal is currently showing. Asserting
@@ -1781,11 +2061,18 @@ export async function assertHandHistoryAgreement(ctx, page, opts) {
     // invisible. `rake` comes from `HandHistoryRecord` (`get_hand`), the only
     // shape that carries it; reading it off `HandSummary` is docs/DEFECTS.md
     // E-61.
-    for (const [handNumber, hist] of byHandNumber) {
+    //
+    // IT ITERATES THE RECORDS, NOT A MAP KEYED ON `hand_number`. It used to
+    // iterate the map, and on the local archive that map held ten entries for
+    // twenty fetched records — so half the evidence for the product's headline
+    // property was never looked at, and which half was decided by insertion
+    // order. docs/DEFECTS.md E-71.
+    for (const hist of archived) {
         if (hist.rake !== null && hist.rake !== 0) {
             structural.push(
-                `RAKE TAKEN: hand ${handNumber} recorded rake=${hist.rake} e8s. ClearDeck `
-                + 'publishes a no-rake property; a non-zero rake contradicts it.',
+                `RAKE TAKEN: hand ${hist.handUid || `id ${hist.handId}`} recorded `
+                + `rake=${hist.rake} e8s. ClearDeck publishes a no-rake property; a non-zero rake `
+                + 'contradicts it.',
             );
         }
     }
@@ -1794,16 +2081,21 @@ export async function assertHandHistoryAgreement(ctx, page, opts) {
     // built in above.
     for (let i = 0; i < Math.min(dom.rows.length, hands.length); i += 1) {
         const hand = hands[i];
-        const hist = byHandNumber.get(hand.handNumber);
+        const hist = joined.pairs[i]?.hist ?? null;
+        const uid = joined.pairs[i]?.uid ?? null;
 
         // A hand the TABLE recorded and the ARCHIVE does not have is the archive
         // being incomplete, which is the thing "provably fair" rests on. It is
         // also the state in which every assertion below quietly does not run.
+        //
+        // NAMED BY ITS NAME. "hand 1 is missing" was never a checkable claim on a
+        // table that has been reset: it named a set. This names the deal.
         if (!hist) {
             structural.push(
-                `STRUCTURAL: hand ${hand.handNumber} is in the table canister's own record but not `
-                + 'in the history canister\'s archive, so nothing about it -- rake included -- was '
-                + 'checked.',
+                `STRUCTURAL: the hand this table calls number ${hand.handNumber}, which committed `
+                + `to ${uid || '(no usable commitment)'}, is in the table canister's own record `
+                + 'but NOT in the history canister\'s archive -- not in the newest twenty and not '
+                + 'under get_hand_by_uid. Nothing about it, rake included, was checked.',
             );
         }
 
@@ -1813,23 +2105,41 @@ export async function assertHandHistoryAgreement(ctx, page, opts) {
         // structural failure: the scene cannot go green while one is present.
         if (hist?.structural?.length) {
             for (const problem of hist.structural) {
-                structural.push(`hand ${hand.handNumber}: ${problem}`);
+                structural.push(`hand ${uid || hand.handNumber}: ${problem}`);
             }
         }
 
-        // Money in equals money out, hand by hand.
+        // ONE DEAL, ONE NUMBER. The join no longer uses `hand_number`, which is
+        // exactly why the two sides' hand numbers can now be COMPARED instead of
+        // assumed equal. Both were written from the same deal, so a deal the
+        // table calls hand 1 and the archive calls hand 7 is the two surfaces
+        // disagreeing about the record they each hold -- invisible to every gate
+        // while the number was the join key, because the join made it true by
+        // construction.
+        if (hist && hist.handNumber !== null && hist.handNumber !== hand.handNumber) {
+            structural.push(
+                `hand ${uid}: the TABLE calls this deal hand number ${hand.handNumber} and the `
+                + `ARCHIVE calls it hand number ${hist.handNumber} (hand_id ${hist.handId}). One `
+                + 'deal, two numbers: the two surfaces disagree about the record they hold.',
+            );
+        }
+
+        // Money in equals money out, hand by hand. Named by the hand's NAME: a
+        // money disagreement reported against a number that answers to seventy
+        // records is a report nobody can act on.
         if (hist && hist.totalPot !== null && hist.awarded !== null && hist.rake !== null
             && hist.totalPot !== hist.awarded + hist.rake) {
             structural.push(
-                `hand ${hand.handNumber}: history says total_pot=${hist.totalPot} but the winners were `
+                `hand ${uid}: history says total_pot=${hist.totalPot} but the winners were `
                 + `paid ${hist.awarded} with rake ${hist.rake} (difference `
                 + `${hist.totalPot - hist.awarded - hist.rake} e8s)`,
             );
         }
         if (hist && hist.awarded !== null && hist.awarded !== hand.awardedByTable) {
             structural.push(
-                `hand ${hand.handNumber}: the TABLE canister paid ${hand.awardedByTable} e8s but the `
-                + `HISTORY canister recorded ${hist.awarded} e8s paid`,
+                `hand ${uid}: the TABLE canister paid ${hand.awardedByTable} e8s but the `
+                + `HISTORY canister recorded ${hist.awarded} e8s paid (archived as hand_id `
+                + `${hist.handId}, which that table calls hand number ${hist.handNumber})`,
             );
         }
 
@@ -1837,8 +2147,9 @@ export async function assertHandHistoryAgreement(ctx, page, opts) {
         // one (that is the field the client renders), otherwise the amount the
         // table actually paid out.
         const expected = hist && hist.totalPot !== null ? hist.totalPot : hand.awardedByTable;
+        const named = uid ? `${uid.slice(0, 12)}…${uid.slice(-6)}` : `hand ${hand.handNumber}`;
         figures.push(checkFigure(
-            `history row ${i + 1} pot vs ${hist && hist.totalPot !== null ? `history total_pot (hand ${hand.handNumber})` : `sum of winners paid (hand ${hand.handNumber})`}`,
+            `history row ${i + 1} pot vs ${hist && hist.totalPot !== null ? `history total_pot (${named})` : `sum of winners paid (${named})`}`,
             expected, dom.rows[i].potText, { currency: truth.currency },
         ));
     }
@@ -1855,13 +2166,38 @@ export async function assertHandHistoryAgreement(ctx, page, opts) {
             figures: folded.figures.map((f) => ({ label: f.label, chain: f.chain, screen: f.domText, ok: f.ok, detail: f.detail })),
             onChain: {
                 fromTableCanister: hands,
-                fromHistoryCanister: Object.fromEntries(byHandNumber),
+                // Keyed by the hand's NAME. It used to be keyed by hand number,
+                // which silently discarded every colliding record before anything
+                // downstream could see it (docs/DEFECTS.md E-71).
+                fromHistoryCanister: Object.fromEntries(
+                    archived.map((a) => [a.handUid || `unnamed:hand_id ${a.handId}`, a]),
+                ),
+                joinedBy: 'hand_uid (table_id:seed_hash)',
+                archivedRecordsCheckedForRake: archived.length,
+                archiveIntegrity: integrity
+                    ? {
+                        recordsHeld: Number(integrity.records_held),
+                        distinctNames: Number(integrity.distinct_names),
+                        nameCollisions: Number(integrity.name_collisions),
+                        recordsWithoutAUsableCommitment:
+                            Number(integrity.records_without_a_usable_commitment),
+                        indexDisagreesWithRecords: integrity.index_disagrees_with_records,
+                        ambiguousHandNumberCitations:
+                            Number(integrity.ambiguous_hand_number_citations),
+                        recordsUnderAnAmbiguousHandNumber:
+                            Number(integrity.records_under_an_ambiguous_hand_number),
+                        worstHandNumberCitation: optional(integrity.worst_hand_number_citation),
+                    }
+                    : null,
                 noRakeAsserted: true,
             },
             onScreen: dom.rows,
         },
         notes: ok
-            ? `hand history: ${folded.checked} pot figure(s) equal get_hand_history()`
+            ? `hand history: ${folded.checked} pot figure(s) equal get_hand_history(), joined by `
+              + `hand name over ${archived.length} archived record(s); `
+              + `${integrity ? `${integrity.distinct_names} names for ${integrity.records_held} `
+                  + 'records, 0 collisions' : 'archive integrity NOT read'}`
             : `HISTORY CHAIN DISAGREEMENT: ${[...folded.mismatches, ...structural].slice(0, 4).join(' | ')}`,
     };
 }

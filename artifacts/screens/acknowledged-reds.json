@@ -44,7 +44,24 @@
     "        every figure was correct. The GATE was wrong, not the screen; it read the",
     "        notice's numbers positionally and the copy had grown a fourth. Both green."
   ],
-  "recorded_run": "artifacts/screens/latest/verdicts.json (sweep at 134550e, dirty, 2026-08-08T00:44Z, wave-12 reconciliation) -- 24 shots, 15 verified, 9 red. The tree is dirty because the wave's changes are not committed yet; the deposit-screen custody correction and the label-anchored deposit check are both in this sweep. 5 of 5 protected notices measured on rendered pixels on ALL 24 shots, at both viewports, behind every modal, and under a real error toast raised by the app's own error path.",
+  "went_green_2026_08_08_wave_13": [
+    "  E-71  handhistory/desktop and handhistory/mobile. Both were red with",
+    "        'HISTORY CHAIN DISAGREEMENT: hand 1: the TABLE canister paid 2400000000 e8s but",
+    "        the HISTORY canister recorded 20000000 e8s paid'. Neither figure was ever wrong:",
+    "        the gate matched the table's hand to the archive's record by `hand_number`, which",
+    "        restarts at 1 on every reset_table, so it was comparing two different hands. On the",
+    "        local archive one such citation answered to 70 records with 6 different pots.",
+    "",
+    "        A hand is now named `table_id:seed_hash` -- its shuffle commitment, unique over all",
+    "        3,218 archived records and derived on read, so nothing was rewritten or renumbered --",
+    "        and the gate joins on that name AND ASSERTS THE JOIN: the record it compares against",
+    "        must carry the name of the hand it is compared with. Both shots verified at both",
+    "        viewports. Reverting the lookup to `hand_number` puts the shot straight back to red,",
+    "        now reading 'JOIN BROKEN ... those are two different hands' instead of a money",
+    "        mismatch, which is the difference between a gate and an alarm nobody can act on.",
+    "        docs/DEFECTS.md E-71; tools/shots/test-hand-identity.mjs holds it with no replica."
+  ],
+  "recorded_run": "artifacts/screens/latest/verdicts.json (sweep at a65868e, dirty, 2026-08-09T06:42Z, wave-13) -- 24 shots, 17 verified, 7 red. The tree is dirty because the wave's changes are not committed yet. Both handhistory shots are GREEN in this sweep (E-71 closed) and both deposit shots are GREEN carrying the new cycle-runway banner (docs/DEFECTS.md E-55): its two cycles figures are declared non-monetary in tools/shots/token-allowlist.mjs and its days figure is gated by tools/shots/test-cycle-runway.mjs. 5 of 5 protected notices measured on rendered pixels on ALL 24 shots, at both viewports, behind every modal, and under a real error toast raised by the app's own error path.",
   "reds": [
     {
       "scene": "lobby",
@@ -110,24 +127,6 @@
         "the playing surface is 42.9% of the 390x844 frame"
       ],
       "note": "FELT: 42.9% of the 390x844 frame (280x504.5), floor 45%, in the ring-crowded 9-pod layout. docs/DESIGN-BAR.md 11.3 shows this is at its GEOMETRIC ceiling minus the dock: the 9-max felt is width-capped at 78cqw = 304.2 px, so no vertical budget can move it and the honest options are to take furniture out of the dock or to set the floor per ring density. The occlusion gate on this shot is green (81 pixel pairs, 0 occluded)."
-    },
-    {
-      "scene": "handhistory",
-      "viewport": "desktop",
-      "defect": "E-71",
-      "covers": [
-        "HISTORY CHAIN DISAGREEMENT"
-      ],
-      "note": "'hand 1: the TABLE canister paid 2400000000 e8s but the HISTORY canister recorded 20000000 e8s paid'. Both numbers are true of A hand 1 and they are not the same hand 1: hand_number restarts at 1 on every table reset and the archive has no uniqueness on (table_id, hand_number)."
-    },
-    {
-      "scene": "handhistory",
-      "viewport": "mobile",
-      "defect": "E-71",
-      "covers": [
-        "HISTORY CHAIN DISAGREEMENT"
-      ],
-      "note": "the same disagreement at 390x844."
     }
   ]
 }

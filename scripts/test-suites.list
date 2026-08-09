@@ -1,0 +1,151 @@
+# THE ONE LIST OF EVERY CARGO TEST SUITE IN THIS REPOSITORY, AND WHAT RUNS IT.
+#
+# docs/DEFECTS.md H-23 and H-45. Read scripts/check-suite-wiring.sh before editing.
+#
+# WHY IT EXISTS
+#
+# Six money-safety suites were cargo-auto-discovered and named by no target, no
+# make rule and no CI job; one of them sat RED for a whole wave and the register
+# cited it as what held a finding closed. The fix each time was a human noticing.
+# This file is what makes noticing unnecessary: every integration-test target on
+# disk must appear here, and every row here must name a tier that actually runs
+# it. A suite added and not listed FAILS THE BUILD instead of sitting unrun.
+#
+# IT IS NOT A SECOND LIST. `scripts/ci-fund-safety.sh` executes the `fast` and
+# `deep` rows directly, so a row is not a description of what CI runs, it IS what
+# CI runs. That is the docs/DEFECTS.md H-47 lesson (one runner, both callers).
+#
+# FORMAT   crate | target | tier | threads | filter | env | note
+#
+#   crate    directory holding the Cargo.toml, relative to the repo root
+#   target   cargo test target name (`cargo test --test <target>`), or the literal
+#            `(lib)` for the unit tests compiled into the crate itself, which are a
+#            DIFFERENT cargo target (`--lib`) and which every runner in this repo
+#            was blind to until wave 13
+#   tier     fast       the REQUIRED pull-request job (.github/workflows/ci.yml)
+#            deep       the scheduled job (.github/workflows/fund-safety-deep.yml)
+#            workspace  covered by `cargo test --locked --workspace` in ci.yml
+#            sweep      covered by a crate-wide `cargo test` in scripts/dev.sh --
+#                       WHICH IS A LOCAL GATE AND NOT A CI JOB. These rows are run
+#                       when a human runs `dev.sh test`, and by nothing else. That
+#                       is a weaker claim than the other three tiers make and it
+#                       is stated rather than blurred: see docs/DEFECTS.md H-23,
+#                       "What this does not fix".
+#   threads  value for --test-threads, or `-` to leave cargo's default
+#   filter   test-name filter passed after `--`, or `-`
+#   env      space-separated K=V applied to this row only, or `-`
+#   note     why this row is in the tier it is in. Never blank.
+#
+# A `fast` row costs every pull request. A `deep` row costs a nightly. Moving a
+# row from fast to deep is a decision about what a merge is allowed to be blind
+# to, so the note has to say it.
+
+# ---------------------------------------------------------------------------
+# tests/money_safety -- the named fund invariants, the fuzzer, the custody gate
+# ---------------------------------------------------------------------------
+
+tests/money_safety|invariants|fast|2|-|-|M1..M14, the named fund invariants, plus the seam and classifier tests. The gate that has caught the most.
+tests/money_safety|regressions|fast|2|-|-|Minimal reproducers of every payout defect ever found here. Cheap and each one is a conviction.
+tests/money_safety|deposit_replay|fast|2|-|-|The E-02 FUND-THEFT reproducer and the ten regressions that keep it shut. This is the one that was named by nothing for a whole wave.
+tests/money_safety|ui_limits|fast|-|-|-|Two file reads, no replica: the limit the UI states against the limit the canister enforces (T-26).
+tests/money_safety|deposit_floor|fast|2|-|-|FINDING 27 / E-62: a deposit the canister accepts that withdraw can never return.
+tests/money_safety|admin_custody|fast|2|-|-|FINDING 07, the admin custody surface. One controller call destroyed 100% of a funded table's chips.
+tests/money_safety|ledger_boundary|fast|2|-|-|FINDING 29, M14: a discarded post-await continuation leaves real ledger movement with no book entry.
+tests/money_safety|coherence_w8|fast|2|-|-|FINDING 33, the currency guard's last term. total_liability() has no other instrument.
+tests/money_safety|deposit_surface|fast|2|-|-|FINDING 06/11/34/39. The only target that spends through the ledger's LEGACY transfer endpoint, the door a 64-hex address is paid through.
+tests/money_safety|deposit_subaccount_anchor|fast|2|-|-|FINDING 28/21/11, eleven re-anchorings. The only gate on E-12, and it was outside every target from wave 8 to wave 11.
+tests/money_safety|oldest_cluster|fast|2|-|-|FINDING 02/05/08/09/17/22, including the recovery door that could void a live hand while conserving to the e8.
+tests/money_safety|solvency|fast|2|-|-|FINDING 35 / E-70: can this canister pay everyone, and can it say so. A real 2.00 ICP mainnet shortfall no surface could see.
+tests/money_safety|controller_custody|fast|2|-|-|FINDING 23, the controller seat. THE CUSTODY GATE. install_code --mode reinstall on a funded table, and the guardian that stops it.
+tests/money_safety|wave6_coherence|fast|1|-|-|probe1 (fund lock by real silence), probe4 (FINDING 17: the fold-out winner must be PAID), probe5 (FINDING 07).
+tests/money_safety|fund_reachability|fast|1|-|-|M9, added after an auditor locked ~420 ICP. It sat RED for a wave because nothing ran it (H-48).
+tests/money_safety|fuzz|fast|-|-|MONEY_FUZZ_SEEDS=1 MONEY_FUZZ_STEPS=40 MONEY_FUZZ_SHRINK=10|A short hostile-sequence run, the same one dev.sh test uses. THE ONE ROW HERE THAT CAN FLAKE: the fuzzer is measurably not a function of its inputs (see H-26 and the H-23 write-up -- one module, one seed set, two runs, two different op sequences). 40 steps keeps the variance small; a red here is still worth reading before it is blamed on the machine.
+tests/money_safety|fuzz|deep|-|-|-|THE FUZZER AT ITS OWN DEFAULTS, nothing in the environment (H-28). The invocation in the harness's own doc comment was RED for a whole wave because every caller passed MONEY_FUZZ_SEEDS.
+tests/money_safety|fuzz|deep|-|-|MONEY_FUZZ_SEEDS=212967420072193,212967420072194,212967420072195,212967420072196,212967420072197,212967420072198,212967420072199,212967420072200,212967420072201 MONEY_FUZZ_STEPS=600|The long sweep: 9 seeds x 600 real IC messages. E-39 was found by seed 5 at these settings and by nothing shorter.
+tests/money_safety|timers|deep|1|-|-|FINDING 19 / E-54..E-56, the on-chain clock. Every test drives the table with NO ingress message after setup, so it is slow by construction: it waits.
+tests/money_safety|stall_agreement|deep|1|-|-|M13 ONE BELIEF (E-59, FINDING 25), 138 forked states. The fourth cross-agent defect. Minutes, because it forks a world per row.
+tests/money_safety|cycles_runway|deep|1|-|-|E-55 / FINDING 24 / FINDING 26: how long until the canister freezes and every player loses access at once. It measures burn over many hands, so it is slow by construction.
+
+# THE GATE CAUGHT TWO WHILE IT WAS BEING BUILT, WHICH IS THE POINT.
+#
+# `cycles_runway.rs` above and a `e41_probe.rs` were both dropped into
+# tests/money_safety/tests/ by another owner DURING the wave that wired this
+# check, and both were named by nothing: not by a [[test]] stanza, not by
+# scripts/dev.sh, not by any make rule, not by any CI job. That is H-45 / H-17 /
+# H-50 / H-53 happening for the FIFTH time, and this time a script said so within
+# a minute rather than a human noticing a wave later.
+#
+# `e41_probe` was then deleted by its owner while this file was being written,
+# and check-suite-wiring.sh went red on the row that outlived the file -- which
+# is the other direction of the same gate, unplanned and unrehearsed.
+
+# ---------------------------------------------------------------------------
+# UNIT TESTS COMPILED INTO A CRATE'S OWN lib, WHICH ARE A DIFFERENT TARGET
+# ---------------------------------------------------------------------------
+#
+# `cargo test --test X` DOES NOT RUN `--lib`. Every runner in this repository
+# names integration targets, so a `#[cfg(test)] mod tests` inside a crate's src/
+# is run only if something sweeps that crate. Hunting for that found TWELVE tests
+# that nothing ran, in a wave that had just closed H-53 for the same shape.
+
+tests/money_safety|(lib)|fast|-|-|-|`invariants::outcome::tests` -- one test on `capped()`, the arithmetic that decides how much of a bet is CONTESTABLE, inside the money-safety harness itself. `cargo test --test invariants` does not run it and nothing else did either. Milliseconds.
+tests/no_peeking|(lib)|sweep|-|-|-|9 unit tests in the sealed-dealer harness's own src. Swept by `cd tests/no_peeking && cargo test --release` in dev.sh no-peeking, which does run --lib.
+tools/differential|(lib)|sweep|-|-|-|25 unit tests across the differential's oracles and classifiers. Swept by `cd tools/differential && cargo test` in dev.sh test.
+src/no_peeking/dealer_canister|(lib)|sweep|-|-|-|7 unit tests in the sealed dealer itself. Run by NOTHING until this wave; now swept by `cd src/no_peeking && cargo test` in dev.sh no-peeking.
+src/no_peeking/dealer_types|(lib)|sweep|-|-|-|4 unit tests on the dealer's wire types. Run by NOTHING until this wave; now swept by `cd src/no_peeking && cargo test` in dev.sh no-peeking.
+src/poker_core|(lib)|workspace|-|-|-|44 in-src tests in the engine. `cargo test --locked --workspace` runs --lib for every member.
+src/table_canister|(lib)|workspace|-|-|-|57 in-src tests including payout_tests, the canister's own money assertions.
+src/history_canister|(lib)|workspace|-|-|-|14 in-src tests in the archive canister.
+
+# ---------------------------------------------------------------------------
+# tests/settlement -- the independent oracle
+# ---------------------------------------------------------------------------
+#
+# THE ONLY HARNESS IN THE REPO THAT CONVICTS A CORRECT-TOTALS / WRONG-RECIPIENTS
+# PAYOUT. Measured: a mutation that credits 99% of every pot to the winner and 1%
+# to another seated player leaves money_safety `invariants` 30/30 green and
+# `regressions` 6/6 green, and is caught here. It is therefore not allowed to be
+# deep-tier-only, however long it takes.
+
+tests/settlement|oracle_rules|fast|-|-|-|The oracle's own rules, no replica. If the oracle is wrong, everything it convicts is worthless.
+tests/settlement|disagreements|fast|-|golden|-|Golden reproducers of every disagreement it has ever found, no replica.
+tests/settlement|disagreements|fast|1|pinned|-|The payout defects it found (E-01, E-05, odd chips), pinned as FIXED against the REAL canister. Wrong-recipient convictions, on PocketIC.
+tests/settlement|settlement|fast|1|-|SETTLEMENT_RANDOM_HANDS=6|The comparison harness against the real canister, with the randomised sweep cut from 24 hands to 6. The deliberate scenarios and the wrong-seat probe are unaffected: only the sweep is shortened.
+tests/settlement|settlement|deep|1|-|-|The same harness at its full 24-hand randomised sweep, which is where a shape nobody thought of turns up.
+
+# ---------------------------------------------------------------------------
+# tests/no_peeking -- the sealed-dealer spike
+# ---------------------------------------------------------------------------
+#
+# Swept as a crate by `scripts/dev.sh no-peeking` (`cd tests/no_peeking && cargo
+# test --release`), which is step 8 of 8 in `dev.sh test`. Listed target by target
+# anyway, because "the crate is swept" is exactly the sentence that let five
+# named-in-their-own-Cargo.toml targets be run by nothing for a wave (H-53).
+
+tests/no_peeking|no_peek|sweep|-|-|-|The negative: no principal can read a live hole card. Swept by dev.sh no-peeking.
+tests/no_peeking|full_hand|sweep|-|-|-|A whole hand with side pots settled from cards the table never held. Swept by dev.sh no-peeking.
+tests/no_peeking|disconnect|sweep|-|-|-|The disconnect case, where these protocols die. Swept by dev.sh no-peeking.
+tests/no_peeking|measurements|sweep|-|-|-|Cycles per hand and rounds per deal. Swept by dev.sh no-peeking.
+tests/no_peeking|operator_attack|sweep|-|-|-|The controller key holder trying every route to a live hole card. Swept by dev.sh no-peeking.
+
+# ---------------------------------------------------------------------------
+# tools/differential -- the evaluator differential
+# ---------------------------------------------------------------------------
+
+tools/differential|fast_subset|sweep|-|-|-|Swept by `cd tools/differential && cargo test` in dev.sh test, and it carries the inverted known-defect markers.
+
+# ---------------------------------------------------------------------------
+# the root workspace -- already covered by ci.yml's `cargo test --locked --workspace`
+# ---------------------------------------------------------------------------
+
+src/poker_core|golden_vectors|workspace|-|-|-|The committed shuffle vectors, on the host. The wasm32 replay of the same fixture has its own CI job.
+src/poker_core|unit_tests|workspace|-|-|-|Engine unit tests.
+src/poker_core|wasm32_golden|workspace|-|-|-|Also named explicitly by the wasm32-tests job in ci.yml, which is the job that would have caught FINDING-02.
+src/table_canister|betting_rules|workspace|-|-|-|Betting-rule unit tests against the real engine.
+src/table_canister|coherence_regressions|workspace|-|-|-|Coherence regressions filed by the wave-3 pass.
+src/table_canister|hand_membership|workspace|-|-|-|Who is in the hand, which is what the payout basis is built from.
+src/table_canister|integration_test|workspace|-|-|-|The canister's own integration tests.
+src/table_canister|money_safety|workspace|-|-|-|The canister crate's in-tree money assertions (not the tests/money_safety harness).
+src/table_canister|unit_tests|workspace|-|-|-|Canister unit tests, including payout_tests.
+src/lobby_canister|unit_tests|workspace|-|-|-|Lobby unit tests.
+src/history_canister|unit_tests|workspace|-|-|-|History unit tests.

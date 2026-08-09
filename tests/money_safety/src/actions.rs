@@ -86,6 +86,28 @@ pub enum Op {
     SitIn { actor: usize },
     SitOutNextHand { actor: usize },
     UseTimeBank { actor: usize },
+    /// `use_time_bank` AS THE SEAT THE ACTION POINTER NAMES, resolved at execution
+    /// time in the same way as [`Op::ActLegalInTurn`].
+    ///
+    /// # Why this op exists (docs/DEFECTS.md E-41, H-26)
+    ///
+    /// [`Op::UseTimeBank`] names a RANDOM actor, and `use_time_bank` refuses
+    /// anybody who is not the seat `action_on` points at. Across 220 hostile steps
+    /// at three seeds that call therefore essentially never LANDED: it spent its
+    /// whole budget on "Not your turn", and the op looked like coverage while
+    /// measuring nothing.
+    ///
+    /// It matters because `use_time_bank` was the ONE entry point in the canister
+    /// that armed an `ActionTimer` without asking whether a hand was in progress,
+    /// and an armed clock on a finished hand is what made the settlement path run
+    /// twice and create chips from nothing (FINDING 39). Seven waves of this fuzzer
+    /// never produced the sequence, and this is the reason.
+    ///
+    /// Deliberately resolved through [`under_the_action_pointer`] and NOT through
+    /// [`on_the_clock`]: the latter returns `None` unless a hand is in progress, so
+    /// every op built on it is blind to exactly the between-hands states where the
+    /// pointer is stale. That blindness is the H-26 half of this defect.
+    UseTimeBankOnClock,
     ShowCards { actor: usize },
     Heartbeat { actor: usize },
     StartNewHand { actor: usize },
@@ -268,6 +290,10 @@ pub fn apply(world: &mut World, op: &Op) -> StepResult {
             let who = actor_principal(world, *actor);
             describe(&world.use_time_bank(who))
         }
+        Op::UseTimeBankOnClock => match under_the_action_pointer(world) {
+            Some(who) => describe(&world.use_time_bank(who)),
+            None => "no seat under the action pointer".to_string(),
+        },
         Op::ShowCards { actor } => {
             let who = actor_principal(world, *actor);
             describe(&world.show_cards(who))
@@ -312,6 +338,27 @@ pub fn on_the_clock(world: &World) -> Option<Principal> {
     if !t.phase.hand_in_progress() {
         return None;
     }
+    t.players
+        .get(t.action_on as usize)
+        .and_then(|p| p.as_ref())
+        .map(|p| p.principal)
+}
+
+/// Whoever `action_on` names, WHETHER OR NOT A HAND IS IN PROGRESS.
+///
+/// [`on_the_clock`] answers "who is being asked to act", which is a question only
+/// a live hand has an answer to, and that is right for every betting op. This
+/// answers the different question "who does the engine's pointer currently name",
+/// which has an answer at every instant -- `finish_hand` clears the action TIMER
+/// and leaves `action_on` wherever the last street put it.
+///
+/// The distinction is not academic: a canister surface that reads `action_on`
+/// without asking about the phase is reachable only by a caller chosen this way,
+/// and `use_time_bank` was exactly such a surface (docs/DEFECTS.md E-41). A
+/// harness whose only seat-resolver refuses to look between hands cannot produce a
+/// single call to it with the right caller.
+pub fn under_the_action_pointer(world: &World) -> Option<Principal> {
+    let t = world.table_state();
     t.players
         .get(t.action_on as usize)
         .and_then(|p| p.as_ref())

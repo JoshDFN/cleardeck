@@ -1673,8 +1673,39 @@ fn record_hand_to_history(
     // Get the shuffle proof
     let shuffle_proof = match &state.shuffle_proof {
         Some(proof) => {
+            // THE SEED FOR *THIS* COMMITMENT, not whatever is on the end of the
+            // ring.
+            //
+            // This used to read `HAND_HISTORY.last()`. The seed_hash beside it
+            // comes from `state.shuffle_proof`, which is this hand's, so the two
+            // halves of the proof were read from two different places and only
+            // agreed because the ring's last entry usually is this hand. When it
+            // is not, the archive is handed THIS hand's commitment next to
+            // ANOTHER hand's seed, `check_recorded_hand` finds they do not hash
+            // to each other, and the permanent, append-only record accuses the
+            // table of revealing a seed it did not commit to. A false accusation
+            // of cheating is worse than a missing field, and this archive cannot
+            // take one back.
+            //
+            // `reveal_seed_on_hand_end` writes the seed into the entry matching
+            // (hand_number, seed_hash); this reads it out of the entry matching
+            // (hand_number, seed_hash). One predicate, so the seed in the record
+            // can only ever be the pre-image of the hash in the same record.
+            //
+            // No entry matching means the reveal never landed, and the record
+            // goes out with an empty `revealed_seed` -- which the archive's
+            // `check_recorded_hand` already reports in its own words ("this
+            // record carries no revealed seed ... if the hand is long finished
+            // ... that is a defect worth reporting") instead of manufacturing an
+            // accusation out of a bookkeeping miss.
             let revealed_seed = HAND_HISTORY.with(|h| {
-                h.borrow().last()
+                h.borrow()
+                    .iter()
+                    .rev()
+                    .find(|e| {
+                        e.hand_number == state.hand_number
+                            && e.shuffle_proof.seed_hash == proof.seed_hash
+                    })
                     .and_then(|hh| hh.shuffle_proof.revealed_seed.clone())
                     .unwrap_or_default()
             });
@@ -8021,14 +8052,42 @@ fn timed_out_message(timed_out_seat: Option<u8>, player_seat: usize) -> String {
 /// drive THIS function instead of a copy of it. See docs/DEFECTS.md H-04: seven
 /// of seven mutations to this file used to survive with the whole suite green.
 pub fn advance_game(state: &mut TableState, now: u64) {
+    // THERE IS NO GAME TO ADVANCE WHEN THERE IS NO HAND.
+    //
+    // docs/DEFECTS.md E-41 / docs/SECURITY-FINDINGS.md FINDING 39, and it is the
+    // reason this line is a hard return rather than the narrower guard that used
+    // to sit on `refresh_side_pots` alone.
+    //
+    // `finish_hand` empties `state.pot` and sets `HandComplete`; it does NOT clear
+    // `total_bet_this_hand`, because that is the record of what the hand collected
+    // and three instruments read it after the hand is over. Only `start_new_hand`
+    // clears it. So between two hands the table carries a COMPLETE PAYOUT BASIS
+    // with an EMPTY POT, and everything below this line is willing to settle from
+    // that basis: `count_active_players` still counts the seats holding last
+    // hand's cards, `end_hand_single_winner` pays out `hand_stakes` again, and
+    // `plan_payouts` conserves against its own `collected` so `apply_payouts` sees
+    // nothing wrong and does not trap. The hand settles a second time and every
+    // e8 of it is created from nothing.
+    //
+    // Measured on this build before the guard: one limped heads-up hand, settled,
+    // then settled again by an expired clock, credited 4,000,000 e8s of chips the
+    // ledger never received. The engine said so itself and carried on:
+    // "CRITICAL: pot accounting disagreement in hand 1: state.pot = 0 but the
+    // contributions ... sum to 4000000."
+    //
+    // The reachability is closed at `use_time_bank` and at
+    // `resolve_expired_action_timer`. This is the statement that makes settling a
+    // settled hand unrepresentable whatever calls in.
+    if !hand_in_progress(state) {
+        return;
+    }
+
     // Keep the DISPLAYED side-pot breakdown in step with the money after every
     // action, not once per street. `side_pots` is a breakdown of what has been
     // collected, so a reader of `get_table_state` -- the UI, or a money-safety
     // invariant -- must never see it disagree with `pot`. It is display-only: the
     // payout is always recomputed from the contributions when the hand settles.
-    if state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete {
-        refresh_side_pots(state);
-    }
+    refresh_side_pots(state);
 
     // Check if only one player left
     if count_active_players(state) == 1 {
@@ -9309,6 +9368,10 @@ fn finish_hand(state: &mut TableState, now: u64) {
 
 /// Everybody folded except one player: they take the pot without showing a hand.
 pub fn end_hand_single_winner(state: &mut TableState, now: u64) {
+    // A HAND THAT IS ALREADY OVER CANNOT END AGAIN. See [`settled_twice_refusal`].
+    if settled_twice_refusal(state, "end_hand_single_winner") {
+        return;
+    }
     // Reveal the seed now that hand is ending
     reveal_seed_on_hand_end(state);
 
@@ -9320,8 +9383,50 @@ pub fn end_hand_single_winner(state: &mut TableState, now: u64) {
     finish_hand(state, now);
 }
 
+/// Refuse a settlement of a hand that is not in progress, and say so loudly.
+///
+/// The LAST line of defence for docs/DEFECTS.md E-41 /
+/// docs/SECURITY-FINDINGS.md FINDING 39, standing directly in front of the only
+/// two functions that can call [`settle_hand`].
+///
+/// Between hands the table holds an intact payout basis (`total_bet_this_hand`,
+/// which only `start_new_hand` clears) over an empty pot (`finish_hand` zeroes it).
+/// A settlement run against that state pays out the whole of last hand's money a
+/// second time, out of chips that do not exist, and it passes every arithmetic
+/// post-condition on the way: `plan_payouts` conserves against its OWN `collected`,
+/// so `apply_payouts` sees a plan that adds up and credits it.
+///
+/// Returns `true` when the caller must not settle. `CRITICAL:` on purpose: the
+/// money-safety classifier stops a run on every unregistered `CRITICAL:` line, so
+/// if any path ever reaches here it is convicted rather than quietly absorbed.
+fn settled_twice_refusal(state: &TableState, who: &str) -> bool {
+    if hand_in_progress(state) {
+        return false;
+    }
+    ic_cdk::println!(
+        "CRITICAL: refusing to settle hand {} from {}: the hand is at phase {} and has already \
+         been paid out. Nothing has been credited. The seats still carry {} e8s of \
+         total_bet_this_hand from that hand -- that is the RECORD of what it collected, not \
+         money waiting to be paid -- and settling from it would create every e8 of it. See \
+         docs/SECURITY-FINDINGS.md FINDING 39.",
+        state.hand_number,
+        who,
+        phase_to_string(&state.phase),
+        state
+            .players
+            .iter()
+            .flatten()
+            .fold(0u64, |a, p| a.saturating_add(p.total_bet_this_hand)),
+    );
+    true
+}
+
 /// The showdown.
 pub fn determine_winners(state: &mut TableState, now: u64) {
+    // A HAND THAT IS ALREADY OVER CANNOT END AGAIN. See [`settled_twice_refusal`].
+    if settled_twice_refusal(state, "determine_winners") {
+        return;
+    }
     // Reveal the seed now that hand is ending (showdown)
     reveal_seed_on_hand_end(state);
 
@@ -10513,6 +10618,25 @@ pub fn resolve_expired_action_timer(state: &mut TableState, now: u64) -> Option<
         return None;
     }
 
+    // A CLOCK BELONGING TO NO HAND IS NOT AN ACTION TO RESOLVE.
+    //
+    // Same shape as the guard above and the same remedy: drop it. Folding a seat
+    // here would be folding somebody out of a hand that is already over, and the
+    // `advance_game` below would then read last hand's cards as live claims and
+    // settle it a second time. That is docs/DEFECTS.md E-41 /
+    // docs/SECURITY-FINDINGS.md FINDING 39, 4,000,000 e8s created from nothing on
+    // an ordinary heads-up hand.
+    //
+    // `finish_hand` clears the timer, so on the settlement path this is
+    // unreachable. It is reachable from `use_time_bank`, which used to arm a fresh
+    // `ActionTimer` without asking whether there was a hand -- that door is shut
+    // too, and this guard is here because a door being shut today is not a reason
+    // for the clock to trust that it is.
+    if !hand_in_progress(state) {
+        state.action_timer = None;
+        return None;
+    }
+
     // Auto-fold the player
     if let Some(ref mut player) = state.players[seat as usize] {
         player.has_folded = true;
@@ -10700,6 +10824,79 @@ thread_local! {
     /// reads high is the one failure mode that matters here: it is the gauge saying
     /// "plenty of fuel" to a canister that is about to stop honouring withdrawals.
     static CYCLES_LATEST: RefCell<(u64, u128)> = const { RefCell::new((0, 0)) };
+    /// A SLIDING WINDOW of `(time, balance)` tick samples covering the last
+    /// [`CYCLES_RECENT_WINDOW_SECS`], oldest first.
+    ///
+    /// # Why the lifetime average is not good enough, and reads HIGH
+    ///
+    /// [`CYCLES_ORIGIN`] is anchored at the first tick of the instance and moves
+    /// only on a top-up, so a burn rate derived from it is an average over the
+    /// canister's whole life. That is the one shape a fuel gauge must not have.
+    ///
+    /// A table sits empty for months at the idle rate. Then players arrive -- or,
+    /// worse, somebody points a free permissionless ingress flood at it, which is
+    /// docs/SECURITY-FINDINGS.md FINDING 26 and costs the attacker nothing while
+    /// burning the canister ~65x faster. The lifetime average barely moves, because
+    /// months of quiet are still in it. The gauge goes on reporting the runway of a
+    /// table nobody was using while the real one collapses to days.
+    ///
+    /// That is precisely the failure [`CYCLES_LATEST`] names as the only one that
+    /// matters: the gauge saying "plenty of fuel" to a canister about to stop
+    /// honouring withdrawals. `runway_days` is therefore computed from the
+    /// PESSIMISTIC of the two rates. Reading low costs an operator an unnecessary
+    /// top-up; reading high costs every player at the table access to their money.
+    ///
+    /// Bounded by construction: samples older than the window are dropped on every
+    /// tick and the length is capped, so this is ~16 bytes x ~121 entries and
+    /// cannot grow with uptime. Deliberately NOT persisted across upgrades, for the
+    /// same reason `STALL_WITNESS` is not: an upgrade is a period in which the
+    /// canister was not executing, and a window spanning it would divide a real
+    /// burn by a wall-clock gap that includes time the canister did not run.
+    static CYCLES_RECENT: RefCell<Vec<(u64, u128)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// How far back the sliding burn window looks, in seconds. One hour: long enough
+/// that a single expensive message cannot dominate it, short enough that a table
+/// which just got busy is reported as busy well inside a day.
+const CYCLES_RECENT_WINDOW_SECS: u64 = 3_600;
+
+/// Hard cap on samples kept, so a pathological tick rate cannot grow the heap.
+/// At [`CLOCK_WATCHDOG_SECS`] = 30 s an hour needs 120; the slack is for the
+/// extra samples a tick storm could produce before the age filter catches up.
+const CYCLES_RECENT_MAX_SAMPLES: usize = 256;
+
+/// Burn per day over the sliding window, and the window's real length in seconds.
+///
+/// Sums only the POSITIVE deltas between consecutive samples. A negative delta is
+/// a top-up, and a top-up inside the window must not be allowed to cancel out burn
+/// that genuinely happened -- `saturating_sub(first, last)` over a window
+/// containing a top-up reports a burn of zero on a canister that is burning.
+fn recent_burn_per_day() -> (u128, u64) {
+    CYCLES_RECENT.with(|c| {
+        let samples = c.borrow();
+        if samples.len() < 2 {
+            return (0, 0);
+        }
+        let span_secs = samples
+            .last()
+            .map(|(t, _)| t)
+            .unwrap_or(&0)
+            .saturating_sub(samples[0].0)
+            / 1_000_000_000;
+        if span_secs == 0 {
+            return (0, 0);
+        }
+        let mut burned: u128 = 0;
+        for pair in samples.windows(2) {
+            if pair[1].1 < pair[0].1 {
+                burned = burned.saturating_add(pair[0].1 - pair[1].1);
+            }
+        }
+        (
+            burned.saturating_mul(86_400) / (span_secs as u128).max(1),
+            span_secs,
+        )
+    })
 }
 
 /// Start (or restart) the on-chain clock.
@@ -10725,6 +10922,7 @@ fn start_clock() {
     // first tick, in the same message context every later sample is taken in.
     CYCLES_ORIGIN.with(|c| *c.borrow_mut() = (0, 0));
     CYCLES_LATEST.with(|c| *c.borrow_mut() = (0, 0));
+    CYCLES_RECENT.with(|c| c.borrow_mut().clear());
 
     schedule_next_wake();
 }
@@ -10799,6 +10997,25 @@ fn on_clock_tick() {
         }
     });
     CYCLES_LATEST.with(|c| *c.borrow_mut() = (now, balance));
+    // The sliding window, which is the sample `runway_days` actually trusts when
+    // the two disagree. See CYCLES_RECENT for why a lifetime average is not a fuel
+    // gauge. Bounded twice over: by age and by count.
+    CYCLES_RECENT.with(|c| {
+        let mut samples = c.borrow_mut();
+        samples.push((now, balance));
+        let cutoff = now.saturating_sub(CYCLES_RECENT_WINDOW_SECS * 1_000_000_000);
+        let drop_by_age = samples.iter().take_while(|(t, _)| *t < cutoff).count();
+        // Never drop the whole window: one sample cannot measure a rate, and a
+        // clock jump must not silently reset the gauge to "no measurement".
+        let keep_at_least = 2usize.min(samples.len());
+        let drop_by_age = drop_by_age.min(samples.len().saturating_sub(keep_at_least));
+        if drop_by_age > 0 {
+            samples.drain(..drop_by_age);
+        }
+        while samples.len() > CYCLES_RECENT_MAX_SAMPLES {
+            samples.remove(0);
+        }
+    });
 
     // WRITE THE SIGHTING FIRST, in this message, which does nothing that can trap.
     // `note_stall_opportunity` is the ONE place a stall is recorded, shared with
@@ -11077,17 +11294,61 @@ pub struct CycleStatus {
     /// `balance - liquid_balance`: the freezing reserve, roughly this canister's
     /// idle burn over its configured freezing threshold (30 days by default).
     pub reserved_for_freezing: u128,
-    /// Cycles burned per day, MEASURED over `sample_window_secs` on this instance.
+    /// Cycles burned per day, MEASURED over `sample_window_secs` on this instance:
+    /// the LIFETIME average since the first tick (or the last observed top-up).
     /// Zero until the window is long enough to say anything.
+    ///
+    /// Kept alongside `recent_burn_per_day` rather than replaced by it, because the
+    /// two disagreeing is itself information: a lifetime rate far below the recent
+    /// one is a table that has just got busy or is being flooded.
     pub observed_burn_per_day: u128,
-    /// `liquid_balance / observed_burn_per_day`. `null` when the window is too
-    /// short to have measured a burn rate, which is not the same as "plenty".
+    /// Cycles burned per day over the LAST HOUR only, measured the same way.
+    ///
+    /// This is the number that moves when a quiet table gets busy, and the reason
+    /// `runway_days` cannot be fooled by months of idle history.
+    ///
+    /// # Why this is an `opt` on a field this module always sets
+    ///
+    /// A CLIENT IS OLDER OR NEWER THAN THE CANISTER IT TALKS TO, ALWAYS. The
+    /// frontend asset canister and the table canisters are deployed separately,
+    /// and as of this change the mainnet table module is a different build from
+    /// this tree. Candid will not decode a record that is MISSING a non-optional
+    /// field, so declaring this as a bare `nat` made every reply from the running
+    /// mainnet module undecodable by a bundle built from this commit -- and the
+    /// UI reports a failed read as "this table is not answering", which is the
+    /// alarm for a canister that has run out of cycles.
+    ///
+    /// That was not a thought experiment: it was measured. The first build of
+    /// this change rendered **"This table is not answering"** on the deposit
+    /// screen of a table with 960 days of runway, and the screenshot gate went
+    /// green because it checks the protected notices and the money figures, not
+    /// this banner. `opt` makes the version skew a NULL -- "this module cannot
+    /// measure a recent window" -- which is exactly what it is.
+    pub recent_burn_per_day: Option<u128>,
+    /// `liquid_balance` divided by the LARGER of the two burn rates above. `null`
+    /// when neither window has measured a burn rate, which is not the same as
+    /// "plenty" — a reader must treat `null` as UNKNOWN and alarm on it, not skip
+    /// it.
+    ///
+    /// The pessimistic of the two on purpose: reading low costs an operator an
+    /// unnecessary top-up, reading high costs every player at this table access to
+    /// their own money on a day nobody predicted.
     pub runway_days: Option<u64>,
-    /// How long the measurement above has been running. An upgrade resets it.
+    /// How long the lifetime measurement has been running. An upgrade resets it.
     pub sample_window_secs: u64,
-    /// True once the sample window is long enough for `runway_days` to mean
-    /// something. Reported separately so a reader is never left guessing whether
-    /// a small number is a measurement or an artefact.
+    /// The real span of the sliding window `recent_burn_per_day` was measured over.
+    /// Below `CYCLE_SAMPLE_MIN_SECS` it is not yet trustworthy on its own.
+    /// `opt` for the version-skew reason given on `recent_burn_per_day`.
+    pub recent_window_secs: Option<u64>,
+    /// True once at least one of the two windows is long enough for `runway_days`
+    /// to mean something. Reported separately so a reader is never left guessing
+    /// whether a small number is a measurement or an artefact.
+    ///
+    /// **False does not mean "fine".** It means the canister cannot yet say, which
+    /// is the state every instance is in for the first
+    /// [`CYCLE_SAMPLE_MIN_SECS`] after an install or an upgrade. A monitor that
+    /// skips a canister reporting `false` is a monitor that goes quiet exactly
+    /// when the fleet was last touched.
     pub measurement_is_meaningful: bool,
     /// Ticks the on-chain clock has run since this instance started. **Zero on a
     /// canister that has been up for minutes means the clock is not running** --
@@ -11119,15 +11380,25 @@ fn get_cycle_status() -> CycleStatus {
     // comparison reported and why it was wrong in the dangerous direction.
     let window_secs = latest_time.saturating_sub(origin_time) / 1_000_000_000;
     let burned = origin_balance.saturating_sub(latest_balance);
-    let meaningful = origin_time > 0 && window_secs >= CYCLE_SAMPLE_MIN_SECS && burned > 0;
+    let lifetime_meaningful = origin_time > 0 && window_secs >= CYCLE_SAMPLE_MIN_SECS && burned > 0;
 
-    let per_day = if meaningful {
+    let per_day = if lifetime_meaningful {
         burned.saturating_mul(86_400) / (window_secs as u128).max(1)
     } else {
         0
     };
-    let runway_days = if per_day > 0 {
-        Some((liquid / per_day) as u64)
+    let (recent_per_day, recent_window_secs) = recent_burn_per_day();
+    // Either window on its own is enough to answer. Requiring BOTH would report
+    // "no measurement" for the first hour of every instance while the sliding
+    // window fills, on a canister that can already say what it is burning.
+    let meaningful =
+        lifetime_meaningful || (recent_window_secs >= CYCLE_SAMPLE_MIN_SECS && recent_per_day > 0);
+    // THE PESSIMISTIC ONE. A lifetime average alone reads high on any table that
+    // has just got busy, which is exactly when the number is needed; a sliding
+    // window alone reads high during a lull. See CYCLES_RECENT.
+    let worst_per_day = per_day.max(recent_per_day);
+    let runway_days = if worst_per_day > 0 {
+        Some((liquid / worst_per_day) as u64)
     } else {
         None
     };
@@ -11143,8 +11414,10 @@ fn get_cycle_status() -> CycleStatus {
         liquid_balance: liquid,
         reserved_for_freezing: balance.saturating_sub(liquid),
         observed_burn_per_day: per_day,
+        recent_burn_per_day: Some(recent_per_day),
         runway_days,
         sample_window_secs: window_secs,
+        recent_window_secs: Some(recent_window_secs),
         measurement_is_meaningful: meaningful,
         clock_ticks: CLOCK_TICKS.with(|c| *c.borrow()),
         clock_last_tick_at: CLOCK_LAST_TICK_AT.with(|c| *c.borrow()),
@@ -11622,6 +11895,30 @@ fn use_time_bank() -> Result<u64, String> {
             .find(|(_, p)| p.as_ref().map(|p| p.principal == caller).unwrap_or(false))
             .map(|(i, _)| i as u8)
             .ok_or("Not at table")?;
+
+        // THERE MUST BE A CLOCK TO EXTEND.
+        //
+        // This method used to ask only "is `action_on` pointing at you", which is
+        // a question about a stale pointer between hands: `finish_hand` clears the
+        // action timer but leaves `action_on` wherever the last street left it. So
+        // on a table with no hand in progress this arm ARMED A FRESH ActionTimer,
+        // and it was the only place in the file that could. Thirty seconds later
+        // the clock resolved that timer, folded a seat out of a hand that had
+        // already been paid, and `advance_game` settled the finished hand a second
+        // time from a payout basis `finish_hand` does not clear -- 4,000,000 e8s of
+        // chips created from nothing, with the canister's own
+        // "CRITICAL: pot accounting disagreement" line the only sign.
+        // docs/DEFECTS.md E-41, docs/SECURITY-FINDINGS.md FINDING 39.
+        //
+        // Refused BEFORE the time bank is spent, so a player who calls this
+        // between hands still has it when the next hand deals.
+        if !hand_in_progress(state) {
+            return Err(
+                "There is no hand in progress, so there is no clock to extend. Your time bank \
+                 is untouched and will be there when the next hand is dealt."
+                    .to_string(),
+            );
+        }
 
         // Must be the player's turn
         if state.action_on != player_seat {
@@ -14193,6 +14490,171 @@ mod payout_tests {
                 "a pot share must name the seat's own occupant"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // E-41 / FINDING 39 -- A HAND THAT HAS BEEN PAID MAY NEVER BE PAID AGAIN
+    // -----------------------------------------------------------------------
+    //
+    // `finish_hand` empties `state.pot`, clears the departed stakes, sets
+    // `HandComplete` and turns the clock off. It does NOT clear
+    // `total_bet_this_hand`: that is the RECORD of what the hand collected, three
+    // instruments read it after the hand is over, and only `start_new_hand`
+    // clears it.
+    //
+    // So between two hands the table sits on a complete payout basis over an empty
+    // pot, and the whole settlement path is willing to act on it: `hand_stakes`
+    // still builds the stakes, `plan_payouts` still conserves (against its OWN
+    // `collected`, which is why `apply_payouts` does not trap), `count_active_players`
+    // still counts the seats holding last hand's cards. Settle it a second time and
+    // every e8 of the hand is credited out of chips that do not exist.
+    //
+    // Three guards stop it, at three depths, and each of the three tests below goes
+    // RED if its own guard alone is removed. The fourth, `use_time_bank` (the door
+    // it was actually reachable through), is gated at the canister level by
+    // `tests/money_safety/tests/regressions.rs::reg39_*`.
+
+    /// A table exactly as `finish_hand` leaves it after a real showdown: two seats
+    /// still holding the cards they were dealt, an empty pot, and the full 124 e8s
+    /// of payout basis still standing.
+    fn already_paid_showdown() -> TableState {
+        let mut state = table(
+            vec![seat(0, 100, 62, "Ac Qc"), seat(1, 100, 62, "2d 7h")],
+            "Jd Ah 7h 5c Kc",
+            0,
+        );
+        state.phase = GamePhase::Showdown;
+        determine_winners(&mut state, 10 * SEC);
+        assert!(
+            matches!(state.phase, GamePhase::HandComplete),
+            "sanity: the hand really did settle"
+        );
+        assert_eq!(state.pot, 0, "sanity: finish_hand empties the pot");
+        assert_eq!(
+            wagered_basis(&state),
+            124,
+            "sanity: and leaves the payout basis standing. THIS is what E-41 pays out twice."
+        );
+        state
+    }
+
+    fn wagered_basis(state: &TableState) -> u64 {
+        state
+            .players
+            .iter()
+            .flatten()
+            .fold(0u64, |a, p| a.saturating_add(p.total_bet_this_hand))
+    }
+
+    /// GUARD 1, at the money. Calling the settlement entry points directly on a
+    /// hand that is already over must move nothing.
+    ///
+    /// Remove the `settled_twice_refusal` call from `determine_winners` /
+    /// `end_hand_single_winner` and this test pays 124 e8s out of nothing.
+    #[test]
+    fn e41_a_settled_hand_refuses_to_settle_again() {
+        for (name, mut state) in [
+            ("determine_winners", already_paid_showdown()),
+            ("end_hand_single_winner", already_paid_showdown()),
+        ] {
+            let before = table_value(&state);
+            let basis = wagered_basis(&state);
+            if name == "determine_winners" {
+                determine_winners(&mut state, 20 * SEC);
+            } else {
+                end_hand_single_winner(&mut state, 20 * SEC);
+            }
+            assert_eq!(
+                table_value(&state),
+                before,
+                "{name} settled hand {} a SECOND time and created {basis} e8s of chips from \
+                 nothing. docs/SECURITY-FINDINGS.md FINDING 39.",
+                state.hand_number
+            );
+            assert_eq!(state.pot, 0);
+        }
+    }
+
+    /// GUARD 2, structural. `advance_game` on a table with no hand in progress must
+    /// be a no-op, not "settle whatever the seats still look like".
+    ///
+    /// Remove the `hand_in_progress` return at the top of `advance_game` and this
+    /// test sees the stale basis rebuilt into `side_pots` and a fresh action clock
+    /// armed on a hand that finished a street ago -- which is the state that then
+    /// feeds guard 1.
+    #[test]
+    fn e41_advance_game_does_nothing_to_a_table_with_no_hand() {
+        let mut state = already_paid_showdown();
+        let before = table_value(&state);
+        let acted_before: Vec<bool> = state
+            .players
+            .iter()
+            .flatten()
+            .map(|p| p.has_acted_this_round)
+            .collect();
+
+        advance_game(&mut state, 20 * SEC);
+
+        assert_eq!(table_value(&state), before, "no chip may move");
+        assert_eq!(state.pot, 0);
+        assert!(
+            state.side_pots.is_empty(),
+            "advance_game rebuilt a side-pot breakdown out of last hand's basis: {:?}",
+            state.side_pots
+        );
+        assert!(
+            state.action_timer.is_none(),
+            "advance_game armed an action clock on a table with no hand: {:?}",
+            state.action_timer
+        );
+        let acted_after: Vec<bool> = state
+            .players
+            .iter()
+            .flatten()
+            .map(|p| p.has_acted_this_round)
+            .collect();
+        assert_eq!(
+            acted_before, acted_after,
+            "advance_game opened a new betting round on a finished hand"
+        );
+    }
+
+    /// GUARD 3, at the clock. An expired action timer on a table with no hand is
+    /// not an action to resolve: drop it, and fold nobody.
+    ///
+    /// Remove the `hand_in_progress` return in `resolve_expired_action_timer` and
+    /// this test folds a player out of a hand they have already been paid for --
+    /// the step that turns two live claims into one and hands the finished hand to
+    /// `end_hand_single_winner`.
+    #[test]
+    fn e41_an_expired_clock_on_a_finished_hand_resolves_to_nothing() {
+        let mut state = already_paid_showdown();
+        let before = table_value(&state);
+        // The shape `use_time_bank` used to be able to create from outside.
+        state.action_timer = Some(ActionTimer {
+            player_seat: 1,
+            started_at: 10 * SEC,
+            expires_at: 40 * SEC,
+            using_time_bank: true,
+        });
+
+        let folded = resolve_expired_action_timer(&mut state, 41 * SEC);
+
+        assert_eq!(
+            folded, None,
+            "there is no hand, so there is no seat to fold out of it"
+        );
+        assert!(
+            state.action_timer.is_none(),
+            "the orphaned clock must be dropped, not left to fire again"
+        );
+        for (i, p) in state.players.iter().flatten().enumerate() {
+            assert!(
+                !p.has_folded,
+                "seat {i} was folded out of a hand that had already been paid"
+            );
+        }
+        assert_eq!(table_value(&state), before, "no chip may move");
     }
 }
 

@@ -28,7 +28,6 @@ table_1	method-missing-from-a	admin_get_deposit_custody
 table_1	method-missing-from-a	admin_return_all_chips_to_escrow
 table_1	method-missing-from-a	get_all_ledger_intents
 table_1	method-missing-from-a	get_custody_status
-table_1	method-missing-from-a	get_cycle_status
 table_1	method-missing-from-a	get_deposit_custody
 table_1	method-missing-from-a	get_deposit_replay_state
 table_1	method-missing-from-a	get_my_ledger_intents
@@ -52,7 +51,6 @@ table_2	method-missing-from-a	admin_get_deposit_custody
 table_2	method-missing-from-a	admin_return_all_chips_to_escrow
 table_2	method-missing-from-a	get_all_ledger_intents
 table_2	method-missing-from-a	get_custody_status
-table_2	method-missing-from-a	get_cycle_status
 table_2	method-missing-from-a	get_deposit_custody
 table_2	method-missing-from-a	get_deposit_replay_state
 table_2	method-missing-from-a	get_my_ledger_intents
@@ -76,7 +74,6 @@ table_3	method-missing-from-a	admin_get_deposit_custody
 table_3	method-missing-from-a	admin_return_all_chips_to_escrow
 table_3	method-missing-from-a	get_all_ledger_intents
 table_3	method-missing-from-a	get_custody_status
-table_3	method-missing-from-a	get_cycle_status
 table_3	method-missing-from-a	get_deposit_custody
 table_3	method-missing-from-a	get_deposit_replay_state
 table_3	method-missing-from-a	get_my_ledger_intents
@@ -95,3 +92,25 @@ table_3	signature	get_table_state	ret0.Ok.last_action
 table_3	signature	get_table_state	ret0.Ok.players[]?.sitting_out_since
 table_3	signature	get_table_view	ret0?.hand_is_unmovable
 table_3	signature	get_table_view	ret0?.my_committed_in_pot
+#
+# --- added 2026-08-08 by docs/DEFECTS.md E-71 (the hand's permanent name) -----
+# src/declarations/history/ is a generated copy owned by the frontend, and this
+# script does not edit files it does not own. ONE regeneration of
+# src/declarations/history/* clears all nine lines below AND closes E-67 (the
+# .did.js copy silently dropping dealt_in / contributed / left_mid_hand /
+# dealt_in_count), which is the same staleness one file further along.
+#
+# Nothing the UI renders depends on any of it: the frontend builds its actors
+# from history.did.js, Candid subtyping drops fields a decoder does not declare,
+# and the archive's own gate in tools/shots reads through the harness's own
+# mirror (tools/shots/lib/archive-wire.mjs) precisely so a stale declaration
+# cannot blind it.
+history	method-missing-from-a	get_archive_integrity
+history	method-missing-from-a	get_hand_by_uid
+history	method-missing-from-a	resolve_hand_number
+history	signature	check_recorded_hand	ret0.Ok.hand_uid
+history	signature	get_hand	ret0?.hand_uid
+history	signature	get_hands_by_player	ret0[].hand_uid
+history	signature	get_hands_by_table	ret0[].hand_uid
+history	signature	get_recent_hands	ret0[].hand_uid
+history	signature	record_hand	arg0.hand_uid

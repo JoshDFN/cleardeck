@@ -283,6 +283,21 @@ export const idlFactory = ({ IDL }) => {
     'local_history_cap' : IDL.Nat64,
     'local_history_len' : IDL.Nat64,
   });
+  const CycleStatus = IDL.Record({
+    'balance' : IDL.Nat,
+    'liquid_balance' : IDL.Nat,
+    'reserved_for_freezing' : IDL.Nat,
+    'observed_burn_per_day' : IDL.Nat,
+    'recent_burn_per_day' : IDL.Opt(IDL.Nat),
+    'runway_days' : IDL.Opt(IDL.Nat64),
+    'sample_window_secs' : IDL.Nat64,
+    'recent_window_secs' : IDL.Opt(IDL.Nat64),
+    'measurement_is_meaningful' : IDL.Bool,
+    'clock_ticks' : IDL.Nat64,
+    'clock_last_tick_at' : IDL.Nat64,
+    'clock_watchdog_armed' : IDL.Bool,
+    'next_wake_at' : IDL.Opt(IDL.Nat64),
+  });
   return IDL.Service({
     'add_controller' : IDL.Func([IDL.Principal], [Result], []),
     'admin_get_all_balances' : IDL.Func(
@@ -380,6 +395,7 @@ export const idlFactory = ({ IDL }) => {
         [CommitmentCheck],
         ['query'],
       ),
+    'get_cycle_status' : IDL.Func([], [CycleStatus], ['query']),
     'get_fairness_retention' : IDL.Func([], [FairnessRetention], ['query']),
     'get_history_status' : IDL.Func([], [HistoryStatus], ['query']),
     'flush_unrecorded_hands' : IDL.Func([], [Result_1], []),

@@ -12,7 +12,7 @@ DEV := ./scripts/dev.sh
 .DEFAULT_GOAL := help
 .PHONY: help doctor local-up local-status wasm test custody archive fuzz \
         fuzz-default diff-full diff-full-sevens settlement settlement-fast \
-        shots shots-verdict shots-selftest known-defects hygiene selftest \
+        shots shots-verdict shots-selftest cycles known-defects hygiene selftest \
         no-peeking phe-venv check
 
 help:            ## show this help
@@ -67,6 +67,9 @@ shots-verdict:   ## the LAST RECORDED sweep's verdict as a gate: no red may be u
 
 shots-selftest:  ## the screenshot harness's own gates on known-answer fixtures. No replica.
 	@$(DEV) shots-selftest
+
+cycles:          ## how long before a canister stops honouring withdrawals (DEFECTS E-55). Read-only, no identity.
+	@$(DEV) cycles $(ARGS)
 
 known-defects:   ## run the markers that are RED on purpose; shouts when one gets fixed
 	@$(DEV) known-defects

@@ -160,6 +160,21 @@ type CommitmentCheck = variant {
   Malformed : CommitmentMalformed;
 };
 // --- Durability of the fairness record ------------------------------------
+type CycleStatus = record {
+  balance : nat;
+  liquid_balance : nat;
+  reserved_for_freezing : nat;
+  observed_burn_per_day : nat;
+  recent_burn_per_day : opt nat;
+  runway_days : opt nat64;
+  sample_window_secs : nat64;
+  recent_window_secs : opt nat64;
+  measurement_is_meaningful : bool;
+  clock_ticks : nat64;
+  clock_last_tick_at : nat64;
+  clock_watchdog_armed : bool;
+  next_wake_at : opt nat64;
+};
 type FairnessRetention = record {
   table_keeps_last_n_hands : nat64;
   table_copy_is_destructible_by_controller : bool;
@@ -384,6 +399,7 @@ service : (TableConfig) -> {
   // Public, unauthenticated, and sometimes the honest answer is "no".
   get_history_status : () -> (HistoryStatus) query;
   // How long a proof survives, and who can destroy it. Read this before you sit.
+  get_cycle_status : () -> (CycleStatus) query;
   get_fairness_retention : () -> (FairnessRetention) query;
   // Re-send every settled hand the archive has not acknowledged. Callable by
   // any non-anonymous principal on purpose: the party with the strongest

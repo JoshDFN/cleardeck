@@ -793,6 +793,18 @@ cmd_test() {
     # idle-table cycle burn the clock adds. Named explicitly for the deposit_replay
     # reason above.
     cargo test --test timers -- --test-threads=1 &&
+    # cycles_runway is the gate on THE RUNWAY (docs/DEFECTS.md E-55,
+    # docs/SECURITY-FINDINGS.md FINDING 24/26). `timers` measures the IDLE burn, and
+    # idle is the number for a table nobody is using: measured here, a table dealing
+    # ~500 hands a day with six tabs open burns 0.4994 T/day against 0.0442 idle, so
+    # 10 T is TWENTY days rather than 225. It also carries the port of FINDING 24's
+    # probe -- a frozen canister rejects QUERIES too, which the finding says is the
+    # load-bearing sentence of the whole cycles plan and which nothing in this tree
+    # executed -- and the gate on `get_cycle_status` itself: a lifetime burn average
+    # reads HIGH on a table that has just got busy, and a fuel gauge that reads high
+    # is the failure that matters. Named explicitly for the deposit_replay reason
+    # above. ~4 min.
+    cargo test --test cycles_runway -- --test-threads=1 &&
     # controller_custody is the gate on THE CONTROLLER SEAT
     # (docs/SECURITY-FINDINGS.md FINDING 23). One controller principal per canister,
     # and `install_code --mode reinstall` or `uninstall_code` on a funded table
@@ -1030,6 +1042,28 @@ cmd_shots_selftest() {
   # be unwired) and REQUIRES the named ones to exist (so an old gate cannot vanish).
   node tools/shots/selftest.mjs || { warn "screenshot-harness self-tests FAILED"; return 1; }
   ok "all screenshot-harness self-tests green"
+}
+
+# ---------------------------------------------------------------------------
+# cmd: cycles  -- how long before a canister stops honouring withdrawals
+# ---------------------------------------------------------------------------
+#
+# docs/DEFECTS.md E-55. A canister below its freezing threshold rejects EVERY
+# update call at once, so every player at that table loses access to their own
+# money at the same moment with no attacker involved. Nothing in this tree tops a
+# canister up, and until wave 13 nothing measured the runway either.
+#
+# Read-only and anonymous: `get_cycle_status` is a public query, so this needs no
+# identity and cannot deploy. `.github/workflows/cycles-monitor.yml` runs the same
+# script against mainnet twice a day and `scripts/assert-read-only.sh` enforces
+# that neither of them can do anything else.
+cmd_cycles() {
+  step "cycle runway (local, read-only)"
+  gateway_is_up || die "the local replica gateway at $GATEWAY_ORIGIN is not answering. \
+Run '$0 local-up' first."
+  ./scripts/cycles-runway.sh --selftest || return 1
+  echo
+  ./scripts/cycles-runway.sh --network local "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -1482,6 +1516,16 @@ cmd_no_peeking() {
   ./src/no_peeking/build.sh >/dev/null || die "no-peeking spike build FAILED"
   step "sealed-dealer spike: 36 tests, every door, every caller (docs/NO-PEEKING-FEASIBILITY.md)"
   ( cd tests/no_peeking && cargo test --release ) || die "no-peeking harness FAILED"
+  # THE SPIKE'S OWN UNIT TESTS, WHICH NOTHING RAN (docs/DEFECTS.md H-23, H-53).
+  #
+  # H-53 wired the five INTEGRATION targets in tests/no_peeking. The three crates
+  # under src/no_peeking are a separate workspace with `#[cfg(test)]` modules of
+  # their own -- 11 tests, 0.4 s -- and `cargo test --test X` does not run `--lib`,
+  # so no runner in the repo touched them. Found by extending
+  # scripts/check-suite-wiring.sh to unit tests after it was written, on the
+  # assumption that a new gate is blind somewhere; it was blind here.
+  step "sealed-dealer spike: the dealer crates' own unit tests (11, ~0.4 s)"
+  ( cd src/no_peeking && cargo test --locked ) || die "no-peeking spike unit tests FAILED"
   ok "no-peeking harness passed"
 }
 
@@ -1586,6 +1630,13 @@ ${B}ClearDeck dev entry point${R}   (make <target> works for all of these)
                   the solvency reader and the table-in-frame verdict. ONE list,
                   discovered from disk and cross-checked against a required set,
                   shared with 'npm run selftest' (docs/DEFECTS.md H-47). No replica.
+  ${B}cycles${R}          how long before each local canister stops honouring withdrawals
+                  (docs/DEFECTS.md E-55). Self-tests the threshold logic on
+                  fixtures first, then reads every canister's own get_cycle_status
+                  -- a PUBLIC query, so this holds no identity and cannot deploy.
+                  Fails below 60 days of MEASURED runway, and treats a canister
+                  that will not answer as the alarm rather than as an error:
+                  a frozen canister rejects queries too (FINDING 24).
   ${B}known-defects${R}   run the markers that are RED on purpose; succeeds while the
                   engine defects are still present, shouts when one is fixed
   ${B}hygiene${R}         no large/binary files added, no tracked artifact blob, every
@@ -1622,6 +1673,7 @@ main() {
     shots)          cmd_shots "$@" ;;
     shots-verdict)  cmd_shots_verdict ;;
     shots-selftest) cmd_shots_selftest ;;
+    cycles)         cmd_cycles "$@" ;;
     known-defects)  cmd_known_defects ;;
     hygiene)        cmd_hygiene ;;
     selftest)       cmd_selftest ;;

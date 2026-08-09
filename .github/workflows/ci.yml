@@ -57,7 +57,139 @@ jobs:
       # `poker_core`'s wasm32 replay drives the module with Node, and its
       # cross-language check runs the Python verifier in
       # src/poker_core/tests/verify/ (python3 is preinstalled on ubuntu-latest).
+      #
+      # WHAT THIS COMMAND DOES NOT SEE. `tests/money_safety`, `tests/settlement`
+      # and `tests/no_peeking` each carry a bare `[workspace]` table, which
+      # DETACHES them from the root workspace on purpose: `pocket-ic` drags in
+      # tokio + reqwest + rustls, and the root Cargo.lock is an input to the
+      # reproducible build of six canisters that custody real ICP on mainnet.
+      # `--workspace` therefore cannot reach a single fund-safety harness. That is
+      # docs/DEFECTS.md H-23, and it is why the fund-safety-fast job below exists.
       - run: cargo test --locked --workspace
+
+  suite-wiring:
+    name: No test suite is run by nothing
+    runs-on: ubuntu-latest
+    # WHY THIS JOB EXISTS
+    #
+    # The same defect has been filed four times, under four numbers, and every
+    # time it was found by a human reading a directory listing. It happened a
+    # FIFTH time during the wave that wrote this job, and the script caught it in
+    # a minute:
+    #
+    #   H-17  `deposit_replay` -- the only proven fund-theft reproducer in this
+    #         project -- was cargo-auto-discovered and named by no target, for a
+    #         whole wave.
+    #   H-45  six money-safety suites, 46 tests, named by nothing. One of them,
+    #         `fund_reachability`, was RED the entire time, and THE REGISTER CITED
+    #         IT as what held M9 closed.
+    #   H-50  `tools/archive` shipped with 39 self-tests and no runner, in a
+    #         document whose own section opens "A gate nothing runs is worse than
+    #         no gate".
+    #   H-53  `tests/no_peeking` named all five of its targets explicitly in its
+    #         own Cargo.toml *so that nothing would be auto-discovered* -- and
+    #         then nothing named the Cargo.toml either.
+    #
+    # scripts/check-suite-wiring.sh is that directory-reading, mechanised: every
+    # cargo test target in the repo must appear in scripts/test-suites.list, and
+    # every row there must name a tier something actually runs. A suite added and
+    # never wired now fails the build instead of sitting unrun.
+    #
+    # It also holds the tier assignment against the pressure that will be put on
+    # it: the fast tier is the one that costs every pull request, so the incentive
+    # is always to move things out of it. The gates that have actually convicted a
+    # fund defect here -- the money invariants, the E-02 fund-theft reproducer,
+    # the custody gate, the solvency gate and the settlement oracle -- are named in
+    # the script's REQUIRED_FAST list and cannot be demoted to the nightly without
+    # failing this job.
+    #
+    # No replica, no wasm, no network. Seconds.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: The check proves it can fail, before it is believed
+        # It plants every failure it claims to catch -- an unwired new test file,
+        # a whole new crate whose only tests are unit tests, a row whose file is
+        # gone, a tier no workflow runs, the settlement oracle demoted out of the
+        # required tier, and a tier name nothing recognises -- and requires itself
+        # to go red on each, with a green baseline either side so the reds are not
+        # vacuous. This repository has shipped a gate that could not fail (the
+        # Candid drift job ended in `exit 0` behind a TODO while the committed
+        # .did was missing seven fields and a whole method), so the proof runs
+        # first, every time.
+        run: ./scripts/check-suite-wiring.sh --selftest
+      - name: Every test target in the tree is run by something
+        run: ./scripts/check-suite-wiring.sh
+
+  fund-safety-fast:
+    name: Fund safety (fast tier, required)
+    runs-on: ubuntu-latest
+    # Sized for the COLD case, not the warm one. With rust-cache warm the tier is
+    # roughly the sum of its suites; on the first run after a lockfile change it
+    # also builds pocket-ic + tokio + rustls for two detached crates. A bound that
+    # only fits the warm case turns a cache miss into a red required check, and a
+    # required check that goes red for reasons unrelated to the code is a required
+    # check somebody removes.
+    timeout-minutes: 60
+    # WHY THIS JOB EXISTS -- docs/DEFECTS.md H-23
+    #
+    # Until this job, EVERY fund-safety result in this project's documents came
+    # from a harness no CI job invoked. The money invariants (M1..M14), the
+    # settlement oracle, the hostile-sequence fuzzer, the custody gate and the
+    # solvency gate ran on somebody's laptop, when they remembered. That is the
+    # difference between a property that is enforced and a property that was once
+    # observed, and this project has already watched a suite sit RED for a whole
+    # wave while the register cited it as a gate.
+    #
+    # THE OBSTACLE WAS REAL, AND IT IS SOLVED RATHER THAN ROUTED AROUND. These
+    # harnesses need a PocketIC server and a built canister wasm.
+    # scripts/pocket-ic.sh fetches the exact server version tests/money_safety's
+    # own Cargo.lock pins, verified against a recorded sha256;
+    # scripts/ci-fund-safety.sh fetches the real ICP ledger module at the hash the
+    # harness itself pins, and builds table_canister.wasm from this checkout.
+    #
+    # WHY IT IS SPLIT. `./scripts/dev.sh test` takes over twenty minutes on a fast
+    # laptop. A required check that takes an hour gets marked non-required, and a
+    # job nobody waits for gets skipped, so the split is honest rather than
+    # cosmetic: this tier is everything that convicts a money defect in seconds
+    # per suite, and fund-safety-deep.yml carries the runs whose value is DEPTH --
+    # the fuzzer at 9 seeds x 600 messages, the 138-state stall sweep, the clock
+    # tests that are slow because they WAIT, and the oracle's full random sweep.
+    #
+    # What is in each, and why, is one line per suite in scripts/test-suites.list.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          # The fund-safety harnesses are DETACHED crates with their own
+          # lockfiles and their own target dirs. Cache each, or every run pays to
+          # rebuild pocket-ic + tokio + rustls from source and the "fast" tier is
+          # not fast.
+          workspaces: |
+            . -> target
+            tests/money_safety -> target
+            tests/settlement -> target
+      - name: Cache the pinned PocketIC server and ICP ledger module
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          # Deliberately OUTSIDE target/, so rust-cache's pruning and this cache
+          # cannot fight over the same paths.
+          path: ~/.cache/cleardeck
+          # Keyed on the two files that DECIDE what gets fetched: the lockfile
+          # (which pins the PocketIC server version) and wasms.rs (which pins the
+          # ledger URL and its sha256). A cache hit therefore cannot serve the
+          # wrong replica or the wrong ledger -- and both are hash-checked again
+          # on use anyway, because a cache is not an authority.
+          key: cleardeck-fixtures-${{ hashFiles('tests/money_safety/Cargo.lock', 'tests/money_safety/src/wasms.rs') }}
+      - name: The fast fund-safety tier
+        # $HOME is expanded by the shell here on purpose: an `env:` value of
+        # `~/.cache/cleardeck` is passed through literally and would create a
+        # directory called `~` in the workspace, which actions/cache would never
+        # find.
+        run: CLEARDECK_CACHE_DIR="$HOME/.cache/cleardeck" ./scripts/ci-fund-safety.sh fast
 
   wasm32-tests:
     name: Engine tests on wasm32 (the target that runs the money)
@@ -323,10 +455,21 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
       - run: npm ci
-      - name: Build frontend (declarations are committed under src/declarations)
-        run: npm --workspace src/cleardeck_frontend run build
-        env:
-          DFX_NETWORK: ic
-          # Placeholder IDs: the bundle resolves real IDs at deploy time from .env.
-          VITE_CANISTER_ID_LOBBY: aaaaa-aa
-          VITE_CANISTER_ID_HISTORY: aaaaa-aa
+      # THE NAMED MAINNET PATH, because the placeholder path stopped building.
+      #
+      # docs/DEFECTS.md E-95. This step used to be `npm run build` with
+      # `DFX_NETWORK: ic` and `VITE_CANISTER_ID_* = aaaaa-aa`, under a comment
+      # saying "the bundle resolves real IDs at deploy time from .env". That
+      # stopped being true when the mainnet-id cross-check landed:
+      # `vite.config.js` now ABORTS a `DFX_NETWORK=ic` build whose ids do not
+      # match `.icp/data/mappings/ic.ids.json`, which placeholders never can. So
+      # this job has failed on every run since, main's CI has been red
+      # continuously, and a red pipeline is a pipeline nobody reads -- which is
+      # what the fund-safety jobs above are about to be added to.
+      #
+      # `build:mainnet` is the one named path: it reads the ids from the TRACKED
+      # mapping itself, refuses a contradictory ambient DFX_NETWORK (so this step
+      # must NOT set one), verifies the bundle, and deletes dist if verification
+      # fails.
+      - name: Build frontend (the named mainnet path; declarations are committed under src/declarations)
+        run: npm --workspace src/cleardeck_frontend run build:mainnet

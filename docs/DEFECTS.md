@@ -54,6 +54,16 @@ has a single queue to work from.
 > invariants this project calls never excusable. Same cause as the three above: no default target
 > runs the configuration that finds it.
 >
+> > **WAVE 13: ROOT-CAUSED AND CLOSED. A HAND SETTLES TWICE.** Not a timeout defect and not a
+> > two-seed artifact. `finish_hand` empties the pot and leaves `total_bet_this_hand` standing, so
+> > between hands the table holds a complete payout basis over an empty pot; `use_time_bank` armed an
+> > action clock on a finished hand, and the clock handed that hand back to `end_hand_single_winner`.
+> > Every arithmetic post-condition passed on the way, because the plan conserves against its own
+> > `collected`. Shrunk to **one limped heads-up hand and five ordinary player calls**; four guards,
+> > four gates, each verified red in isolation. The sentence above about no default target running
+> > the configuration was right and was also not the whole story: the fuzzer's ALPHABET could not
+> > express the call ([H-26](#h-26)).
+>
 > **4. [FINDING 31](SECURITY-FINDINGS.md#finding-31) is genuinely open, driven again.** A deposit
 > of exactly the advertised 20,000 e8s to the address the canister publishes still cannot be
 > withdrawn.
@@ -319,12 +329,14 @@ is true.
 | [T-42](#t-42) | high | OPEN | — | — | `tools/archive/lib/collusion.mjs` signal 2; `tools/archive/selftest/synthetic.mjs` | **the collusion detector accuses honest winning players and cannot tell them from cheats.** Signal 2's null (*"does A lose to B faster than A loses to everybody else"*) is ALSO the definition of *"B is better than A's other opponents"*, so it is false under ordinary skill variation and its error rate rises toward 1 with sample size rather than holding at alpha. Measured on **800 real, uncoordinated `table_3` hands**: two `REVIEW` rows at q=1.50e-4, both naming the best player — the same verdict, count and q as a scripted chip dump. Invisible to the shipped gate because `synthetic.mjs` has no per-player skill parameter, and its false-positive assertion tolerates `0.12` while claiming alpha `0.05`. The bootstrap p-value is separately anti-conservative (fires at 14% where it claims 5%). Disclosed at the top of [ARCHIVE.md §6](ARCHIVE.md) and in the tool's own output; **the fix is a skill-adjusted null, not a tighter alpha** |
 | [H-54](#h-54) | high | FIXED | 12 | `dev.sh test` -> `with_timeout`, whose watchdog now writes to `/dev/null` and whose children are killed BEFORE it is. Before/after reproduced with a 1-second command and a 300-second bound: the old form blocks its consumer indefinitely, the new one returns at once and leaves no orphan | `scripts/dev.sh` `with_timeout` | **[H-42](#h-42)'s mechanism, and H-42 blames the wrong step.** `kill "$wd"` kills the watchdog SUBSHELL; the `sleep` it forked survives, orphaned to init, **still holding the stdout and stderr it inherited**. So `./scripts/dev.sh test` exits normally and any consumer of its output — `\| tail`, `\| tee`, `$( )`, a CI log collector — then blocks for the remainder of the bound with **zero CPU anywhere**, which is exactly what H-42 describes. Measured this wave: the gate finished and `sleep 900` sat at PPID 1 holding the pipe for another **14 minutes**. 900 + 300 is H-42's twenty; all of it is post-hoc, after every gate has already passed or failed. H-42 diagnosed the step BEFORE this one, for having no time bound; the cause is the two steps that DO have one |
 | [E-89](#e-89) | high | OPEN | — | — (it IS the red) | `tests/money_safety/src/invariants/reachability.rs` `check_drain`; `Currency::ICP` deposit-sweep floor | **`./scripts/dev.sh fuzz-default`, and therefore `./scripts/dev.sh test`, is RED — and the red is TRUE.** Seed `0xc1ea2dec0002`, twice, byte for byte: two players each send **10,001 e8s** to their own published deposit address, and after every legal player-side exit is driven to exhaustion the canister still owes **20,002 e8s that no player call can move**. 10,001 is inside [FINDING 31](SECURITY-FINDINGS.md#finding-31)'s dead band `(10_000, 20_000]`, and the drain transcript prints `sweepable=true` beside each one, which is FINDING 31's lie in the canister's own words. **This is the gate FINDING 31 never had**, in a five-op minimal reproducer. It fires at 20,002 rather than at 10,001 because `check_drain`'s `UNMOVABLE_DUST_E8S` is a PER-ACCOUNT floor (`min_withdrawal + fee`) compared against an AGGREGATE, so one stranded player is tolerated and two are not — the threshold's verdict depends on seat count rather than on whether the money is recoverable. **Pre-existing at `134550e`: no canister source and no fuzzer source changed in wave 12** |
+| [E-92](#e-92) | high | OPEN | — | — | `src/cleardeck_frontend/src/routes/+page.svelte` `POLL_INTERVAL` -> `check_timeouts`; every runway figure written in wave 13 | **the runway numbers wave 13 published leave out the biggest per-tab term.** `loadTableState` runs on `setInterval(…, 500)` and its FIRST statement is `await tableActor.check_timeouts()`, which is `#[ic_cdk::update]` (`lib.rs:10397`) and carries no `query` in `table_canister.did:714`. That is an UPDATE loop, one per open browser tab, and no cycles figure in this tree counts it: [E-55](#e-55)'s table, `scripts/cycles-runway.sh`'s header, `cycleRunway.js` and `FALLBACK_BURN_PER_DAY` all price the 10 s HEARTBEAT and stop. The per-call cost was measured on the real module at **6,573,911 cycles**. The call rate is bounded by finality, not by the interval, because `loadingTableState` blocks re-entry — so it is ~43,200/day at mainnet's ~2 s update finality and 172,800/day at PocketIC's, i.e. **0.28–1.14 T/day per open tab against the 0.0618 T/day the heartbeat contributes**. Six tabs is 1.7–6.8 T/day before a single hand is dealt, and the published "fully occupied table" figure is 0.4994 T/day total. **The direction is the dangerous one: every runway in the tree reads HIGH**, which is the exact failure [E-55](#e-55) was reopened to fix one level down. Not fixed here: the constant is another owner's, and correcting it without re-measuring the whole table would replace one unverified number with another |
 | [E-84](#e-84) | fund-theft | OPEN | — | — | the CONTROLLER SEAT: `icp.yaml`, every fund-holding canister on mainnet | **the id [FINDING 23](SECURITY-FINDINGS.md#finding-23) never had, so it could be scheduled.** One controller principal per canister, and a controller can call `install_code --mode reinstall` or `uninstall_code` on a funded table: measured at **40.00000000 ICP of player claims destroyed by one command with the same wasm and no code change**, ledger untouched, no restore path. No in-canister check can reach it — `require_controller()` lives in the table, these are calls to the MANAGEMENT canister. `src/guardian_canister/` is the mitigation, is built and gated (`./scripts/dev.sh custody`, 9 tests) and is **NOT DEPLOYED**, so nothing has changed for a real deposit. Disclosed as of wave 12 ([D-13](#d-13)) |
-| [E-41](#e-41) | high | OPEN | — | — | unknown; first observed at `check_timeouts` | **the canister owes 4,000,000 e8s it does not hold.** M1 CONSERVATION and M2 LEDGER REALITY, the two invariants this project calls never excusable. Filed wave 4 at 2,000,000 e8s; **re-driven 2026-08-06 on the wasm `dev.sh test` had just built and it is twice that size**. Reproduces only in the two-seed form ([H-26](#h-26)), which **no default target runs**: `dev.sh test` fuzzes 1 seed x 40 steps, `make fuzz-default` 3 seeds x 220, and the reproducer is seeds `…193,…194` x 400. [FINDING 39](SECURITY-FINDINGS.md#finding-39) |
-| [E-55](#e-55) | high | OPEN | — | — | cycles: no monitoring, no top-up, anywhere in the tree | **a canister below its freezing threshold rejects every update call at once** — `deposit`, `withdraw`, `cash_out`, `player_action`, `abandon_stuck_hand` — which is total custody failure with no attacker. Measured this wave: the on-chain clock raises idle burn from **0.00007 T/day to 0.0442 T/day, a factor of ~630**, so a table holding 10 T cycles now has **226 days** of runway instead of centuries. `get_cycle_status` was added so the number is visible to anybody; **nothing tops it up** |
-| [E-71](#e-71) | high | OPEN | — | — (red on 2 of the 24 recorded shots) | `history_canister` `(table_id, hand_number)`; `get_hands_by_table` | the archive's `(table_id, hand_number)` is not a key: **eleven records answer to "table_2 hand 1", with three different pots**, because `hand_number` restarts at 1 on every table reset. The screenshot sweep's history-chain gate is red on it at both viewports |
-| [H-23](#h-23) | high | OPEN | — | — | `.github/workflows/ci.yml` | CI runs neither the money-safety suite nor the settlement oracle. Every fund-safety result in these documents comes from a harness no CI job invokes |
-| [H-26](#h-26) | high | OPEN | — | — | `tests/money_safety/src/fuzz.rs` `run_sequence` | a fuzz run is documented as "a pure function of `(seed, config, actor_names, steps)`" and is not. Seed `212967420072194` at 400 steps plays **4 hands and finds nothing alone, 5 hands and two fund-creation findings when seed `212967420072193` ran before it in the same process**. Every `MONEY_FUZZ_SEEDS=<one seed>` reproducer in this repo is therefore unverified |
+| [E-41](#e-41) | high | FIXED | 13 | `dev.sh test` step 4 -> `cargo test --test regressions` -> `reg39_a_settled_hand_is_never_settled_a_second_time` (the door AND the money, both legs verified red on the unfixed build: `use_time_bank -> Ok(0)`, then `created 4000000 e8s of chips out of nothing`), plus `dev.sh test` step 1 -> `cargo test --workspace` -> `payout_tests::e41_*`, three tests for the three guards, each verified to go red when **its own guard alone** is removed and green under the other two | `use_time_bank` (the door), `resolve_expired_action_timer` (the clock), `advance_game` (the settlement path), `end_hand_single_winner`/`determine_winners` (the money) — all `src/table_canister/src/lib.rs` | **the canister owed 4,000,000 e8s it did not hold, and the mechanism is A HAND SETTLING TWICE.** `finish_hand` empties `state.pot` but not `total_bet_this_hand` (only `start_new_hand` clears that), so between hands the table sits on a COMPLETE PAYOUT BASIS over an EMPTY POT. `use_time_bank` asked only "is `action_on` pointing at you" and never "is there a hand", so it armed an `ActionTimer` on a finished hand; 30 s later the clock folded a seat out of a hand already paid, `advance_game` read `count_active_players == 1` off last hand's cards, and `end_hand_single_winner` paid the whole basis again. `plan.conserves()` is TRUE throughout — awarded equals the plan's own `collected` — so `apply_payouts` never trapped. Shrunk from 400 steps x 2 seeds to **one limped heads-up hand and five ordinary player calls**. [FINDING 39](SECURITY-FINDINGS.md#finding-39) |
+| [E-55](#e-55) | high | OPEN | — | — (the row stays gateless because the DEFECT is still live: nothing funds a table. The monitoring half that closed is held by `dev.sh test` → `cycles_runway`, `dev.sh shots-selftest` → `test-cycle-runway.mjs` and `scripts/cycles-runway.sh --selftest`) | cycles: measured, monitored and shown to players; still nothing tops it up | **a canister below its freezing threshold rejects every update call at once** — `deposit`, `withdraw`, `cash_out`, `player_action`, `abandon_stuck_hand` — which is total custody failure with no attacker. **The 226-day figure was the number for a table NOBODY IS USING.** Measured under load in wave 13: a hand costs 168.3 M cycles, a deposit 12.7 M, a withdrawal 12.7 M and a heartbeat 7.16 M — and the frontend heartbeats **every 10 s per seated player**, so a table at 500 hands/day with six tabs open burns **0.4994 T/day: 20 days on 10 T, not 226**. Also fixed here: `runway_days` was computed from a **lifetime burn average**, so a table that sat idle and then got busy over-reported its runway by **2.1x** (measured 891 days against a true 422). Now warned to a player before they deposit, and read twice a day by a CI job that holds no credential. **Nothing tops it up.** **And every figure in this row is still optimistic: see [E-92](#e-92).** The 0.4994 T/day composition is idle + 500 hands + six 10-second heartbeat streams and nothing else. The frontend also drives `check_timeouts` — an UPDATE call — from a **500 ms** `setInterval`, at a measured 6,573,911 cycles each, which is 0.28-1.14 T/day per open tab against the heartbeat's 0.0618 |
+| [E-91](#e-91) | high | FIXED | 13 | `dev.sh test` step 1 -> `cargo test --workspace` -> `history_canister::retention_tests::a_table_may_not_record_a_hand_naming_another_table` (+ `a_table_may_record_its_own_hand`, `the_admin_is_still_allowed_to_record_for_a_table`, `a_stranger_is_still_refused_before_any_of_this`, and `two_records_sharing_one_name_collapse_to_one_which_is_why_the_binding_exists`, which measures the mechanism the binding protects). Verified to go red: neutering the binding to `if false` fails exactly that one test, 22 of 23 still green | `history_canister` `record_hand` -> `may_record` | **THE NINTH CROSS-AGENT DEFECT, and it is a REGRESSION THIS WAVE INTRODUCED.** [E-71](#e-71) narrowed the de-duplication key from `(table_id, hand_number, seed_hash)` to the hand's NAME, `(table_id, seed_hash)` — and `record_hand` authorised the CALLER but never bound `record.table_id` to it, so a writer picked half of the name. The other half, the shuffle commitment, is PUBLIC: it is on the player's screen while the hand is running. Before the narrowing a forged record naming another table landed as a visible EXTRA record under its own `hand_number`; after it, the forgery and the genuine hand share one whole name, so the second to arrive is absorbed as a "retry" and **DISCARDED while its sender is told `Ok` with somebody else's id**. File the forgery first and a genuine hand is deleted from the permanent, append-only, "provably fair" archive, silently. That is [E-49](#e-49) exactly, in the wave whose own comments cite E-49 as the thing being avoided, reachable by any of the four authorised tables. **Every instrument built this wave reads green over it, because the failure is an ABSENT record rather than a wrong one.** Closed by binding `record.table_id` to the caller; the admin stays exempt and it is [SAID](SECURITY-FINDINGS.md#finding-23) rather than assumed, because the admin can reinstall this canister anyway |
+| [E-71](#e-71) | high | FIXED | 13 | `dev.sh shots-selftest` -> `tools/shots/test-hand-identity.mjs` (25 cases, no replica), whose case 4 injects the by-`hand_number` join and requires `JOIN BROKEN`; `dev.sh test` -> `cargo test -p history_canister` -> `eleven_hands_under_one_number_have_eleven_different_names` + 6 more; on a running canister, `history get_archive_integrity` (`name_collisions` and `records_without_a_usable_commitment` must be 0, recounted from the RECORDS not the index). Verified to go red end to end: the join reverted to `hand_number` turns the `handhistory` shot red naming both hands | `history_canister` `hand_uid`; `tools/shots/lib/chain-agreement.mjs` `joinTableHandsToArchive` | the archive's `(table_id, hand_number)` was not a key: measured, **947 of 1,651 citations named more than one record, 2,514 of 3,218 records (78%) lived under one, and "table_2 hand 1" answered to 70 records with 6 different pots**. A hand is now named by what is intrinsic to it — `table_id:seed_hash`, the shuffle commitment, unique over all 3,218 existing records — DERIVED on read, so every record already stored was named without being rewritten, renumbered or reindexed (proved by an upgrade over the live 3,218: 0 lost, 0 added, 0 changed). Old citations still resolve, via `resolve_hand_number`, to the labelled SET they always named |
+| [H-23](#h-23) | high | FIXED | 13 | CI `fund-safety-fast` (**declared on every PR; NOT a required status check — see the correction below**) → `./scripts/ci-fund-safety.sh fast`: 21 suite invocations including the money invariants, `deposit_replay`, the custody gate, the solvency gate and the settlement oracle. CI `fund-safety-deep` (nightly + every push to `main`) → `ci-fund-safety.sh deep`: the 9×600 fuzz, the fuzzer at its own defaults, the 138-state stall sweep, the clock, the runway, the full oracle sweep. CI `suite-wiring` → `./scripts/check-suite-wiring.sh`, which fails the build when any cargo test target is run by no tier, and which `--selftest`s its own ability to go red BEFORE it judges. **Verified to convict:** a 1% skim planted in `apply_payouts`, invisible to conservation, `sum(winners) == collected` and `total_liability()`, turns the fast tier RED. **CORRECTION, wave-13 reconciliation, verified against the API on 2026-08-09: nothing here is REQUIRED and the deep workflow has never run.** `gh api repos/JoshDFN/cleardeck/branches/main/protection/required_status_checks` -> `404 Required status checks not enabled`; `.../rulesets` -> `[]`; `.../actions/workflows` lists CI, Cycles monitor, Deploy to IC mainnet, Deployed drift and Security, and **`Fund safety (deep tier)` is not among them**. So a red fund-safety job blocks no merge, and the register said REQUIRED where the repository says nothing is. The job exists, is runnable by a human as `./scripts/ci-fund-safety.sh fast`, and is proved to convict a real theft — **turning it on in branch protection is one click nobody has made, and it is the single highest-value item left in this row** | `.github/workflows/ci.yml`, `.github/workflows/fund-safety-deep.yml`, `scripts/ci-fund-safety.sh`, `scripts/pocket-ic.sh`, `scripts/test-suites.list`, `scripts/check-suite-wiring.sh` | **every fund-safety result in this project's documents came from a harness no CI job invoked.** `cargo test --locked --workspace` could not reach one of them: the three PocketIC harnesses carry a bare `[workspace]` on purpose, so the deployed canisters stay byte-reproducible, and that put every money invariant outside the only test command CI ran. The wiring check caught **three unwired suites while it was being written**, including its own blind spot — `--test X` does not run `--lib`, so **twelve unit tests**, one of them inside the money-safety harness itself, were run by nothing |
+| [H-26](#h-26) | high | OPEN | — | — | `tests/money_safety/src/fuzz.rs` `run_sequence` | a fuzz run is documented as "a pure function of `(seed, config, actor_names, steps)`" and is not. Seed `212967420072194` at 400 steps plays **4 hands and finds nothing alone, 5 hands and two fund-creation findings when seed `212967420072193` ran before it in the same process**. Every `MONEY_FUZZ_SEEDS=<one seed>` reproducer in this repo is therefore unverified. **The COVERAGE half is closed in wave 13 and the purity half is not.** Two changes, both needed, neither about run length: (1) `Op::UseTimeBankOnClock` + `under_the_action_pointer`, because `Op::UseTimeBank` names a RANDOM actor and the harness's only seat-resolver `on_the_clock` returns `None` unless a hand is live, so no op in the alphabet could call a between-hands surface with the right caller; (2) a state-arming op now sometimes carries its own `AdvanceTime(31 s)` + `CheckTimeouts`, because every clock defect here is "one message arms it, a later deadline acts on it" and the generator was drawing the pair by luck. **Measured, all at the default 3 seeds x 220 steps with nothing in the environment:** HEAD's generator finds 1 finding (E-89, 20,002 e8s, 74.0 s); change (1) alone still misses E-41; (1)+(2) on the UNFIXED canister finds **32**, including `M1_CONSERVATION delta=-200000000 / -399000000 / -601500000` and the `CRITICAL: pot accounting disagreement` line, in 87.8 s; on the fixed canister it is back to 2 (both [E-89](#e-89) family) in **55.6 s**. Seed order still decides what a run explores. **TWO CORRECTIONS, wave-13 reconciliation.** (1) *The 55.6 s figure is for a configuration nothing runs.* It was measured with `MONEY_FUZZ_SHRINK=0`; `dev.sh test` and `make fuzz-default` both `env -u` that variable, so the shrink budget is the default 60 and a run that finds anything spends ~200 s per shrink pass. The generator change is not free: measured at the real default, the new generator cost **597.6 s against HEAD's 389.5 s** because it produced two shrink passes rather than one. (2) *The second of the two surviving reds was not [E-89](#e-89).* It was `M3_NO_RAKE +10000` at seed `0xc1ea2dec0001` — [FINDING 44](SECURITY-FINDINGS.md#finding-44), a FALSE conviction caused by M3's window guard reading `ledger_main` while `internal_total()` counts deposit subaccounts. Fixed in this pass, and with it seed `0xc1ea2dec0001` is clean in 19.9 s and `fuzz-default` is red on E-89 alone |
 | [H-42](#h-42) | high | OPEN | — | — | `scripts/dev.sh` `cmd_test` step 4 (**and see [H-54](#h-54): the mechanism is the settlement steps' timeout watchdog, not this step**) | **`./scripts/dev.sh test`, the repo's primary gate, hung for 33 minutes** with zero CPU on both the test binary and its own PocketIC. The money-safety targets have NO time bound; the settlement targets one step later have two. Every leg is green when run directly (`invariants` 45/0 in 63 s single-threaded) |
 | [D-11](#d-11) | high | OPEN | — | — | `src/declarations/<n>/<n>.did.js` via `src/lib/canisters.js` | the frontend's Candid bindings are a **third** copy of the interface and have drifted from both. `table_1.did.js` does not declare `get_solvency`, `get_all_ledger_intents`, `get_cycle_status`, `refresh_solvency` or `get_deposit_replay_state`, so the custody and solvency instruments built in waves 7–10 cannot reach the UI. Same shape as [E-67](#e-67) |
 | [H-45](#h-45) | high | OPEN | — | — | `tests/money_safety/tests/{stall_agreement,solvency,deposit_subaccount_anchor,fund_reachability,oldest_cluster,deposit_surface}.rs` | **[H-17](#h-17) AT FOUR TIMES THE SCALE, and it is holding up the two most recent cross-agent defects.** `scripts/dev.sh cmd_test` names its money-safety targets one by one *precisely so* a cargo-auto-discovered target cannot be a target nobody runs — and four targets are not on the list, are in no make target, and are in no CI job. They are the named gates of [E-59](#e-59)/[FINDING 25](SECURITY-FINDINGS.md#finding-25) (M13 ONE BELIEF, the FOURTH cross-agent defect), [E-70](#e-70)/[E-72](#e-72)/[FINDING 35](SECURITY-FINDINGS.md#finding-35)/[36](SECURITY-FINDINGS.md#finding-36) (the FIFTH), [FINDING 28](SECURITY-FINDINGS.md#finding-28)/[FINDING 11](SECURITY-FINDINGS.md#finding-11)/[E-12](#e-12), and M9's own file. **46 tests, and the count grew by two files DURING this pass** — `oldest_cluster` (the gate the [E-78](#e-78) row names) and `deposit_surface` were both added unwired by other owners in the same wave. **Three of the six are wired as of 2026-08-06:** `oldest_cluster`, `deposit_surface` and `deposit_subaccount_anchor` are now named in `scripts/dev.sh cmd_test` AND in `tests/money_safety/Cargo.toml`, by the owners who filed them. `deposit_subaccount_anchor` mattered most: it was the ONLY gate on [E-12](#e-12)/[FINDING 11](SECURITY-FINDINGS.md#finding-11) and [FINDING 28](SECURITY-FINDINGS.md#finding-28), eleven tests, run by nothing since wave 8. **`stall_agreement`, `solvency` and `fund_reachability` are still unwired**, and [H-48](#h-48) says the last of those three is RED. Verified 2026-08-06 by grepping every `--test <name>` in `scripts/`, `Makefile` and `.github/` |
@@ -362,6 +374,9 @@ is true.
 | [T-04](#t-04) | medium | OPEN | — | — | `.icp/cache/networks/local/state` | the local network state has no checkpoint height common to all five subnets, so it cannot be resumed |
 | [T-15](#t-15) | medium | OPEN | — | — | `lib/utils.js` `formatTokenAmount` | the "canonical money layer" written this wave, documented at length, was imported by **nobody**. Seven copies of "divide by 1e8", not one |
 | [T-32](#t-32) | medium | OPEN | — | — | `PokerTable.svelte:313` `max_players ?? 9` | **every table entry first paints a NINE-seat ring.** At a 6-max table on a phone the felt is 45.3%→50.7% of the frame for **336 ms** and then jumps to 60.6%; on desktop 33.2% for **304 ms** and then 31.7%. Wave 5's headline 60.6% is the settled state and was never distinguished from the first paint |
+| [E-94](#e-94) | medium | FIXED | 13 | `./scripts/assert-read-only.sh --selftest`, which the guard runs on ITSELF before it judges any file, now carrying the four demonstrated bypasses as probe lines and requiring 5 of 5 mutating hits and 5 of 5 credential hits. Verified against hostile files: a workflow carrying `secrets.DEPLOY_KEY_PEM_BLOB` + `icp identity use`, and one carrying `icp canister create` + `icp canister migrate-id`, are now both REFUSED where both previously printed `ok … read-only, anonymous` and exited 0 | `scripts/assert-read-only.sh` `MUTATING` and `CREDENTIAL` | **the guard on the credential-free cycles monitor was a list of yesterday's incidents, not a rule.** `CREDENTIAL` matched `secrets\.IC_` only, so any secret not named `IC_*` — `secrets.DEPLOY_KEY_PEM_BLOB` — passed; `MUTATING` listed `install/stop/start/delete/top-up/snapshot/settings` and omitted `create`, `migrate-id`, `uninstall`, `update-settings` and every `icp identity` subcommand, so `icp identity use monitor` was `read-only, anonymous`. The exact historical regression (`secrets.IC_DEPLOY_IDENTITY`) was blocked and nothing near it was. Widened to the whole write half of the CLI surface and to every `secrets.` reference. **Still not transitive** — the guard reads the workflow, not the scripts a workflow invokes, so a `run: ./scripts/anything.sh` is unexamined; that is named here rather than fixed, because making it transitive means resolving arbitrary shell |
+| [E-95](#e-95) | high | FIXED | 13 | reproduced and fixed locally with the exact command the job runs: `DFX_NETWORK=ic VITE_CANISTER_ID_LOBBY=aaaaa-aa VITE_CANISTER_ID_HISTORY=aaaaa-aa npm --workspace src/cleardeck_frontend run build` -> `ABORT: building for MAINNET, but the canister ids do not match the roles in .icp/data/mappings/ic.ids.json`; the replacement, `npm --workspace src/cleardeck_frontend run build:mainnet` with no ambient `DFX_NETWORK`, builds AND verifies (`8 of 8 checks passed`) | `.github/workflows/ci.yml` job `Build frontend` | **main's CI has been red continuously since 2026-08-07 for a reason that is a CI wiring fault, and a permanently red pipeline is the reason a fund-safety red would be invisible.** The job ran `npm run build` with `DFX_NETWORK: ic` and `VITE_CANISTER_ID_* = aaaaa-aa`, under a comment saying *"Placeholder IDs: the bundle resolves real IDs at deploy time from .env"*. That comment stopped being true when the mainnet-id cross-check landed in `vite.config.js`: an `ic` build whose ids disagree with the TRACKED `.icp/data/mappings/ic.ids.json` now aborts, and placeholders can never agree. So [H-23](#h-23) landed its fund-safety jobs onto a pipeline that was already failing, where **a new red is indistinguishable from the red that has been sitting there for two days**. Switched to `build:mainnet`, the one named path, which reads the ids from the tracked mapping itself, refuses a contradictory ambient `DFX_NETWORK` (so the step sets none) and verifies the bundle before exiting 0 |
+| [E-93](#e-93) | medium | OPEN | — | — | `cargo` feature unification; `recipes/rust-reproducible.hbs` line 77 (one package) vs `scripts/check-candid.sh` line 142 (the whole workspace) | **`history_canister.wasm` is not a function of its source alone: it changes with the `-p` set of the `cargo build` that produced it.** Measured on identical source, same directory, same toolchain, clean each time: `cargo build -p history_canister --target wasm32-unknown-unknown --release` -> `ea701f77…62e15`; `cargo build -p table_canister -p history_canister …` -> `9f511048…3db2d`. `table_canister` is `3890a6d4…b29a0d` under BOTH, so it is not machine noise — it is cargo unifying dependency features across the packages named in one invocation. **Nothing in the tree currently builds that way**, which is why this is `low` and not high: the deploy recipe runs `cargo build --package {{package}}` one package at a time, `tests/money_safety/src/wasms.rs` builds each canister on its own, and the two-path byte-reproducibility check passes (working tree and a `cp -Rc` clone agree to the byte on both modules). But the whole point of the vendored recipe is that **a stranger can rebuild and compare a hash**, and a stranger who types `cargo build --release` for two canisters at once gets a module that matches nothing. The recipe is the only thing standing between that and a false "this canister is not the code" |
 | [E-13](#e-13) | low | OPEN | — | — (`dev.sh known-defects` marker, red on purpose) | `poker_core::hand::detect_straight` | prefers the wheel over a better straight; unreachable today, a trap for the obvious optimisation |
 | [E-83](#e-83) | low | OPEN | — | — | `buy_in`, `src/table_canister/src/lib.rs:4789` | `join_table(seat)` silently auto-buys-in at `min_buy_in`, and a subsequent `buy_in(seat, amount)` on **your own** seat answers *"Seat is taken"*. It is taken by the caller. Topping up needs `reload`, which the error does not name. First interaction at the table, and it lies about who is sitting there |
 | [E-14](#e-14) | low | OPEN | — | — | `leave_table` | missing the `check_rate_limit()?` that `player_action` has |
@@ -2875,8 +2890,165 @@ will honour, or run each seed in its own process and make the report say so. Unt
 reproducer must carry the full seed LIST and the position of the seed within it, not just the seed.
 [E-41](#e-41) is the first finding this affects: it only reproduces in the two-seed form.
 
+> ## WAVE 13 — THE COVERAGE HALF IS CLOSED. THE PURITY HALF ABOVE IS NOT, AND STAYS OPEN.
+>
+> [E-41](#e-41) was root-caused in wave 13, and the interesting part for this entry is that
+> **the two-seed form was never the point.** The default target did not reach E-41 for a reason
+> that has nothing to do with seed order or run length:
+>
+> 1. **The alphabet could not express the call.** `Op::UseTimeBank` names a RANDOM actor, and
+>    `use_time_bank` refuses anybody who is not the seat `action_on` names. Across 220 steps at
+>    three seeds it therefore essentially never LANDED — an op that is always refused looks like
+>    coverage and measures nothing. Worse, the harness's ONLY seat-resolver, `on_the_clock`,
+>    returns `None` unless a hand is in progress, so no op in the alphabet could reach a
+>    between-hands surface with the right caller at all. E-41 lives in exactly that gap.
+> 2. **Deadlines were drawn independently of the ops that arm them.** Every clock defect in this
+>    register ([E-54](#e-54), [E-56](#e-56), [E-59](#e-59), [E-41](#e-41)) is "one message arms
+>    something, a later deadline-crossing acts on it", and the generator had to draw that pair, in
+>    that order, by luck.
+>
+> Both are fixed: `Op::UseTimeBankOnClock` with `under_the_action_pointer`, and a state-arming op
+> that sometimes carries its own `AdvanceTime(31 s)` + `CheckTimeouts` out of the same step budget.
+>
+> **MEASURED, all four runs at the DEFAULT 3 seeds x 220 steps with nothing in the environment,
+> `MONEY_FUZZ_SHRINK=0`, same machine:**
+>
+> | canister | generator | blocking findings | E-41 reached | wall |
+> |---|---|---|---|---|
+> | E-41 fixed | HEAD's | 1 — [E-89](#e-89), M9, 20,002 e8s | — | 74.0 s |
+> | E-41 fixed | + change 1 only | 1 — M3, 10,000 e8s, same E-89 family | — | 81.3 s |
+> | **E-41 UNFIXED** | **+ changes 1 and 2** | **32**, incl. `M1_CONSERVATION delta=-200000000`, `-399000000`, `-601500000`, `M9` stranding 12.49 ICP and 14.60 ICP, and `M1b_POT_BREAKDOWN` quoting the engine's own `CRITICAL: pot accounting disagreement in hand 2: state.pot = 0 but the contributions ... sum to 399000000` | **YES** | 87.8 s |
+> | E-41 fixed | + changes 1 and 2 | 2 — M3 10,000 + M9 20,002, both [E-89](#e-89) family | — | **55.6 s** |
+>
+> **The runtime cost is negative.** 55.6 s against the 74.0 s baseline on the same box, because
+> the follow-up ops come out of the same 220-step budget and a run that resolves its clocks gets
+> through more hands. Nothing was lengthened and no seed was added.
+>
+> Three things this does NOT close, stated so nobody reads the table above as more than it is:
+>
+> * **The purity defect is untouched.** Consecutive `World`s in one process still do not get
+>   independent subnet randomness, so seed *k* still depends on seeds 1..*k-1* and the shrinker's
+>   output is still only minimal for the trajectory it hit. Both red boxes above are evidence OF
+>   that, not against it: changing the generator moved the surviving E-89-family red from seed 2
+>   (M9, 20,002) to seed 1 (M3, 10,000) without any canister change.
+> * **It is still search.** The 32 findings are a measurement of one op stream, not a guarantee.
+>   E-41's own deterministic gate is `reg39_*` and `payout_tests::e41_*`, which is where a fix
+>   belongs when it must not depend on luck.
+> * **The default fuzz step of `./scripts/dev.sh test` was red before this change and is red
+>   after it**, on the [E-89](#e-89) / [FINDING 31](SECURITY-FINDINGS.md#finding-31) dead band.
+>   That red is true and is somebody else's entry.
+
 <a id="e-41"></a>
-### E-41 — high — a hostile sequence leaves the canister SHORT by one big blind — STATUS: OPEN
+### E-41 — high — a settled hand settles a second time and pays itself out of nothing — STATUS: FIXED (wave 13)
+
+> ## ✅ ROOT-CAUSED, SHRUNK AND CLOSED IN WAVE 13.
+>
+> **The origin is not `check_timeouts` and it is not the fuzzer's two-seed form. A HAND SETTLES
+> TWICE.**
+>
+> `finish_hand` empties `state.pot`, clears the departed stakes, sets `HandComplete` and turns the
+> action clock off. It deliberately does NOT clear `total_bet_this_hand`: that is the RECORD of what
+> the hand collected, three instruments read it after the hand is over, and only `start_new_hand`
+> clears it. So **between two hands the table sits on a complete payout basis over an empty pot**,
+> and every piece of the settlement path is willing to act on it — `hand_stakes` still builds the
+> stakes, `count_active_players` still counts the seats holding last hand's cards, and
+> `plan_payouts` still produces a plan that CONSERVES, because it conserves against its own
+> `collected`. `apply_payouts` therefore sees a plan that adds up and credits it. Every e8 of it is
+> created.
+>
+> **The door was `use_time_bank`.** It asked only *"is `action_on` pointing at you"*, which is a
+> question about a stale pointer between hands, and it never asked whether there was a hand. It was
+> the only entry point in the file that could arm an `ActionTimer` with no hand in progress.
+>
+> **The shrunk reproducer: one limped heads-up hand and five ordinary player calls.** No hostile
+> input, no upgrade, no fault injection, no controller.
+>
+> 1. alice and bob sit down and play one hand. It is limped and checked to a showdown: 4,000,000
+>    e8s go in, the winner is paid, `finish_hand` closes it. Both seats still hold the cards they
+>    were dealt and still carry 2,000,000 of `total_bet_this_hand`.
+> 2. Whoever `action_on` still names calls `use_time_bank()`. A fresh 30-second `ActionTimer` is
+>    armed on a table with no hand.
+> 3. The other player calls `sit_out()`. Fewer than two seats will now be dealt in, so
+>    `advance_table_clock` stops short-circuiting on auto-deal and reaches the timer.
+> 4. 31 seconds pass. Any tick — the on-chain clock, or any player's `check_timeouts` — reaches
+>    `resolve_expired_action_timer`, which folds that seat out of the hand it has already been paid
+>    for and calls `advance_game`.
+> 5. `advance_game` had no phase guard. `count_active_players` is now 1, off last hand's cards, so
+>    it calls `end_hand_single_winner` on the finished hand. `plan_payouts` "collects" 4,000,000 and
+>    pays it out again.
+>
+> Measured, exactly, on the wasm the harness had just built:
+>
+> ```text
+> BEFORE: ledger=1200000000 escrow=800000000 chips=400000000 pot=0 internal=1200000000
+> AFTER : ledger=1200000000 escrow=800000000 chips=404000000 pot=0 internal=1204000000
+> DELTA internal = 4000000
+> CRITICAL: pot accounting disagreement in hand 1: state.pot = 0 but the contributions
+>   (including 0 departed stake(s)) sum to 4000000. Settling from the contributions,
+>   which is what was taken from the stacks.
+> ```
+>
+> That `CRITICAL:` line, and a SECOND `HISTORY: hand 1` record for a hand that had already been
+> archived, are the identical pair of lines the 400-step two-seed run produces at its step 233. The
+> canister said what was wrong, once, and carried on.
+>
+> ### The fix: four guards, at four depths, three of them backstops
+>
+> | where | what it now does | its gate |
+> |---|---|---|
+> | `use_time_bank` | refuses when no hand is in progress, **before** the time bank is spent | `reg39_a_settled_hand_is_never_settled_a_second_time` |
+> | `resolve_expired_action_timer` | a clock belonging to no hand is dropped, and folds nobody | `payout_tests::e41_an_expired_clock_on_a_finished_hand_resolves_to_nothing` |
+> | `advance_game` | hard return when `!hand_in_progress` (this was a narrow guard on `refresh_side_pots` only) | `payout_tests::e41_advance_game_does_nothing_to_a_table_with_no_hand` |
+> | `end_hand_single_winner` / `determine_winners` | `settled_twice_refusal`: refuse, and log `CRITICAL:` so the classifier convicts anything that ever gets here | `payout_tests::e41_a_settled_hand_refuses_to_settle_again` |
+>
+> Each of the last three gates was verified by removing **its own guard alone**: it goes red and
+> the other two stay green. `reg39_*` was verified on the fully unfixed build in both of its legs —
+> the door (`use_time_bank -> Ok(0)`) and the money (`created 4000000 e8s of chips out of nothing`).
+>
+> ### What was NOT done, on purpose
+>
+> `finish_hand` still leaves `total_bet_this_hand` standing. Clearing it there is the tempting
+> one-line fix and it is wrong: the fuzzer's M3 basis (`wagered_last_hand`), the hand-attribution
+> watch and the settlement oracle all read that figure at `HandComplete`, and it is the only record
+> of what the hand collected. The defect is not that the record exists, it is that the settlement
+> path was willing to treat a record as money.
+>
+> ### And the original reproducer
+>
+> ```text
+> MONEY_FUZZ_SEEDS=212967420072193,212967420072194 MONEY_FUZZ_STEPS=400 MONEY_FUZZ_SHRINK=0
+>   before: seed 0xc1b1576c1102 -> 5 hands, 7 blocking finding(s), worst stranded 3175980000 e8s
+>   after : seed 0xc1b1576c1102 -> 5 hands, 0 blocking finding(s), worst stranded 0 e8s
+> ```
+>
+> ### AND THE DEFAULT TARGET NOW REACHES IT, WHICH IS THE HALF THAT KEPT IT ALIVE
+>
+> The entry blamed "no default target runs the configuration". That was true and it was not the
+> reason. **The fuzzer's ALPHABET could not express the call**: `Op::UseTimeBank` names a random
+> actor and `use_time_bank` refuses anybody who is not `action_on`, so it essentially never landed;
+> and the harness's only seat-resolver refused to look at the table between hands, which is the only
+> place this defect lives. See [H-26](#h-26) for the two changes and the four-run measurement table.
+>
+> With them, the DEFAULT configuration — 3 seeds x 220 steps, nothing in the environment, the exact
+> thing `./scripts/dev.sh test` and `make fuzz-default` run — finds it on the unfixed canister:
+>
+> ```text
+> seed 0xc1ea2dec0002 -> 10 blocking finding(s), worst stranded 1249020002 e8s
+> seed 0xc1ea2dec0003 -> 21 blocking finding(s), worst stranded 1459990000 e8s
+> M1_CONSERVATION:ledger_equals_owed  delta=-200000000  (chips CREATED)
+> M1_CONSERVATION:ledger_equals_owed  delta=-399000000  (chips CREATED)
+> M1_CONSERVATION:ledger_equals_owed  delta=-601500000  (chips CREATED)
+> CRITICAL: pot accounting disagreement in hand 2: state.pot = 0 but the contributions
+>   (including 0 departed stake(s)) sum to 399000000.
+> ```
+>
+> **2.00, 3.99 and 6.01 ICP, from the seed set the project has shipped since wave 1** — 50x to 150x
+> the 4,000,000 e8s this entry is titled with. On the fixed canister the same run drops from 32
+> findings to 2, and both survivors are the [E-89](#e-89) / [FINDING 31](SECURITY-FINDINGS.md#finding-31)
+> dead-band family that was there before and is not this defect.
+
+**The record of the defect as it was filed, kept because the entry was wrong about the cause for
+nine waves and that is worth reading:**
 
 The strongest thing the money-safety harness can say is M2 LEDGER REALITY: the canister's real
 ledger balance is at least what it owes players. It can never be short. It goes short.
@@ -2937,6 +3109,16 @@ Disconnected ([E-32](#e-32)) or being vacated, and watch `ledger_main` against
 `escrow + chips + pot` across the settlement. It should be recorded in
 `docs/SECURITY-FINDINGS.md` as soon as the mechanism is known, because a canister that owes more
 than it holds is one withdrawal away from a player's funds being unbacked.
+
+> **THAT NEXT STEP WAS NEVER THE RIGHT ONE, AND IT IS WORTH SAYING WHY.** The entry told nine
+> waves of readers to look at a hand being run out while a seat was Disconnected or being vacated,
+> because `check_timeouts` was where the shortfall was first OBSERVED. Nothing was wrong with any
+> of that machinery. The hand the money came out of had already finished; the timer was resolving a
+> clock that belonged to no hand at all. **The reported site was the observer, not the cause**, and
+> the entry's own suggested experiment would have watched the settlement of a LIVE hand, which is
+> conserving and always was. What found it was asking the different question — why does the engine
+> log `state.pot = 0 but the contributions sum to 4000000`, and what has to be true of a table for
+> `pot` and `total_bet_this_hand` to disagree in that direction.
 
 <a id="h-29"></a>
 ### H-29 — medium — the sha256 the harnesses print identifies a BUILD, not the code — STATUS: OPEN
@@ -3342,24 +3524,281 @@ cannot currently tell a right number from a wrong one, and shipping a prettier c
 the pot at 2× is worse than shipping the current one.
 
 <a id="h-23"></a>
-### H-23 — high — CI runs none of the fund-safety harnesses — STATUS: OPEN
+### H-23 — high — CI runs none of the fund-safety harnesses — STATUS: FIXED (wave 13)
 
-`.github/workflows/ci.yml` has five jobs: build the canisters for wasm32, `cargo test --locked
+`.github/workflows/ci.yml` had five jobs: build the canisters for wasm32, `cargo test --locked
 --workspace`, the `poker_core` wasm32 golden replay (plus the outsider verifiers), Candid interface
 drift, and the frontend build. That is a genuinely good set — the wasm32 job in particular is what
-would have caught FINDING-02 — but note what is absent:
+would have caught FINDING-02 — but note what was absent:
 
-* the money-safety suite (`invariants`, `regressions`, `deposit_replay`, `fuzz`), and
-* the settlement oracle.
+* the money-safety suite (`invariants`, `regressions`, `deposit_replay`, `fuzz`),
+* the settlement oracle,
+* the custody gate (`controller_custody`), and
+* the solvency gate.
 
-**Every fund-safety claim in `WAVE-02.md` and `SECURITY-FINDINGS.md` comes from a harness that no
-CI job invokes.** They run when a human remembers to run them. The wave-2 evidence that this
-matters: `deposit_replay` was in no target at all (H-17) and nobody noticed for a whole wave, and
-the settlement oracle — the only gate that convicts a wrong-seat payment — was behind its own
-`make settlement`.
+**Every fund-safety claim in `WAVE-02.md` and `SECURITY-FINDINGS.md` came from a harness that no
+CI job invoked.** They ran when a human remembered to run them.
 
-Both are PocketIC-based, so they need a job that can fetch the pocket-ic binary and the pinned ICP
-ledger wasm. `./scripts/dev.sh test` now runs both, so the CI change is one job that calls it.
+**`--workspace` could not have reached them even in principle.** `tests/money_safety`,
+`tests/settlement` and `tests/no_peeking` each carry a bare `[workspace]` table, and that is
+deliberate and correct: `pocket-ic` drags in tokio + reqwest + rustls, and the root `Cargo.lock` is
+an input to `cargo build --locked` for six canisters that custody real ICP on mainnet. Detaching
+them keeps the deployed modules byte-reproducible. It also put every money invariant outside the
+only test command CI ran.
+
+## What was built
+
+| file | what it is |
+|---|---|
+| `scripts/ci-fund-safety.sh <fast\|deep>` | **the job body**, not a description of one. Both workflows call this and nothing else, so the thing a developer runs on a laptop and the thing that gates a merge are the same bytes |
+| `scripts/test-suites.list` | **the one list**: every cargo test target in the repo, its tier, its thread count, its filter, its per-row environment, and one line saying why it is in the tier it is in. The runner executes these rows; they are not a description of what CI runs, they *are* what CI runs ([H-47](#h-47)'s lesson) |
+| `scripts/pocket-ic.sh` | resolves a PocketIC **server**: `$POCKET_IC_BIN`, then this repo's cache, then the dfx cache, then a pinned download. The required version is **read out of `tests/money_safety/Cargo.lock`**, so a crate bump cannot silently leave CI on an older server — it lands on a version with no recorded checksum and the script stops |
+| `scripts/check-suite-wiring.sh` | the unwired-suite gate, below |
+| `.github/workflows/ci.yml` | two new jobs: `fund-safety-fast` (required, every PR) and `suite-wiring` |
+| `.github/workflows/fund-safety-deep.yml` | the scheduled tier: nightly, on `workflow_dispatch`, and on every push to `main` |
+
+The two fetches are both pinned and both verified on use. The PocketIC server is checked against a
+recorded sha256 per platform *and* required to answer `--version` with the version the lockfile
+asks for — measured, because the release asset extracted under any other filename **panics on
+startup** (`The PocketIc server binary name must be "pocket-ic" or "pocket-ic-server"`), so the
+version in the cache path is a directory rather than a suffix. The ICP ledger's URL and hash are
+not restated in the shell at all: they are **read out of `tests/money_safety/src/wasms.rs`**, which
+owns the pin, because a CI job that fetched a different ledger than the harness pins would
+invalidate every M2 (LEDGER REALITY) result while staying green.
+
+## The split, and why
+
+`./scripts/dev.sh test` takes over twenty minutes. A required check that takes an hour gets marked
+non-required, and a job nobody waits for gets skipped, so the split is by **what the runtime buys**:
+
+**FAST (required on every PR — 21 suite invocations).** Everything that convicts a money defect in
+seconds. Measured on a laptop, warm build cache, one suite at a time: `invariants` 63 s,
+`deposit_replay` 26 s, `controller_custody` 23 s, `admin_custody` 22 s, `deposit_surface` 22 s,
+`deposit_subaccount_anchor` 20 s, `solvency` 16 s, `ledger_boundary` 16 s, `oldest_cluster` 13 s,
+`fund_reachability` 13 s, `regressions` 11 s, `wave6_coherence` 9 s, `deposit_floor` 8 s,
+`coherence_w8` 5 s, `ui_limits` 0 s — about five minutes of tests. Plus a short fuzz run, and the
+settlement oracle with its randomised sweep cut from 24 hands to 6.
+
+**The settlement oracle is in the fast tier deliberately, however long it takes.** It derives what
+each seat is owed from the rules of poker, independently of the code under test, and compares that
+against what the canister actually paid — which is what convicts a payout with the right totals at
+the wrong seat, the cross-agent signature this project has now produced eight times. (`invariants`
+grew its own attribution oracle, M8, after [FINDING 13](SECURITY-FINDINGS.md#finding-13), and the
+planted-theft run below shows both convicting. Two independent instruments on the property that has
+cost this project the most is the right number, not a redundancy to trim.)
+
+**Measured end to end, green: 21 rows, 222 tests, 1,491 s.** That figure is the pessimistic one —
+a fresh clone with a cold build cache (so every test binary is compiled inside its own row) and
+three other test runs competing for the same laptop. `controller_custody` reads 98 s there against
+23 s warm, `regressions` 74 s against 11 s. With the build cache warm the tier is about seven
+minutes of tests. `timeout-minutes` on the job is set for the cold case, because a required check
+that goes red for a cache miss is a required check somebody removes.
+
+**DEEP (nightly, on dispatch, and on every push to `main`).** The runs whose value is depth:
+
+| suite | measured | why it cannot be a required check |
+|---|---|---|
+| `stall_agreement` | **802 s** | 138 forked worlds, one per row ([E-59](#e-59)). On its own it is two thirds of the twenty-minute local gate |
+| `fuzz` (9 seeds × 600 steps) | minutes | [E-39](#e-39) was found at exactly these settings and by nothing shorter; the wave that ran a third of it reported "0 blocking findings" |
+| `fuzz` (no environment at all) | ~50 s | [H-28](#h-28): every caller passed `MONEY_FUZZ_SEEDS`, so the harness's own default arm was executed by nothing and was RED for a whole wave |
+| `timers` | slow by construction | it *waits*: every test drives the table with no ingress message after setup |
+| `cycles_runway` | slow by construction | burn measured over many hands ([E-55](#e-55)) |
+| `settlement` (24-hand sweep) | minutes | the shape nobody thought of |
+
+Pushing to `main` runs the deep tier too, so a merge that breaks a deep suite is attributed to that
+merge rather than found by a nightly the next morning with a day of commits to bisect.
+
+**The deep tier was RED on its first run, and both reds are true.** Row 1 — the fuzzer at its own
+defaults, 665 s — reported two blocking findings against the working tree:
+
+```
+M9_FUND_REACHABILITY:money_left_behind_after_drain|FundsUnreachable|HandComplete|+
+  (seed 0xc1ea2dec0002, 5 ops) -- after every legal player-side exit was driven to
+  exhaustion, the canister still owes 20002 of the 3793874570 e8s it started with,
+  and no player call can move it.
+
+M3_NO_RAKE:value_conserved_across_hand|FundCreation|HandComplete|+
+  (seed 0xc1ea2dec0001, 7 ops) -- value at the table changed across a hand with no
+  external money movement: before total 2400000000, after total 2400010000, delta=10000
+```
+
+The first is [E-89](#e-89) exactly, which is OPEN and whose own entry says the red is true. The
+second is a **fund CREATION** — 10,000 e8s that nobody put in — which `src/fuzz.rs`'s own classifier
+treats as never excusable.
+
+**Re-running it turned up something worse than either.** The same invocation was run again on a
+separate checkout, and the two runs disagree with an IDENTICAL module:
+
+| | repo root (three other test runs on the machine) | clean twin (quiet) |
+|---|---|---|
+| module sha256 | `713d5678…798b7` | `713d5678…798b7` (same bytes) |
+| seed `0xc1ea2dec0001` | 2 hands, 4 upgrades, **1 blocking: FundCreation +10,000 e8s** | 3 hands, 5 upgrades, **0 blocking** |
+| seed `0xc1ea2dec0002` | 2 hands, 0 upgrades, 1 blocking, 20,002 stranded | 7 hands, 3 upgrades, 1 blocking, 20,002 stranded |
+
+Same wasm, same default seeds, same `DEFAULT_STEPS = 220`, `env -u` on every `MONEY_FUZZ_*` in both.
+**The fuzzer's default run is not reproducible run to run**, and the difference tracks machine load,
+so something outside `(seed, config, actor_names, steps)` is steering it. That is [H-26](#h-26) at a
+larger scale than H-26 describes — H-26 is about seed ORDER inside one process; this is one
+invocation against one module giving two different op sequences — and it has two consequences
+worth writing down:
+
+1. The `FundCreation` red is **unattributed**. It was produced once, by the shipped module, and did
+   not reproduce on a quieter machine. It is not dismissed on that basis; a fund-creation finding
+   that appears under load is a fund-creation finding.
+2. **The deep tier's two fuzz rows will be intermittently red**, and a nightly that flickers is a
+   nightly people stop reading. The fix is [H-26](#h-26)'s, not this entry's: make a run a function
+   of its inputs. Until then the fuzz rows are honest but noisy, which is still strictly better than
+   a fuzzer nothing schedules.
+
+## A suite that nothing runs now fails the build
+
+This is the fifth filing of one defect: [H-17](#h-17) (`deposit_replay`, the only proven
+fund-theft reproducer in the project, named by nothing for a wave), [H-45](#h-45) (six suites,
+46 tests, one of them RED the whole time while the register cited it as a gate), [H-50](#h-50)
+(`tools/archive`, 39 self-tests), [H-53](#h-53) (`tests/no_peeking`, five targets named in their
+own `Cargo.toml` *so that nothing would be auto-discovered*, then named by nothing else). Every one
+was found by a human reading a directory listing.
+
+`scripts/check-suite-wiring.sh` is that reading, mechanised, and it is a required CI job. It
+discovers every cargo test target from every `Cargo.toml` in the tree — not from the inventory,
+because a checker that only looks where it has been told to look cannot see a new crate — and
+fails when a target has no row, when a row has no target, when a tier has no runner, or when
+`dev.sh` names a `--test` target CI has never heard of.
+
+**It caught three while it was being written**, which is the whole argument for having it:
+
+1. `cycles_runway.rs` and `e41_probe.rs` were dropped into `tests/money_safety/tests/` by another
+   owner *during this wave* and were named by nothing — no `[[test]]` stanza, no `dev.sh` line, no
+   make rule, no CI job. The check said so within a minute.
+2. `e41_probe.rs` was then deleted by its owner while the inventory was being written, and the
+   check went red on the row that outlived the file. That is the other direction, unrehearsed.
+3. **Its own blind spot.** The first version looked only at integration targets. `cargo test
+   --test X` does not run `--lib`, and every runner in this repository names integration targets,
+   so unit tests compiled into a crate were invisible to the gate whose entire job is finding
+   invisible tests. Extending discovery to `#[cfg(test)]` inside `src/` found **twelve tests that
+   nothing ran**: one in `tests/money_safety/src/invariants/outcome.rs` on `capped()`, the
+   arithmetic that decides how much of a bet is *contestable*, inside the money-safety harness
+   itself; and eleven in `src/no_peeking/dealer_types` + `dealer_canister`, the spike whose five
+   integration targets were [H-53](#h-53). All twelve are wired now — the money-safety one into the
+   fast tier, the spike's into `dev.sh no-peeking`.
+
+`--selftest` plants every failure the check claims to catch — a new unwired test file, a whole new
+crate whose only tests are unit tests, a row whose file is gone, a tier no workflow runs, the
+settlement oracle demoted out of the required tier, and a tier name nothing recognises — and
+requires the check to go red on each, with a green baseline either side so the reds are not
+vacuous. **The CI job runs `--selftest` before it runs the check**, because this repository has
+already shipped a gate that could not fail: the Candid drift job compared the wrong thing and ended
+in `exit 0` behind a TODO while the committed `.did` was missing seven fields and a whole method.
+
+**The tier assignment is held against the pressure that will be put on it.** The fast tier is the
+one that costs every pull request, so the incentive on it is always downward, and moving the
+custody gate or the oracle to a nightly is a one-word edit that leaves every other check green.
+`REQUIRED_FAST` in `check-suite-wiring.sh` names the nine gates that have convicted a real fund
+defect here, and the selftest performs the one-word demotion of the settlement oracle and requires
+the build to break.
+
+## The runner cannot pass by testing nothing
+
+`cargo test` exits 0 when a filter matches nothing, so a renamed filter would turn a gate into a
+silent no-op — this project's most reliable failure shape. Each row is therefore required to have
+produced a `test result:` line, a row with a filter is required not to report `0 passed`, and a
+tier that selects no rows at all stops the run instead of passing it. All three were executed
+against the real script and a real crate:
+
+| planted | what the runner did |
+|---|---|
+| a filter matching no test | `FILTER MATCHED NOTHING — "a_filter_that_matches_no_test_at_all" selects no test in oracle_rules`, exit 1 |
+| a row naming a target that is not there | `NO TEST BINARY REPORTED — this row executed nothing`, exit 1 |
+| a tier with no rows | `ERROR no rows in scripts/test-suites.list for tier 'fast'`, exit 1 |
+| *control:* one genuine row | `the fast fund-safety tier is green`, exit 0 |
+
+The control is the point: without it the three reds would only prove the script refuses everything.
+
+## The pipeline was made to go red on a real theft
+
+A green pipeline that cannot fail is the thing this project keeps finding, so the tier was
+executed against a planted fund-theft rather than argued about. In a scratch clone,
+`apply_payouts` in `src/table_canister/src/lib.rs` was changed to divert **1% of every pot** into
+an escrow account the operator controls, while the winner record continued to state the full
+amount:
+
+```rust
+let skim = payout.amount / 100;
+if let Some(ref mut p) = state.players[payout.seat as usize] {
+    p.chips = p.chips.saturating_add(payout.amount - skim);
+}
+if skim > 0 {
+    credit_escrow(Principal::management_canister(), skim);
+}
+```
+
+Chosen to be **invisible to every conservation check in the canister**: the payout plan still
+conserves, `sum(winners) == collected` still holds (M3 NO RAKE), and `total_liability()` is
+unchanged because the chips leave a stack and arrive in an escrow, which is also a liability.
+Correct totals, wrong recipient, every invariant silent — the signature. The plant lives only in a
+scratch clone; nothing in this tree contains it, and the two module hashes differ
+(`713d5678…` clean, `5dd6a6ab…` planted), so neither run can have been against the wrong wasm.
+
+**The same tier, on the two modules:**
+
+| | clean `713d5678…` | planted `5dd6a6ab…` |
+|---|---|---|
+| result | **green**, exit 0, 21 rows, 222 tests, 1,491 s | **RED**, exit 1, 8 of 21 rows, 1,764 s |
+| rows that convicted | — | `invariants`, `admin_custody`, `oldest_cluster`, `wave6_coherence`, `fund_reachability`, `fuzz` (1 seed × 40 steps), `disagreements -- pinned`, `settlement` |
+| rows that stayed green under the theft | — | `regressions`, `deposit_replay`, `ui_limits`, `deposit_floor`, `ledger_boundary`, `coherence_w8`, `deposit_surface`, `deposit_subaccount_anchor`, **`solvency`**, `controller_custody`, `(lib)`, `oracle_rules`, `disagreements -- golden` |
+
+The second row of that table is the point of the design and the third row is the reason the fast
+tier is the shape it is. **`solvency` stayed green while 1% of every pot was being stolen** — it
+must, because the money is all still inside the canister and the books still balance. So does
+`regressions`. What convicts is attribution, and there are two independent instruments on it:
+
+```
+M8_PRINCIPAL_ATTRIBUTION violated:
+  hand #1: principal aaaaa-aa staked NOTHING and came out of it +640000 e8s richer.
+  You cannot win money from a hand you did not play.
+```
+
+```
+`post_flop_betting_to_showdown` was settled differently from the rules of poker.
+Per-SEAT DIFF   (engine minus what the rules owe): [(0, -2), (1, 0), (2, 0), (3, 0)]
+Per-PRINCIPAL DIFF (WHO was paid, by principal):   [("aaaaa-aa", 2), ("6ui2b-…-oae", -2)]
+Per-RECORD DIFF (who the canister SAYS it paid):   []
+Every chip may still be conserved -- 0 destroyed -- and the totals may still be right;
+what is wrong is WHO HAS THE MONEY.
+```
+
+`Per-RECORD DIFF []` is the whole argument: the canister's own record of the hand was **clean**,
+because the plant credits the winner record in full and skims the stack. An instrument that reads
+the canister's record agrees with the canister. Only an instrument that measures what actually
+moved, against an answer derived somewhere else, can say otherwise.
+
+## What this does not fix
+
+* The deep tier's cost is real. A nightly that nobody reads is a nightly that fails silently;
+  the workflow keeps every suite log and the fuzzer's machine-readable report as artifacts so a
+  reader can say what it actually covered, but nothing forces anyone to look.
+* [H-45](#h-45) is not closed here. Its three named-as-unwired targets (`stall_agreement`,
+  `solvency`, `fund_reachability`) are now in `scripts/dev.sh`, in the inventory and in a CI tier,
+  and the class it describes now fails the build — but the row is another owner's to close.
+* The first CI run on a cold cache pays to build `pocket-ic` + tokio + rustls for two detached
+  crates. `Swatinem/rust-cache` is configured for all three workspaces; the cost is the first run
+  after a lockfile change, not every run.
+* **Ten rows are gated by `scripts/dev.sh` and by no CI job**: `tests/no_peeking`'s five targets
+  plus its lib, `tools/differential/fast_subset` plus its lib, and the two sealed-dealer crates.
+  They are run by `dev.sh test` (steps 3 and 8) and nothing in CI types that. The check prints
+  `LOCAL GATE ONLY, no CI job` on every one of them and the census ends `41 of 51 row(s) are gated
+  by a CI job; 10 are local-only`, because a tier line that just read `ok` would let a reader
+  conclude they run on every pull request. They do not. Wiring them is the obvious next step and
+  was out of this pass's scope (`money_safety`, `settlement`, the custody gate).
+* **`scripts/dev.sh test` and the fast tier are still two lists.** The check enforces the direction
+  that matters — every `--test` target `dev.sh` names must have a row, so the local gate cannot run
+  something CI has never heard of — and `REQUIRED_FAST` in `check-suite-wiring.sh` stops the gates
+  that have convicted a fund defect from being demoted to the nightly. It does **not** stop
+  `cmd_test` from dropping a target that CI still runs. The clean fix is for `dev.sh test` to call
+  `./scripts/ci-fund-safety.sh fast`, which is a change to a file three other owners were editing
+  during this wave.
+* The deep tier was run once, here, and takes long enough that nobody will watch it. It keeps its
+  logs and the fuzzer's report as artifacts; nothing forces a reader.
 
 <a id="e-39"></a>
 ### E-39 — medium — `leave_table` reduced `state.pot` without rebuilding `state.side_pots` — STATUS: FIXED (wave 3)
@@ -6584,60 +7023,271 @@ update and a reply callback.
 ---
 
 <a id="e-55"></a>
-### E-55, high, cycles: no monitoring, no top-up, and this wave made the burn 630x worse — STATUS: OPEN
+### E-55, high, cycles: the runway is a fifth of what the register said, the gauge read high, and still nothing tops it up — STATUS: OPEN (monitoring closed, funding open)
 
-**Status: executed. OPEN.** This is the area the second auditor named as the one it did not
-reach, and [E-54](#e-54) is a change that makes it arrive sooner, so it is recorded here rather
-than left for the next pass to discover.
+**Status: OPEN, and the reason it is still open is stated exactly.** Three of the four things
+this entry asked for exist now and each names a gate. The fourth — *a funding path* — is a
+DESIGN below, not a mechanism in the tree, because the mechanism needs money and a decision
+that is not an engineer's to make. Until somebody funds it, the honest answer to *"can I
+always get my money out"* is still **no**, for a reason that has nothing to do with poker.
 
 An IC canister below its freezing threshold **rejects every update call**. On this canister
 that is `deposit`, `withdraw`, `cash_out`, `player_action`, `reload` and `abandon_stuck_hand`
 failing simultaneously: every player at the table unable to reach their own money at the same
-moment, with no attacker involved and no in-application remedy. Queries keep answering, so the
-UI would continue to show balances it can no longer pay out.
+moment, with no attacker involved and no in-application remedy.
 
-#### What the clock costs, and what it does to the runway
+Two facts about that state, established rather than assumed, in
+`tests/money_safety/tests/cycles_runway.rs::a_frozen_table_answers_nothing_and_is_fully_recoverable`:
 
-Measured (`idle_table_cycle_burn_and_runway`), empty table:
+* **It is fully recoverable.** A top-up restores every method and every balance to the e8. The
+  test freezes a table holding a player's 10.00000000 ICP, proves nothing answers, restores the
+  threshold and withdraws successfully. Freezing destroys nothing.
+* **Running to TRUE ZERO is not** — and this half is **NOT measured here.** The IC uninstalls a
+  canister that reaches zero and its state is gone; that is the platform's documented behaviour
+  and nothing in this tree drives a canister to zero to confirm it. It is stated because it is
+  the difference the alarm thresholds are sized around, and it is labelled because the
+  difference between "we froze a table and unfroze it" and "we destroyed one" is exactly the
+  kind of thing this register has been wrong about before.
 
-| | idle burn | runway at 1 T | at 10 T | at 50 T |
+#### 1. THE RUNWAY, MEASURED UNDER LOAD. The old table was for a table nobody is using
+
+The figures this entry used to carry were measured on an **EMPTY** table: the on-chain clock
+and nothing else. Every table in a lobby that anybody is actually playing at costs more, and
+the difference is not marginal. Measured on the module in this tree, PocketIC 13-node
+application subnet, every figure a difference of two `pic.cycle_balance` reads taken from
+OUTSIDE the canister:
+
+| unit | cycles | how |
+|---|---|---|
+| one hand, net of the clock | **168,327,574** | 10 hands, 3 funded players, real post-flop betting, all to showdown |
+| one hand, raw | 170,376,082 | the same window, undivided |
+| a deposit | **12,664,287** | `icrc2_approve` + `deposit` + the ledger round trip |
+| a withdrawal | **12,705,850** | `withdraw` + `icrc1_transfer` round trip |
+| **a heartbeat** | **7,156,658** | and see the next section, because this is the whole bill |
+| a heartbeat from a principal NOT at the table | 6,829,064 | **REFUSED, and still charged.** Rate limiting moves the price, it does not remove it |
+| a query | **0** | measured first, because every figure above is a difference taken while the harness was watching |
+
+Turned into days, at the balances an operator holds:
+
+| what the table is doing | burn/day | 1 T | 10 T | 50 T |
 |---|---|---|---|---|
-| before the clock | 0.00007 T/day | ~39 years | ~390 years | ~1,950 years |
-| after the clock | 0.0442 T/day | **22 days** | **226 days** | **1,130 days** |
+| idle, nobody at it | 0.0442 T | 22 d | **225 d** | 1,129 d |
+| 200 hands/day, no tabs open | 0.0779 T | 12 d | 128 d | 641 d |
+| 1000 hands/day, no tabs open | 0.2126 T | 4 d | 47 d | 235 d |
+| 500 hands/day, **2 tabs open** | 0.2521 T | 3 d | 39 d | 198 d |
+| 500 hands/day, **6 tabs open** | **0.4994 T** | 2 d | **20 d** | 100 d |
+| dealing continuously | 3.68 T | 0 d | 2 d | 13 d |
 
-The freezing *reserve* is unchanged by this — measured at 2,128,884,000 cycles, which is 30
-days of storage-only burn, because the reserve is computed from idle resource consumption and
-not from message execution. The clock does not raise the freezing threshold; it drains the
-balance toward it ~630x faster.
+**A full 6-max table has about twenty days on 10 T, not 226.** Reproduce with
+`cd tests/money_safety && cargo test --test cycles_runway -- --nocapture --test-threads=1`.
 
-#### What was added
+#### 2. The largest single cost is the frontend's heartbeat, and nothing had ever priced it
 
-`get_cycle_status()`, a query, callable by anybody including anonymously, because the number
-that predicts a total custody failure must not be privileged. It reports `liquid_balance` (the
-figure that actually reaches zero, i.e. balance minus the freezing reserve), a burn rate
-**measured on the running instance** rather than taken from a price list, `runway_days`, and
-`clock_ticks` — which is the only externally visible evidence that the clock is alive at all.
+`src/cleardeck_frontend/src/routes/+page.svelte` sends `heartbeat()` **every 10 seconds** for
+every open tab at the table. That is 8,640 permissionless update calls per player per day, each
+an ingress message the IC charges to the canister:
 
-#### What is NOT built, and what a top-up would need
+```
+  0.0618 T/day PER SEATED PLAYER
+  0.3710 T/day for a full 6-max table of open tabs, before a single card is dealt
+```
 
-Deliberately out of scope this wave, and stated so nobody reads `get_cycle_status` as a
-solution:
+Against an idle burn of 0.0442 T/day, **six open browser tabs cost more than eight times what
+the on-chain clock costs**, and the clock is what this project spent a whole wave worrying
+about.
 
-1. **A funding path.** A `deposit_cycles` endpoint is trivial; deciding *who pays* is not.
-   These are per-table canisters, so the bill scales with the lobby.
-2. **A cycles wallet or a minting arrangement** the tables can pull from, and a controller
-   authorised to move value into them. That is an additional privileged actor on a canister
-   where [FINDING 07](SECURITY-FINDINGS.md#finding-07) is still open, which is the reason not
-   to bolt one on in a hurry.
-3. **An off-chain watcher** polling `get_cycle_status` across every table with alerting well
-   above zero — `runway_days` under, say, 60 — because by the time a canister is frozen the
-   remedy needs someone awake.
-4. **A decision about what a table does when it is nearly out.** Refusing new buy-ins while
-   still honouring withdrawals is a better failure mode than serving both until the moment
-   everything stops, and nothing in the engine expresses that today.
+**And it is per open TAB, not per seated player.** `sendHeartbeat` short-circuits only on
+`!tableActor`, so anybody with the table page open heartbeats — seated or not. The canister
+REFUSES a heartbeat from a principal who is not at the table and is charged **6,829,064 cycles**
+for the refusal, 95% of what an accepted one costs, because the IC charges ingress induction and
+execution before the canister decides to say no. A spectator is therefore almost exactly as
+expensive as a player, and no rate limit changes that: `MAX_HEARTBEATS_PER_SECOND` moves the
+price of a flood, it does not remove it. That is the same mechanism as
+[FINDING 26](SECURITY-FINDINGS.md#finding-26), reachable by an ordinary browser tab rather than
+by an attacker. Not a defect on its own — the heartbeat is what the disconnect threshold reads — but it
+is the dial an operator would turn first, it is in a file this project owns, and no document
+here had ever multiplied it out. `CLOCK_WATCHDOG_SECS` is not the knob that matters;
+`HEARTBEAT_INTERVAL` is.
 
-Until at least 1 and 3 exist, **the honest answer to "can I always get my money out" is still
-no**, for a reason that has nothing to do with poker.
+This also re-prices [FINDING 26](SECURITY-FINDINGS.md#finding-26). Its 65x amplification was
+measured against an idle baseline. Against a table with players at it the *multiple* is smaller
+and the *absolute* burn is worse, and the attacker still pays nothing.
+
+#### 3. `get_cycle_status` READ HIGH, which is the one direction that matters — FIXED
+
+`CYCLES_ORIGIN` was anchored at the first tick of the instance and moved only on a top-up, so
+`observed_burn_per_day` was a **lifetime average from install** and `runway_days` was computed
+from it alone. That is the one shape a fuel gauge must not have. A table sits idle for months,
+then fills with players — or gets pointed at by FINDING 26's free ingress flood — and the
+lifetime average barely moves, because the months of quiet are still in it.
+
+Measured, on a table left quiet for four hours and then given sustained load
+(`the_gauge_reads_high_after_a_quiet_start`):
+
+| | cycles/day |
+|---|---|
+| external truth over the window the gauge averages | 236,375,439,226 |
+| the gauge's new one-hour window | 234,287,091,638 (0.9% low) |
+| the gauge's **lifetime** average | 112,117,734,673 |
+
+| runway on the same balance | days |
+|---|---|
+| what the canister reports now | **426** |
+| what the load actually implies | 422 |
+| **what a lifetime average gives — what shipped before this change** | **891** |
+
+A **2.1x overstatement after four quiet hours**; on a real table with months of idle history
+the lifetime average converges on the idle rate and the overstatement is unbounded. The source
+comment beside `CYCLES_LATEST` already named this as the only failure mode that matters — *"the
+gauge saying 'plenty of fuel' to a canister that is about to stop honouring withdrawals"* — and
+the gauge was doing it.
+
+**The fix.** A sliding one-hour window of tick samples (`CYCLES_RECENT`, bounded by age and by
+count, summing only positive deltas so a top-up inside the window cannot cancel real burn), and
+`runway_days` is now `liquid_balance` divided by the **larger** of the two rates. Reading low
+costs an operator an unnecessary top-up; reading high costs every player at the table access to
+their own money on a day nobody predicted.
+
+> **A caveat on the first version of that gate, because it was wrong in a way worth recording.**
+> The first test compared the gauge's one-hour average against an external measurement over a
+> *different, shorter* window that happened to be mostly load-burst. It reported a 2.24x
+> "overstatement" and would have failed any honest implementation: two averages over two
+> different windows are not the same quantity, and a gauge that chased a 40-second burst
+> instantly would be a worse gauge. The shipped test sustains the load for longer than the
+> gauge's own window and measures the truth over exactly that window.
+
+#### 4. A WARNING WHERE A PLAYER SEES IT — FIXED
+
+`src/cleardeck_frontend/src/lib/cycleRunway.js` +
+`src/cleardeck_frontend/src/lib/components/CycleRunwayNotice.svelte`, rendered in
+`DepositModal.svelte` and `WithdrawModal.svelte` — the two screens money is committed from,
+before any amount is typed. Warn below **60 days**, critical below **21**. Captured on the real
+replica at `artifacts/screens/latest/deposit-desktop.png`:
+
+> **This table has about 7 days of cycles left**
+> Do not deposit. When a canister runs out of cycles it stops accepting every update call at
+> once, including withdrawals, and money already inside it cannot be taken out until somebody
+> tops it up.
+
+with `5/5 protected notices on screen`, `0 occluded` — the notice is an ordinary in-flow block
+with no `position`, no `z-index` and no `transform`, and `test-cycle-runway.mjs` asserts that
+structurally so it can never grow the ability to cover the four protected notices.
+
+Three states of it are not "low", and each is louder than silence:
+
+* **UNREACHABLE.** [FINDING 24](SECURITY-FINDINGS.md#finding-24), now reproduced inside this
+  tree: a frozen canister rejects **queries too**, so `get_cycle_status` goes dark at the exact
+  moment its alarm is true. A failed read is therefore the LOUDEST state, not a caught error.
+* **UNKNOWN.** `runway_days` is null for the first five minutes after every install, upgrade
+  **and top-up**, because a top-up re-baselines the measurement. Null is never "fine".
+* **UNSUPPORTED.** The running module has no such endpoint.
+
+> **The false alarm this shipped with for one build, measured on the running system.** The two
+> new fields were first declared as bare `nat`/`nat64`. Candid will not decode a record that is
+> MISSING a non-optional field, so every reply from the **older module actually deployed on
+> mainnet** became undecodable, the read threw, and the deposit screen of a table with **960
+> days of runway** rendered *"This table is not answering"* — the alarm for a canister that has
+> run out of cycles. The screenshot gate went green: it checks the protected notices and the
+> money figures, not this banner. Both fields are `opt` now, and
+> `test-cycle-runway.mjs` encodes an old-shaped record and decodes it against the shipped
+> declarations, so the skew cannot come back silently.
+
+#### 5. A READ-ONLY CI JOB THAT CANNOT DEPLOY — FIXED
+
+`.github/workflows/cycles-monitor.yml` + `scripts/cycles-runway.sh`, twice a day. **The
+workflow it replaced was itself a finding.** It ran `icp canister status`, which is
+controller-only, so it base64-decoded `secrets.IC_DEPLOY_IDENTITY` into `/tmp` and made it the
+default identity — every day, on a schedule, to read one number. A credential that can
+`install_code` on a canister custodying real ICP ([FINDING 23](SECURITY-FINDINGS.md#finding-23))
+was sitting in a scheduled job for the sake of a status line. It also alarmed on a flat **1 T**
+cycles floor, which is 22 days on an idle table and **under seven hours** on one dealing
+continuously, and it parsed a `.cycles` key it admitted in a comment it had never confirmed,
+`continue`-ing silently when the parse produced nothing — so a wrong key name would have
+reported *"all canisters above threshold"* forever.
+
+The replacement authenticates as **nobody**: `get_cycle_status` is a public query, which is the
+whole reason the canister publishes its own runway. `scripts/assert-read-only.sh` enforces it —
+no mutating `icp` subcommand, no non-query canister call, no identity, no secret — and
+self-tests against synthetic positives first, so a vacuous guard fails instead of passing.
+
+Measured both ways on the local replica:
+
+```
+RED   table_1: 24 days left -- below the 60-day warning threshold
+      table_2: 7 DAYS LEFT -- CRITICAL (1.269 T spendable, burning 0.160 T/day)
+      table_3: 7 DAYS LEFT -- CRITICAL
+  btc_table_1: 30 days left
+      exit 1
+
+(topped up with `icp canister top-up <id> --amount 50t -e local`)
+
+GREEN table_1: 960 days (51.378 T spendable, burning 0.054 T/day)
+      table_2: 100 days   table_3: 111 days   btc_table_1: 1139 days
+      exit 0
+```
+
+**Two limits of it, stated rather than discovered later.**
+
+1. **`lobby`, `history` and the asset `frontend` canister publish no runway.** They get a
+   liveness probe only, which catches a canister that has ALREADY frozen and gives no warning
+   beforehand. Closing that needs `get_cycle_status` on those canisters, in crates this change
+   does not own.
+2. **The mainnet balances are not readable from this machine.** The public dashboard API
+   (`ic-api.internetcomputer.org/api/v3/canisters/<id>`) returns controllers, module hash and
+   subnet and **no cycle balance** — checked, including `/cycle-balance`, `/metrics` and
+   `/cycles`, all 404; the only network-wide cycle endpoints are aggregates. The only public
+   per-canister read is the canister's own query, which is a mainnet call this wave is
+   forbidden to make. So the runway of the live fleet is **UNMEASURED HERE** and the CI job is
+   what will measure it. Note also that mainnet `table_1` reports module hash
+   `9c0ed3a1…` against this tree's `cc47b16f…`/`713d5678…`, so the deployed module is a
+   different build and may predate `get_cycle_status` entirely — the job reports that as a loud
+   NO ANSWER rather than as a pass.
+
+#### 6. THE TOP-UP: who pays, from where, and what happens if nobody does — DESIGNED, NOT BUILT
+
+**The answer is an operator-funded reservoir, and it is emphatically not a levy on players.**
+
+*Why not a levy.* Any mechanism that takes a fraction of a pot, a deposit or a withdrawal to
+buy cycles **is a rake**. "No middleman, no house, 0% rake" is this product's headline claim,
+it is one of the four protected notices, and it is gated on rendered pixels by
+`tools/shots/test-rake.mjs`, which goes red on a rake of **1 e8**. A cycles levy would be a
+rake with a good excuse, and a good excuse is what every rake has. **Nothing proposed here
+touches player money.** If a future wave proposes something that does, that sentence is the one
+to argue with.
+
+*Can a table fund itself?* Only from money that is somebody's. A table's ICP is either escrow
+(a player's) or a pot (a player's). There is no third pile. The canister cannot mint cycles and
+cannot buy them without spending ICP it does not own. **So no: self-funding and the no-rake
+property are mutually exclusive on this design, and that is a property of the product, not a
+gap in the engineering.**
+
+*The shape that works.*
+
+| | |
+|---|---|
+| **who pays** | the operator, from operator funds, as a cost of running the service — the same party that pays for the deploy today |
+| **from where** | a cycles reservoir: one canister holding cycles, funded from an operator wallet, whose only job is to hold and hand out cycles |
+| **how it moves** | `deposit_cycles` on the management canister is **open to any principal and needs no controller rights**. TWO SEPARATE CLAIMS, WITH SEPARATE PROVENANCE, because conflating them is how a remedy nobody can run gets printed as if it worked. *Permissionlessness*: not measured in this wave — it is the property `src/no_peeking/dealer_canister/src/lib.rs` records as measured (*"open to all principals, no controller needed — measured"*) and that `src/guardian_canister/src/lib.rs` builds its recovery story on. *The command*: measured here, against the pinned CLI (icp-cli 1.0.2), as `icp canister top-up <id> --amount <n> -e ic`. `dfx` spells it `deposit-cycles`; **`icp` has no such subcommand**, and the first draft of the player-facing banner printed exactly that. `tools/shots/test-cycle-runway.mjs` now pins the spelling in the UI and in `scripts/cycles-runway.sh` together. **No new privileged actor on the table canister**, which matters because [FINDING 07](SECURITY-FINDINGS.md#finding-07) is open and [FINDING 23](SECURITY-FINDINGS.md#finding-23) is what a controller can already do. The reservoir needs no rights over a table and a table needs no method it does not already have. **Nothing here adds a way for a controller to change a player's balance** |
+| **who pulls the trigger** | anybody. The CI job names the exact command in the incident it opens, and the player-facing banner names it too. A stranger who reads the alarm can fix it |
+| **what happens if nobody does** | the table freezes. Every update is rejected; queries are rejected too; balances are intact and unreachable. A top-up at any later moment restores everything. **Only running to true zero destroys state**, and that is what the 60-day warning and the 21-day critical exist to keep far away |
+
+*What is deliberately still missing, and why.* An automatic pull. A table that could pull
+cycles from a reservoir on its own is a table with a standing claim on somebody's funds, and
+sizing that claim safely under [FINDING 26](SECURITY-FINDINGS.md#finding-26) — where a free
+ingress flood can burn 65x faster at zero cost to the attacker — is the hard half. An
+attacker who can make the table spend can make the reservoir spend. Until the rate-limiting gap
+that finding names is closed, a manual top-up against a two-month warning is the safer machine.
+
+#### What remains OPEN
+
+1. **A funded reservoir.** Money and a decision, not code.
+2. **`get_cycle_status` on `lobby` and `history`**, so the monitor covers the fleet rather than
+   the tables.
+3. **A degraded mode.** Refusing new buy-ins while still honouring withdrawals is a better
+   failure than serving both until everything stops at once, and nothing in the engine
+   expresses it. It is now *possible* to express, because the canister knows its own runway.
+4. **The rate-limiting gap in [FINDING 26](SECURITY-FINDINGS.md#finding-26)**, which is what any
+   funding mechanism has to be sized against.
 
 ---
 
@@ -7549,7 +8199,7 @@ a player standing in front of a deposit button on a table that is 2.00 ICP short
 application showing them nothing at all.
 
 <a id="e-71"></a>
-### E-71, high, the archive's `(table_id, hand_number)` is not a key: eleven records answer to "table_2 hand 1", with three different pots — STATUS: OPEN
+### E-71, high, the archive's `(table_id, hand_number)` is not a key: seventy records answer to "table_2 hand 1", with six different pots — STATUS: FIXED (wave 13)
 
 Measured on the local archive after the wave-8 screenshot sweep
 (`icp canister call history get_recent_hands '(20)' --query`):
@@ -7579,9 +8229,192 @@ hand 1: the TABLE canister paid 2400000000 e8s but the HISTORY canister recorded
 
 The number on screen and the number in the archive are both true of *a* hand 1 and they are not
 the same hand 1. [FINDING 30](SECURITY-FINDINGS.md#finding-30) made the CONTENT of each record
-true; it did not give the records identity. The fix is `hand_id` as the only durable name (it
-already is unique), the UI and the spec citing it, and `record_hand` refusing, or explicitly
-versioning, a `(table_id, hand_number)` it has already seen.
+true; it did not give the records identity.
+
+---
+
+## E-71 — how it was closed (wave 13)
+
+### 1. The damage, counted rather than sampled
+
+Every record in the local archive, read back and recounted on 2026-08-08. The wave-8 note above
+sampled twenty; this is all 3,218:
+
+```
+distinct (table_id, hand_number) citations : 1651
+records                                    : 3218
+citations that name MORE THAN ONE record   :  947
+records living under such a citation       : 2514      <- 78% of the archive
+citations whose records have DIFFERENT pots:  877
+worst: table_2 "hand 1" -> 70 records, 6 distinct pots
+```
+
+**And a verifier did get the wrong hand back, silently.** The screenshot sweep's history-chain gate
+fetched the newest twenty records for `table_2` and put them in a `Map` keyed on `hand_number`.
+Twenty records collapsed to **ten** keys. The record left under "hand 1" was `hand_id 3173`, pot
+0.2 ICP, from an earlier life of the table; the hand just played was `hand_id 3218`, pot 24 ICP. The
+gate then reported *"the TABLE canister paid 2400000000 e8s but the HISTORY canister recorded
+20000000 e8s paid"* — which reads as the archive losing 22 ICP and is really the gate comparing two
+different hands. Nothing anywhere said the two records were not the same hand.
+
+The ten records the map discarded were **also** the ten it never checked for a rake, because the
+no-rake loop iterated the same collapsed map. Half the evidence for the product's headline property,
+dropped by insertion order, on the one gate that asserts it against the permanent archive.
+
+### 2. What names a hand now
+
+```
+hand_uid = "<table canister id>:<seed_hash>"
+```
+
+The shuffle commitment. It is 32 bytes of `raw_rand` per hand, published before any card is shown,
+already carried by every record ever archived, and already on the player's own screen while the hand
+is running — the one value in a hand record that is unique to the hand by construction rather than by
+bookkeeping. Recounted over the same 3,218 records: **3,218 distinct commitments, 0 empty, 0 that
+are not 64 lowercase hex.** It was already a perfect key; nothing was using it as one.
+
+The table is in the name for what happens when the commitment is *not* unique. Keyed on the
+commitment alone, a second table sending a record that reused another table's commitment would be
+de-duplicated away — a genuine hand discarded with an `Ok`, which is [E-49](#e-49) exactly. Scoped to
+the table, both records survive and the collision is visible in `get_archive_integrity`.
+
+It is **derived on read, never stored and never accepted from a writer**. `record_hand` clears
+whatever a caller put in the field; `get_hand`, `get_hands_by_table`, `get_hands_by_player`,
+`get_recent_hands` and `check_recorded_hand` all fill it from `table_id` and
+`shuffle_proof.seed_hash` through one function. That is the whole migration.
+
+### 3. Migration — exactly what happened to the records that already exist
+
+Nothing was rewritten, renumbered, reindexed or moved.
+
+| | |
+|---|---|
+| `hand_id` | unchanged. Still the archive's primary key, still what `get_hand` takes, still what five auditors' citations resolve through |
+| `hand_number` | unchanged. Still recorded, still returned, still not a name |
+| every stored byte | unchanged. `hand_uid` is `opt` in storage ([FINDING 14](SECURITY-FINDINGS.md#finding-14)) and is **never written**, so old and new records are identical on disk and are named by the same three lines of code |
+| the de-duplication key | narrowed from `(table_id, hand_number, seed_hash)` to `(table_id, seed_hash)`. Over the existing archive this merges nothing: 3,218 records, 3,218 distinct commitments |
+| an old `(table, hand number)` citation | still resolves — `resolve_hand_number` returns the whole SET it always named, oldest first, each with its pot, timestamp and permanent name, plus `is_unique` and advice. The number the auditor quoted pins which one they meant |
+
+**Proved on the live local archive, not argued.** All 3,218 records were snapshotted field by field,
+the canister was upgraded (`--mode upgrade`), and the snapshot retaken:
+
+```
+records present before and missing after : 0
+records that appeared                    : 0
+records whose CONTENT changed            : 0
+```
+
+then, on the upgraded canister, every record written under the old scheme:
+
+```
+get_archive_integrity ->
+  records_held                            3218
+  records_with_a_name                     3218
+  distinct_names                          3218
+  name_collisions                            0
+  records_without_a_usable_commitment        0
+  index_disagrees_with_records           false
+  ambiguous_hand_number_citations          947
+  worst_hand_number_citation   4fbx2… hand number 1 answers to 70 records
+resolve_hand_number(table_2, 1) -> 70 matches, is_unique=false,
+  and all 70 resolve back to THEMSELVES by name (70/70)
+```
+
+`get_archive_integrity` recounts from the RECORDS, not from the name index — an index cannot be
+used to check itself, and an index that disagrees with its records is the failure this canister is
+most likely to have. It is also how the property can be checked on an archive nobody is allowed to
+call from a test.
+
+**About the MAINNET archive, stated exactly.** It was not called: this wave is local-only and
+`kggj7-…` is off limits, so nothing here is a measurement of it. What is claimed instead is
+structural and checkable by anyone in one call. The name is a pure function of `table_id` and
+`shuffle_proof.seed_hash`, two fields every record on every instance already carries, so installing
+this code names whatever is there without writing to it; the `opt` field means `stable_restore`
+accepts state written before it existed; and `get_archive_integrity` reports, for *that* instance,
+whether the naming actually holds — `name_collisions`, `records_without_a_usable_commitment` and
+`index_disagrees_with_records`. The local instance is the evidence that the query is honest about a
+real archive: it reports the 947 ambiguous citations rather than a clean sheet, and it was caught
+being blind once already (see §5). Run it after the upgrade rather than trusting this paragraph.
+
+### 4. A record with no usable commitment is REFUSED, not stored
+
+`record_hand` returns an `Err` naming the problem. Storing such a record would mean every unnamable
+record from one table sharing one name and the second being de-duplicated into the first — a genuine
+hand discarded with an `Ok`, [E-49](#e-49) again. Refusing is loud: the table keeps the record in its
+retry backlog and `get_history_status` reports the sentence verbatim. No hand the table canister
+produces can hit this (it returns before building a record when there is no shuffle proof), and all
+3,218 existing records carry a 64-hex commitment.
+
+### 5. The gate, and the blind spot it was hiding
+
+`tools/shots/lib/chain-agreement.mjs` now joins the table's hands to the archive **by name**, and —
+the part that matters — **asserts its own join**: whatever record comes back must carry the name of
+the hand it is being compared against. A future edit that puts the lookup back on `hand_number` fails
+on the join, naming both hands, instead of producing a plausible money mismatch. Reverted end to end
+on the live replica, the `handhistory` shot goes red with
+
+```
+JOIN BROKEN: hand 1 of this table committed to 4fbx2…:c12ece47…, but the archived record being
+compared against it is 4fbx2…:c9952d42… (hand_id 3201, pot 20000000). Those are two different hands.
+```
+
+Four more holes closed while in there:
+
+* the no-rake loop iterates the records fetched, not the collapsed map, so all twenty are checked
+  rather than ten;
+* **no-rake is now asserted over the WHOLE archive**, not over the window the gate can afford to
+  fetch. `get_archive_integrity` carries `records_with_a_nonzero_rake` and `rake_recorded_total`,
+  recounted from every record on every call, so a rake no longer only has to wait twenty hands to be
+  checked by nothing at all;
+* the two sides' `hand_number`s are now COMPARED, which was impossible while the number was the join
+  key — the join made them equal by construction. One deal recorded under two different numbers is
+  the two surfaces disagreeing about the record they hold, and it now fails;
+* the gate reads the archive and the table's hand record through the harness's **own** Candid
+  mirrors (`lib/archive-wire.mjs`, new; `lib/hand-record-wire.mjs`), because
+  `src/declarations/history/history.did.js` is stale ([E-67](#e-67)) and would have dropped
+  `hand_uid` in silence — sending the join quietly back to `hand_number`, which is the defect.
+
+`tools/shots/test-hand-identity.mjs` holds all of it with no replica, no browser and no canister:
+25 cases, including the eleven-hands-one-number archive, the injected by-`hand_number` lookup, a
+truncated commitment, a name that does not follow from its own record, and a `HandSummary` with the
+field dropped.
+
+**And the instrument was blind in the way this project's standing lesson predicts.**
+`index_disagrees_with_records` was first written as `hand_uid_index.len() != distinct_names`, which is
+self-confirming: two records sharing a name produce ONE name and ONE index entry, the two agree, and
+the field that exists to report exactly that drift cannot see it. Caught by
+`the_integrity_report_sees_a_collision_the_index_would_hide`, which forces a twin in behind
+`insert_hand`'s back — the test failed on the field, not on the archive. It compares the index with
+the number of NAMED RECORDS now.
+
+### 6. A hand rebuilt from a record, by name, to check nothing was lost
+
+`hand_uid` `4xhad-gd777-77775-aaacq-cai:ecc34b2f1d5325b7c982b8ed7ed19bc411d427b9b1daecc8857c9ecc23f9dc58`
+was fetched with `get_hand_by_uid`, and its seed handed to the Python verifier written from
+[SHUFFLE-SPEC.md](SHUFFLE-SPEC.md), which shares no line with the canister:
+
+```
+P = 4 (dealt_in states it)     board  derived [Qd 8c Ad 9s 2d]  record [Qd 8c Ad 9s 2d]  MATCH
+seat 0  derived [Ks 9c]  record [Ks 9c]  MATCH
+seat 1  derived [Tc 8d]  record [Tc 8d]  MATCH
+```
+
+Seats 2 and 3 folded and their cards are not in the record; the verifier derives them anyway
+(`8h Th`, `Qc Ac`) from the seed alone, which is the property an auditor used to reconstruct a folded
+player's hand. Nothing the record carries changed, so that still holds.
+
+### 7. Also fixed, in `record_hand_to_history`: the record could carry another hand's seed
+
+`seed_hash` came from `state.shuffle_proof` (this hand's) and `revealed_seed` came from
+`HAND_HISTORY.last()` (whatever is on the end of the ring). `reveal_seed_on_hand_end` writes the seed
+into the entry matching **(hand_number, seed_hash)**; this read it off the end. When the two are not
+the same entry, the archive is handed this hand's commitment beside another hand's seed,
+`check_recorded_hand` finds they do not hash to each other, and a permanent append-only record
+accuses the table of revealing a seed it did not commit to. Latent — all 3,218 archived records hash
+correctly — and now structurally impossible: the read uses the same predicate as the write, so the
+seed in a record can only ever be the pre-image of the hash in the same record. A miss leaves
+`revealed_seed` empty, which `check_recorded_hand` already reports in its own words instead of
+manufacturing an accusation.
 
 <a id="e-72"></a>
 ### E-72, high, the money-safety harness's `CustodyStatus` mirror silently drops `unfinished_ledger_ops` — STATUS: FIXED (wave 10)
@@ -8900,3 +9733,295 @@ never calls. The report records the same `table_wasm_sha256` the gate builds. **
 
 **Left RED on purpose, with an id.** A gate that is red about the top open `critical` is doing its
 job; the thing that must not happen is for it to be red about it silently.
+
+---
+
+<a id="e-91"></a>
+### E-91 — high — the archive's writer picks half of the hand's name, and after E-71 that silently DELETES another table's hand — STATUS: FIXED (wave 13)
+
+**THE NINTH CROSS-AGENT DEFECT. It is a regression this wave introduced, in the wave whose own
+source comments cite [E-49](#e-49) as the failure being avoided.**
+
+`record_hand` authorised the CALLER and never bound `record.table_id` to it:
+
+```rust
+let is_authorized = state.authorized_tables.contains(&caller) || state.admin == Some(caller);
+if !is_authorized { return Err(...) }
+insert_hand(&mut state, record)      // record.table_id is whatever the writer said
+```
+
+[E-71](#e-71) then narrowed the de-duplication key from `(table_id, hand_number, seed_hash)` to the
+hand's NAME, `hand_uid = "<table_id>:<seed_hash>"`. Those two facts together are the defect: the
+writer chooses `table_id`, and the other half of the name — the shuffle commitment — **is public**.
+It is published before any card is dealt and it is on the player's screen while the hand runs.
+
+### What changed, and it changed in the silent direction
+
+| | HEAD (`a65868e`) | after E-71 |
+|---|---|---|
+| key | `(table_id, hand_number, seed_hash)` | `(table_id, seed_hash)` |
+| forged record naming another table | stored as its OWN record under its own `hand_number` — **visible** | shares the victim's whole name |
+| the genuine hand that arrives after it | stored | **de-duplicated away, `Ok(forgery_id)` returned** |
+| records surviving | 2 | **1, and it is the forgery** |
+
+So filing a forgery first deletes a genuine hand from an archive whose entire promise is that it is
+permanent and append-only, with an `Ok` on the way out and no counter moving. Reachable by any of
+the four authorised table canisters.
+
+**Every instrument built this wave reads green over it**, and that is the eight-times-repeated
+signature: `get_archive_integrity` recounts NAME COLLISIONS and there is no collision — there is one
+record where there should be two. `index_disagrees_with_records` compares the index against the
+records and they agree. `check_recorded_hand` is asked about a record that is present. The failure
+is an ABSENT record, and nothing in the tree counts absences.
+
+### The fix
+
+`record_hand`'s authorisation moved into `may_record`, a pure function, and it now ends:
+
+```rust
+if state.admin != Some(caller) && record.table_id != caller { return Err(...) }
+```
+
+`record_hand_to_history` sets `table_id = self_principal()`, so no honest table can fail it. **The
+admin stays exempt and that is stated rather than assumed**: the archive's admin is its controller
+and can rewrite the whole canister by reinstalling it
+([FINDING 23](SECURITY-FINDINGS.md#finding-23)), so refusing here would be a claim rather than a
+control. `the_admin_is_still_allowed_to_record_for_a_table` pins the exemption so that removing the
+binding can never be mistaken for "the admin path was already closed".
+
+### The gate, and that it goes red
+
+`cargo test --workspace` (step 1 of 8 in `./scripts/dev.sh test`), five host tests in
+`history_canister::retention_tests`. Neutering the binding to `if false` and re-running:
+
+```text
+test retention_tests::a_table_may_not_record_a_hand_naming_another_table ... FAILED
+test result: FAILED. 22 passed; 1 failed
+```
+
+`two_records_sharing_one_name_collapse_to_one_which_is_why_the_binding_exists` measures the
+mechanism rather than arguing it: two records with one name, one survives, and what survives is the
+one with `total_pot = 1` rather than the hand that was played.
+
+### Why the split is worth keeping
+
+`may_record` and `insert_hand` are both split out of the canister entry point for the same reason,
+now written down twice: **a rule that decides whether one table can delete another's evidence must
+not be reachable only through a deployed replica.**
+
+---
+
+<a id="e-92"></a>
+### E-92 — high — every cycles-runway figure this wave published omits the 500 ms UPDATE poll, which is the biggest per-tab term — STATUS: OPEN
+
+Wave 13 measured the cost of a hand, a deposit, a withdrawal and the frontend's 10-second
+heartbeat, and concluded that *"six open browser tabs cost more than eight times what the on-chain
+clock costs"*. There is a second per-tab loop, it was not measured, and it is larger.
+
+```js
+// src/cleardeck_frontend/src/routes/+page.svelte
+const POLL_INTERVAL = 500;
+pollInterval = setInterval(loadTableState, POLL_INTERVAL);
+
+async function loadTableState() {
+  ...
+  const timeoutResult = await tableActor.check_timeouts();   // FIRST statement
+```
+
+```rust
+// src/table_canister/src/lib.rs:10397
+#[ic_cdk::update]
+fn check_timeouts() -> TimeoutCheckResult {
+```
+
+`table_canister.did:714` declares it `check_timeouts : () -> (TimeoutCheckResult);` — no `query`.
+So every open tab drives an **update** call in a 500 ms loop, at a measured **6,573,911 cycles**
+each.
+
+### The rate, honestly bounded
+
+`loadingTableState` blocks re-entry, so the real rate is one call per round trip rather than two per
+second. At mainnet's ~2 s update finality that is ~43,200/day per tab (**0.284 T/day**); at
+PocketIC's near-instant finality it is the full 172,800/day (**1.136 T/day**). Either end of that
+range is the dominant per-tab cost: the heartbeat this wave headlined is **0.0618 T/day**.
+
+Against the published composition — `0.4994 T/day = idle + 500 hands + six heartbeat streams` — six
+open tabs add **1.7 to 6.8 T/day before a single hand is dealt**.
+
+### Why it is `high` and why it is not fixed here
+
+**The error is in the dangerous direction.** [E-55](#e-55) was reopened this wave precisely because
+`runway_days` divided by a lifetime average and therefore READ HIGH; this is the same failure one
+level up, in the numbers a human reads, and it is baked into `FALLBACK_BURN_PER_DAY` — the floor the
+CI monitor alarms on when a canister cannot yet measure its own burn.
+
+It is left open rather than patched because the honest fix is to re-measure the whole table with the
+poll included, in `tests/money_safety/tests/cycles_runway.rs`, and publish one set of numbers. That
+is the owner's work, not a reconciliation pass's; replacing one unverified constant with another is
+how the 226-day figure got written in the first place.
+
+**What is NOT affected:** the canister's own `get_cycle_status`. Its sliding window measures real
+consumption, so it already includes these calls. The defect is in the DOCUMENTED figures and in the
+fallback constant used when the window is too young to speak.
+
+### Corroborated by the canister's own gauge, on the local replica, in this pass
+
+`./scripts/dev.sh cycles` immediately after a full 24-shot screenshot sweep — a browser holding a
+table page open, which is the load this entry is about:
+
+```text
+  ✓  btc_table_1: 1138 days (51.380 T spendable, burning 0.045 T/day)     <- never opened in a browser
+  ✓  table_1:      277 days (51.360 T spendable, burning 0.185 T/day)
+  ✗  table_2:       11 DAYS LEFT -- CRITICAL (51.241 T spendable, burning 0.333 T/day)
+  ✗  table_3:       11 DAYS LEFT -- CRITICAL (51.176 T spendable, burning 0.218 T/day)
+```
+
+`btc_table_1` is the control: no browser ever pointed at it, and it reports **0.045 T/day**, which
+is the idle figure this project has been quoting. The three tables a browser did open report
+**4x to 7.4x** that, and the sweep is a handful of hands, not 500. **The gauge is right and the
+documents are wrong** — which is the good half of this: `get_cycle_status`'s sliding window (fixed
+this same wave under [E-55](#e-55)) sees the poll even though no document does.
+
+`dev.sh cycles` is therefore RED on the local replica as of this pass. It is a local fixture running
+low, not a product defect, and it is the same instrument reporting the same thing the entry above
+predicts.
+
+---
+
+<a id="e-93"></a>
+### E-93 — low — `history_canister.wasm` changes with the `-p` set of the build that produced it — STATUS: OPEN
+
+Identical source, identical directory, identical toolchain, `cargo clean -p history_canister` before
+each:
+
+```text
+cargo build -p history_canister --target wasm32-unknown-unknown --release
+  history_canister.wasm  ea701f773853c36f8c895639fd0bab2b5ded49071fcd1ddafb8ec7d60f862e15
+
+cargo build -p table_canister -p history_canister --target wasm32-unknown-unknown --release
+  history_canister.wasm  9f511048cdada0b9bbfe3548c5436ef67a89fb0d176a8c3f31db84285fc3db2d
+  table_canister.wasm    3890a6d4a1861343df40c08772979171bc15fed8c51102c81f3c849346b29a0d
+```
+
+`table_canister` is `3890a6d4…b29a0d` under **both** invocations, so this is not nondeterminism in
+the compiler: it is `cargo` unifying dependency FEATURES across every package named in one
+invocation. `table_canister` already pulls the union, so it does not move; `history_canister` does.
+
+### THE REPOSITORY HAS BOTH INVOCATIONS, so this is live and not theoretical
+
+* `recipes/rust-reproducible.hbs` line 77 — the DEPLOY path —
+  `cargo build --package {{ package }} --target wasm32-unknown-unknown --release --locked`.
+  One package. Produces `ea701f77…`.
+* `tests/money_safety/src/wasms.rs` — every PocketIC harness — `-p <one canister>`. Same shape.
+* `scripts/check-candid.sh` line 142 — the gate that compares each committed `.did` against
+  *"the interface exported by the built wasm"* — `cargo build --locked --release --target
+  wasm32-unknown-unknown`, **the whole workspace at once**. Produces `9f511048…`.
+
+So `target/wasm32-unknown-unknown/release/history_canister.wasm` **is whichever shape the last gate
+you ran left there**. Measured on this tree at the close of wave 13: after `dev.sh test` +
+`check-candid.sh` the file was `9f511048…`, and a `cargo build -p history_canister` immediately
+afterwards rewrote it to `ea701f77…`.
+
+No gate is currently wrong because of it — the exported Candid interface is the same either way, so
+`check-candid.sh` is green, and every harness rebuilds before it reads — but "the artifact's identity
+depends on which command ran last" is not a property this project is allowed to have.
+
+The wave-13 two-path check passes when the invocation is held fixed: the working tree and a `cp -Rc`
+clone agree to the byte on both modules (`table_canister 3890a6d4…`, `history_canister ea701f77…`).
+
+### Why it is not `low`
+
+The vendored recipe exists because *"an independent auditor could not match the deployed module hash
+to ANY commit in this repository"*. A stranger reproducing a build is not reading the recipe's line
+77; they type what looks obvious. Building two canisters in one command is obvious, and it produces
+a module that matches nothing, which reads as **"this canister is not the code"** — the exact false
+alarm the recipe was written to end.
+
+**The fix, when somebody takes it:** make `scripts/check-candid.sh` build package by package like
+everything else, say so where a verifier reads it (README's verification section), and have
+`scripts/verify-build.sh` assert that it built one package per invocation.
+
+---
+
+<a id="e-94"></a>
+### E-94 — medium — the read-only guard blocked the exact incident and nothing near it — STATUS: FIXED (wave 13)
+
+`scripts/assert-read-only.sh` exists because the workflow it replaced base64-decoded
+`secrets.IC_DEPLOY_IDENTITY` into `/tmp` every day to read one number. The guard it shipped with
+matched that string, and generalised from it badly.
+
+**What went straight through, measured on hostile files before the fix — each printed
+`ok … read-only, anonymous` and exited 0:**
+
+| planted in a workflow | why it passed |
+|---|---|
+| `${{ secrets.DEPLOY_KEY_PEM_BLOB }}` | `CREDENTIAL` was `secrets\.IC_` — any secret not named `IC_*` |
+| `icp identity use monitor` | not `identity import` and not `--identity` |
+| `icp canister create` | not in `MUTATING`'s verb list |
+| `icp canister migrate-id` | same |
+
+The shape is the one this project keeps finding: **a deny list built from the incident that
+happened rather than from the property being enforced.** The property is "this job needs no
+credential of any name and changes nothing", so the patterns are now the whole write half of the
+CLI surface this repo touches and every `secrets.` reference.
+
+`--selftest` carries all four as probe lines and requires 5 of 5 hits on each pattern, so the guard
+proves it can see them before it judges anything. Re-run against the two real files it protects:
+both still `ok`.
+
+### What is still open, and is stated rather than fixed
+
+**It is not transitive.** The guard reads the workflow; it does not open the scripts a workflow
+invokes. `run: ./scripts/anything.sh` is unexamined, so read-only-ness stops at the YAML. Making it
+transitive means resolving arbitrary shell, which is a different piece of work; until somebody does
+it, the honest reading of a green result is *"this workflow file cannot deploy"*, not *"this job
+cannot deploy"*.
+
+---
+
+<a id="e-95"></a>
+### E-95 — high — the CI frontend job cannot succeed, so main's pipeline is permanently red — STATUS: FIXED (wave 13)
+
+Two things landed in different waves and were never run against each other.
+
+`.github/workflows/ci.yml`, before:
+
+```yaml
+      - name: Build frontend (declarations are committed under src/declarations)
+        run: npm --workspace src/cleardeck_frontend run build
+        env:
+          DFX_NETWORK: ic
+          # Placeholder IDs: the bundle resolves real IDs at deploy time from .env.
+          VITE_CANISTER_ID_LOBBY: aaaaa-aa
+          VITE_CANISTER_ID_HISTORY: aaaaa-aa
+```
+
+`src/cleardeck_frontend/vite.config.js`, after the mainnet-id cross-check landed — the mirror of
+[T-01](#t-01), added so a bundle that says MAINNET cannot talk to a canister nobody named:
+
+```text
+Error: ABORT: building for MAINNET, but the canister ids do not match the roles in
+.icp/data/mappings/ic.ids.json:
+  LOBBY=aaaaa-aa but .icp/data/mappings/ic.ids.json says lobby=kpfcd-…-cai
+  HISTORY=aaaaa-aa but .icp/data/mappings/ic.ids.json says history=kggj7-…-cai
+```
+
+Reproduced by running the job's exact command locally. **A placeholder id can never satisfy that
+check**, so the job cannot pass, and it has not: main's last CI runs failed on `Build frontend`.
+
+### Why it is `high` and not `medium`
+
+Because of what was merged on top of it. [H-23](#h-23) put the fund-safety suites into this same
+pipeline in this same wave — the suites whose whole purpose is that somebody looks when they go red.
+**They arrived on a pipeline that was already red, where a new red is indistinguishable from the old
+one**, and where nothing is a required status check ([H-23](#h-23)'s own correction). A gate nobody
+reads is [H-45](#h-45) with a green tick instead of a missing target.
+
+### The fix
+
+`npm --workspace src/cleardeck_frontend run build:mainnet`, with **no** `DFX_NETWORK` in the step's
+environment. That script is the one named mainnet path: it reads the ids from the tracked mapping
+rather than being handed them, refuses a contradictory ambient `DFX_NETWORK` as a hard error, and
+runs `verifyBundle` before exiting 0, deleting `dist` if verification fails. Run locally on this
+tree: build succeeded, **8 of 8 bundle checks passed**, and the local dist was rebuilt afterwards
+because both paths write to the same directory.

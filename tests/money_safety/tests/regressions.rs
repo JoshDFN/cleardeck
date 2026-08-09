@@ -915,6 +915,174 @@ fn reg06_admin_reinit_table_returns_every_seated_chip_to_its_owner() {
 }
 
 // ---------------------------------------------------------------------------
+// REG-39 -- E-41 / FINDING 39: THE CANISTER OWED MONEY IT DID NOT HOLD
+// ---------------------------------------------------------------------------
+
+/// One ordinary heads-up hand, then five ordinary player calls, and the canister
+/// owes 4,000,000 e8s it does not hold.
+///
+/// # The story, which is the whole point of this test
+///
+/// alice and bob sit down and play one limped hand, checked to a showdown. The
+/// winner is paid and `finish_hand` closes it: `pot = 0`, departed stakes cleared,
+/// `phase = HandComplete`, action clock off. What `finish_hand` does NOT clear is
+/// `total_bet_this_hand`, because that is the RECORD of what the hand collected and
+/// three instruments read it afterwards; only `start_new_hand` clears it. So the
+/// table now sits on a COMPLETE PAYOUT BASIS over an EMPTY POT.
+///
+/// Then, on the build this test was written against:
+///
+///  1. whoever the now-meaningless `action_on` pointer names calls `use_time_bank()`.
+///     That method asked only "is the pointer at you" and never "is there a hand",
+///     so it ARMED A FRESH ACTION CLOCK on a table with no hand in progress. It was
+///     the only place in the file that could.
+///  2. one seat sits out, so fewer than two seats will be dealt in and
+///     `advance_table_clock` stops short-circuiting on auto-deal.
+///  3. thirty-one seconds pass and any tick -- the on-chain clock, or any player's
+///     `check_timeouts` -- reaches `resolve_expired_action_timer`, which folds that
+///     seat out of the hand it has already been paid for and calls `advance_game`.
+///  4. `advance_game` had no phase guard. `count_active_players` is now 1, because
+///     the other seat still holds the cards it was dealt, so it calls
+///     `end_hand_single_winner` on the finished hand.
+///  5. `plan_payouts` reads the basis that is still standing, "collects" 4,000,000
+///     and pays it out a second time. `plan.conserves()` is TRUE -- awarded equals
+///     the plan's own collected -- so `apply_payouts` does not trap. 4,000,000 e8s
+///     of chips are credited that no player ever put in and the ledger never
+///     received.
+///
+/// The engine said so, once, and carried on:
+/// `CRITICAL: pot accounting disagreement in hand 1: state.pot = 0 but the
+/// contributions (including 0 departed stake(s)) sum to 4000000.`
+///
+/// Filed as [E-41] in wave 4 from a 400-step two-seed fuzz run, never root-caused;
+/// this is the same defect in one hand and five calls.
+#[test]
+fn reg39_a_settled_hand_is_never_settled_a_second_time() {
+    let mut world = World::new(TableConfig::heads_up_icp(), &["alice", "bob"]);
+    let alice = world.actor("alice");
+    let bob = world.actor("bob");
+
+    for (i, who) in [alice, bob].into_iter().enumerate() {
+        world.fund_escrow(who, 6 * ICP).expect("deposit");
+        world.join_table(who, i as u8).expect("seat");
+    }
+    world.advance(Duration::from_secs(4));
+    world.start_new_hand(alice).expect("deal");
+
+    // Limp and check it down: both seats reach the showdown still holding cards,
+    // which is what makes `count_active_players` read 2 after the hand is over.
+    for _ in 0..24 {
+        let t = world.table_state();
+        if !t.phase.hand_in_progress() {
+            break;
+        }
+        let who = on_clock(&t);
+        if world.player_action(who, PlayerAction::Check).is_ok() {
+            continue;
+        }
+        if world.player_action(who, PlayerAction::Call).is_ok() {
+            continue;
+        }
+        break;
+    }
+
+    let settled = world.table_state();
+    assert_eq!(
+        settled.phase,
+        GamePhase::HandComplete,
+        "the hand must have been played out and paid"
+    );
+    assert_eq!(settled.pot, 0, "finish_hand empties the pot");
+    let basis: u64 = settled
+        .players
+        .iter()
+        .flatten()
+        .fold(0u64, |a, p| a.saturating_add(p.total_bet_this_hand));
+    assert_eq!(
+        basis, 4_000_000,
+        "and leaves the payout basis standing: 1,000,000 + 1,000,000 completing the small \
+         blind, plus the 2,000,000 big blind. THIS is the money E-41 pays out a second time."
+    );
+
+    let before = world.snapshot();
+    assert!(
+        before.internal_total() <= before.ledger_holdings(),
+        "sanity: the canister is solvent before the sequence"
+    );
+
+    // 1. THE DOOR. `use_time_bank` must refuse: there is no clock to extend.
+    let pointer_names = settled
+        .players
+        .get(settled.action_on as usize)
+        .and_then(|p| p.as_ref())
+        .map(|p| p.principal)
+        .expect("action_on still points at an occupied seat between hands");
+    let armed = world.use_time_bank(pointer_names);
+    let refusal = format!("{armed:?}");
+    assert!(
+        armed.is_err(),
+        "PINNED FIX (E-41 / FINDING 39): use_time_bank ARMED AN ACTION CLOCK on a table with \
+         no hand in progress. That clock is the only way into the double settlement below, and \
+         it is a call any seated player may make. Got {refusal}"
+    );
+    assert!(
+        refusal.contains("no hand in progress"),
+        "the refusal must say WHY, so a player does not read it as a bug and retry. Got {refusal}"
+    );
+    assert!(
+        world.table_state().action_timer.is_none(),
+        "and it must leave no clock behind: {:?}",
+        world.table_state().action_timer
+    );
+
+    // 2..4. Drive the rest of the sequence anyway, so that if the door is ever
+    // reopened the money statement below is what convicts it.
+    world.sit_out(if pointer_names == alice { bob } else { alice }).ok();
+    world.advance(Duration::from_secs(31));
+    world.check_timeouts(alice).expect("check_timeouts");
+    world.advance(Duration::from_secs(31));
+    world.check_timeouts(bob).expect("check_timeouts");
+
+    // 5. THE MONEY.
+    let after = world.snapshot();
+    assert_eq!(
+        after.internal_total(),
+        before.internal_total(),
+        "PINNED FIX (E-41 / FINDING 39): the canister settled hand {} a SECOND time and created \
+         {basis} e8s of chips out of nothing. M1 CONSERVATION.",
+        settled.hand_number
+    );
+    assert!(
+        after.internal_total() <= after.ledger_holdings(),
+        "PINNED FIX (E-41 / FINDING 39): M2 LEDGER REALITY. The canister owes {} and the LEDGER \
+         says it holds {}. It is short {} e8s: somebody's withdrawal is going to fail, and it \
+         will be whoever asks last.",
+        after.internal_total(),
+        after.ledger_holdings(),
+        after.internal_total() as i128 - after.ledger_holdings() as i128
+    );
+
+    // THE ENGINE'S OWN TESTIMONY. It reported the disagreement and settled anyway;
+    // a run in which this line appears is a run in which the books disagreed.
+    let logs = world.new_canister_logs();
+    let critical: Vec<&String> = logs
+        .iter()
+        .filter(|l| l.contains("pot accounting disagreement"))
+        .collect();
+    assert!(
+        critical.is_empty(),
+        "PINNED FIX (E-41 / FINDING 39): the canister reported its own accounts disagreeing and \
+         paid out of them anyway: {critical:?}"
+    );
+
+    let vs = check_world(&world);
+    assert!(
+        vs.is_empty(),
+        "no money invariant may fire after this sequence. Got: {vs:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
 

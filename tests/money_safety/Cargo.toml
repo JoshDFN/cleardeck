@@ -151,3 +151,15 @@ path = "tests/deposit_subaccount_anchor.rs"
 [[test]]
 name = "controller_custody"
 path = "tests/controller_custody.rs"
+
+# HOW LONG BEFORE A CANISTER STOPS HONOURING WITHDRAWALS (docs/DEFECTS.md E-55,
+# docs/SECURITY-FINDINGS.md FINDING 24 and 26). Named explicitly for the reason
+# `admin_custody` and `solvency` are: an auto-discovered target is a target no
+# human ever types, and this one carries the only measurement in the tree of what
+# a table costs to run UNDER LOAD -- the idle figure in `timers` is the number for
+# a table nobody is using, and it is 11x too optimistic. It also holds the port of
+# FINDING 24's probe, which that finding says belongs in the tree and which
+# nothing had executed here. Named by `scripts/dev.sh test` in the same change.
+[[test]]
+name = "cycles_runway"
+path = "tests/cycles_runway.rs"

@@ -17,14 +17,59 @@ use super::{phase_of, Invariant, Severity, Violation};
 // M3 -- no rake, over a hand
 // ---------------------------------------------------------------------------
 
+/// **DID MONEY CROSS THE CANISTER'S BOUNDARY BETWEEN THESE TWO OBSERVATIONS?**
+///
+/// [`check_no_rake`] is only meaningful over a window in which nothing external
+/// moved money, and this is the test for that. It has to be asked of the SAME set
+/// of accounts [`Snapshot::internal_total`] is built from, or the two sides of the
+/// equation are drawn from different worlds.
+///
+/// # Why this is not `ledger_main`, which is what it used to be
+///
+/// The canister owns **two** classes of ledger account: its main account, and one
+/// published deposit subaccount per principal. `internal_total()` has counted the
+/// second class since wave 8 (`canister_unswept_deposits`, added because a canister
+/// holding 5 ICP for a player at an address it had published to them reported that
+/// it owed nobody anything -- FINDING 21 / FINDING 28). The window guard was never
+/// updated with it, so it went on asking only about the MAIN account.
+///
+/// The consequence is a **false conviction**, and it was filed as a real one. A
+/// third party pays 10,000 e8s into their own published deposit address while a
+/// hand is running. `ledger_main` does not move -- the money is in a subaccount --
+/// so the window was admitted; `canister_unswept_deposits` does move, so
+/// `internal_total` grew by 10,000 across the hand; and M3 reported
+/// `FundCreation`, *"value at the table changed across a hand with no external
+/// money movement"*, about 10,000 e8s that had just arrived from outside. That is
+/// [FINDING 44](../../../../docs/SECURITY-FINDINGS.md), and its 7-op minimal
+/// reproducer is literally `ExternalDepositThenClaim { amount: 10_000 }` inside a
+/// hand. It reproduces identically on the wave-12 canister, so it was never a
+/// canister defect at all.
+///
+/// An instrument that convicts the innocent is not a safe instrument: the register
+/// gained a `high` fund-creation finding against a module that had not created
+/// anything, and a real red in the same row now has to be told apart from it.
+///
+/// # What this costs
+///
+/// Windows in which subaccount money moved are now SKIPPED by M3 rather than
+/// mis-decided, exactly as windows in which main-account money moved always were.
+/// A genuine chip creation that happened to coincide with a deposit is therefore
+/// not seen *by M3* in that window -- it is still seen by M1 conservation, M8
+/// attribution, M9 reachability, M11 outcome and the settlement oracle, none of
+/// which are gated on this predicate.
+pub fn external_money_moved(before: &Snapshot, after: &Snapshot) -> bool {
+    before.ledger_holdings() != after.ledger_holdings()
+}
+
 /// M3 NO RAKE, measured over a completed hand.
 ///
 /// `before` must be taken with the table idle (`WaitingForPlayers` or
 /// `HandComplete`, pot 0) and `after` once the next `HandComplete` is reached,
-/// with no deposit / withdraw / buy-in / cash-out in between. Under those
-/// conditions the total value at the table cannot change: the pot is chips taken
-/// out of stacks and handed back to stacks. Any change is the house taking (or
-/// giving) something.
+/// with no deposit / withdraw / buy-in / cash-out in between -- which is
+/// [`external_money_moved`]'s question, and asking it of the wrong accounts is
+/// FINDING 44. Under those conditions the total value at the table cannot change:
+/// the pot is chips taken out of stacks and handed back to stacks. Any change is
+/// the house taking (or giving) something.
 pub fn check_no_rake(before: &Snapshot, after: &Snapshot) -> Vec<Violation> {
     let mut out = Vec::new();
     let b = before.internal_total();
