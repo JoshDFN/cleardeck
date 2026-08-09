@@ -66,6 +66,14 @@ pub const MONEY_DOORS: &[&str] = &[
     "cash_out",
     "withdraw",
     "abandon_stuck_hand",
+    // The two doors out of a DEPOSIT SUBACCOUNT, which is the second kind of
+    // ledger account this canister owns. `claim_external_deposit` reaches only
+    // what it will sweep -- at or above `minimum_deposit` -- and for the whole
+    // band between the ledger fee and that floor `refund_external_deposit` is
+    // the only door there is (docs/SECURITY-FINDINGS.md FINDING 31,
+    // docs/DEFECTS.md E-89).
+    "claim_external_deposit",
+    "refund_external_deposit",
 ];
 
 /// Did this op run the settlement path?
@@ -174,6 +182,19 @@ pub struct DrainReport {
     pub uncredited_raw: u64,
     /// Ledger money each actor gained, net of transfer fees.
     pub returned_to_wallets: BTreeMap<Principal, u64>,
+    /// **WHAT IS LEFT, PER ACCOUNT.** `owed_after` is a total, and a total is the
+    /// wrong shape to compare against a floor that exists per account: see
+    /// [`check_drain`]. These four fields are that total's decomposition, taken
+    /// from the same final snapshot.
+    ///
+    /// Escrow, by principal (`admin_get_all_balances`).
+    pub escrow_after: BTreeMap<Principal, u64>,
+    /// What the CANISTER says is at each deposit subaccount it owns.
+    pub deposit_custody_after: BTreeMap<Principal, u64>,
+    /// Chips still in seats.
+    pub chips_after: u64,
+    /// Whatever is still in the pot.
+    pub pot_after: u64,
     /// Calls the drain had to make, in order, for the transcript.
     pub log: Vec<String>,
 }
@@ -235,6 +256,69 @@ impl DrainReport {
         self.orphaned_e8s() <= ORPHAN_TOLERANCE_E8S
     }
 
+    /// **MONEY THE LEDGER COULD STILL MOVE, AND THE DRAIN COULD NOT.**
+    ///
+    /// This is the number [`check_drain`] convicts on, and it replaces comparing
+    /// `owed_after` against a single 20,000-e8 constant.
+    ///
+    /// # Why the constant was the wrong shape (docs/DEFECTS.md E-89)
+    ///
+    /// `UNMOVABLE_DUST_E8S` was documented as *"`Currency::ICP.min_withdrawal()`
+    /// in the canister, plus one fee"* -- **a per-account floor** -- and it was
+    /// compared against the AGGREGATE owed across every account. One player
+    /// stranded with 19,999 e8s was silently tolerated; two players stranded with
+    /// 10,001 each were a finding. The verdict depended on how many seats happened
+    /// to be holding dead-band dust rather than on whether any of it was
+    /// recoverable, and at 9-max the same defect can strand nine times as much and
+    /// still pass.
+    ///
+    /// # The rule that replaces it
+    ///
+    /// After every legal exit has been driven to exhaustion, the only money that
+    /// may still be owed is money **the ledger itself cannot move**, and that is a
+    /// fact about ONE ACCOUNT at a time: a transfer of any positive amount costs
+    /// `fee`, so a balance at or below `fee` cannot produce a delivery, and no
+    /// version of this canister can change that (docs/SECURITY-FINDINGS.md
+    /// FINDING 11). So, per account:
+    ///
+    /// * an escrow row above the fee is stranded -- `withdraw`'s whole-balance
+    ///   sweep exists precisely to move it;
+    /// * a deposit subaccount above the fee is stranded -- `claim_external_deposit`
+    ///   sweeps it or `refund_external_deposit` sends it home;
+    /// * **chips and the pot count in full at any size.** There is no ledger-fee
+    ///   argument for a chip stack: `cash_out` turns it into escrow with no
+    ///   transfer at all.
+    ///
+    /// Nothing here is excused by how many accounts are involved.
+    pub fn stranded_e8s(&self) -> u64 {
+        self.stranded_breakdown()
+            .iter()
+            .fold(0u64, |acc, (_, v)| acc.saturating_add(*v))
+    }
+
+    /// The same figure, itemised, so the violation message names the accounts
+    /// rather than a total nobody can act on.
+    pub fn stranded_breakdown(&self) -> Vec<(String, u64)> {
+        let mut out: Vec<(String, u64)> = Vec::new();
+        for (who, amount) in &self.escrow_after {
+            if *amount > LEDGER_FEE_E8S {
+                out.push((format!("escrow of {who}"), *amount));
+            }
+        }
+        for (who, amount) in &self.deposit_custody_after {
+            if *amount > LEDGER_FEE_E8S {
+                out.push((format!("deposit address of {who}"), *amount));
+            }
+        }
+        if self.chips_after > 0 {
+            out.push(("chips still in seats".to_string(), self.chips_after));
+        }
+        if self.pot_after > 0 {
+            out.push(("the pot".to_string(), self.pot_after));
+        }
+        out
+    }
+
     /// The honest end-state: the canister neither claims to owe anything nor holds
     /// anything it cannot name an owner for.
     ///
@@ -256,6 +340,16 @@ impl DrainReport {
 /// and cannot move (FINDING 11 / E-12); this is about money it owes to nobody, and
 /// no economic floor makes that acceptable.
 pub const ORPHAN_TOLERANCE_E8S: u64 = 0;
+
+/// The ICP ledger's own transfer fee, which is the ONE floor in this file that is
+/// not a policy choice.
+///
+/// A transfer of any positive amount costs this, so an account holding this much
+/// or less can deliver nothing to anybody. It is used PER ACCOUNT in
+/// [`DrainReport::stranded_e8s`]; the constant it replaced was per account in its
+/// doc comment and per canister in its use, which is docs/DEFECTS.md E-89's second
+/// defect.
+pub const LEDGER_FEE_E8S: u64 = crate::ledger::TRANSFER_FEE;
 
 /// THE CONSTRUCTIVE CHECK. Take everybody's money out and see whether it arrives.
 ///
@@ -281,14 +375,30 @@ pub const ORPHAN_TOLERANCE_E8S: u64 = 0;
 /// transcript and reported `table_is_really_empty`. So the drain makes the
 /// canister LOOK before it is allowed to conclude anything
 /// (docs/SECURITY-FINDINGS.md FINDING 28).
-/// Make the canister READ every actor's deposit address, then sweep whatever is
-/// there into escrow.
+/// Make the canister READ every actor's deposit address, then take the money out
+/// of it by whichever of the two doors will open.
 ///
-/// Both calls are player-callable with no privilege check, so they belong in a
-/// drain exactly as `cash_out` does. `refresh_deposit_custody` runs even when
+/// All three calls are player-callable with no privilege check, so they belong in
+/// a drain exactly as `cash_out` does. `refresh_deposit_custody` runs even when
 /// there is nothing to sweep, because the drain's verdict is "this canister holds
 /// nothing that belongs to anybody" and a canister that has not looked at an
 /// account it published cannot support that sentence.
+///
+/// # Why the refund is tried, and tried SECOND
+///
+/// `claim_external_deposit` refuses everything below `minimum_deposit`, because
+/// crediting it would put an escrow balance in the books that `withdraw` can
+/// never pay out. For the whole band from one ledger fee up to that floor the
+/// sweep is not a door at all, and a drain that only knocks on it concludes the
+/// money is unreachable while a method that would move it goes uncalled. That is
+/// docs/DEFECTS.md E-89 in the instrument rather than in the canister: the
+/// transcript printed `sweepable=true` beside 20,002 e8s that `claim` had just
+/// declined.
+///
+/// Second, not first, because a sweep is the outcome the player asked for -- the
+/// money ends up in escrow, ready to play -- and the refund is the fallback that
+/// ends the relationship. Trying the refund first would take a legitimate deposit
+/// back out of the table.
 fn sweep_deposit_addresses(
     world: &mut World,
     actors: &[Principal],
@@ -301,15 +411,35 @@ fn sweep_deposit_addresses(
                 log.push(format!("{stage}: refresh_deposit_custody TRAPPED: {m}"))
             }
             Ok(c) if c.observed_amount > 0 => log.push(format!(
-                "{stage}: deposit address of {who} holds {} (sweepable={})",
-                c.observed_amount, c.sweepable
+                "{stage}: deposit address of {who} holds {} (sweepable={}, refundable={}, \
+                 minimum={})",
+                c.observed_amount, c.sweepable, c.refundable, c.minimum_deposit
             )),
             _ => {}
         }
-        match world.claim_external_deposit(*who) {
-            Ok(n) => log.push(format!("{stage}: claim_external_deposit -> escrow {n}")),
+        let swept = match world.claim_external_deposit(*who) {
+            Ok(n) => {
+                log.push(format!("{stage}: claim_external_deposit -> escrow {n}"));
+                true
+            }
             Err(OpError::Trap(m)) => {
-                log.push(format!("{stage}: claim_external_deposit TRAPPED: {m}"))
+                log.push(format!("{stage}: claim_external_deposit TRAPPED: {m}"));
+                false
+            }
+            Err(OpError::Err(_)) => false,
+        };
+        if swept {
+            continue;
+        }
+        match world.refund_external_deposit(*who) {
+            Ok(block) => log.push(format!(
+                "{stage}: refund_external_deposit -> ledger block {block}"
+            )),
+            // A build with no such method rejects the call. Logged rather than
+            // swallowed: "this canister has no way to give the money back" is
+            // the finding, and the drain's verdict below is what convicts it.
+            Err(OpError::Trap(m)) => {
+                log.push(format!("{stage}: refund_external_deposit TRAPPED: {m}"))
             }
             Err(OpError::Err(_)) => {}
         }
@@ -376,9 +506,19 @@ pub fn drain(world: &mut World) -> DrainReport {
         }
         // Escrow out to the ledger. The withdrawal cooldown is one per actor per
         // 60 s, and the loop advances 400 s per round, so one call each is right.
+        //
+        // THE THRESHOLD IS THE CANISTER'S, NOT A CONSTANT OF THIS FILE. `withdraw`
+        // waives its policy minimum for a whole-balance sweep -- `sweeping_whole_balance
+        // = amount == balance_now && amount > transfer_fee` -- so anything above ONE
+        // fee is payable, and `bal` is always the whole balance here. This used to
+        // read `> 20_000`, the old `min_withdrawal + fee`, while `stranded_e8s()`
+        // convicts every account above one fee: the gap `(fee, 2*fee]` was money the
+        // drain never asked for and then reported as unreachable. A drain that knocks
+        // on fewer doors than the canister opens does not measure reachability, it
+        // measures its own loop.
         for who in &actors {
             let bal = world.get_balance(*who);
-            if bal > 20_000 {
+            if bal > LEDGER_FEE_E8S {
                 match world.withdraw(*who, bal) {
                     Ok(n) => log.push(format!("round {round}: withdraw {bal} -> balance {n}")),
                     Err(OpError::Trap(m)) => {
@@ -411,6 +551,10 @@ pub fn drain(world: &mut World) -> DrainReport {
         ledger_deposit_subaccounts_after: after.ledger_deposit_subaccounts,
         uncredited_raw: crate::invariants::Exemptions::of(world).total(),
         returned_to_wallets: returned,
+        escrow_after: after.escrow.clone(),
+        deposit_custody_after: after.canister_deposit_by_principal.clone(),
+        chips_after: after.chips_total,
+        pot_after: after.table.pot,
         log,
     }
 }
@@ -469,24 +613,37 @@ pub fn check_no_orphaned_custody(
 /// economic floor, it is documented as FINDING 11 / E-12, and no amount of
 /// engineering makes an amount smaller than the transfer fee movable.
 pub fn check_drain(report: &DrainReport, phase: &crate::table_api::GamePhase) -> Vec<Violation> {
-    /// `Currency::ICP.min_withdrawal()` in the canister, plus one fee. Below this
-    /// the ledger itself refuses.
-    const UNMOVABLE_DUST_E8S: u64 = 20_000;
     let mut out = Vec::new();
 
-    if report.owed_after > UNMOVABLE_DUST_E8S {
+    // PER ACCOUNT, AGAINST THE LEDGER'S OWN FEE. See
+    // [`DrainReport::stranded_e8s`] for what this replaced and why a single
+    // aggregate constant made the verdict depend on seat count (docs/DEFECTS.md
+    // E-89).
+    let stranded = report.stranded_e8s();
+    if stranded > 0 {
+        let breakdown = report
+            .stranded_breakdown()
+            .iter()
+            .map(|(what, amount)| format!("{amount} e8s in {what}"))
+            .collect::<Vec<_>>()
+            .join("; ");
         out.push(Violation::new(
             Invariant::M9FundReachability,
             "money_left_behind_after_drain",
             Severity::FundsUnreachable,
-            report.owed_after as i128,
+            stranded as i128,
             phase,
             format!(
                 "after every legal player-side exit was driven to exhaustion, the canister still \
-                 owes {} of the {} e8s it started with, and no player call can move it. Drain \
-                 transcript:\n  {}",
+                 owes {} of the {} e8s it started with, and {} of that is in accounts the LEDGER \
+                 could still move: {}. Anything at or below the {} e8 ledger fee is excused \
+                 because no transfer can deliver it (docs/SECURITY-FINDINGS.md FINDING 11); this \
+                 is not that. Drain transcript:\n  {}",
                 report.owed_after,
                 report.owed_before,
+                stranded,
+                breakdown,
+                LEDGER_FEE_E8S,
                 report.log.join("\n  ")
             ),
         ));

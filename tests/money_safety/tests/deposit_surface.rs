@@ -697,33 +697,36 @@ fn the_oisy_transfer_destination_is_derived_locally_and_not_fetched() {
     );
 }
 
-/// **RED ON PURPOSE.** The public solvency instrument calls the money at the
-/// shared main account a SURPLUS, in the same reply that names it as unattributed.
+/// **CLOSED IN WAVE 14, AND NO LONGER `#[ignore]`d.** Money at the shared main
+/// account is a LIABILITY, and the public solvency instrument says so.
 ///
-/// docs/SECURITY-FINDINGS.md FINDING 43. `#[ignore]`d for the reason
-/// `dev.sh known-defects` exists: a suite that is red by design teaches everyone
-/// to ignore red. Run it deliberately:
+/// docs/SECURITY-FINDINGS.md FINDING 43. This was committed red-on-purpose and
+/// ignored for one wave, for the reason `dev.sh known-defects` exists: a suite
+/// that is red by design teaches everyone to ignore red. It is an ordinary gate
+/// now and it runs in the default suite:
 ///
 /// ```text
 /// cd tests/money_safety
-/// cargo test --test deposit_surface -- --ignored --nocapture \
+/// cargo test --test deposit_surface -- --nocapture \
 ///   the_solvency_verdict_counts_money_at_the_main_account_as_surplus
 /// ```
 ///
-/// # The two totals
+/// # The two totals, and the one that replaced them
 ///
-/// `total_liability()` -- the number the currency guard reads -- has five terms
-/// and the fifth is `main_uncredited_observed()` (FINDING 35). `get_solvency()`'s
-/// own `owed` has six terms and that is not one of them, while `held` DOES
-/// include the main-account balance. So the same e8 is counted as an asset and
-/// not as a liability, and the difference is reported as surplus. The report even
-/// carries both numbers: `guard_liability` and `owed`, side by side, disagreeing.
+/// `total_liability()` -- the number the currency guard reads -- had five terms
+/// and the fifth was `main_uncredited_observed()` (FINDING 35). `get_solvency()`'s
+/// own `owed` had six terms and that was not one of them, while `held` DID
+/// include the main-account balance. So the same e8 was counted as an asset and
+/// not as a liability, and the difference was reported as surplus. The report even
+/// carried both numbers -- `guard_liability` and `owed`, side by side, disagreeing.
+///
+/// There is one definition now and `owed` IS `guard_liability`, the same call.
+/// Reverting either half turns this red: `owed` loses the main-account residual
+/// and the difference goes to +1 ICP.
 ///
 /// This is the money FINDING 34's shared address collected for eleven waves, and
 /// there is ICP at that account on mainnet today.
 #[test]
-#[ignore = "RED ON PURPOSE: docs/SECURITY-FINDINGS.md FINDING 43, the solvency verdict omits \
-            main-account liability. Run with --ignored."]
 fn the_solvency_verdict_counts_money_at_the_main_account_as_surplus() {
     let mut world = World::new(TableConfig::six_max_icp(), &["alice"]);
     let alice = world.actor("alice");
@@ -764,10 +767,29 @@ fn the_solvency_verdict_counts_money_at_the_main_account_as_surplus() {
         report.unattributed_at_main
     );
     assert_eq!(
+        report.owed, report.guard_liability,
+        "ONE DEFINITION. `owed` and `guard_liability` are one call to total_liability(), \
+         not two sums that are expected to differ in a documented way -- that expectation \
+         is what let this ship. owed={} guard_liability={}",
+        report.owed, report.guard_liability
+    );
+    assert_eq!(
         report.difference_e8s,
         Some(0),
-        "and so a canister holding exactly what it owes reports a surplus of the \
-         player's own money"
+        "a canister holding exactly what it owes has a difference of ZERO. Before wave 14 \
+         this read +1 ICP and the summary called a player's own money a surplus."
+    );
+    assert!(
+        !report.summary.contains("a surplus of"),
+        "and the sentence a player reads on the deposit screen must not call it profit: {}",
+        report.summary
+    );
+    assert!(
+        report.summary.contains("100000000") && report.summary.contains("cannot yet name"),
+        "it must NAME the unattributed 1 ICP in words. Publishing the number in a field \
+         nobody reads, three fields above calling the same money a surplus, is exactly what \
+         FINDING 43 was. summary = {}",
+        report.summary
     );
 }
 

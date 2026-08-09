@@ -1,0 +1,25 @@
+{
+  "measured_at": "2026-08-09T16:40:11.266Z",
+  "host": "http://localhost:8077",
+  "canister": "4xhad-gd777-77775-aaacq-cai",
+  "seconds": 120,
+  "settle": 12,
+  "runs": [
+    {
+      "tabs": 3,
+      "mode": "fixed",
+      "elapsed_s": 132,
+      "cycles_spent": "325093159",
+      "burn_per_day": 212765683470,
+      "burn_per_day_T": 0.2128,
+      "clock_ticks": 5,
+      "calls": {
+        "heartbeat": 36,
+        "get_balance": 72,
+        "get_table_view": 720,
+        "get_shuffle_proof": 720
+      },
+      "update_calls": 36
+    }
+  ]
+}

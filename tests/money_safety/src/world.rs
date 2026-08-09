@@ -572,6 +572,27 @@ impl World {
         out
     }
 
+    /// `refund_external_deposit`: send what is at the caller's own deposit
+    /// address back to the caller's own wallet, less one ledger fee.
+    ///
+    /// The second door out of a deposit subaccount, and the only one that reaches
+    /// the band between the ledger fee and `minimum_deposit`
+    /// (docs/SECURITY-FINDINGS.md FINDING 31, docs/DEFECTS.md E-89). Like
+    /// `claim_external_deposit` it asks the ledger before deciding anything, so
+    /// **whatever the outcome the canister has now looked** and the harness's
+    /// allowance for that actor is spent -- Err included.
+    ///
+    /// On a build where the method does not exist the call is REJECTED, which
+    /// arrives as `OpError::Trap`. That is deliberate and it is what makes a test
+    /// written against this able to convict the build that lacks the door.
+    pub fn refund_external_deposit(&mut self, who: Principal) -> Outcome<u64> {
+        let out = self.update_result(who, "refund_external_deposit", Encode!().unwrap());
+        if !matches!(out, Err(OpError::Trap(_))) {
+            self.unobserved_subaccount_deposits.remove(&who);
+        }
+        out
+    }
+
     /// `refresh_deposit_custody`: ask the ledger what is at the caller's deposit
     /// address and write it into the canister's books. Moves no money.
     pub fn refresh_deposit_custody(&mut self, who: Principal) -> Outcome<DepositAddressCustody> {

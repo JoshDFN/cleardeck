@@ -934,6 +934,15 @@ fn a_drain_report_that_says_fully_drained_is_not_enough() {
         ledger_deposit_subaccounts_after: 0,
         uncredited_raw: 0,
         returned_to_wallets: BTreeMap::new(),
+        // The decomposition of `owed_after`, which is zero here: that is the
+        // whole point of this state. Nothing is owed and 4 ICP is held, so the
+        // per-account stranded check is silent and only the LEDGER-anchored leg
+        // convicts (docs/DEFECTS.md E-89 made the first leg per-account; this
+        // test is why the second leg has to exist at all).
+        escrow_after: BTreeMap::new(),
+        deposit_custody_after: BTreeMap::new(),
+        chips_after: 0,
+        pot_after: 0,
         log: vec!["reset_table -> Ok".to_string()],
     };
     assert!(

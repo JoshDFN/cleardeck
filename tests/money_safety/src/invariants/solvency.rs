@@ -147,13 +147,20 @@ pub fn check_solvency_report_is_coherent(snap: &Snapshot) -> Vec<Violation> {
     // The terms must add up to the total the verdict is computed from. If they do
     // not, one of them is not in the sum and the whole point of publishing the
     // terms separately is gone.
+    //
+    // `unattributed_at_main` IS ONE OF THE TERMS, and it is docs/SECURITY-FINDINGS.md
+    // FINDING 43: it was published in the report, counted in `total_liability()`,
+    // and in no term of `owed`, so the same e8s at the shared main account were an
+    // asset on the held side and a liability nowhere. This leg was silent on it
+    // because it summed exactly the six terms the canister summed.
     let term_sum = r
         .escrow
         .saturating_add(r.chips_at_table)
         .saturating_add(r.pot.max(r.committed_stake))
         .saturating_add(r.unswept_deposits)
         .saturating_add(r.unfinished_incoming)
-        .saturating_add(r.payouts_in_flight);
+        .saturating_add(r.payouts_in_flight)
+        .saturating_add(r.unattributed_at_main.unwrap_or(0));
     if term_sum != r.owed {
         out.push(Violation::new(
             Invariant::M2LedgerReality,
@@ -164,9 +171,10 @@ pub fn check_solvency_report_is_coherent(snap: &Snapshot) -> Vec<Violation> {
             format!(
                 "get_solvency() reports owed={} and its own published terms sum to {} \
                  (escrow {} + chips {} + max(pot {}, committed {}) + unswept {} + \
-                 unfinished_incoming {} + payouts_in_flight {}). A term that is in the total \
-                 and not in the breakdown is a term no reader can audit, which is the shape \
-                 of docs/SECURITY-FINDINGS.md FINDING 37.",
+                 unfinished_incoming {} + payouts_in_flight {} + unattributed_at_main {:?}). \
+                 A term that is in the total and not in the breakdown is a term no reader can \
+                 audit, which is the shape of docs/SECURITY-FINDINGS.md FINDING 37; a term in \
+                 the breakdown and not in the total is FINDING 43.",
                 r.owed,
                 term_sum,
                 r.escrow,
@@ -175,38 +183,81 @@ pub fn check_solvency_report_is_coherent(snap: &Snapshot) -> Vec<Violation> {
                 r.committed_stake,
                 r.unswept_deposits,
                 r.unfinished_incoming,
-                r.payouts_in_flight
+                r.payouts_in_flight,
+                r.unattributed_at_main
             ),
         ));
     }
 
-    // THE GUARD'S NUMBER. `guard_liability` is `total_liability()`, the single
-    // input to `refuse_currency_change_while_funded`, and the relation below is
-    // the whole of what makes the report and the guard the same instrument:
+    // THE GUARD'S NUMBER, AND IT IS THE INSTRUMENT'S NUMBER.
     //
-    //   total_liability() = owed - payouts_in_flight + unattributed_at_main
+    // `guard_liability` is `total_liability()`, the single input to
+    // `refuse_currency_change_while_funded`; `owed` is what the verdict and the
+    // player-facing summary are computed from. **They are one call now, and this
+    // leg is what keeps them one.**
     //
-    // (a payout is money leaving and is not in the guard's sum; money at the main
-    // account that nobody is credited with IS, and that fifth term is FINDING 35's
-    // own prescription.)
-    let expected_guard = r
-        .owed
-        .saturating_sub(r.payouts_in_flight)
-        .saturating_add(r.unattributed_at_main.unwrap_or(0));
-    if r.guard_liability != expected_guard {
+    // This used to assert a RELATION between two different sums --
+    // `guard = owed - payouts_in_flight + unattributed_at_main` -- which is a
+    // check that two totals of one liability differ in the expected way. It
+    // passed for two waves while the public report was, by exactly that relation,
+    // reporting a player's money at the shared main account as a SURPLUS
+    // (docs/SECURITY-FINDINGS.md FINDING 43).
+    if r.guard_liability != r.owed {
         out.push(Violation::new(
             Invariant::M2LedgerReality,
             "guard_liability_disagrees_with_the_published_terms",
             Severity::InsolvencyUnreported,
-            r.guard_liability as i128 - expected_guard as i128,
+            r.guard_liability as i128 - r.owed as i128,
             phase_of(&snap.table),
             format!(
                 "get_solvency() publishes guard_liability={} -- the ONLY number \
-                 refuse_currency_change_while_funded reads -- while its own terms imply {}. \
-                 The guard and the report have come apart, and the guard is the one nobody \
-                 can sample without attempting the destructive operation it protects. \
-                 docs/SECURITY-FINDINGS.md FINDING 37.",
-                r.guard_liability, expected_guard
+                 refuse_currency_change_while_funded reads -- and owed={}, which is what its \
+                 own verdict and summary are computed from. Two totals of one liability in \
+                 one reply, and the public one is the smaller: docs/SECURITY-FINDINGS.md \
+                 FINDING 43. There is one definition of what this canister owes and every \
+                 reader must be on it.",
+                r.guard_liability, r.owed
+            ),
+        ));
+    }
+
+    // AND THE PROPERTY THAT MAKES IT A CUSTODIAN RATHER THAN A BUSINESS.
+    //
+    // This canister takes no rake and keeps nothing. An e8 at an account it owns
+    // that no player is credited with is money held for somebody it cannot yet
+    // name -- a liability -- so the difference can never be positive and the
+    // summary can never offer a surplus. A positive difference IS FINDING 43.
+    if let Some(d) = r.difference_e8s {
+        if d > 0 {
+            out.push(Violation::new(
+                Invariant::M2LedgerReality,
+                "solvency_reports_a_surplus",
+                Severity::InsolvencyUnreported,
+                d,
+                phase_of(&snap.table),
+                format!(
+                    "get_solvency() reports a SURPLUS of {d} e8s (held {:?} against owed {}), \
+                     with {:?} of it money at the main account that nobody is credited with. \
+                     This canister takes no rake: money it holds and cannot attribute is \
+                     somebody's, and calling it a surplus is what \
+                     docs/SECURITY-FINDINGS.md FINDING 43 measured, on the screen a player \
+                     reads before committing real money.",
+                    r.held, r.owed, r.unattributed_at_main
+                ),
+            ));
+        }
+    }
+    if r.summary.contains("a surplus of") {
+        out.push(Violation::new(
+            Invariant::M2LedgerReality,
+            "solvency_summary_claims_a_surplus",
+            Severity::InsolvencyUnreported,
+            r.difference_e8s.unwrap_or(0),
+            phase_of(&snap.table),
+            format!(
+                "the player-facing solvency sentence claims a surplus. It has none, ever. \
+                 summary = {:?}. docs/SECURITY-FINDINGS.md FINDING 43.",
+                r.summary
             ),
         ));
     }
@@ -231,9 +282,13 @@ pub fn check_solvency_report_is_coherent(snap: &Snapshot) -> Vec<Violation> {
     // every part it assembles `held` from, so there is nothing here the harness
     // has to take on trust.
     if let (Some(main), Some(held)) = (r.main_account, r.held) {
+        // NO IN-FLIGHT TERM. `pulls_in_flight` was in this sum until
+        // docs/SECURITY-FINDINGS.md FINDING 38: an open pull is either already
+        // inside `main_account` or is not this canister's money, and
+        // `refresh_solvency()` -- public, anonymous-callable -- is what decides
+        // which. Adding it here let one free call publish the same e8s twice.
         let expected_held = main
             .saturating_add(r.deposit_subaccounts)
-            .saturating_add(r.pulls_in_flight)
             .saturating_sub(r.sweep_fees_in_flight);
         if held != expected_held {
             out.push(Violation::new(
@@ -244,11 +299,12 @@ pub fn check_solvency_report_is_coherent(snap: &Snapshot) -> Vec<Violation> {
                 phase_of(&snap.table),
                 format!(
                     "get_solvency() reports held={held}, and its own published parts give \
-                     main_account({main}) + deposit_subaccounts({}) + pulls_in_flight({}) - \
+                     main_account({main}) + deposit_subaccounts({}) - \
                      sweep_fees_in_flight({}) = {expected_held}. A total a reader cannot \
                      rebuild from the record is a total they have to take on trust from the \
-                     party being audited.",
-                    r.deposit_subaccounts, r.pulls_in_flight, r.sweep_fees_in_flight
+                     party being audited, and an IN-FLIGHT term in this sum is FINDING 38 \
+                     (pulls_in_flight is {}, and it belongs on the owed side alone).",
+                    r.deposit_subaccounts, r.sweep_fees_in_flight, r.pulls_in_flight
                 ),
             ));
         }
@@ -456,14 +512,18 @@ pub fn check_written_down_holdings_are_not_overstated(snap: &Snapshot) -> Vec<Vi
     //
     // Both are exactly cancelled on the owed side, so the TOTAL is not allowed to
     // be loose even while the parts are. `held` may never exceed what the ledger
-    // holds across every account plus what is genuinely arriving from outside
-    // (an open `pull` is money in a player's wallet or in ours, and the report
-    // counts it on both sides on purpose).
+    // holds across every account, plus the ONE allowance a written-down reading
+    // can legitimately run ahead by: a payout already handed to the ledger and not
+    // yet seen to leave.
+    //
+    // `pulls_in_flight` USED TO BE IN THIS BOUND and it is not any more, which is
+    // what makes this leg able to convict docs/SECURITY-FINDINGS.md FINDING 38.
+    // An open pull can only make the WRITTEN reading stale LOW (the money arrives
+    // with no message), so it can never be the reason `held` is too high -- and
+    // while it was in the allowance, `held` landed on the bound exactly and this
+    // check was silent by construction on the one state it existed for.
     if let Some(held) = r.held {
-        let bound = snap
-            .ledger_holdings()
-            .saturating_add(r.payouts_in_flight)
-            .saturating_add(r.pulls_in_flight);
+        let bound = snap.ledger_holdings().saturating_add(r.payouts_in_flight);
         if held > bound {
             out.push(Violation::new(
                 Invariant::M2LedgerReality,
@@ -473,10 +533,10 @@ pub fn check_written_down_holdings_are_not_overstated(snap: &Snapshot) -> Vec<Vi
                 phase_of(&snap.table),
                 format!(
                     "get_solvency() reports held={held} against a LEDGER total of {} across \
-                     every account this canister owns, with {} in payouts and {} in pulls in \
-                     flight. Every e8 of the in-flight allowance is counted on the OWED side \
-                     too, so it cannot be what closes this gap: the canister is claiming money \
-                     that is not there.",
+                     every account this canister owns, with {} in payouts in flight (the only \
+                     allowance, and it is cancelled on the OWED side). {} is in open pulls, \
+                     which are counted as owed and never as held and so cannot close this \
+                     gap: the canister is claiming money that is not there.",
                     snap.ledger_holdings(),
                     r.payouts_in_flight,
                     r.pulls_in_flight

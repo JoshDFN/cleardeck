@@ -873,10 +873,34 @@ fn uncredited_money_at_the_main_account_is_a_liability_the_guard_can_see() {
         5 * ICP,
         "which is exactly the fifth term FINDING 35 prescribed for total_liability()"
     );
-    // It is a surplus against the escrow books, not a shortfall, and the report
-    // must not confuse the two.
+
+    // AND THE PUBLIC INSTRUMENT MUST BE ON THE SAME NUMBER.
+    //
+    // This assertion used to read `difference_e8s == Some(5 * ICP)` under the
+    // comment "it is a surplus against the escrow books, not a shortfall, and the
+    // report must not confuse the two". It was asserting
+    // docs/SECURITY-FINDINGS.md FINDING 43: the guard counted the 5 ICP and the
+    // public `owed` did not, so the reply called a player's money a SURPLUS in the
+    // same breath as naming it unattributed. There is one definition now.
+    assert_eq!(
+        r.owed, r.guard_liability,
+        "the public `owed` and the guard's total_liability() are one number: {}",
+        r.summary
+    );
     assert_eq!(r.verdict, SolvencyVerdict::CanPayEveryone);
-    assert_eq!(r.difference_e8s, Some(5 * ICP as i128));
+    assert_eq!(
+        r.difference_e8s,
+        Some(0),
+        "the canister holds exactly what it owes -- 5 ICP against 5 ICP -- so there is no \
+         surplus and no shortfall. 5 ICP of PROFIT on a table that takes no rake is FINDING \
+         43. summary = {}",
+        r.summary
+    );
+    assert!(
+        !r.summary.contains("a surplus of"),
+        "and the sentence a player reads must not offer it as profit: {}",
+        r.summary
+    );
 }
 
 // ===========================================================================
@@ -984,6 +1008,35 @@ fn every_solvency_leg_can_go_red() {
             "pulls larger than the whole journal",
             Box::new(|r: &mut SolvencyReport| r.pulls_in_flight = r.unfinished_incoming + 1),
             "solvency_pulls_exceed_unfinished_incoming",
+        ),
+        // docs/SECURITY-FINDINGS.md FINDING 43. A canister that takes no rake
+        // cannot have a surplus, so a positive difference is always somebody
+        // else's money booked as this canister's own.
+        (
+            "a SURPLUS, which a no-rake custodian cannot have",
+            Box::new(|r: &mut SolvencyReport| {
+                r.difference_e8s = Some(r.difference_e8s.unwrap_or(0).abs() + 1)
+            }),
+            "solvency_reports_a_surplus",
+        ),
+        (
+            "the SENTENCE offering a surplus, whatever the number says",
+            Box::new(|r: &mut SolvencyReport| {
+                r.summary.push_str(" ... a surplus of 100000000 e8s.")
+            }),
+            "solvency_summary_claims_a_surplus",
+        ),
+        // FINDING 38. `held` is built from ledger readings and nothing else; an
+        // in-flight term in it is what let one anonymous refresh_solvency()
+        // publish the same e8s twice.
+        (
+            "an in-flight pull added to the HELD side",
+            Box::new(|r: &mut SolvencyReport| {
+                r.pulls_in_flight += 5;
+                r.unfinished_incoming += 5;
+                r.held = r.held.map(|h| h + 5);
+            }),
+            "solvency_held_is_not_built_from_its_published_parts",
         ),
         (
             "an all-clear built on an account nobody read",

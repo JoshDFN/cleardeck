@@ -145,8 +145,35 @@ async function createAgent() {
 
     const agentOptions = {
         host,
-        // Disable query verification for now - there may be subnet key issues
-        verifyQuerySignatures: false,
+        // QUERY REPLIES ARE VERIFIED. docs/DEFECTS.md T-43.
+        //
+        // This line used to read `verifyQuerySignatures: false`, with the comment
+        // "Disable query verification for now - there may be subnet key issues".
+        // `false` is not the library's default; it had to be written. What it
+        // switches off is the check that a query reply was signed by a node of
+        // the subnet that hosts the canister, and with it off ANYTHING between
+        // this browser and that subnet -- a boundary node, an HTTP gateway, a
+        // proxy, a compromised CDN edge -- can rewrite any query reply and this
+        // client cannot tell. Every uncertified-reply finding in this project
+        // (FINDING 40, 41, 42) is one class of attacker cheaper because of it.
+        //
+        // MEASURED, not assumed: with this `true`, the whole app works on the
+        // local replica -- the lobby list, the table view and the deposit modal
+        // all render, with ZERO console errors
+        // (`node tools/shots/repro-finding42.mjs`, artifacts/finding42). The
+        // "subnet key issues" the old comment speculated about did not appear.
+        // MAINNET WAS NOT TESTED (this wave does not touch mainnet), so whoever
+        // deploys next should smoke-test the lobby before announcing it: the
+        // failure mode is a visible "Failed to load tables", not a silent one.
+        //
+        // WHAT THIS DOES NOT FIX, and why it is not the answer to FINDING 42:
+        // a verified query is still ONE replica's opinion, signed. It binds the
+        // reply to a node key; it does not put the reply through consensus. A
+        // dishonest node can still answer `get_tables()` with any canister id it
+        // likes and sign it. That is why the deposit address is rooted in
+        // `trustedTables.js` -- the ids this build was published with -- and not
+        // in anything that arrives over the wire, verified or not.
+        verifyQuerySignatures: true,
     };
 
     // Use authenticated identity if available

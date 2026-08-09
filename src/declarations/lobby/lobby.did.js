@@ -14,7 +14,7 @@ export const idlFactory = ({ IDL }) => {
     'ante' : IDL.Nat64,
     'min_buy_in' : IDL.Nat64,
     'max_players' : IDL.Nat8,
-    'currency' : IDL.Opt(Currency),
+    'currency' : Currency,
     'big_blind' : IDL.Nat64,
     'max_buy_in' : IDL.Nat64,
   });
@@ -26,7 +26,7 @@ export const idlFactory = ({ IDL }) => {
     'canister_id' : IDL.Opt(IDL.Principal),
     'created_at' : IDL.Nat64,
     'created_by' : IDL.Principal,
-    'currency' : IDL.Opt(Currency),
+    'currency' : Currency,
     'config' : TableConfig,
   });
   const PlayerProfile = IDL.Record({
@@ -43,6 +43,7 @@ export const idlFactory = ({ IDL }) => {
     'Medium' : IDL.Null,
     'Micro' : IDL.Null,
   });
+  const Result_2 = IDL.Variant({ 'Ok' : IDL.Vec(IDL.Nat64), 'Err' : IDL.Text });
   const Result_1 = IDL.Variant({ 'Ok' : PlayerProfile, 'Err' : IDL.Text });
   return IDL.Service({
     'add_authorized_table' : IDL.Func([IDL.Principal], [Result], []),
@@ -91,6 +92,8 @@ export const idlFactory = ({ IDL }) => {
       ),
     'is_caller_admin' : IDL.Func([], [IDL.Bool], ['query']),
     'is_initialized' : IDL.Func([], [IDL.Bool], ['query']),
+    'refresh_all_table_configs' : IDL.Func([], [Result_2], []),
+    'refresh_table_config' : IDL.Func([IDL.Nat64], [Result], []),
     'register_player' : IDL.Func([IDL.Text], [Result_1], []),
     'remove_authorized_table' : IDL.Func([IDL.Principal], [Result], []),
     'set_admin' : IDL.Func([IDL.Principal], [Result], []),

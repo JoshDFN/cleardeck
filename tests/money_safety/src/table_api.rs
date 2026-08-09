@@ -575,6 +575,17 @@ pub struct DepositAddressCustody {
     pub observed_amount: u64,
     pub observed_at_ns: Option<u64>,
     pub transfer_fee: u64,
+    /// `Currency::min_external_deposit()`: the least the canister will SWEEP from
+    /// this address. MIRRORED FOR THE FINDING 36 REASON -- a mirror that drops
+    /// this field turns the one number that decides whether a deposit works into
+    /// a number the harness cannot read.
+    pub minimum_deposit: u64,
+    /// `observed_amount >= minimum_deposit`. See docs/DEFECTS.md E-89: it used to
+    /// be `> transfer_fee`, and the drain printed that answer back as evidence
+    /// that stranded money was reachable.
     pub sweepable: bool,
+    /// `observed_amount > transfer_fee`: `refund_external_deposit()` would move
+    /// it. The band where this is true and `sweepable` is false is FINDING 31.
+    pub refundable: bool,
     pub note: String,
 }

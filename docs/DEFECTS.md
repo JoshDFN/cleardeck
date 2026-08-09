@@ -307,6 +307,124 @@ vocabulary and the same gate column.
 > are named by a target now. [H-53](#h-53) is the one worth reading: its manifest names all five
 > targets explicitly *so that nothing would be auto-discovered*, and then no human ever typed one.
 
+> ## WAVE 14, 2026-08-09 — THE COHERENCE PASS: FOUR DOORS, AND THE ONE NOBODY OWNED
+>
+> Five builder/critic pairs worked this tree at the same time. Each pair's own work
+> holds: the dead-band refund, the deposit trust root, the single definition of
+> held and owed, the poll split, and the gates that run all of it were each measured
+> red before and green after. **Every defect this pass found lives between two of
+> them.**
+>
+> **[T-47](#t-47) / [FINDING 45](SECURITY-FINDINGS.md#finding-45), graded
+> `fund-theft`.** The deposit stream closed three money doors against a table id
+> that arrives over an uncertified query, wrote a gate called
+> `every_money_door_in_the_modal_refuses_an_unpinned_table`, and shipped a summary
+> saying *"all three money doors refuse together, because closing one and leaving
+> the others is exactly how FINDING 40 shipped half closed."* There were four.
+> `loadBtcDepositAddress()` asks the wire-supplied canister for a **Bitcoin**
+> address and the modal renders it under *"Your Bitcoin Deposit Address"* with a
+> Copy button and no trust check anywhere in that subtree. It is worse than the
+> defect it sat beside: the address is not derived from the canister id, it is
+> **fetched from the canister** — [FINDING 40](SECURITY-FINDINGS.md#finding-40)
+> unfixed, on a chain where the transfer cannot be reversed. The same substituted
+> reply picks the branch, because `currency` comes out of it too.
+>
+> **[H-63](#h-63): two gates on one directory, one green and one red, and CI ran
+> the red one.** Each `src/declarations/<n>/` holds three copies of an interface.
+> The new generator writes two of them; the new gate reads the same two; the older
+> gate that CI runs reads the third. When the lobby gained two methods,
+> `check-declarations-js.sh` printed *"all 5 binding set(s) regenerate to exactly
+> what is committed"* while `check-candid.sh --declarations` exited 1 on the same
+> directory in the same tree. The stream that saw the red attributed it correctly
+> to another stream; the stream that owned the change was reading the gate that
+> could not see it. **Two correct local judgements, one red CI.**
+>
+> **[H-57](#h-57): FINDING 31's dead band moved rather than closed.** The refund
+> genuinely reaches every amount above one ledger fee at a deposit subaccount, and
+> that is measured at the player's own wallet. But `check_drain`'s tolerance was
+> rewritten to convict every account above one fee while `drain()`'s own withdraw
+> loop kept knocking at the old `bal > 20_000`, and the canister pays any whole
+> balance above one fee. Every escrow row in `(10_000, 20_000]` was therefore
+> reported unreachable **by an instrument that never asked for it** — a false red
+> on M9, the top-severity invariant here, in a repository that keeps an
+> acknowledged-reds file because reds get skimmed. The drain transcript for the
+> reproducer is empty.
+>
+> **[T-48](#t-48): the poll split rebuilt FINDING 15 on the client.** Splitting the
+> 500 ms poll into queries plus a 2 s clock nudge was right and cut a measured
+> 1.1380 T/day per tab to 0.0572. The nudger's `seated` term for an unreadable view
+> read `this.lastCallAt !== null`, and `lastCallAt` is only set when a call is
+> made — so a tab that never gets a decodable `TableView` never calls, is never
+> seated, never reaches the backstop, and emits **zero `check_timeouts` in a day.**
+> The client it replaced called `check_timeouts` before `get_table_view`, so it kept
+> firing exactly in that state. Three lines above the defect, the comment reads:
+> *"'I could not tell' must not become 'so I stopped calling'."* **The comment
+> stated the requirement and the code did the opposite**, and the gate beside it
+> asserted the predicate was false and called that "the backstop covers it" without
+> measuring whether the backstop fired.
+>
+> ### THE STANDING LESSON OF THIS WAVE
+>
+> The repository already knows that an instrument measuring nothing passes. Wave 14
+> produced the sharper form: **an instrument can be weakened by a correct fix to
+> something else, and it reports the same word.**
+>
+> * [H-59](#h-59): replacing sixteen `cargo test --test X` lines with a `run_ms`
+>   helper — a clean refactor — took `check-suite-wiring.sh`'s fourth assertion from
+>   23 subjects to **7**. It printed `ok` both times. Only the count in the message
+>   changed, and nothing reads the count. With zero subjects it passed as well. This
+>   is the gate built to catch H-45, blinded by the fix for H-45.
+> * [H-56](#h-56): the FINDING 42 door gate compared the byte OFFSET of the guard
+>   against the byte offset of the approval. Deleting the single token `return;`
+>   left all seven tests green **and** the browser reproducer exiting 0 printing
+>   `✓ REFUSED`, while the approval went out to the substituted canister. **The
+>   first repair was also too weak and was caught only by re-running the same
+>   mutation** — "a `return` appears between the check and the money call" is
+>   satisfied by the `return` belonging to the next statement.
+> * [H-61](#h-61): `test-burn-table.mjs` verifies that `burn-table.json` agrees with
+>   itself and never reads the 13 raw runs beside it. Divide every per-tab price by
+>   four, recompute consistently, and the gate is green while the monitor's alarm
+>   floor drops by 70%.
+>
+> So the wave's rule, in the same shape as the one about anchors: **a gate's subject
+> list is part of the gate.** Ask what it is looking at, not only what it asserts,
+> and prove it by breaking the thing it claims to watch — not by reading it.
+>
+> ### What this pass changed, and what it did not
+>
+> Closed here: [T-47](#t-47), [T-48](#t-48), [H-56](#h-56), [H-57](#h-57),
+> [H-59](#h-59), [H-63](#h-63). Filed and left open, with reasons in their rows:
+> [H-58](#h-58) (nothing ties the shipped page to the clock policy, so every
+> published per-tab price rests on an unenforced link), [H-60](#h-60),
+> [H-61](#h-61), [H-62](#h-62), [H-64](#h-64) (the drain's stranded leg still reads
+> the canister's own books while the ledger scan sits unused in the same struct),
+> [H-65](#h-65) and [E-101](#e-101).
+>
+> Rendered-pixel evidence for this pass: a full 24-shot sweep after every edit here
+> — **19 verified, 5 red, all 5 the same reds the streams recorded**, so nothing in
+> this pass added one. `5/5 protected notices on screen` at 1440x900 and 390x844,
+> `notices survive an error toast`, and the four notices plus the no-rake sentence
+> read legibly off the mobile PNG. The deposit shot's two reds are [E-101](#e-101).
+>
+> Corrections to claims this wave made and could not support, each written into the
+> entry a reader would hit: [FINDING 42](SECURITY-FINDINGS.md#finding-42)'s "all
+> three doors" and its "every agent"; [FINDING 38](SECURITY-FINDINGS.md#finding-38)'s
+> outside anchor, which anchors the held side only; [FINDING 31](SECURITY-FINDINGS.md#finding-31)'s
+> tolerance, which turned on whether the drain tried rather than on recoverability;
+> [E-100](#e-100)'s "56x error", which is a fixture result — on the live fleet the
+> reported days are byte-identical either way; [E-92](#e-92)'s "typical" per-tab
+> price, measured on a table where the mechanism being priced fired zero times; and
+> [T-01](#t-01), which is `FIXED` behind a gate that exits 1 on every run
+> ([T-46](#t-46)) — something `register-stats.sh --check` is structurally unable to
+> notice, because it asks whether a `FIXED` row names a gate and never whether the
+> gate passes.
+>
+> Figures in earlier wave-14 text that this pass could not reproduce are left
+> corrected rather than deleted: the table wasm on this tree is
+> `ff98f6640c93fb4683732ff31c6b4011c2efdc1d27601ec142cf9a06e86163a2`, not the
+> `6902bb50…` one stream recorded before four others edited `lib.rs`; and the "nine
+> stale `NOT RUN BY ANY TARGET` cells" were six literal cells across eight ids.
+
 <a id="the-register"></a>
 ## THE REGISTER
 
@@ -318,6 +436,19 @@ is true.
 | id | sev | status | wave | gate — what would catch it coming back | where | one line |
 |---|---|---|---|---|---|---|
 | [D-14](#d-14) | fund-theft | FIXED | 12 | `dev.sh hygiene` -> `the retracted custody claim has not come back (FINDING 23c)` (an INVERTED check: the two retracted sentences must be absent from `README.md` and the frontend) + `dev.sh custody` -> `finding23c_the_operator_can_pay_the_ledger_balance_to_themselves`, which executes the theft | `DepositModal.svelte` `.custody-notice`; `README.md` "What that means for a deposit" | **the custody disclosure understated a fund-THEFT capability as destruction, on the screen a player deposits from.** It promised that the money would be "unreachable by anybody, including the operator", and the README's decision table answered "Can the operator take the ICP out of the canister to their own wallet?" with **No**. Both false. A controller is not bound to the ClearDeck wasm: a 500-byte module installed with the SAME verb as the wipe moved **39.99990000 ICP** into a wallet the operator owns. Every presence check in [D-13](#d-13)'s gate was GREEN while the paragraph lied, which is why the retraction needed an inverted gate of its own |
+| [H-65](#h-65) | medium | OPEN | — | — | `tools/shots/lib/chain-agreement.mjs` `~1518`, the fiat leg | **the deposit shot has an intermittent FALSE RED, produced by the harness's own read ordering.** The fiat check re-reads the SERVED QUOTE after the settle loop — its comment says *"a quote can land between the two"* — and then compares it against `dom.usdValues`, which was read BEFORE the loop and is never re-read. When the third-party quote lands in that window the harness holds a quote and a stale-empty DOM, and reports `DEPOSIT CHAIN DISAGREEMENT: a live quote (2.19 USD/ICP) was served but the modal shows no fiat figure`. **Observed once by the wave-14 coherence pass** on `deposit/desktop` and not reproduced in the immediately following full sweep on the same tree, same replica, same fixture. It lands on the deposit screen, which is already carrying an acknowledged red ([E-101](#e-101)) — so the failure mode is that an intermittent red arrives on a shot people have learned to expect a red on, and the `covers` rule then fails the whole gate for a reason that is not real. The fix is to re-read the DOM in the same breath as the quote |
+| [H-64](#h-64) | medium | OPEN | — | — | `tests/money_safety/src/invariants/reachability.rs` `DrainReport::stranded_breakdown()`; `Snapshot` in `tests/money_safety/src/world.rs` | **the drain's stranded leg is measured against the CANISTER, not the ledger — this repository's standing lesson, re-created inside the fix for that lesson.** `stranded_breakdown()`'s deposit term reads `DrainReport::deposit_custody_after`, which is `Snapshot::canister_deposit_by_principal`: the reply from `admin_deposit_custody()`, i.e. **what the canister says it observed**. The escrow term is `admin_get_all_balances()`, the canister's own escrow book. The same `Snapshot` already carries `ledger_deposit_by_principal`, built per principal from `icrc1_balance_of`, and its own doc comment says *"The whole value of this field is that it can DISAGREE with the ledger scan"* — and `stranded_breakdown()` does not consult it. So wave 14's claim that *"recoverability is measured at the player's wallet on the ledger, never at an escrow row"* is true of the `deposit_floor` tests and false of `check_drain`'s stranded leg, which is the leg that decides whether `fuzz-default` is red. **Not blind today:** `orphaned_e8s()` is ledger-anchored (but AGGREGATE, and reduced by `Exemptions::unobserved_subaccount`) and `check_deposit_attribution` backstops it. The fix is to iterate the union of both maps and take the MAX per principal, which cannot under-report |
+| [T-47](#t-47) | fund-theft | FIXED | 14 | `cd tests/money_safety && cargo test --test deposit_trust_root -- every_money_door_in_the_modal_refuses_an_unpinned_table` — verified RED by removing the two guards on the tree that has them: *"loadBtcDepositAddress() asks an unpinned canister for a Bitcoin address (guard at 6033, fetch at 1110)"* | `DepositModal.svelte` `loadBtcDepositAddress()` (the fetch) and the `{#if isBTC && depositMethod === 'btc'}` subtree (the render) | **wave 14 closed three money doors in the deposit modal and left a fourth open, and the fourth is the worst of them.** [FINDING 42](SECURITY-FINDINGS.md#finding-42) pinned the table id so the ICP address, the OISY transfer and the ICRC-2 approval all refuse an unpinned canister. `loadBtcDepositAddress()` was not among them: it calls `get_btc_deposit_address()` on the wire-supplied id and the template renders whatever string comes back under **"Your Bitcoin Deposit Address"** with a Copy Address button, with no trust check anywhere in that subtree. It is worse than FINDING 42 because the address is not DERIVED from the canister id, it is **FETCHED from the canister** — [FINDING 40](SECURITY-FINDINGS.md#finding-40) unfixed, for a chain whose transfers cannot be reversed. The attacker picks the branch too: `currency` comes off the same uncertified `get_tables()` reply. The gate that missed it is named `every_money_door_in_the_modal_refuses_an_unpinned_table`. Full write-up: [FINDING 45](SECURITY-FINDINGS.md#finding-45) |
+| [T-48](#t-48) | high | FIXED | 14 | `node tools/shots/test-clock-nudge.mjs` → `a tab that never gets a readable view still nudges the clock (T-48)` — verified RED by restoring `this.lastCallAt !== null`: `FAIL a tab that never gets a readable view still nudges the clock` | `src/cleardeck_frontend/src/lib/clockNudge.js` `decide()`, the `seated` term | **the poll split made a tab that cannot read the table stop asking the canister to advance its clock — which is [FINDING 15](SECURITY-FINDINGS.md#finding-15)'s fund lock, rebuilt on the client side.** `seated` for a null view read `this.lastCallAt !== null`, which sounds like *"we have seen a table before, so keep a pulse"* and is not: `lastCallAt` is only set when a call is MADE, so a tab that never gets a decodable `TableView` has never called, is never seated, never reaches the 60 s backstop, and emits **zero `check_timeouts` for as long as it stays open** — measured, 0 calls in a synthetic day. The client this replaced called `check_timeouts` as the FIRST statement of the 500 ms poll, *before* `get_table_view`, so it kept firing at 2/s exactly when the view could not be read. `check_timeouts` records `note_stall_opportunity`, and three of those across the grace period is what makes `abandon_stuck_hand` reachable when the on-chain timer is dead. The module's own header says a tab that stops asking rebuilds that lock, and the comment three lines above the defect said *"'I could not tell' must not become 'so I stopped calling'"* — **the comment stated the requirement and the code did the opposite**. Now 1,440 calls/day worst case, 0.0099 T/day, inside the gate's 0.02 T budget |
+| [H-56](#h-56) | high | FIXED | 14 | `cd tests/money_safety && cargo test --test deposit_trust_root -- every_money_door_in_the_modal_refuses_an_unpinned_table` — the assertion is now on the guard's OWN brace-matched block; verified RED by deleting the single token `return;` | `tests/money_safety/tests/deposit_trust_root.rs` `every_money_door_in_the_modal_refuses_an_unpinned_table` | **the gate that certified FINDING 42 closed measured TEXT POSITION, not control flow.** It found the byte offset of `!tableIsTrusted` inside `handleDeposit` and asserted it was lower than the offsets of `icrc2_approve` and `wallet.transfer` — which is equally true of `if (!tableIsTrusted) { error = msg; }` with no `return`, a guard that sets a message and signs anyway. Deleting that one token left all seven tests green AND left `node tools/shots/repro-finding42.mjs` exiting 0 printing *"REFUSED"*, because the reproducer scrapes only the Claim button's `disabled` and never observes the Deposit button or the approval. Nothing asserted the `disabled` bindings at all. **The first repair was itself too weak and was caught by re-running the same mutation:** "a `return` appears between the check and the money call" stayed GREEN, because the next `return` belongs to the `if (!depositAmount ...)` validation immediately below. The assertion had to be scoped to the guard's own block |
+| [H-57](#h-57) | high | FIXED | 14 | `cd tests/money_safety && cargo test --test fund_reachability -- the_drain_tries_every_balance_the_canister_would_pay` — verified RED at `> 20_000`: `the drain left 15000 e8s convicted as unreachable … left: 15000 right: 0`, with an EMPTY drain transcript, and green after with the player's own ledger wallet up exactly 5,000 | `tests/money_safety/src/invariants/reachability.rs`, the escrow leg of `drain()` | **M9, the top-severity invariant in this harness, was made able to convict money the canister pays on the very next call.** Wave 14 replaced `check_drain`'s aggregate tolerance with a PER-ACCOUNT rule at one ledger fee and left the drain's own withdraw loop knocking at `bal > 20_000`, the old `min_withdrawal + fee`. The canister waives its policy minimum for a whole-balance sweep (`sweeping_whole_balance = amount == balance_now && amount > transfer_fee`), so **every escrow row in `(10_000, 20_000]` was reported `FundsUnreachable` by an instrument that never asked for it.** This is [FINDING 31](SECURITY-FINDINGS.md#finding-31)'s dead band MOVED rather than closed: out of the deposit subaccount, where `refund_external_deposit()` now reaches it, and into the measuring instrument, where it produces a FALSE RED on `dev.sh test` and `fuzz-default`. In a repository that keeps an acknowledged-reds file precisely because reds get skimmed, an invariant that cries wolf is the failure mode being defended against. The threshold is now the canister's own, not a constant of the harness |
+| [H-63](#h-63) | high | FIXED | 14 | `./scripts/check-candid.sh --declarations` (CI job *Candid interface drift*, `.github/workflows/ci.yml`) — it was exit 1 on the wave-14 tree with two NEW drift entries and is exit 0 now | `tools/gen-declarations`, `scripts/check-declarations-js.sh` and `scripts/check-candid.sh --declarations`, all reading `src/declarations/<n>/` | **two gates on the same directory disagreed, one green and one red, and the red one is the one CI runs.** Wave 14 built a generator for the frontend bindings and a gate around it; both write and read `<n>.did.js` and `<n>.did.d.ts` and **neither touches `<n>.did`**, the Candid TEXT in the same directory, which is what the older `check-candid.sh --declarations` compares. So when the lobby gained `refresh_table_config` and `refresh_all_table_configs`, `check-declarations-js.sh` reported *"src/declarations/lobby matches src/lobby_canister/lobby_canister.did"* while `check-candid.sh --declarations` reported *"NEW declaration drift, not in the baseline"* and exited 1. It was left that way because the one stream that saw the red correctly attributed it to another stream's lobby change and the stream that owned the lobby change was reading the gate that could not see it. **Nothing regenerates that file; it is hand-edited, and that is now written down rather than assumed** |
+| [H-58](#h-58) | high | OPEN | — | — | `tools/shots/test-poll-updates.mjs`, `tools/shots/test-clock-nudge.mjs`, `+page.svelte` `advanceTableClock()` | **nothing ties the shipped page to the clock policy, so every measured cycles claim rests on a link no gate enforces.** `test-poll-updates.mjs` checks only the TIMER PERIOD (2000 ≥ the 2000 ms floor) and a shape budget (51,840 < 60,000); `test-clock-nudge.mjs` exercises `clockNudge.js` in isolation and never reads `+page.svelte`; `test-burn-table.mjs` reads only JSON. Measured: a `+page.svelte` that never consults `clockPolicy` and calls `check_timeouts` unconditionally on its 2 s timer leaves **all three gates green**, at 43,200 calls/day/tab ≈ 0.298 T/day — 5.2x the published "typical" price and 1.54x the published policy CEILING, which is the figure `fallback_burn_per_day` is built from. [T-48](#t-48) is the same seam from the other side: the policy was wrong and only a test of the policy could see it. The honest fix is a gate that resolves `advanceTableClock`'s body and requires the decision to gate the call, which is the third instrument this pass would have had to write |
+| [E-101](#e-101) | medium | OPEN | — | — | `artifacts/screens/acknowledged-reds.json`, `SolvencyNotice.svelte`, `tools/shots/lib/chain-agreement.mjs` | **one register id is being used to excuse two OPPOSITE symptoms on the same screen.** [E-96](#e-96) says money the table cannot attribute *"renders NOTHING on the deposit screen"*; `acknowledged-reds.json` cites **E-96** to excuse `deposit/desktop` and `deposit/mobile` going red with *"TOKEN CENSUS FAILED: 8 of 43 numeric tokens on screen are asserted by nothing"* — money figures that DO render, one of them (`287.9296`) inside the `p.advice` sentence wave 14 rewrote. Both are real; they are not the same defect, and a reader who follows the acknowledgement to E-96 is told the screen shows nothing. The census red needs its own id, its own site in `chain-agreement.mjs`, and the acknowledgement repointed. Until then `./scripts/dev.sh shots` exits 1 with the deposit screen UNVERIFIED at both viewports, where at `a65868e` it was VERIFIED with *"0 unaccounted"* |
+| [H-59](#h-59) | medium | FIXED | 14 | `./scripts/check-suite-wiring.sh` — check 4 now recognises the `run_ms` helper as well as a literal `--test`, and REFUSES to pass on an empty subject list. It reported `7 target(s) named in dev.sh` before and reports `25` now | `scripts/check-suite-wiring.sh`, check 4 | **the fix for [H-45](#h-45) silently blinded 70% of the gate built to catch H-45.** Check 4 (*"every target `scripts/dev.sh` names with `--test` has a row"*) discovers its subjects with `grep -oE -- '--test [a-z_0-9]+' scripts/dev.sh`. Wave 14 replaced sixteen literal `cargo test --test X` lines in `cmd_test` with `run_ms X`, so those strings stopped existing: the check went from 23 subjects to 7 and printed `ok` both times — **only the number in the message changed, and nothing reads the number.** Compounding it, with ZERO subjects it still passed, because `printf '%s\n' "" \| wc -l` is 1. It is also the only one of the gate's five assertions with no `--selftest` case; the selftest plants nine failures covering checks 1, 2, 3 and 5. An instrument that quietly measures less and passes, introduced into the gate written to stop exactly that |
+| [H-60](#h-60) | medium | OPEN | — | — | `scripts/check-deployed-config.sh`, the lobby-vs-contract loop | **the new lobby leg prints `✓ matches` when it compares ZERO fields — [H-55](#h-55)'s exact shape, in the same file that was just fixed for H-55.** The loop does `IFS=',' read -ra pairs <<< "$tfields"`; if the python parse yields no fields for a row, bash produces a zero-length array, the body never runs, `bad` stays empty and the row is reported `✓ lobby row N … matches <cid>` — a green tick over nothing. The icp.yaml half of the same script guards this explicitly (`[ -n "$got" ] \|\| { echo "  ! …could not read…"; fail=1; }`); the lobby half has only a whole-registry `lobby_rows -eq 0` guard, and `--selftest` does not exercise the lobby half at all. **Latent, not live:** measured today the parser extracts 8/8 fields from all three rows. It goes live the first time the record shape, a field name, or the CLI's Candid spacing changes |
+| [H-61](#h-61) | medium | OPEN | — | — | `tools/shots/test-burn-table.mjs`, `tools/cycles/burn-table.json`, `artifacts/cycles/*.json` | **the gate on the burn table conserves against the table's own internal state, which is this repository's standing lesson applied to cycles.** `test-burn-table.mjs` checks that every scenario recomputes from `burn-table.json`'s OWN measured and inherited components, and never compares any of them to the 13 raw runs in `artifacts/cycles/`. A hand-edited table that is internally consistent passes cleanly, and `scripts/cycles-runway.sh` reads `FALLBACK_BURN_PER_DAY` straight out of it with no verification, so the monitor's alarm floor can be loosened silently. Demonstrated: dividing every non-legacy `per_tab_per_day` by 4 and recomputing each scenario with the builder's own formula leaves the gate exit 0 (*"all 8 scenarios recompute from their own components"*) while the unknown-burn floor drops 2.0539 → 0.6075 T/day and the 51.4 T column goes 25 days → 84. The only outside anchor is read by `build-burn-table.mjs` and by nothing that gates |
+| [H-62](#h-62) | medium | OPEN | — | — | `artifacts/cycles/fixed-{1,3,10}tab.json`, `tools/cycles/build-burn-table.mjs` | **the "typical" per-tab price was measured with the mechanism being priced switched off.** `artifacts/cycles/fixed-1tab.json`, `-3tab` and `-10tab` contain **no `check_timeouts` key at all** — the calls recorded are `heartbeat`, `get_balance`, `get_table_view` and `get_shuffle_proof` and nothing else — because the table used had 0 of 9 seats filled, and `clockIsDue` refuses both the predicate and the backstop on an empty table. That figure (0.0572 T/day) is then multiplied by 6 and 10 in the *"500 hands/day, N tabs open (typical)"* rows, which are the rows [E-55](#e-55)'s corrected runway table and wave 14's headline quote. **A table dealing 500 hands a day is by definition one where the nudger fires between every hand**, so the row is internally contradictory. Measured on an occupied table: ~1,963 calls/day/tab ≈ 0.0135 T/day, so the 10-tab typical row is ≈0.832 T/day (61 days on 51.4 T, 12 on 10 T) rather than 0.6974 (73 / 14). Direction: safe-looking. Same species as [E-92](#e-92) itself |
 | [E-85](#e-85) | medium | OPEN | — | — (red on 2 of the 24 recorded shots) | `.sit-controls > button.control-btn.destructive` in `PokerTable.svelte` | **the Leave-table control renders 6–7 px outside a 1440 px window** (`51.2x28 at x=1396`, right edge 1447.2) with `documentElement.scrollWidth == 1440` and `<body>` at `overflow-x: hidden`, so its tail is off screen and cannot be scrolled to. Found by `tools/shots/lib/table-in-frame.mjs`, invisible to every other gate: `occlusion.mjs` compares element rectangles against each other, not against the frame. The wrapping fix costs 43 px of dock and drops the desktop felt 27.8% -> 23.2%; the structural fix is to move `.sit-controls` into the left dock cell (~435 px unused). [DESIGN-BAR §11.7](DESIGN-BAR.md) |
 | [E-86](#e-86) | high | FIXED | 12 | `dev.sh shots` -> the `deposit` scene's chain-agreement check, now anchored on four LABELS; a copy edit that moves a figure is a MISSING-LABEL structural failure instead of a silent re-pointing | `tools/shots/lib/chain-agreement.mjs`, the `.minimum-notice` block | **THE EIGHTH CROSS-AGENT DEFECT: correct totals, wrong recipients, every invariant silent.** The deposit check read `.minimum-notice`'s numbers **in DOM order** and assigned them (minimum, fee, minimum + 2 fee). At `134550e` the copy grew a FOURTH figure and reordered the rest, so `nums[0]` became the ADDRESS minimum (30 000 e8s) compared against the canister's `min_deposit` (20 000), and `nums[1]` became the wallet-route minimum (20 000) compared against `icrc1_fee()` (10 000). Both deposit shots went red as *"screen is 1.500x the chain"* — **the screen was right, every figure on it was correct, and the comparison had been re-pointed at the wrong quantity by a copy edit.** The fourth figure was asserted by nothing at all and the token census reported it unaccounted for |
 | [E-87](#e-87) | high | FIXED | 12 | `dev.sh shots-verdict` / `dev.sh hygiene` -> rule 3: every recorded problem on an acknowledged shot must be named by a `covers` string, and every `covers` string must still match something | `tools/shots/verdict-gate.mjs`; `artifacts/screens/acknowledged-reds.json` | **the red ledger acknowledged a SHOT, not a PROBLEM.** Once a (scene, viewport) was red for any reason, every LATER failure on the same shot was absorbed in silence. Not hypothetical: `table-in-frame.mjs`'s first real conviction ([E-85](#e-85), a control a player cannot reach) landed on two shots already acknowledged under [E-76](#e-76) for a felt shortfall of 0.2 points, and the gate stayed green |
@@ -326,24 +457,29 @@ is true.
 | [H-51](#h-51) | high | FIXED | 12 | `dev.sh shots-selftest` -> `tools/shots/test-table-in-frame.mjs`, 17 cases; verified to convict by reverting the hardening (3 of 17 go red) | `tools/shots/lib/table-in-frame.mjs` | **the new gate had no gate, and its own headline conviction was unprotected.** `grep -rn table-in-frame` returned ONE hit, `run.mjs:41`, so the only runner needed a live replica — the condition [E-63](#e-63) blames for sitting red a whole wave. Worse: `.seat` is a `0x0` point on the ring, so the naive measurement is inside the frame by construction; restoring it left `foldTableInFrame` reporting *"9/9 seat pods, all in frame"* over zero-size boxes with every target green. Three blind spots are now asserted: the seats-block SHAPE, an empty pod set, and the board's silent skip (cross-checked against painted hole cards) |
 | [H-52](#h-52) | high | FIXED | 12 | `dev.sh custody` -> `./scripts/check-candid.sh --guardian-only`, run BEFORE the tests; verified to go red by deleting one method from the committed `.did` | `scripts/check-candid.sh`; `src/guardian_canister/guardian_canister.did` | **the guardian's whole safety claim is "no destructive verb on its wire", and the three gates that assert it all parse the COMMITTED `.did` with nothing comparing that file to the module.** `check-candid.sh` covered `lobby`/`table`/`history` only, and `cmd_custody` ran `build-guardian.sh` **without** `--did`. A critic compiled a real `install_chunked_code(mode = Reinstall)` into the guardian, left the `.did` as committed, and all nine custody tests passed GREEN over a canister that can wipe a funded table |
 | [H-53](#h-53) | high | FIXED | 12 | `dev.sh no-peeking` (and `make no-peeking`), plus step 8 of 8 in `dev.sh test` | `tests/no_peeking/**` (5 `[[test]]` targets, 36 tests), `src/no_peeking/**` | **[H-45](#h-45) a THIRD time, and this one names itself.** `tests/no_peeking/Cargo.toml` declares all five targets explicitly, with the comment *"Named explicitly for the reason every target in tests/money_safety/Cargo.toml is named explicitly: an auto-discovered target is a target no human ever types"* — and then no `dev.sh` target, no make rule and no CI job typed any of them. 36 tests, all green, ~30 s. Several are the [FINDING 23](SECURITY-FINDINGS.md#finding-23) pattern and PASS while a defect in the spike is live (`two_concurrent_try_advance_calls_pay_the_pot_out_twice`) |
+| [T-44](#t-44) | medium | OPEN | — | — | `solvency.js` `readTableSolvency`, `cycleRunway.js` `readCycleRunway`, both rendered by `DepositModal.svelte` | **the two warnings on the screen money leaves from are UNCERTIFIED QUERY REPLIES, and their reassuring state renders NOTHING.** [FINDING 35](SECURITY-FINDINGS.md#finding-35)'s solvency verdict and [E-55](#e-55)'s runway notice are both read with a `query`: one replica answers out of its own memory and no consensus is involved. `SolvencyNotice` renders nothing at all when the verdict is `covered`, so a replica that answers `covered` (or that answers a shape the interpreter cannot read, which degrades to a quieter block) produces a deposit screen that is pixel-identical to a healthy table. The same replica can report a runway of years. Neither instrument is anchored outside the canister, so **the one screen that exists to tell a player not to deposit can be silenced by the cheapest attacker in the model**, and the silence looks like good news. Query-signature verification ([T-43](#t-43)) removes the gateway/MITM class but not this one: a signed query is still one replica's opinion. The fix is to read the pre-deposit verdict through an UPDATE call (consensus) or to state on screen that it is unverified |
+| [T-43](#t-43) | high | FIXED | 14 | `cd tests/money_safety && cargo test --test deposit_trust_root -- the_agent_verifies_query_signatures` — verified RED on the pre-fix tree (`verifyQuerySignatures: false`) and GREEN after | `src/cleardeck_frontend/src/lib/canisters.js` `createAgent()` | **the app switched OFF the only check that binds a query reply to the subnet that answered it**, with the comment *"Disable query verification for now - there may be subnet key issues"*. `false` is not the library default; it had to be written. With it off, anything on the path — a boundary node, an HTTP gateway, a proxy, a compromised CDN edge — can rewrite ANY query reply, so [FINDING 42](SECURITY-FINDINGS.md#finding-42)'s substituted `get_tables()` needed no dishonest replica at all, only a position on the wire. Restored to `true` and MEASURED: the lobby list, the table view and the deposit modal all render on the local replica with **zero console errors** (`node tools/shots/repro-finding42.mjs`, `artifacts/finding42/evidence.json`). MAINNET NOT TESTED (hard rule 1) — smoke-test the lobby on the next deploy; the failure mode is a visible "Failed to load tables". **It is not the answer to FINDING 42:** a verified query is one replica's opinion, signed, not a consensus result |
 | [T-42](#t-42) | high | OPEN | — | — | `tools/archive/lib/collusion.mjs` signal 2; `tools/archive/selftest/synthetic.mjs` | **the collusion detector accuses honest winning players and cannot tell them from cheats.** Signal 2's null (*"does A lose to B faster than A loses to everybody else"*) is ALSO the definition of *"B is better than A's other opponents"*, so it is false under ordinary skill variation and its error rate rises toward 1 with sample size rather than holding at alpha. Measured on **800 real, uncoordinated `table_3` hands**: two `REVIEW` rows at q=1.50e-4, both naming the best player — the same verdict, count and q as a scripted chip dump. Invisible to the shipped gate because `synthetic.mjs` has no per-player skill parameter, and its false-positive assertion tolerates `0.12` while claiming alpha `0.05`. The bootstrap p-value is separately anti-conservative (fires at 14% where it claims 5%). Disclosed at the top of [ARCHIVE.md §6](ARCHIVE.md) and in the tool's own output; **the fix is a skill-adjusted null, not a tighter alpha** |
 | [H-54](#h-54) | high | FIXED | 12 | `dev.sh test` -> `with_timeout`, whose watchdog now writes to `/dev/null` and whose children are killed BEFORE it is. Before/after reproduced with a 1-second command and a 300-second bound: the old form blocks its consumer indefinitely, the new one returns at once and leaves no orphan | `scripts/dev.sh` `with_timeout` | **[H-42](#h-42)'s mechanism, and H-42 blames the wrong step.** `kill "$wd"` kills the watchdog SUBSHELL; the `sleep` it forked survives, orphaned to init, **still holding the stdout and stderr it inherited**. So `./scripts/dev.sh test` exits normally and any consumer of its output — `\| tail`, `\| tee`, `$( )`, a CI log collector — then blocks for the remainder of the bound with **zero CPU anywhere**, which is exactly what H-42 describes. Measured this wave: the gate finished and `sleep 900` sat at PPID 1 holding the pipe for another **14 minutes**. 900 + 300 is H-42's twenty; all of it is post-hoc, after every gate has already passed or failed. H-42 diagnosed the step BEFORE this one, for having no time bound; the cause is the two steps that DO have one |
-| [E-89](#e-89) | high | OPEN | — | — (it IS the red) | `tests/money_safety/src/invariants/reachability.rs` `check_drain`; `Currency::ICP` deposit-sweep floor | **`./scripts/dev.sh fuzz-default`, and therefore `./scripts/dev.sh test`, is RED — and the red is TRUE.** Seed `0xc1ea2dec0002`, twice, byte for byte: two players each send **10,001 e8s** to their own published deposit address, and after every legal player-side exit is driven to exhaustion the canister still owes **20,002 e8s that no player call can move**. 10,001 is inside [FINDING 31](SECURITY-FINDINGS.md#finding-31)'s dead band `(10_000, 20_000]`, and the drain transcript prints `sweepable=true` beside each one, which is FINDING 31's lie in the canister's own words. **This is the gate FINDING 31 never had**, in a five-op minimal reproducer. It fires at 20,002 rather than at 10,001 because `check_drain`'s `UNMOVABLE_DUST_E8S` is a PER-ACCOUNT floor (`min_withdrawal + fee`) compared against an AGGREGATE, so one stranded player is tolerated and two are not — the threshold's verdict depends on seat count rather than on whether the money is recoverable. **Pre-existing at `134550e`: no canister source and no fuzzer source changed in wave 12** |
-| [E-92](#e-92) | high | OPEN | — | — | `src/cleardeck_frontend/src/routes/+page.svelte` `POLL_INTERVAL` -> `check_timeouts`; every runway figure written in wave 13 | **the runway numbers wave 13 published leave out the biggest per-tab term.** `loadTableState` runs on `setInterval(…, 500)` and its FIRST statement is `await tableActor.check_timeouts()`, which is `#[ic_cdk::update]` (`lib.rs:10397`) and carries no `query` in `table_canister.did:714`. That is an UPDATE loop, one per open browser tab, and no cycles figure in this tree counts it: [E-55](#e-55)'s table, `scripts/cycles-runway.sh`'s header, `cycleRunway.js` and `FALLBACK_BURN_PER_DAY` all price the 10 s HEARTBEAT and stop. The per-call cost was measured on the real module at **6,573,911 cycles**. The call rate is bounded by finality, not by the interval, because `loadingTableState` blocks re-entry — so it is ~43,200/day at mainnet's ~2 s update finality and 172,800/day at PocketIC's, i.e. **0.28–1.14 T/day per open tab against the 0.0618 T/day the heartbeat contributes**. Six tabs is 1.7–6.8 T/day before a single hand is dealt, and the published "fully occupied table" figure is 0.4994 T/day total. **The direction is the dangerous one: every runway in the tree reads HIGH**, which is the exact failure [E-55](#e-55) was reopened to fix one level down. Not fixed here: the constant is another owner's, and correcting it without re-measuring the whole table would replace one unverified number with another |
+| [E-89](#e-89) | high | FIXED | 14 | `./scripts/dev.sh fuzz-default` (seed `0xc1ea2dec0002` clean); `cd tests/money_safety && cargo test --test deposit_floor` — the six NEW tests, each verified RED against `git show HEAD:src/table_canister/src/lib.rs` in a `cp -Rc` tree | `tests/money_safety/src/invariants/reachability.rs` `check_drain`; `Currency::ICP` deposit-sweep floor | **`./scripts/dev.sh fuzz-default`, and therefore `./scripts/dev.sh test`, is RED — and the red is TRUE.** Seed `0xc1ea2dec0002`, twice, byte for byte: two players each send **10,001 e8s** to their own published deposit address, and after every legal player-side exit is driven to exhaustion the canister still owes **20,002 e8s that no player call can move**. 10,001 is inside [FINDING 31](SECURITY-FINDINGS.md#finding-31)'s dead band `(10_000, 20_000]`, and the drain transcript prints `sweepable=true` beside each one, which is FINDING 31's lie in the canister's own words. **This is the gate FINDING 31 never had**, in a five-op minimal reproducer. It fires at 20,002 rather than at 10,001 because `check_drain`'s `UNMOVABLE_DUST_E8S` is a PER-ACCOUNT floor (`min_withdrawal + fee`) compared against an AGGREGATE, so one stranded player is tolerated and two are not — the threshold's verdict depends on seat count rather than on whether the money is recoverable. **Pre-existing at `134550e`: no canister source and no fuzzer source changed in wave 12** |
+| [E-92](#e-92) | high | FIXED | 14 | `node tools/shots/test-poll-updates.mjs` (discovered by `./scripts/dev.sh shots-selftest`, which `./scripts/dev.sh test` runs); the per-tab budget by `node tools/shots/test-clock-nudge.mjs`; the published numbers by `node tools/shots/test-burn-table.mjs` | `src/cleardeck_frontend/src/routes/+page.svelte` poll -> `check_timeouts`; every runway figure in the tree | **the render rate was driving an UPDATE loop, and it was the largest single cost of running this game.** `loadTableState` ran on `setInterval(…, 500)` and its FIRST statement was `await tableActor.check_timeouts()` — `#[ic_cdk::update]` in `lib.rs`, no `query` in `table_canister.did`. **MEASURED on the local replica against a no-tabs control (`tools/cycles/tab-burn.mjs`): one open browser tab cost 1.1380 T/day; ten tabs on one table burned 9.7618 T/day against an idle 0.0411.** At 500 hands/day that is **11.5 T/day, which is ZERO days on the 10 T [E-55](#e-55) headlines and four days on the 51 T the fixtures hold** — and the freezing reserve, nominally 30 days, was worth **four minutes**. No cycles figure in the tree counted any of it: six files carried a hand-copied table and all six priced a tab as a 10-second heartbeat. FIXED by splitting the loops — the 500 ms poll is queries only, and the clock is advanced by `$lib/clockNudge.js` only when a deadline is crossable, floored at 2 s and backing off to 30 s when calls change nothing. Re-measured: **0.0572 T/day per tab typical and 0.1929 T/day at the policy's ceiling — 19.9x and 5.9x cheaper**. Every runway figure now comes from one generated file, `tools/cycles/burn-table.json` |
 | [E-84](#e-84) | fund-theft | OPEN | — | — | the CONTROLLER SEAT: `icp.yaml`, every fund-holding canister on mainnet | **the id [FINDING 23](SECURITY-FINDINGS.md#finding-23) never had, so it could be scheduled.** One controller principal per canister, and a controller can call `install_code --mode reinstall` or `uninstall_code` on a funded table: measured at **40.00000000 ICP of player claims destroyed by one command with the same wasm and no code change**, ledger untouched, no restore path. No in-canister check can reach it — `require_controller()` lives in the table, these are calls to the MANAGEMENT canister. `src/guardian_canister/` is the mitigation, is built and gated (`./scripts/dev.sh custody`, 9 tests) and is **NOT DEPLOYED**, so nothing has changed for a real deposit. Disclosed as of wave 12 ([D-13](#d-13)) |
 | [E-41](#e-41) | high | FIXED | 13 | `dev.sh test` step 4 -> `cargo test --test regressions` -> `reg39_a_settled_hand_is_never_settled_a_second_time` (the door AND the money, both legs verified red on the unfixed build: `use_time_bank -> Ok(0)`, then `created 4000000 e8s of chips out of nothing`), plus `dev.sh test` step 1 -> `cargo test --workspace` -> `payout_tests::e41_*`, three tests for the three guards, each verified to go red when **its own guard alone** is removed and green under the other two | `use_time_bank` (the door), `resolve_expired_action_timer` (the clock), `advance_game` (the settlement path), `end_hand_single_winner`/`determine_winners` (the money) — all `src/table_canister/src/lib.rs` | **the canister owed 4,000,000 e8s it did not hold, and the mechanism is A HAND SETTLING TWICE.** `finish_hand` empties `state.pot` but not `total_bet_this_hand` (only `start_new_hand` clears that), so between hands the table sits on a COMPLETE PAYOUT BASIS over an EMPTY POT. `use_time_bank` asked only "is `action_on` pointing at you" and never "is there a hand", so it armed an `ActionTimer` on a finished hand; 30 s later the clock folded a seat out of a hand already paid, `advance_game` read `count_active_players == 1` off last hand's cards, and `end_hand_single_winner` paid the whole basis again. `plan.conserves()` is TRUE throughout — awarded equals the plan's own `collected` — so `apply_payouts` never trapped. Shrunk from 400 steps x 2 seeds to **one limped heads-up hand and five ordinary player calls**. [FINDING 39](SECURITY-FINDINGS.md#finding-39) |
-| [E-55](#e-55) | high | OPEN | — | — (the row stays gateless because the DEFECT is still live: nothing funds a table. The monitoring half that closed is held by `dev.sh test` → `cycles_runway`, `dev.sh shots-selftest` → `test-cycle-runway.mjs` and `scripts/cycles-runway.sh --selftest`) | cycles: measured, monitored and shown to players; still nothing tops it up | **a canister below its freezing threshold rejects every update call at once** — `deposit`, `withdraw`, `cash_out`, `player_action`, `abandon_stuck_hand` — which is total custody failure with no attacker. **The 226-day figure was the number for a table NOBODY IS USING.** Measured under load in wave 13: a hand costs 168.3 M cycles, a deposit 12.7 M, a withdrawal 12.7 M and a heartbeat 7.16 M — and the frontend heartbeats **every 10 s per seated player**, so a table at 500 hands/day with six tabs open burns **0.4994 T/day: 20 days on 10 T, not 226**. Also fixed here: `runway_days` was computed from a **lifetime burn average**, so a table that sat idle and then got busy over-reported its runway by **2.1x** (measured 891 days against a true 422). Now warned to a player before they deposit, and read twice a day by a CI job that holds no credential. **Nothing tops it up.** **And every figure in this row is still optimistic: see [E-92](#e-92).** The 0.4994 T/day composition is idle + 500 hands + six 10-second heartbeat streams and nothing else. The frontend also drives `check_timeouts` — an UPDATE call — from a **500 ms** `setInterval`, at a measured 6,573,911 cycles each, which is 0.28-1.14 T/day per open tab against the heartbeat's 0.0618 |
+| [E-55](#e-55) | high | OPEN | — | — (the row stays gateless because the DEFECT is still live: nothing funds a table. The measurement and monitoring halves that closed are held by `dev.sh test` → `cycles_runway`, `dev.sh shots-selftest` → `test-cycle-runway.mjs`, `test-poll-updates.mjs`, `test-clock-nudge.mjs` and `test-burn-table.mjs`, and `scripts/cycles-runway.sh --selftest`) | cycles: measured properly at last, monitored, and shown to players; still nothing tops it up | **a canister below its freezing threshold rejects every update call at once** — `deposit`, `withdraw`, `cash_out`, `player_action`, `abandon_stuck_hand` — which is total custody failure with no attacker. **The 226-day figure was for a table nobody was using; the 20-day figure that replaced it was still wrong, because it priced an open browser tab as a heartbeat stream.** Measured against a no-tabs control in wave 14 ([E-92](#e-92)): **a table dealing 500 hands a day with ten browser tabs open burned 11.5 T/day — ZERO days on 10 T and four days on the 51 T these canisters hold**, with everybody behaving normally, and the freezing reserve was worth four minutes. The poll is fixed and the same table is now 4–14 days on 10 T. **Days, not months. And nothing tops it up.** Also fixed earlier: `runway_days` was computed from a lifetime burn average, so a table that sat idle and then got busy over-reported its runway by 2.1x. Now warned to a player before they deposit, and read twice a day by a CI job that holds no credential |
 | [E-91](#e-91) | high | FIXED | 13 | `dev.sh test` step 1 -> `cargo test --workspace` -> `history_canister::retention_tests::a_table_may_not_record_a_hand_naming_another_table` (+ `a_table_may_record_its_own_hand`, `the_admin_is_still_allowed_to_record_for_a_table`, `a_stranger_is_still_refused_before_any_of_this`, and `two_records_sharing_one_name_collapse_to_one_which_is_why_the_binding_exists`, which measures the mechanism the binding protects). Verified to go red: neutering the binding to `if false` fails exactly that one test, 22 of 23 still green | `history_canister` `record_hand` -> `may_record` | **THE NINTH CROSS-AGENT DEFECT, and it is a REGRESSION THIS WAVE INTRODUCED.** [E-71](#e-71) narrowed the de-duplication key from `(table_id, hand_number, seed_hash)` to the hand's NAME, `(table_id, seed_hash)` — and `record_hand` authorised the CALLER but never bound `record.table_id` to it, so a writer picked half of the name. The other half, the shuffle commitment, is PUBLIC: it is on the player's screen while the hand is running. Before the narrowing a forged record naming another table landed as a visible EXTRA record under its own `hand_number`; after it, the forgery and the genuine hand share one whole name, so the second to arrive is absorbed as a "retry" and **DISCARDED while its sender is told `Ok` with somebody else's id**. File the forgery first and a genuine hand is deleted from the permanent, append-only, "provably fair" archive, silently. That is [E-49](#e-49) exactly, in the wave whose own comments cite E-49 as the thing being avoided, reachable by any of the four authorised tables. **Every instrument built this wave reads green over it, because the failure is an ABSENT record rather than a wrong one.** Closed by binding `record.table_id` to the caller; the admin stays exempt and it is [SAID](SECURITY-FINDINGS.md#finding-23) rather than assumed, because the admin can reinstall this canister anyway |
 | [E-71](#e-71) | high | FIXED | 13 | `dev.sh shots-selftest` -> `tools/shots/test-hand-identity.mjs` (25 cases, no replica), whose case 4 injects the by-`hand_number` join and requires `JOIN BROKEN`; `dev.sh test` -> `cargo test -p history_canister` -> `eleven_hands_under_one_number_have_eleven_different_names` + 6 more; on a running canister, `history get_archive_integrity` (`name_collisions` and `records_without_a_usable_commitment` must be 0, recounted from the RECORDS not the index). Verified to go red end to end: the join reverted to `hand_number` turns the `handhistory` shot red naming both hands | `history_canister` `hand_uid`; `tools/shots/lib/chain-agreement.mjs` `joinTableHandsToArchive` | the archive's `(table_id, hand_number)` was not a key: measured, **947 of 1,651 citations named more than one record, 2,514 of 3,218 records (78%) lived under one, and "table_2 hand 1" answered to 70 records with 6 different pots**. A hand is now named by what is intrinsic to it — `table_id:seed_hash`, the shuffle commitment, unique over all 3,218 existing records — DERIVED on read, so every record already stored was named without being rewritten, renumbered or reindexed (proved by an upgrade over the live 3,218: 0 lost, 0 added, 0 changed). Old citations still resolve, via `resolve_hand_number`, to the labelled SET they always named |
-| [H-23](#h-23) | high | FIXED | 13 | CI `fund-safety-fast` (**declared on every PR; NOT a required status check — see the correction below**) → `./scripts/ci-fund-safety.sh fast`: 21 suite invocations including the money invariants, `deposit_replay`, the custody gate, the solvency gate and the settlement oracle. CI `fund-safety-deep` (nightly + every push to `main`) → `ci-fund-safety.sh deep`: the 9×600 fuzz, the fuzzer at its own defaults, the 138-state stall sweep, the clock, the runway, the full oracle sweep. CI `suite-wiring` → `./scripts/check-suite-wiring.sh`, which fails the build when any cargo test target is run by no tier, and which `--selftest`s its own ability to go red BEFORE it judges. **Verified to convict:** a 1% skim planted in `apply_payouts`, invisible to conservation, `sum(winners) == collected` and `total_liability()`, turns the fast tier RED. **CORRECTION, wave-13 reconciliation, verified against the API on 2026-08-09: nothing here is REQUIRED and the deep workflow has never run.** `gh api repos/JoshDFN/cleardeck/branches/main/protection/required_status_checks` -> `404 Required status checks not enabled`; `.../rulesets` -> `[]`; `.../actions/workflows` lists CI, Cycles monitor, Deploy to IC mainnet, Deployed drift and Security, and **`Fund safety (deep tier)` is not among them**. So a red fund-safety job blocks no merge, and the register said REQUIRED where the repository says nothing is. The job exists, is runnable by a human as `./scripts/ci-fund-safety.sh fast`, and is proved to convict a real theft — **turning it on in branch protection is one click nobody has made, and it is the single highest-value item left in this row** | `.github/workflows/ci.yml`, `.github/workflows/fund-safety-deep.yml`, `scripts/ci-fund-safety.sh`, `scripts/pocket-ic.sh`, `scripts/test-suites.list`, `scripts/check-suite-wiring.sh` | **every fund-safety result in this project's documents came from a harness no CI job invoked.** `cargo test --locked --workspace` could not reach one of them: the three PocketIC harnesses carry a bare `[workspace]` on purpose, so the deployed canisters stay byte-reproducible, and that put every money invariant outside the only test command CI ran. The wiring check caught **three unwired suites while it was being written**, including its own blind spot — `--test X` does not run `--lib`, so **twelve unit tests**, one of them inside the money-safety harness itself, were run by nothing |
-| [H-26](#h-26) | high | OPEN | — | — | `tests/money_safety/src/fuzz.rs` `run_sequence` | a fuzz run is documented as "a pure function of `(seed, config, actor_names, steps)`" and is not. Seed `212967420072194` at 400 steps plays **4 hands and finds nothing alone, 5 hands and two fund-creation findings when seed `212967420072193` ran before it in the same process**. Every `MONEY_FUZZ_SEEDS=<one seed>` reproducer in this repo is therefore unverified. **The COVERAGE half is closed in wave 13 and the purity half is not.** Two changes, both needed, neither about run length: (1) `Op::UseTimeBankOnClock` + `under_the_action_pointer`, because `Op::UseTimeBank` names a RANDOM actor and the harness's only seat-resolver `on_the_clock` returns `None` unless a hand is live, so no op in the alphabet could call a between-hands surface with the right caller; (2) a state-arming op now sometimes carries its own `AdvanceTime(31 s)` + `CheckTimeouts`, because every clock defect here is "one message arms it, a later deadline acts on it" and the generator was drawing the pair by luck. **Measured, all at the default 3 seeds x 220 steps with nothing in the environment:** HEAD's generator finds 1 finding (E-89, 20,002 e8s, 74.0 s); change (1) alone still misses E-41; (1)+(2) on the UNFIXED canister finds **32**, including `M1_CONSERVATION delta=-200000000 / -399000000 / -601500000` and the `CRITICAL: pot accounting disagreement` line, in 87.8 s; on the fixed canister it is back to 2 (both [E-89](#e-89) family) in **55.6 s**. Seed order still decides what a run explores. **TWO CORRECTIONS, wave-13 reconciliation.** (1) *The 55.6 s figure is for a configuration nothing runs.* It was measured with `MONEY_FUZZ_SHRINK=0`; `dev.sh test` and `make fuzz-default` both `env -u` that variable, so the shrink budget is the default 60 and a run that finds anything spends ~200 s per shrink pass. The generator change is not free: measured at the real default, the new generator cost **597.6 s against HEAD's 389.5 s** because it produced two shrink passes rather than one. (2) *The second of the two surviving reds was not [E-89](#e-89).* It was `M3_NO_RAKE +10000` at seed `0xc1ea2dec0001` — [FINDING 44](SECURITY-FINDINGS.md#finding-44), a FALSE conviction caused by M3's window guard reading `ledger_main` while `internal_total()` counts deposit subaccounts. Fixed in this pass, and with it seed `0xc1ea2dec0001` is clean in 19.9 s and `fuzz-default` is red on E-89 alone |
-| [H-42](#h-42) | high | OPEN | — | — | `scripts/dev.sh` `cmd_test` step 4 (**and see [H-54](#h-54): the mechanism is the settlement steps' timeout watchdog, not this step**) | **`./scripts/dev.sh test`, the repo's primary gate, hung for 33 minutes** with zero CPU on both the test binary and its own PocketIC. The money-safety targets have NO time bound; the settlement targets one step later have two. Every leg is green when run directly (`invariants` 45/0 in 63 s single-threaded) |
-| [D-11](#d-11) | high | OPEN | — | — | `src/declarations/<n>/<n>.did.js` via `src/lib/canisters.js` | the frontend's Candid bindings are a **third** copy of the interface and have drifted from both. `table_1.did.js` does not declare `get_solvency`, `get_all_ledger_intents`, `get_cycle_status`, `refresh_solvency` or `get_deposit_replay_state`, so the custody and solvency instruments built in waves 7–10 cannot reach the UI. Same shape as [E-67](#e-67) |
-| [H-45](#h-45) | high | OPEN | — | — | `tests/money_safety/tests/{stall_agreement,solvency,deposit_subaccount_anchor,fund_reachability,oldest_cluster,deposit_surface}.rs` | **[H-17](#h-17) AT FOUR TIMES THE SCALE, and it is holding up the two most recent cross-agent defects.** `scripts/dev.sh cmd_test` names its money-safety targets one by one *precisely so* a cargo-auto-discovered target cannot be a target nobody runs — and four targets are not on the list, are in no make target, and are in no CI job. They are the named gates of [E-59](#e-59)/[FINDING 25](SECURITY-FINDINGS.md#finding-25) (M13 ONE BELIEF, the FOURTH cross-agent defect), [E-70](#e-70)/[E-72](#e-72)/[FINDING 35](SECURITY-FINDINGS.md#finding-35)/[36](SECURITY-FINDINGS.md#finding-36) (the FIFTH), [FINDING 28](SECURITY-FINDINGS.md#finding-28)/[FINDING 11](SECURITY-FINDINGS.md#finding-11)/[E-12](#e-12), and M9's own file. **46 tests, and the count grew by two files DURING this pass** — `oldest_cluster` (the gate the [E-78](#e-78) row names) and `deposit_surface` were both added unwired by other owners in the same wave. **Three of the six are wired as of 2026-08-06:** `oldest_cluster`, `deposit_surface` and `deposit_subaccount_anchor` are now named in `scripts/dev.sh cmd_test` AND in `tests/money_safety/Cargo.toml`, by the owners who filed them. `deposit_subaccount_anchor` mattered most: it was the ONLY gate on [E-12](#e-12)/[FINDING 11](SECURITY-FINDINGS.md#finding-11) and [FINDING 28](SECURITY-FINDINGS.md#finding-28), eleven tests, run by nothing since wave 8. **`stall_agreement`, `solvency` and `fund_reachability` are still unwired**, and [H-48](#h-48) says the last of those three is RED. Verified 2026-08-06 by grepping every `--test <name>` in `scripts/`, `Makefile` and `.github/` |
-| [H-48](#h-48) | high | OPEN | — | — | `tests/money_safety/tests/fund_reachability.rs:266,:349` (**wave 12: re-run at HEAD, 6 of 6 PASS**) | **M9's own file is RED and no target runs it.** 2 of its 6 tests fail on the wasm `dev.sh test` just built, both at the predicate [E-59](#e-59) changed from the wall clock to ATTEMPTS. Probably a stale gate — `timers::the_table_settles_itself_with_no_external_caller` is green and proves the money is reachable on a subnet — but nothing anybody runs has had to answer for it. See [H-45](#h-45) |
+| [H-23](#h-23) | high | FIXED | 13 | CI `fund-safety-fast` (**declared on every PR; NOT a required status check — see the correction below**) → `./scripts/ci-fund-safety.sh fast`: 21 suite invocations including the money invariants, `deposit_replay`, the custody gate, the solvency gate and the settlement oracle. CI `fund-safety-deep` (nightly + every push to `main`) → `ci-fund-safety.sh deep`: the 9×600 fuzz, the fuzzer at its own defaults, the 138-state stall sweep, the clock, the runway, the full oracle sweep. CI `suite-wiring` → `./scripts/check-suite-wiring.sh`, which fails the build when any cargo test target is run by no tier, and which `--selftest`s its own ability to go red BEFORE it judges. **Verified to convict:** a 1% skim planted in `apply_payouts`, invisible to conservation, `sum(winners) == collected` and `total_liability()`, turns the fast tier RED. **CORRECTION, wave-13 reconciliation, verified against the API on 2026-08-09: nothing here is REQUIRED and the deep workflow has never run.** `gh api repos/JoshDFN/cleardeck/branches/main/protection/required_status_checks` -> `404 Required status checks not enabled`; `.../rulesets` -> `[]`; `.../actions/workflows` lists CI, Cycles monitor, Deploy to IC mainnet, Deployed drift and Security, and **`Fund safety (deep tier)` is not among them**. So a red fund-safety job blocks no merge, and the register said REQUIRED where the repository says nothing is. The job exists, is runnable by a human as `./scripts/ci-fund-safety.sh fast`, and is proved to convict a real theft — **turning it on in branch protection is one click nobody has made, and it is the single highest-value item left in this row**. **WAVE-14 ADDITION:** `check-suite-wiring.sh` is no longer CI-only — it is step **[1/9]** of `./scripts/dev.sh test` and it `die`s, so the one check that can catch a suite nobody runs now runs for a developer too, which matters precisely because nothing here is required ([H-45](#h-45)). The `fast` tier also grew `solvency_definition` and `deposit_trust_root` this wave | `.github/workflows/ci.yml`, `.github/workflows/fund-safety-deep.yml`, `scripts/ci-fund-safety.sh`, `scripts/pocket-ic.sh`, `scripts/test-suites.list`, `scripts/check-suite-wiring.sh` | **every fund-safety result in this project's documents came from a harness no CI job invoked.** `cargo test --locked --workspace` could not reach one of them: the three PocketIC harnesses carry a bare `[workspace]` on purpose, so the deployed canisters stay byte-reproducible, and that put every money invariant outside the only test command CI ran. The wiring check caught **three unwired suites while it was being written**, including its own blind spot — `--test X` does not run `--lib`, so **twelve unit tests**, one of them inside the money-safety harness itself, were run by nothing |
+| [H-26](#h-26) | high | FIXED | 14 | `cd tests/money_safety && cargo test --test fuzz -- a_seeds_table_shape_does_not_depend_on_where_it_appears_in_the_list` — milliseconds, no replica, in the same binary as the fuzzer it guards and therefore in `dev.sh test`, the `fast` CI tier and `fuzz-default`. **Proved RED on the pre-fix body** (`run_shape` reverted to `position % 3`): *`seed 0x0 plays a DIFFERENT GAME at position 1 than at position 0: heads_up_icp vs six_max_icp`*, then green on the fix. **And anchored OUTSIDE the code:** seed `212967420072194` at 400 steps was run twice in two separate processes, once after `212967420072193` and once alone, and the two `money-fuzz-report.json` run objects are byte-identical (`config`, `steps_executed` 400, `hands_completed` 7, `upgrades` 6, `final_ledger_main`, `final_internal_total`, `transcript_tail`) | `tests/money_safety/src/fuzz.rs` `run_sequence` | a fuzz run is documented as "a pure function of `(seed, config, actor_names, steps)`" and is not. Seed `212967420072194` at 400 steps plays **4 hands and finds nothing alone, 5 hands and two fund-creation findings when seed `212967420072193` ran before it in the same process**. Every `MONEY_FUZZ_SEEDS=<one seed>` reproducer in this repo is therefore unverified. **The COVERAGE half is closed in wave 13 and the purity half is not.** Two changes, both needed, neither about run length: (1) `Op::UseTimeBankOnClock` + `under_the_action_pointer`, because `Op::UseTimeBank` names a RANDOM actor and the harness's only seat-resolver `on_the_clock` returns `None` unless a hand is live, so no op in the alphabet could call a between-hands surface with the right caller; (2) a state-arming op now sometimes carries its own `AdvanceTime(31 s)` + `CheckTimeouts`, because every clock defect here is "one message arms it, a later deadline acts on it" and the generator was drawing the pair by luck. **Measured, all at the default 3 seeds x 220 steps with nothing in the environment:** HEAD's generator finds 1 finding (E-89, 20,002 e8s, 74.0 s); change (1) alone still misses E-41; (1)+(2) on the UNFIXED canister finds **32**, including `M1_CONSERVATION delta=-200000000 / -399000000 / -601500000` and the `CRITICAL: pot accounting disagreement` line, in 87.8 s; on the fixed canister it is back to 2 (both [E-89](#e-89) family) in **55.6 s**. Seed order still decides what a run explores. **TWO CORRECTIONS, wave-13 reconciliation.** (1) *The 55.6 s figure is for a configuration nothing runs.* It was measured with `MONEY_FUZZ_SHRINK=0`; `dev.sh test` and `make fuzz-default` both `env -u` that variable, so the shrink budget is the default 60 and a run that finds anything spends ~200 s per shrink pass. The generator change is not free: measured at the real default, the new generator cost **597.6 s against HEAD's 389.5 s** because it produced two shrink passes rather than one. (2) *The second of the two surviving reds was not [E-89](#e-89).* It was `M3_NO_RAKE +10000` at seed `0xc1ea2dec0001` — [FINDING 44](SECURITY-FINDINGS.md#finding-44), a FALSE conviction caused by M3's window guard reading `ledger_main` while `internal_total()` counts deposit subaccounts. Fixed in this pass, and with it seed `0xc1ea2dec0001` is clean in 19.9 s and `fuzz-default` is red on E-89 alone |
+| [H-42](#h-42) | high | FIXED | 14 | `scripts/dev.sh` `with_timeout`, now used on **every one of the nine steps** of `cmd_test` with the bound printed next to the measured time. **H-54's fix was vacuous and this is the measurement:** at HEAD, `out="$(with_timeout 2 sh -c 'sleep 60; echo never')"` **returned after 60 s**, because `kill -9 "$pid"` reaches the subshell only and every process it forked keeps the inherited stdout. After the fix the same command returns in **3 s with rc=124**, a deeper tree (`sh -> sh -> sleep 90`) returns in **2 s**, `ps` shows no survivor, and a command that finishes inside its bound still returns its own exit code (7 stays 7) | `scripts/dev.sh` `with_timeout`, `descendants`, `kill_tree`, `timed_step`, `cmd_test` | **`./scripts/dev.sh test`, the repo's primary gate, hung for 33 minutes** with zero CPU on both the test binary and its own PocketIC. The money-safety targets have NO time bound; the settlement targets one step later have two. Every leg is green when run directly (`invariants` 45/0 in 63 s single-threaded) |
+| [D-11](#d-11) | high | FIXED | 14 | `./scripts/check-declarations-js.sh` (CI job *Candid interface drift*, and step [1/9] of `dev.sh test`): regenerates every `<n>.did.js` and `<n>.did.d.ts` from the committed `.did` with the same `candid_parser` bindings `didc bind` uses, and diffs. `--selftest` deletes `get_tables` from a binding and requires a conviction; `--write` is the only sanctioned way to change these files. **Proved RED on the unfixed tree: 10 of 10 files drifted**, then green after `--write`, and the app was re-opened in a plain browser afterwards to confirm the regenerated bindings still drive it | `src/declarations/<n>/<n>.did.js` via `src/lib/canisters.js` | the frontend's Candid bindings are a **third** copy of the interface and have drifted from both. `table_1.did.js` does not declare `get_solvency`, `get_all_ledger_intents`, `get_cycle_status`, `refresh_solvency` or `get_deposit_replay_state`, so the custody and solvency instruments built in waves 7–10 cannot reach the UI. Same shape as [E-67](#e-67) |
+| [H-45](#h-45) | high | FIXED | 14 | step **[1/9]** of `./scripts/dev.sh test` -> `./scripts/check-suite-wiring.sh`, and it is `die`, not a collected failure: a tree containing a test target nothing names does not get to run its gates. **Proved RED twice. Once PLANTED:** an empty `tests/money_safety/tests/zz_planted_unwired.rs` turns `dev.sh test` red in **8 seconds** with `FATAL: suite wiring is broken -- a test target in this tree is run by nothing`. **Once FOR REAL, unplanted, during this wave:** `tests/money_safety/tests/solvency_definition.rs` (FINDING 43/38) was written by another owner and named by nothing, and this step said so within a second instead of a human finding it a wave later — H-45's SEVENTH recurrence, now wired. Second half of the same fix: `money_safety_fast_subset` no longer `&&`-chains its targets, so one red target cannot skip the fifteen after it | `tests/money_safety/tests/{stall_agreement,solvency,deposit_subaccount_anchor,fund_reachability,oldest_cluster,deposit_surface}.rs` | **[H-17](#h-17) AT FOUR TIMES THE SCALE, and it is holding up the two most recent cross-agent defects.** `scripts/dev.sh cmd_test` names its money-safety targets one by one *precisely so* a cargo-auto-discovered target cannot be a target nobody runs — and four targets are not on the list, are in no make target, and are in no CI job. They are the named gates of [E-59](#e-59)/[FINDING 25](SECURITY-FINDINGS.md#finding-25) (M13 ONE BELIEF, the FOURTH cross-agent defect), [E-70](#e-70)/[E-72](#e-72)/[FINDING 35](SECURITY-FINDINGS.md#finding-35)/[36](SECURITY-FINDINGS.md#finding-36) (the FIFTH), [FINDING 28](SECURITY-FINDINGS.md#finding-28)/[FINDING 11](SECURITY-FINDINGS.md#finding-11)/[E-12](#e-12), and M9's own file. **46 tests, and the count grew by two files DURING this pass** — `oldest_cluster` (the gate the [E-78](#e-78) row names) and `deposit_surface` were both added unwired by other owners in the same wave. **Three of the six are wired as of 2026-08-06:** `oldest_cluster`, `deposit_surface` and `deposit_subaccount_anchor` are now named in `scripts/dev.sh cmd_test` AND in `tests/money_safety/Cargo.toml`, by the owners who filed them. `deposit_subaccount_anchor` mattered most: it was the ONLY gate on [E-12](#e-12)/[FINDING 11](SECURITY-FINDINGS.md#finding-11) and [FINDING 28](SECURITY-FINDINGS.md#finding-28), eleven tests, run by nothing since wave 8. **`stall_agreement`, `solvency` and `fund_reachability` are still unwired**, and [H-48](#h-48) says the last of those three is RED. Verified 2026-08-06 by grepping every `--test <name>` in `scripts/`, `Makefile` and `.github/` |
+| [H-48](#h-48) | high | FIXED | 14 | `cd tests/money_safety && CLEARDECK_TABLE_WASM=… cargo test --test fund_reachability -- --test-threads=1`, named in `dev.sh test` step [5/9] and in the `fast` CI tier. **Settled by running it, not by reading a report: 6 passed, 0 failed, 13.04 s**, against wasm `3890a6d4a1861343df40c08772979171bc15fed8c51102c81f3c849346b29a0d`. **And the question the entry actually asked is answered: the GATE was stale, the code was right.** `git log -p` on the file shows the two assertions were rewritten in commit `134550e` from a single `advance(30+300+5 s)` to `12 x advance(60 s)`, with the reason in the file (*"a single `advance(335s)` gives the canister nothing to witness"* — the E-59 predicate counts committed messages, not wall clock) and the resulting coverage loss recorded in the doc comment rather than hidden. The file also carries `m9s_per_step_check_can_actually_fail`, so it is not a gate that cannot go red | `tests/money_safety/tests/fund_reachability.rs:266,:349` (**wave 12: re-run at HEAD, 6 of 6 PASS**) | **M9's own file is RED and no target runs it.** 2 of its 6 tests fail on the wasm `dev.sh test` just built, both at the predicate [E-59](#e-59) changed from the wall clock to ATTEMPTS. Probably a stale gate — `timers::the_table_settles_itself_with_no_external_caller` is green and proves the money is reachable on a subnet — but nothing anybody runs has had to answer for it. See [H-45](#h-45) |
 | [L-03](#l-03) | high | OPEN | — | — | `.alpha-warning-banner` + `header` in portrait | the phone lobby cannot reach the reference band from `Lobby.svelte` at all: with the lobby's own furniture at **zero** the first card is still at **45.9%**. The 28 px needed are chrome, and the mechanism to release them already ships one condition away |
-| [L-04](#l-04) | high | OPEN | — | — | lobby canister registry | the lobby's registered *names* quote blinds the table contracts do not charge (10× and 5× wrong), and its registered *configs* disagree with the contracts on four fields each. **This, and only this, is why both lobby scenes are red.** Every price the client computes is the contract's |
-| [T-14](#t-14) | high | OPEN | — | — | `tools/shots/lib/frontend-build.mjs` `buildEnvFor` | the deployed local frontend points its agent at **127.0.0.1:4943** while the gateway is on 8077, so the app only works behind the screenshot harness's own shim. Opened in a plain browser it shows a raw fetch stack trace and "The lobby canister is reporting no tables" |
+| [L-04](#l-04) | high | FIXED | 14 | `./scripts/check-deployed-config.sh` (daily CI job *Deployed drift*), which now reads `lobby.get_tables()` and diffs **every registered row against its own table contract**, field by field, plus a rule that a registered NAME may not quote a price at all. **Proved RED with real drift and healed:** a name put back to `"6-Max - 0.05/0.10"` and the table_2 contract's clock moved 45 -> 60 produced *`small_blind: lobby advertises 1000000, the contract charges 5000000`* and four more lines plus the name rule; after `refresh_all_table_configs` and restoring the contract it reads *all 4 table config(s) match icp.yaml, and every lobby row matches its contract*. **The missing method exists**: `refresh_table_config` / `refresh_all_table_configs` COPY the config out of `get_table_view()` rather than taking one as an argument, so the registry cannot be told a figure the contract does not charge. LOCAL ONLY; mainnet is untouched and still needs the same one call | lobby canister registry, `src/lobby_canister/src/lib.rs`, `scripts/check-deployed-config.sh` | the lobby's registered *names* quote blinds the table contracts do not charge (10× and 5× wrong), and its registered *configs* disagree with the contracts on four fields each. **This, and only this, is why both lobby scenes are red.** Every price the client computes is the contract's |
+| [H-55](#h-55) | high | FIXED | 14 | `./scripts/check-deployed-config.sh --selftest`, which asserts the extractor can read all eight `TableConfig` fields out of a real Candid reply, that an ABSENT field reads as empty rather than as `0`, and that a 5x drift does not compare equal. It runs before the script judges anything, in the daily *Deployed drift* CI job. **Proved RED before the fix by the guard's own subject:** table_2's contract was moved to `action_timeout_secs = 60` against icp.yaml's 45 and the script printed `✓ table_2 … matches icp.yaml`; after the fix the same tree prints `✗ table_2 … action_timeout_secs: declared 45, running 60` | `scripts/check-deployed-config.sh` field extractor | **the guard against declared-vs-deployed drift compared ONE field out of EIGHT and said "matches".** Its extractor was `grep -oE '[0-9_]+' \| head -1 \| tr -d '_'`, and `[0-9_]+` matches **the underscore inside the field name**: on `small_blind = 5_000_000 : nat64` the first match is the `_` in `small_blind`, `head -1` takes it, `tr -d '_'` empties it and the caller's `[ -n "$got" ] \|\| continue` SKIPPED THE FIELD. Seven of the eight names in `TableConfig` carry an underscore, so the only field ever compared was `ante`. This is the script written in wave 13 to stop [D-12](#d-12)'s `btc_table_1` running at one tenth of its declared stakes for its whole life, it would not have caught that either, and `.github/workflows/deployed-drift.yml` has been running it against MAINNET daily and reporting green |
+| [T-45](#t-45) | medium | OPEN | — | — | `src/cleardeck_frontend/src/lib/oisy.js:60,:165,:301` | [T-14](#t-14)/[T-03](#t-03) surviving in a third place. `ic-config.js` and `auth.js` both derive the local gateway from `LOCAL_GATEWAY_PORT` now; the OISY wallet path still writes `isMainnet() ? IC_HOST : 'http://localhost:4943'` three times, so connecting an external wallet locally still points at a port this project does not run. It is in the built bundle today. Not fixed here: `src/cleardeck_frontend/**` is another owner's tree |
+| [T-46](#t-46) | high | OPEN | — | — | `src/cleardeck_frontend/build/verify-bundle.mjs` `compiledNetwork()` vs `src/lib/ic-config.js` `buildValue()` | **`npm run build:mainnet` is RED at HEAD, and it is the gate [E-95](#e-95) put on CI's `Build frontend` job.** `compiledNetwork()` in the verifier matches `function X(){return"ic"}` in the minified bundle; wave 14's `buildValue(() => import.meta.env.VITE_ICP_NETWORK)` refactor wrapped the substitution in a closure, so the emitted function no longer has that shape and the verifier reports *"no network literal compiled in: the bundle would fall back to sniffing window.location.hostname"* and exits 1. The value is almost certainly still correct — vite's `define` substitutes inside an arrow function — so this is the DETECTOR going stale, which is the worse of the two possibilities: the one gate on T-01 now fails on every build and the pressure is to switch it off |
+| [T-14](#t-14) | high | FIXED | 14 | `assertBundleLocalGateway(GATEWAY_PORT)` in `tools/shots/lib/frontend-build.mjs`, called by `buildFrontend` — so it runs on `dev.sh local-up` and on every screenshot sweep. **Proved RED by building with the PRE-FIX environment** (`buildEnvFor` minus the two keys this fix adds): *`ABORT: the built bundle … contains no reference to the local gateway port 8077`*; green on the fixed build (`port 8077 found in 1 built file(s)`). **And verified on rendered pixels through a plain browser with no shim:** `http://5uljf-…-cai.localhost:8077/` renders *3 tables · 0/17 seats · 0% rake* with no console error, where before it showed a raw fetch stack trace and "The lobby canister is reporting no tables" | `tools/shots/lib/frontend-build.mjs` `buildEnvFor`, `tools/shots/run.mjs`, `tools/shots/perf.mjs` | the deployed local frontend points its agent at **127.0.0.1:4943** while the gateway is on 8077, so the app only works behind the screenshot harness's own shim. Opened in a plain browser it shows a raw fetch stack trace and "The lobby canister is reporting no tables" |
 | [D-03](#d-03) | medium | OPEN | — | — | every component `<style>` block | 16 border radii, 28 font sizes, 9 greens, 6 ambers, 11 greys, 8 panel tints, 8 panel strokes; four buttons in one header row with three heights, two radii, two font sizes and two accent families |
 | [D-06](#d-06) | medium | OPEN | — | — | `README.md` lines 95-125, `docs/SHUFFLE-SPEC.md` | two claims a stranger reads as stronger than they are: *"the commitment is published before the deal"* (true only inside a single message, `start_new_hand` commits and deals atomically, so no outsider can observe the commitment before cards exist), and *"You can verify that the deployed canisters match this source code"* (addressed to people who by construction cannot run the procedure) |
 | [D-07](#d-07) | medium | OPEN | — | — | `README.md` §Verify the Code, the "⚠️ The mainnet canisters do not satisfy this yet" box | two trust surfaces of the same product make opposite claims about the same fact, which is [T-21](#t-21) again on the page a stranger reads first. The README box says the deployed mainnet modules **predate** the reproducible pipeline, carry no `git:revision`, and that a verifier should expect `NOT VERIFIED`. The wave-11 handover states all six backend canisters and the frontend run this tree and the hashes match a reproducible build **6 of 6**. One of the two is false and the README is the one a player reads |
@@ -360,7 +496,7 @@ is true.
 | [E-76](#e-76) | medium | OPEN | — | — (red on 3 of the 24 recorded shots) | `felt-area.mjs` floors vs the 6-pod and 9-pod layouts | the felt drops below its floor on three of the twenty-four shots: 27.8% against a 28% floor on two desktop table scenes, 42.8% against 45% on `table-allin` mobile. Marginal and real |
 | [E-77](#e-77) | medium | OPEN | — | — | `notify_deposit` (archived-block branch) | **renumbered from a second E-45 in wave 11; the id collided with the currency-guard defect.** A deposit made by plain transfer can only be credited while its block is still resident in the ledger canister. Once archived it can **never** be claimed, and `admin_restore_balance` was deliberately removed, so nothing can credit that user afterwards. The README documents this path |
 | [E-80](#e-80) | medium | OPEN | — | — | `notify_deposit` destination branch, `src/table_canister/src/lib.rs` | the refusal asserts a negative the canister cannot know: *"Transfer was not to an account of this canister"* is returned for **any** destination that is neither the main account nor the CALLER's own deposit address — including another player's deposit subaccount, which is exactly where [FINDING 40](SECURITY-FINDINGS.md#finding-40)'s theft lands the money. The same sentence then says *"Check the destination against `get_deposit_address()`"*, which since [FINDING 34](SECURITY-FINDINGS.md#finding-34) returns the caller's OWN address and not the main account this branch is about |
-| [E-81](#e-81) | medium | OPEN | — | — | `withdraw` minimum refusal, `src/table_canister/src/lib.rs` | the refusal states a universal guarantee the same sentence disproves: *"Your whole remaining balance can always be withdrawn in one call whatever its size, as long as it is more than the 0.0001 ICP network fee -- you have 0.0001 ICP."* It is the exact message shown to the player stranded by [FINDING 31](SECURITY-FINDINGS.md#finding-31), and it reads as a formatting mistake to retry rather than a door that will never open |
+| [E-81](#e-81) | medium | FIXED | 14 | `./scripts/dev.sh test` step 4 → `cargo test --test deposit_floor` → `a_balance_at_the_ledger_fee_is_refused_as_arithmetic_and_not_as_a_policy_minimum`, verified RED against `git show HEAD:src/table_canister/src/lib.rs` | `withdraw` minimum refusal, `src/table_canister/src/lib.rs` | the refusal states a universal guarantee the same sentence disproves: *"Your whole remaining balance can always be withdrawn in one call whatever its size, as long as it is more than the 0.0001 ICP network fee -- you have 0.0001 ICP."* It is the exact message shown to the player stranded by [FINDING 31](SECURITY-FINDINGS.md#finding-31), and it reads as a formatting mistake to retry rather than a door that will never open |
 | [E-82](#e-82) | medium | OPEN | — | — | `notify_deposit` ICRC-2 branch, `src/table_canister/src/lib.rs` | on a canister whose stable state has been wiped ([FINDING 23](SECURITY-FINDINGS.md#finding-23)) the refusal says the block *"was credited to your balance when the pull happened and cannot be credited again"*. The replay refusal is right; the stated reason is a claim about the books that is false in that state, and it is the last door a wiped-out player tries |
 | [H-11](#h-11) | medium | OPEN | — | — | `tests/money_safety/src/table_api.rs:80-108` | the fuzzer only ever runs a 30 s action timeout at `table_1` stakes; `table_2`/`table_3` shapes are never exercised |
 | [H-22](#h-22) | medium | OPEN | — | — (contained by `with_timeout 900`, not fixed) | `tests/settlement` re-deal search | the exact-deal search has no attempt cap, so a deck that stops varying HANGS the suite instead of failing it; contained by a timeout in `cmd_test`, not fixed |
@@ -376,6 +512,11 @@ is true.
 | [T-32](#t-32) | medium | OPEN | — | — | `PokerTable.svelte:313` `max_players ?? 9` | **every table entry first paints a NINE-seat ring.** At a 6-max table on a phone the felt is 45.3%→50.7% of the frame for **336 ms** and then jumps to 60.6%; on desktop 33.2% for **304 ms** and then 31.7%. Wave 5's headline 60.6% is the settled state and was never distinguished from the first paint |
 | [E-94](#e-94) | medium | FIXED | 13 | `./scripts/assert-read-only.sh --selftest`, which the guard runs on ITSELF before it judges any file, now carrying the four demonstrated bypasses as probe lines and requiring 5 of 5 mutating hits and 5 of 5 credential hits. Verified against hostile files: a workflow carrying `secrets.DEPLOY_KEY_PEM_BLOB` + `icp identity use`, and one carrying `icp canister create` + `icp canister migrate-id`, are now both REFUSED where both previously printed `ok … read-only, anonymous` and exited 0 | `scripts/assert-read-only.sh` `MUTATING` and `CREDENTIAL` | **the guard on the credential-free cycles monitor was a list of yesterday's incidents, not a rule.** `CREDENTIAL` matched `secrets\.IC_` only, so any secret not named `IC_*` — `secrets.DEPLOY_KEY_PEM_BLOB` — passed; `MUTATING` listed `install/stop/start/delete/top-up/snapshot/settings` and omitted `create`, `migrate-id`, `uninstall`, `update-settings` and every `icp identity` subcommand, so `icp identity use monitor` was `read-only, anonymous`. The exact historical regression (`secrets.IC_DEPLOY_IDENTITY`) was blocked and nothing near it was. Widened to the whole write half of the CLI surface and to every `secrets.` reference. **Still not transitive** — the guard reads the workflow, not the scripts a workflow invokes, so a `run: ./scripts/anything.sh` is unexamined; that is named here rather than fixed, because making it transitive means resolving arbitrary shell |
 | [E-95](#e-95) | high | FIXED | 13 | reproduced and fixed locally with the exact command the job runs: `DFX_NETWORK=ic VITE_CANISTER_ID_LOBBY=aaaaa-aa VITE_CANISTER_ID_HISTORY=aaaaa-aa npm --workspace src/cleardeck_frontend run build` -> `ABORT: building for MAINNET, but the canister ids do not match the roles in .icp/data/mappings/ic.ids.json`; the replacement, `npm --workspace src/cleardeck_frontend run build:mainnet` with no ambient `DFX_NETWORK`, builds AND verifies (`8 of 8 checks passed`) | `.github/workflows/ci.yml` job `Build frontend` | **main's CI has been red continuously since 2026-08-07 for a reason that is a CI wiring fault, and a permanently red pipeline is the reason a fund-safety red would be invisible.** The job ran `npm run build` with `DFX_NETWORK: ic` and `VITE_CANISTER_ID_* = aaaaa-aa`, under a comment saying *"Placeholder IDs: the bundle resolves real IDs at deploy time from .env"*. That comment stopped being true when the mainnet-id cross-check landed in `vite.config.js`: an `ic` build whose ids disagree with the TRACKED `.icp/data/mappings/ic.ids.json` now aborts, and placeholders can never agree. So [H-23](#h-23) landed its fund-safety jobs onto a pipeline that was already failing, where **a new red is indistinguishable from the red that has been sitting there for two days**. Switched to `build:mainnet`, the one named path, which reads the ids from the tracked mapping itself, refuses a contradictory ambient `DFX_NETWORK` (so the step sets none) and verifies the bundle before exiting 0 |
+| [E-96](#e-96) | low | OPEN | — | — | `SolvencyNotice.svelte` `visible`; `interpretSolvency` in `src/cleardeck_frontend/src/lib/solvency.js` | **money the table is holding for somebody it cannot name renders NOTHING on the deposit screen.** Found in wave 14 by SERVER-RENDERING the shipped `SolvencyNotice.svelte` for each reachable state rather than reading it. With 1 ICP sitting at the shared main account and nobody credited with it, the fixed canister answers `CanPayEveryone`, `difference_e8s = 0`, `unattributed_at_main = 100000000`, and NAMES the money in `summary` — and the notice hides itself, because `visible` is `state !== covered`. The verdict is right (the table holds exactly what it owes, so this is not a solvency warning) but the person whose ICP went to [FINDING 34](SECURITY-FINDINGS.md#finding-34)'s old shared address gets no signal on the screen they would look at. `interpretSolvency` does not even extract `unattributed_at_main`. NOT fixed in wave 14 on purpose: adding money figures to that screen requires a matching site in `tools/shots/lib/chain-agreement.mjs` — the token census forbids an unasserted money-shaped token — and that needs the shots harness against a live replica |
+| [E-99](#e-99) | high | FIXED | 14 | `cd tests/money_safety && cargo test --test solvency_definition -- the_currency_guard_refuses_while_a_payout_is_still_in_flight` — verified RED by reverting `total_liability()` alone to its five-term sum on the same tree: `guard_liability=0`, `owed=0`, and `flip to BTC with a payout in flight -> ACCEPTED currency now BTC` | `total_liability` / `main_attributed_claims`, `src/table_canister/src/lib.rs`; read by `refuse_currency_change_while_funded` | **the currency guard read a liability of ZERO on a canister with an irreversible 5 ICP withdrawal still open in its own journal, and accepted the flip.** `total_liability()`'s own doc comment has argued since [FINDING 29](SECURITY-FINDINGS.md#finding-29) that *a table with unfinished ledger operations is a funded table* — re-issuing an open intent after a flip sends the retry to a chain where the original transaction does not exist, so the ledger's deduplication cannot fire and the movement happens twice. That argument was implemented for `pull` and `sweep` (`journalled_incoming_total()`) and **never for `payout`, which was in no term of the guard at all**; `main_uncredited_observed()` then SUBTRACTED the open payout, so a drained table with a withdrawal in flight summed to exactly zero. Closed as a side effect of the one-definition rewrite for [FINDING 43](SECURITY-FINDINGS.md#finding-43) / [FINDING 38](SECURITY-FINDINGS.md#finding-38), with no special case: `main_attributed_claims()` carries `open_payout_total()`, so `total_liability()` cannot be zero while any intent is open |
+| [E-97](#e-97) | medium | OPEN | — | — | `tests/money_safety/tests/cycles_runway.rs` `print_runway_table` call sites | **the suite that produces the runway table prices an open browser tab as a heartbeat stream.** Its "500 hands/day with N tabs open" rows are built as `idle + net_per_hand*500 + hb_per_player_day*seats`, and `hb_per_player_day` is the 10-second heartbeat only. That is [E-92](#e-92)'s arithmetic, in code rather than in a comment: measured, an open tab costs 0.0572 T/day typical and 0.1929 T/day at the client's ceiling against the 0.0618 T/day the heartbeat contributes, so even the FIXED client makes those rows read low, and they read 18x low against the client this suite was written beside. The rows that involve no tabs (idle, N hands/day) are unaffected and agree with wave 14's independent control to within 7%. Not fixed in wave 14: it is another owner's suite and the honest correction is to add a measured per-tab term to the derivation and re-run it under PocketIC, not to edit the labels. Everything outside that suite now reads `tools/cycles/burn-table.json` |
+| [E-100](#e-100) | high | FIXED | 14 | `./scripts/cycles-runway.sh --selftest` (also `./scripts/dev.sh cycles`) | `scripts/cycles-runway.sh` `parse_status` | **the cycles monitor never read the recent burn rate, and its own selftest could not tell.** `recent_burn_per_day` is `opt nat`, so the wire says `recent_burn_per_day = opt (2_604_344_185_140 : nat)`; the parser matched `field = <digits>` and therefore read it as ABSENT against every real canister, fell back to `or 0`, and the `max(lifetime, recent)` below it always chose the LIFETIME AVERAGE — the gauge the whole script was written to stop trusting, and the one that reads HIGH on a table that has just got busy. Found in wave 14 while checking the monitor against a live local canister that was reporting 2.60 T/day: `num('recent_burn_per_day')` returned `None`. **Every fixture in the selftest wrote the field as a BARE nat, a shape no module has ever emitted**, so five green checks proved the parser worked on a canister that does not exist. Replayed on the pre-fix parser with a wire-shaped fixture: it reports **225 days for a table burning 2.05 T/day**, which is 4. The JS reader was never affected — Candid decodes `opt` to an array and `cycleRunway.js` reads it through `optBig` |
+| [E-98](#e-98) | high | FIXED | 14 | `./scripts/dev.sh test` step 4 → `cargo test --test deposit_floor` → `the_top_up_the_dust_refusal_names_actually_makes_the_balance_claimable` (it SENDS the figure the canister prints and requires the claim to succeed) and `sweepable_and_refundable_predict_what_the_two_doors_actually_do` (it asks the flag, then performs the action, at every boundary) | `deposit_custody_sentence`, `deposit_custody_of`, `src/table_canister/src/lib.rs` | **WAVE 12 MOVED THE SWEEP THRESHOLD AND LEFT EVERY SENTENCE ABOUT IT BEHIND.** The Rule-3 floor raised what `claim_external_deposit` will take from `> transfer_fee` to `>= min_external_deposit`, and the three player-facing statements built on the old threshold were not moved with it, so the canister spent two waves giving instructions it would refuse to carry out. (1) The dust refusal named a top-up of `fee + 1 - amount`: driven on the pre-fix build, *"It said to send 2 e8s more to the same address; that was done, the address now holds 10001, and the claim still refused"* — a second wasted ledger fee and a second refusal, for a player who was already stuck. (2) `deposit_custody_sentence`, the ONE place FINDING 28 centralised this prose precisely so the four surfaces could not diverge, told a player holding the advertised 20,000 to *"call claim_external_deposit(), which moves it and credits you 0.0001 ICP"*. (3) `sweepable` stayed `observed_amount > transfer_fee` under a doc comment reading *"true when claim_external_deposit() would sweep this amount right now"* — see [E-89](#e-89), where the drain quoted it back as evidence that stranded money was reachable. **Found by DRIVING the instruction instead of reading it**; every gate here does the thing the sentence says and checks the outcome, because a test that parses prose agrees with whatever the prose says |
 | [E-93](#e-93) | medium | OPEN | — | — | `cargo` feature unification; `recipes/rust-reproducible.hbs` line 77 (one package) vs `scripts/check-candid.sh` line 142 (the whole workspace) | **`history_canister.wasm` is not a function of its source alone: it changes with the `-p` set of the `cargo build` that produced it.** Measured on identical source, same directory, same toolchain, clean each time: `cargo build -p history_canister --target wasm32-unknown-unknown --release` -> `ea701f77…62e15`; `cargo build -p table_canister -p history_canister …` -> `9f511048…3db2d`. `table_canister` is `3890a6d4…b29a0d` under BOTH, so it is not machine noise — it is cargo unifying dependency features across the packages named in one invocation. **Nothing in the tree currently builds that way**, which is why this is `low` and not high: the deploy recipe runs `cargo build --package {{package}}` one package at a time, `tests/money_safety/src/wasms.rs` builds each canister on its own, and the two-path byte-reproducibility check passes (working tree and a `cp -Rc` clone agree to the byte on both modules). But the whole point of the vendored recipe is that **a stranger can rebuild and compare a hash**, and a stranger who types `cargo build --release` for two canisters at once gets a module that matches nothing. The recipe is the only thing standing between that and a false "this canister is not the code" |
 | [E-13](#e-13) | low | OPEN | — | — (`dev.sh known-defects` marker, red on purpose) | `poker_core::hand::detect_straight` | prefers the wheel over a better straight; unreachable today, a trap for the obvious optimisation |
 | [E-83](#e-83) | low | OPEN | — | — | `buy_in`, `src/table_canister/src/lib.rs:4789` | `join_table(seat)` silently auto-buys-in at `min_buy_in`, and a subsequent `buy_in(seat, amount)` on **your own** seat answers *"Seat is taken"*. It is taken by the caller. Topping up needs `reload`, which the error does not name. First interaction at the table, and it lies about who is sitting there |
@@ -421,13 +562,13 @@ is true.
 | [E-54](#e-54) | high | FIXED | 7 | `dev.sh test` → `timers::the_table_settles_itself_with_no_external_caller` | `src/table_canister/src/lib.rs` "THE ON-CHAIN CLOCK"; `tests/money_safety/tests/timers.rs` | **nothing on chain moved the game.** `ic-cdk-timers` was declared and `set_timer` appeared nowhere in `src/`. Measured before: a live pre-flop hand holding 3,000,000 e8s sat unchanged for **20 simulated minutes** with no client attached, both seats still `Active` — the dead window was not 5.5 minutes, it was **unbounded**. After: the hand resolves itself in **30 s** and every seat is released with chips back in escrow at **210 s**, with zero ingress messages. [FINDING 19](SECURITY-FINDINGS.md#finding-19) |
 | [E-56](#e-56) | high | FIXED | 7 | `dev.sh test` → `timers::a_hand_stalled_past_its_grace_is_played_out_not_voided` | the on-chain clock's stuck-hand escalation | the new clock **VOIDED A PLAYABLE HAND**: it refunded every stake in a hand whose clock was merely *stale*, without ever trying the ordinary timeout path. Reached by any stall in which the canister does not execute — including **a canister frozen for want of cycles and then topped up**, so it composed directly with [E-55](#e-55). The grace is now measured from when the canister first SAW the clock overdue. Reverting the fix leaves the fuzzer GREEN, so it has its own gate |
 | [E-57](#e-57) | high | FIXED | 7 | `dev.sh test` → `invariants::custody` (M10) | `cash_out`, `leave_table`, `get_custody_status`, `TableView`, `withdraw`'s refusals | a player could walk away from a table with money in the pot and **every surface told them they had nothing**. A hand no message can move is now settled before the seat is vacated, a live hand cannot outlive its last player, and four surfaces state the committed stake and name `abandon_stuck_hand`. [FINDING 18](SECURITY-FINDINGS.md#finding-18) |
-| [E-59](#e-59) | high | FIXED | 7 | `stall_agreement` (M13) — **NOT RUN BY ANY TARGET**, see [H-45](#h-45) | `hand_is_stuck` vs `clock_should_abandon`; `cash_out`, `leave_table`, `get_custody_status`, `TableView.hand_is_unmovable` | **the fourth cross-agent defect.** After a stall the canister holds two beliefs about one hand: the clock says "playable" and every player-facing surface says "dead". Measured on one state: the clock alone pays `alice=+0 bob=+4000000`; `abandon_stuck_hand(alice)` pays `alice=+2000000 bob=+2000000`. Totals conserve in both. `cash_out` is worse than the recovery method — it takes the whole stack out of a live hand too — and `get_custody_status()` **tells the losing player to press the button**. No gate in the tree could reach it, because `World::advance()` always lets a round run. **Fixed:** `clock_should_abandon` deleted, one predicate for all six surfaces, and it is about ATTEMPTS — the canister must have watched the resolution path fail across 3 committed messages and 300 s. Gated by **M13 ONE BELIEF** (`tests/money_safety/tests/stall_agreement.rs`): 138 forked states, 118 rows paying different recipients → 0, 20 `Err`-replies that changed state → 0. [FINDING 25](SECURITY-FINDINGS.md#finding-25) |
+| [E-59](#e-59) | high | FIXED | 7 | `stall_agreement` (M13) — **run by `dev.sh test` step [5/9] and the `deep` CI tier since wave 14** ([H-45](#h-45) closed) | `hand_is_stuck` vs `clock_should_abandon`; `cash_out`, `leave_table`, `get_custody_status`, `TableView.hand_is_unmovable` | **the fourth cross-agent defect.** After a stall the canister holds two beliefs about one hand: the clock says "playable" and every player-facing surface says "dead". Measured on one state: the clock alone pays `alice=+0 bob=+4000000`; `abandon_stuck_hand(alice)` pays `alice=+2000000 bob=+2000000`. Totals conserve in both. `cash_out` is worse than the recovery method — it takes the whole stack out of a live hand too — and `get_custody_status()` **tells the losing player to press the button**. No gate in the tree could reach it, because `World::advance()` always lets a round run. **Fixed:** `clock_should_abandon` deleted, one predicate for all six surfaces, and it is about ATTEMPTS — the canister must have watched the resolution path fail across 3 committed messages and 300 s. Gated by **M13 ONE BELIEF** (`tests/money_safety/tests/stall_agreement.rs`): 138 forked states, 118 rows paying different recipients → 0, 20 `Err`-replies that changed state → 0. [FINDING 25](SECURITY-FINDINGS.md#finding-25) |
 | [E-61](#e-61) | high | FIXED | 7 | `dev.sh test` → `shots-selftest test-rake.mjs`; sweep: 0 `RAKE TAKEN` on 24 shots | `tools/shots/lib/chain-agreement.mjs` (`foldArchivedHand`) | **the only gate that asserts the no-rake property against the archive is permanently red for a reason unrelated to rake.** It reads `Number(r.rake)` off `get_hands_by_table`, which returns `vec HandSummary`, and `HandSummary` has no `rake` field. `NaN !== 0`, so every archived hand reports `RAKE TAKEN: rake=NaN`. The comment thirty lines above says absence of a field *"is now a structural failure, never a silent NaN"* — that fix was applied to one field and not to the adjacent one |
 | [E-62](#e-62) | high | FIXED | 7 | `dev.sh test` → `deposit_floor` (6 tests) + `const _: () = assert!` | `ICP_MIN_DEPOSIT_AMOUNT` / `ICP_MIN_WITHDRAWAL_AMOUNT`, `withdraw`, both money modals | **the canister accepted money at the minimum it advertises and would not give it back.** `deposit()` took 20,000 e8s; `withdraw()` refused anything under 100,000; `buy_in` refused it too; `get_custody_status` called it a healthy balance. One number per currency now, the relation `min_withdrawal <= min_deposit` is a `const _: () = assert!` so the old value is a BUILD failure, and a caller's whole remaining balance can always leave at any size the ledger can move. [FINDING 27](SECURITY-FINDINGS.md#finding-27) |
 | [E-63](#e-63) | high | FIXED | 8 | `dev.sh test` → `shots-selftest test-dock-overflow.mjs`; sweep: `table-allin`/mobile 81 pixel pairs, 0 occluded | `.action-dock` in `PokerTable.svelte`; `tools/shots/verdict-gate.mjs` | **the pixel gate caught a regression and nobody acted for a whole wave.** 8.7% of `"0.20 ICP"` painted over by `div.stage` at 390x844: a fixed-height dock with an 87 px wallet panel in a 36 px row, spilling under a positioned sibling. Fixed by sizing the dock to its contents — the first attempt bought the occlusion green with a **felt red** (50.7% → 44.1% against a 45% floor) and the new fixture caught that too. The walked-past half is fixed by making the last recorded verdict a gate |
 | [E-66](#e-66) | high | FIXED | 8 | `dev.sh test` → `invariants::archive` (M12); `record::check_archived_participants` each fuzz step | `docs/SHUFFLE-SPEC.md` §4; the archive's participant list | the permanent hand record named the wrong people — built from the seats **as they stood at settlement**, so short by one on any hand somebody left and long by one on any hand somebody joined — and the shuffle specification told verifiers to count from it. [FINDING 30](SECURITY-FINDINGS.md#finding-30) |
-| [E-70](#e-70) | high | FIXED | 10 | `dev.sh test` → `fuzz` (`invariants::solvency` each step); `solvency.rs` (12 tests) **NOT RUN**, see [H-45](#h-45) | `MAIN_CUSTODY`, `refresh_solvency`, `get_solvency`, `get_custody_status().canister_solvency` | **THE FIFTH CROSS-AGENT DEFECT.** Every observation instrument was built for the deposit SUBACCOUNTS and none for the MAIN account, so `admin_audit_deposit_custody` replied `(1 audited, 0 held, 0 unaudited)` on a canister holding 5 ICP and the currency guard accepted a flip that closed the money's only recovery door. Nothing was added that can edit a balance. [FINDING 35](SECURITY-FINDINGS.md#finding-35) |
-| [E-72](#e-72) | high | FIXED | 10 | `solvency::components_sum_to_total` — **NOT RUN BY ANY TARGET**, see [H-45](#h-45) | `tests/money_safety/src/table_api.rs` `CustodyStatus` | the harness's `CustodyStatus` mirror silently dropped `unfinished_ledger_ops` — the field that carries [FINDING 29](SECURITY-FINDINGS.md#finding-29)'s money — under a comment saying it is *"Mirrored in FULL on purpose"*. Candid record subtyping drops an undeclared field without a warning. [FINDING 36](SECURITY-FINDINGS.md#finding-36) |
+| [E-70](#e-70) | high | FIXED | 10 | `dev.sh test` → `fuzz` (`invariants::solvency` each step) **and** `solvency.rs` (12 tests), which `dev.sh test` step [5/9] and the `fast` CI tier have run since wave 14 ([H-45](#h-45) closed; 12 passed in the wave-14 run) | `MAIN_CUSTODY`, `refresh_solvency`, `get_solvency`, `get_custody_status().canister_solvency` | **THE FIFTH CROSS-AGENT DEFECT.** Every observation instrument was built for the deposit SUBACCOUNTS and none for the MAIN account, so `admin_audit_deposit_custody` replied `(1 audited, 0 held, 0 unaudited)` on a canister holding 5 ICP and the currency guard accepted a flip that closed the money's only recovery door. Nothing was added that can edit a balance. [FINDING 35](SECURITY-FINDINGS.md#finding-35) |
+| [E-72](#e-72) | high | FIXED | 10 | `solvency::components_sum_to_total` — **run by `dev.sh test` step [5/9] and the `fast` CI tier since wave 14** ([H-45](#h-45) closed) | `tests/money_safety/src/table_api.rs` `CustodyStatus` | the harness's `CustodyStatus` mirror silently dropped `unfinished_ledger_ops` — the field that carries [FINDING 29](SECURITY-FINDINGS.md#finding-29)'s money — under a comment saying it is *"Mirrored in FULL on purpose"*. Candid record subtyping drops an undeclared field without a warning. [FINDING 36](SECURITY-FINDINGS.md#finding-36) |
 | [E-73](#e-73) | high | FIXED | 10 | `dev.sh test` → `fuzz` (`invariants::solvency::check_solvency_report_is_coherent` each step) | `total_liability()`; `get_solvency().guard_liability` | the last custody guard's **only** input had one caller, no query, no surface and no gate, so the only way to sample it was to attempt the destructive operation it guards. [FINDING 37](SECURITY-FINDINGS.md#finding-37) |
 | [E-78](#e-78) | high | FIXED | 11 | `dev.sh test` → `oldest_cluster` → `finding22_the_recovery_door_refuses_a_hand_that_can_still_be_played` + `finding22_a_hand_a_controller_does_end_is_closed_and_permanently_marked`; `dev.sh test` → `admin_custody::admin_reinit_table_mid_hand_returns_the_pot_to_the_players_who_put_it_in` + `admin_custody::a_controller_ending_a_hand_pays_a_vacated_seats_stake_to_its_owner_not_its_new_occupant` (wave-11 reconciliation: a seat that changed hands mid-hand, asserted PER PRINCIPAL) | `return_all_table_custody_to_escrow` via `admin_return_all_chips_to_escrow` / `admin_reinit_table` | **[FINDING 22](SECURITY-FINDINGS.md#finding-22).** The recovery door worked on a hand being actively played, so a controller who had read every hole card could decide whether the hand happened — conserving to the e8, so no invariant could see it — and it left the hand OPEN with cards on the board and every stack at zero. Now refuses unless nothing can move the hand, closes it through the permissionless `settle_unmovable_hand`, and marks every credit `pot_type="refund:ended-by-controller"` |
 | [H-49](#h-49) | high | FIXED | 11 | `dev.sh test` step 5 / `dev.sh settlement` → `cargo test --test settlement` → `a_seat_folded_by_its_own_clock_and_cashed_out_mid_hand_settles_by_the_rules`; `suite::timed_out_seat_cashes_out_mid_hand` in `run_all` | `tests/settlement/src/suite.rs`, `src/drive.rs` | the settlement oracle — the ONLY instrument that asks who was PAID rather than whether the totals balance — had never executed `cash_out` or `check_timeouts` in 53 compared hands, because every vacating scenario was written as *"`leave_table`, and `cash_out` if that fails"* and `leave_table` never fails. That is [FINDING 08](SECURITY-FINDINGS.md#finding-08)'s door, the one reachable by a plain disconnect |
@@ -466,7 +607,7 @@ is true.
 | [E-35](#e-35) | medium | FIXED | 2 | `dev.sh test` → `settlement disagreements::pinned_odd_chips` | `determine_winners` odd-chip rule | a chopped pot gave its WHOLE remainder to one seat; with three or more winners the rules give one chip each, clockwise from the button. Found by the settlement oracle (D-04) |
 | [E-36](#e-36) | medium | FIXED | 6 | `dev.sh test` → `wave6_coherence::probe4`; `cargo test --workspace hand_membership` | `join_table` + `sit_in` + `is_in_hand` + `count_active_players` | a player who takes an empty chair MID-HAND and calls `sit_in()` is given the action and can bet into a hand they hold no cards in. **In wave 6 it grew a third-party victim:** that cardless seat is counted by `count_active_players`, so when the last card-holder is folded by its own clock the engine settles a "fold-out" with no live claim at all and refunds every stake -- **the hand is un-played and the fold-out WINNER loses the pot they won.** Measured on `5e07edf6` and re-measured on `306caef4`: a 52,000,000 e8 pot, three seats, all three back on exactly their buy-in. **Closed by making participation and eligibility ONE function** (`live_claims` calls `is_in_hand`; `is_in_hand` requires cards), which also stops a cardless seat being offered the action. Register entry and tolerated log line deleted with it. See [FINDING 17](SECURITY-FINDINGS.md#finding-17) |
 | [E-39](#e-39) | medium | FIXED | 3 | `dev.sh test` → `fuzz` at its own defaults | `leave_table` | reduced `state.pot` via `return_uncalled_bet` without the paired `refresh_side_pots`, so the side pots a player is SHOWN stopped summing to the pot. Found by `make fuzz` at its DEFAULT 9 seeds; the wave that caused it ran 3 |
-| [E-46](#e-46) | medium | FIXED | 10 | `dev.sh test` → `fuzz` (`invariants::solvency` each step); `solvency.rs` **NOT RUN**, see [H-45](#h-45) | `icrc1_balance_of` vs `admin_get_all_balances` + `admin_get_table_chips` + `get_pot` | no endpoint reconciles **funds held** against **liabilities recorded**. `table_2` holds 734,105,000,000 e8s against ~42,000,000,000 of recorded liabilities. Nothing is under-collateralised, but *"held by the canister and attributed to nobody"* is exactly what a lost deposit looks like and there is no view that tells the two apart |
+| [E-46](#e-46) | medium | FIXED | 10 | `dev.sh test` → `fuzz` (`invariants::solvency` each step) **and** `solvency.rs`, run by `dev.sh test` step [5/9] and the `fast` CI tier since wave 14 ([H-45](#h-45) closed) | `icrc1_balance_of` vs `admin_get_all_balances` + `admin_get_table_chips` + `get_pot` | no endpoint reconciles **funds held** against **liabilities recorded**. `table_2` holds 734,105,000,000 e8s against ~42,000,000,000 of recorded liabilities. Nothing is under-collateralised, but *"held by the canister and attributed to nobody"* is exactly what a lost deposit looks like and there is no view that tells the two apart |
 | [E-53](#e-53) | medium | FIXED | 7 | `dev.sh shots` resolves the controller from the canister | `tools/shots/lib/ids.mjs`, `lib/frontend-build.mjs`, `run.mjs` | the harness resolved the controller from a four-name allowlist. On this machine the tables are controlled by `cyclepay-hotwallet` and the frontend asset canister by `oms-port-trial`, so **the whole screenshot sweep aborted** — and with it the pixel gate, the occlusion gate and the protected-notice gate — while an aborted run had already deleted the previous run's evidence |
 | [E-60](#e-60) | medium | FIXED | 7 | `make hygiene` (512 KiB cap on tracked artifacts) | `artifacts/screens/**/manifest.json`, `.gitignore`, `scripts/dev.sh` | the screenshot manifest went from **763,703 to 7,612,380 bytes** in one wave and `make hygiene` exited 1. The manifest is build output and is now gitignored; the tracked evidence is `INDEX.md` plus a new **10,767-byte** `verdicts.json` carrying every scene's verdict and every failure headline. ~23 MB of machine-generated JSON leaves the index |
 | [E-64](#e-64) | medium | FIXED | 8 | sweep: token census `0 unaccounted for` on every table scene, both viewports | `dom-scrape.mjs`, `chain-agreement.mjs`, `token-census.mjs` | the FINDING 18 committed-stake readout rendered real ICP that **no gate tied to any canister figure**, on five scenes. Now asserted against `get_table_view().my_committed_in_pot` and `hand_number` — and its ABSENCE while the canister says money is committed is a structural failure, because FINDING 18 coming back must not look like "this scene has no committed block" |
@@ -1944,6 +2085,15 @@ for any future path that sets `status = Active` mid-hand.
 <a id="t-01"></a>
 ### T-01 — high — a bare `npm run build` wires the bundle to MAINNET — STATUS: FIXED (wave 9)
 
+
+> **CORRECTION, wave 14 coherence pass.** This row is `FIXED` and its gate,
+> `npm run build:mainnet`, **exits 1 at HEAD** — that is
+> [T-46](#t-46). `register-stats.sh --check` cannot see it: it verifies that a
+> `FIXED` row NAMES a gate, never that the named gate passes. A gate that cannot
+> pass is as uninformative as one that cannot fail. The compiled value is still
+> `"ic"`; it is the DETECTOR that went stale.
+
+
 **Where** `src/cleardeck_frontend/src/lib/canisters.js` reads
 `VITE_CANISTER_ID_LOBBY || CANISTER_ID_LOBBY`, `vite.config.js` dotenv-loads the repo-root `.env`,
 and that `.env` holds the **mainnet** ids:
@@ -2855,7 +3005,43 @@ and `oracle_rules::the_canister_build_pins_its_toolchain_and_its_output_director
 four more into the test process and assert none of them reaches the command.
 
 <a id="h-26"></a>
-### H-26 — high — a fuzz run is not the pure function of its seed that it claims to be — STATUS: OPEN
+### H-26 — high — a fuzz run is not the pure function of its seed that it claims to be — STATUS: FIXED (wave 14)
+
+> **FIXED 2026-08-09. The impurity was not in the replica, the process or the generator — it was
+> that the TABLE SHAPE was chosen by the seed's POSITION IN THE LIST.**
+>
+> `tests/money_safety/tests/fuzz.rs` had `config_for(i)` where `i` is the index of the seed in
+> `MONEY_FUZZ_SEEDS`, so position 0 played heads-up, position 1 played 6-max and position 2 played
+> 6-max-with-an-ante — while every reproducer this harness printed, wrote into
+> `money-fuzz-report.json` and got quoted by in this register named **the seed and nothing else**.
+> `Reproducer` did not even have a field for the config. So `MONEY_FUZZ_SEEDS=<one seed>` replayed a
+> *different game* from the one that found the violation, and this entry's own observation — seed
+> `212967420072194` finds nothing alone and two fund-creation findings when `212967420072193` runs
+> before it — is that, exactly and completely. Nothing about `run_sequence` was impure; the tuple
+> `(seed, config, actor_names, steps)` was simply not what the driver supplied.
+>
+> **The fix.** One function, `fuzz::run_shape(position, seed)`, which ignores `position`. The
+> mapping is `(seed - 1) % 3` and the `- 1` is chosen so that **every seed set this repository
+> actually runs keeps the shape it has always had** — seed `1` (the `fast` smoke row), the three
+> `0xC1EA_2DEC_000n` defaults, and the nine consecutive seeds of the deep sweep all map term for
+> term onto their old positions — so every figure recorded against `fuzz-default` in this register
+> stays comparable. The reproducer now records the shape and a literal replay command, and both are
+> printed next to every finding.
+>
+> **RED before, GREEN after.** With `run_shape` reverted to `position % 3`:
+>
+> ```text
+> assertion `left == right` failed: seed 0x0 plays a DIFFERENT GAME at position 1 than at
+> position 0: heads_up_icp vs six_max_icp. A reproducer that names only the seed therefore does
+> not reproduce, which is docs/DEFECTS.md H-26.
+> ```
+>
+> **And the outside anchor, which is the one that matters.** Seed `212967420072194` at 400 steps,
+> run in two separate processes — once second in the list after `212967420072193`, once alone — and
+> the two run objects in `money-fuzz-report.json` are **identical**: same `config`, 400 steps
+> executed, 7 hands, 6 upgrades, same `final_ledger_main`, same `final_internal_total`, same
+> `transcript_tail`. The report is written by the harness and compared afterwards by something else,
+> which is the only kind of agreement worth having here.
 
 `tests/money_safety/src/fuzz.rs` opens: *"A run is a pure function of `(seed, config,
 actor_names, steps)`: the generator is a SplitMix64 stream and PocketIC is deterministic, so a
@@ -4017,7 +4203,34 @@ while a second identity acts from Node, with a mid-hand `join` from the browser 
 is `$SCRATCH/w3-coherence/walk3.mjs`.
 
 <a id="t-14"></a>
-### T-14 — high — the app a human opens is not the app the gate tests — STATUS: OPEN
+### T-14 — high — the app a human opens is not the app the gate tests — STATUS: FIXED (wave 14)
+
+> **FIXED 2026-08-09, including the harness change this entry deferred to "wave 4".**
+>
+> `buildEnvFor` now sets `VITE_LOCAL_GATEWAY_PORT` and `VITE_LOCAL_HOST` from the harness's own
+> `GATEWAY_PORT`, so the bundle deployed to the local asset canister points at the gateway this
+> project actually runs. `run.mjs` and `perf.mjs` therefore no longer start the 4943 reverse proxy:
+> they open `http://<frontend-id>.<host>:<port>/`, **the URL a human types**. The proxy survives
+> only for `SHOTS_SERVE_DIST`, which deliberately serves a different build and is already labelled
+> as such in the manifest.
+>
+> **Measured in Chrome, no shim, no harness:** `http://5uljf-s3777-77775-aaaea-cai.localhost:8077/`
+> renders `3 tables · 0/17 seats · 0% rake`, all three rows with live stakes read from their
+> contracts, and no console error. Before, the same URL showed a raw fetch stack trace and *"The
+> lobby canister is reporting no tables."*
+>
+> **Gate:** `assertBundleLocalGateway(GATEWAY_PORT)`, called by `buildFrontend` next to the existing
+> canister-id assertion — because that one was green through the whole of this defect. Built once
+> with the PRE-FIX environment to prove it convicts:
+>
+> ```text
+> ABORT: the built bundle in src/cleardeck_frontend/dist contains no reference to the local
+> gateway port 8077. VITE_LOCAL_GATEWAY_PORT did not reach the build ...
+> ```
+>
+> **Not fixed here:** the empty state still cannot tell "the canister answered with no tables" from
+> "the request never completed", and `oisy.js` hardcodes 4943 three more times — filed as
+> [T-45](#t-45). Both are `src/cleardeck_frontend/**`, another owner's tree.
 
 `ic-config.js` resolves the local agent host from `VITE_LOCAL_GATEWAY_PORT`, defaulting to 4943.
 `buildEnvFor` in `tools/shots/lib/frontend-build.mjs` — the only wired build path — **does not set
@@ -5476,7 +5689,59 @@ carrying the view test, and `header.compact` follows it. Nothing in the wording,
 confirms 4 of 4 on screen and unoccluded in that configuration.
 
 <a id="l-04"></a>
-### L-04 — high — the lobby registry quotes prices its own contracts do not charge, and no method can fix half of it — STATUS: OPEN
+### L-04 — high — the lobby registry quotes prices its own contracts do not charge, and no method can fix half of it — STATUS: FIXED (wave 14, LOCAL ONLY)
+
+> **FIXED 2026-08-09 on the local replica. Mainnet is untouched and still needs the same one call.**
+>
+> The NAME half was closed in wave 13 by deleting the price from every registered name. The CONFIG
+> half needed a method that did not exist, and this is it — deliberately **not** the
+> `update_table_config(id, config)` this entry sketched:
+>
+> ```candid
+> refresh_table_config      : (nat64) -> (Result);      // admin only
+> refresh_all_table_configs : ()      -> (Result_2);    // admin only
+> ```
+>
+> They call `get_table_view()` on the table and COPY its config. An admin setter can be handed a
+> wrong number, which is the defect it would be fixing; a copy cannot. The only way for the registry
+> to be wrong now is for the contract to be wrong, and that is not a registry defect.
+>
+> ```text
+> $ icp canister call lobby refresh_all_table_configs '()' -e local --identity cd-local-deployer
+> (variant { Ok = vec { 2 : nat64; 1 : nat64; 3 : nat64 } })
+>
+> lobby id 2 "6-Max"    5_000_000/10_000_000   buyin 1_000_000_000-5_000_000_000   seats 6
+> lobby id 1 "Heads Up" 1_000_000/2_000_000    buyin   200_000_000-1_000_000_000   seats 2
+> lobby id 3 "9-Max"   10_000_000/20_000_000   buyin 2_000_000_000-10_000_000_000  seats 9
+> ```
+>
+> which is what the three contracts charge, field for field.
+>
+> **CORRECTION to this entry: `up_wire()` is no longer failing silently.** It records that the local
+> lobby's admin was the machine's default identity and that `set_admin(cd-local-deployer)` was being
+> refused. `lobby.get_admin()` now answers `sg3sw-…-6qe`, which *is* `cd-local-deployer`, so the two
+> calls this entry could not issue are issuable by the project's own identity.
+>
+> **Gate:** `./scripts/check-deployed-config.sh` now reads `lobby.get_tables()` and diffs every
+> registered row against its own contract, plus a rule that a registered NAME may not quote a price
+> at all. Proved red by putting the drift back — name to `"6-Max - 0.05/0.10"`, and the table_2
+> contract's clock moved 45 -> 60:
+>
+> ```text
+> ✗ lobby row 2 ("6-Max - 0.05/0.10") -> 4fbx2-kt777-77775-aaabq-cai
+>       small_blind: lobby advertises 1000000, the contract charges 5000000
+>       big_blind: lobby advertises 2000000, the contract charges 10000000
+>       min_buy_in: lobby advertises 200000000, the contract charges 1000000000
+>       max_buy_in: lobby advertises 1000000000, the contract charges 5000000000
+>       action_timeout_secs: lobby advertises 45, the contract charges 60
+>       name "6-Max - 0.05/0.10" quotes a price...
+> ```
+>
+> and green after healing. **Both lobby scenes' cause is gone**: the app in a plain browser no longer
+> shows `⚠ 2 records differ`, `⚠ RECORD DIFFERS` or the strikethroughs.
+>
+> **This gate found [H-55](#h-55) while being written**, which is the more important result of the
+> two: the script it was added to had been comparing one field in eight.
 
 **Status: executed** against the local lobby and all four table canisters.
 
@@ -6482,7 +6747,50 @@ named for it asserts only `r.ok && occlusionsFound === 0` and would still pass w
 `paintOrderModelDisagreement` path deleted.
 
 <a id="h-42"></a>
-### H-42, high, `./scripts/dev.sh test`, the repo's primary gate, can hang forever — STATUS: OPEN
+### H-42, high, `./scripts/dev.sh test`, the repo's primary gate, can hang forever — STATUS: FIXED (wave 14)
+
+> **FIXED 2026-08-09, and [H-54](#h-54)'s fix was vacuous — measured at HEAD before touching
+> anything:**
+>
+> ```text
+> $ out="$(with_timeout 2 sh -c 'sleep 60; echo never')"
+> command substitution returned after 60s
+> ```
+>
+> A two-second bound that returns in sixty seconds is not a bound. H-54 killed the WATCHDOG's
+> children and never killed the BOUNDED COMMAND's: `kill -9 "$pid"` reaches exactly one process —
+> the subshell, which bash has usually exec'd into `sh` — and everything `sh` forked (`cargo`, the
+> test binary, its PocketIC server) is orphaned to init **still holding the inherited stdout**. The
+> consumer then blocks with zero CPU anywhere, which is H-42's symptom word for word. In `cmd_test`
+> that runaway is a whole settlement suite, which is why the original hang was 33 minutes.
+>
+> **After:** `with_timeout` walks the process table and kills the whole descendant tree, deepest
+> first, twice — once when the bound expires and once after the wait, because a runaway can fork
+> between the survey and the kill — and returns 124 so a killed command can never look like a pass.
+>
+> ```text
+> 1. bounded command overruns, read through a pipe   -> returned after 3s, rc=124
+> 2. deeper tree: sh -> sh -> sleep 90                -> returned after 2s, no surviving sleep
+> 3. command finishes inside its bound                -> rc=0, and rc=7 stays 7
+> ```
+>
+> **And the step this entry blamed now HAS a bound, as does every other step.** All nine steps of
+> `cmd_test` run through `timed_step`, which prints the measured time next to the bound — because
+> the thing H-42 could not say was *which step*. The bounds are >=2.2x the measured wall clock, and
+> the measurements are recorded next to them in `scripts/dev.sh` — from the run that turned this
+> gate green on 2026-08-09:
+>
+> ```text
+> [1/9] suite wiring              8 s (bound 120)    [6/9] settlement oracle    101 s (bound 900)
+>       candid bindings           1 s (bound 300)          pinned reproducers    13 s (bound 300)
+> [2/9] cargo test --workspace   24 s (bound 900)    [7/9] shots self-tests       4 s (bound 600)
+> [3/9] wasm build (warm)         0 s (bound 900)    [8/9] archive self-tests    88 s (bound 600)
+> [4/9] differential              3 s (bound 900)    [9/9] no-peeking harness    42 s (bound 900)
+> [5/9] money-safety           1610 s (bound 3600)
+>
+> ==> result   all fast gates green        rc 0, 1,894 s total
+>              money-safety: all 22 cargo targets green
+> ```
 
 > **WAVE 12: THE MECHANISM IS [H-54](#h-54), AND IT IS THE OPPOSITE STEP.** The diagnosis below —
 > "step 4 has no time bound, step 5 does" — is the wrong way round. Step 5's `with_timeout`
@@ -7023,7 +7331,7 @@ update and a reply callback.
 ---
 
 <a id="e-55"></a>
-### E-55, high, cycles: the runway is a fifth of what the register said, the gauge read high, and still nothing tops it up — STATUS: OPEN (monitoring closed, funding open)
+### E-55, high, cycles: with ten tabs open the runway was DAYS, not months, and still nothing tops it up — STATUS: OPEN (measurement and monitoring closed, funding open)
 
 **Status: OPEN, and the reason it is still open is stated exactly.** Three of the four things
 this entry asked for exist now and each names a gate. The fourth — *a funding path* — is a
@@ -7067,21 +7375,44 @@ OUTSIDE the canister:
 | a heartbeat from a principal NOT at the table | 6,829,064 | **REFUSED, and still charged.** Rate limiting moves the price, it does not remove it |
 | a query | **0** | measured first, because every figure above is a difference taken while the harness was watching |
 
-Turned into days, at the balances an operator holds:
+Turned into days, at the balances an operator holds.
 
-| what the table is doing | burn/day | 1 T | 10 T | 50 T |
+**CORRECTED IN WAVE 14 ([E-92](#e-92)). THE ROWS WITH TABS IN THEM WERE WRONG, AND THEY WERE WRONG
+IN THE DIRECTION THAT MAKES A TABLE LOOK SAFER THAN IT IS.** They priced an open browser tab as a
+10-second heartbeat stream and left out the 500 ms `check_timeouts` UPDATE poll, which measured
+**1.0841 T/day per tab against the heartbeat's 0.0539** — about twenty times larger. The rows below are rebuilt from `tools/cycles/burn-table.json`,
+which is generated from measurements taken against a real canister on the local replica with a
+no-tabs control (`tools/cycles/tab-burn.mjs`; the control was taken twice, thirty minutes apart,
+and agreed to 0.011%). The per-hand, per-deposit and per-withdrawal costs in the table above are
+carried forward from this suite unchanged.
+
+| what the table is doing | burn/day | 1 T | 10 T | 51.4 T |
 |---|---|---|---|---|
-| idle, nobody at it | 0.0442 T | 22 d | **225 d** | 1,129 d |
-| 200 hands/day, no tabs open | 0.0779 T | 12 d | 128 d | 641 d |
-| 1000 hands/day, no tabs open | 0.2126 T | 4 d | 47 d | 235 d |
-| 500 hands/day, **2 tabs open** | 0.2521 T | 3 d | 39 d | 198 d |
-| 500 hands/day, **6 tabs open** | **0.4994 T** | 2 d | **20 d** | 100 d |
-| dealing continuously | 3.68 T | 0 d | 2 d | 13 d |
+| idle, nobody at it | 0.0411 T | 24 d | **243 d** | 1,249 d |
+| 500 hands/day, no tabs open | 0.1253 T | 7 d | 79 d | 410 d |
+| 500 hands/day, **6 tabs open** (typical) | 0.4685 T | 2 d | 21 d | 109 d |
+| 500 hands/day, **10 tabs open** (typical) | 0.6974 T | 1 d | 14 d | 73 d |
+| 500 hands/day, **6 tabs open** (client's ceiling) | 1.2825 T | 0 d | 7 d | 40 d |
+| 500 hands/day, **10 tabs open** (client's ceiling) | 2.0539 T | 0 d | **4 d** | 25 d |
+| 500 hands/day, **6 tabs open** — *before* [E-92](#e-92) | 6.9531 T | 0 d | 1 d | 7 d |
+| 500 hands/day, **10 tabs open** — *before* [E-92](#e-92) | **11.5050 T** | 0 d | **0 d** | **4 d** |
 
-**A full 6-max table has about twenty days on 10 T, not 226.** Reproduce with
+Two per-tab prices are published rather than one because either alone is a lie: "typical" is the
+fixed client measured against a table nobody is playing at, "ceiling" is its rate limiter pinned
+wide open all day. The unknown-burn floor the CI monitor alarms on is built from the **ceiling**,
+because an alarm threshold is the one place the pessimistic figure is the right one.
+
+**Before wave 14, ten open browser tabs on a table dealing 500 hands a day had ZERO days on 10 T
+and four days on the 51 T these canisters actually hold** — with nobody hostile, nobody flooding,
+and every player behaving normally. The freezing reserve, nominally thirty days, was worth
+**four minutes** at that rate. After the fix the same table has 4 to 14 days on 10 T depending on
+how hard it is being driven. **It is still days, not months, and still nothing tops it up.**
+
+Reproduce the burn measurement with `./tools/cycles/run-matrix.sh && node tools/cycles/build-burn-table.mjs`.
+Reproduce the per-unit costs with
 `cd tests/money_safety && cargo test --test cycles_runway -- --nocapture --test-threads=1`.
 
-#### 2. The largest single cost is the frontend's heartbeat, and nothing had ever priced it
+#### 2. The largest single cost was the frontend's POLL, not its heartbeat (corrected in wave 14)
 
 `src/cleardeck_frontend/src/routes/+page.svelte` sends `heartbeat()` **every 10 seconds** for
 every open tab at the table. That is 8,640 permissionless update calls per player per day, each
@@ -7092,9 +7423,19 @@ an ingress message the IC charges to the canister:
   0.3710 T/day for a full 6-max table of open tabs, before a single card is dealt
 ```
 
-Against an idle burn of 0.0442 T/day, **six open browser tabs cost more than eight times what
-the on-chain clock costs**, and the clock is what this project spent a whole wave worrying
+Against an idle burn of 0.0442 T/day, six open browser tabs cost more than eight times what
+the on-chain clock costs, and the clock is what this project spent a whole wave worrying
 about.
+
+**THAT WAS THE SECOND-LARGEST COST, NOT THE LARGEST, AND WAVE 13 STOPPED COUNTING TOO SOON
+([E-92](#e-92)).** The same page also drove `check_timeouts` — an UPDATE call, no `query` in the
+`.did` — from a **500 ms** `setInterval`. Measured against a no-tabs control on the local replica:
+**1.1380 T/day PER OPEN TAB, against the heartbeat's 0.0618.** Ten tabs on one table burned
+**9.7618 T/day**. The heartbeat was 5% of the bill and it was the only part anybody had priced.
+
+`HEARTBEAT_INTERVAL` was not the knob that mattered either. `POLL_INTERVAL` was, and the fix was
+not to slow it down — it is a render rate and it should be fast — but to stop it sending an update
+at all. See [E-92](#e-92).
 
 **And it is per open TAB, not per seated player.** `sendHeartbeat` short-circuits only on
 `!tableActor`, so anybody with the table page open heartbeats — seated or not. The canister
@@ -7106,8 +7447,10 @@ price of a flood, it does not remove it. That is the same mechanism as
 [FINDING 26](SECURITY-FINDINGS.md#finding-26), reachable by an ordinary browser tab rather than
 by an attacker. Not a defect on its own — the heartbeat is what the disconnect threshold reads — but it
 is the dial an operator would turn first, it is in a file this project owns, and no document
-here had ever multiplied it out. `CLOCK_WATCHDOG_SECS` is not the knob that matters;
-`HEARTBEAT_INTERVAL` is.
+here had ever multiplied it out. `CLOCK_WATCHDOG_SECS` is not the knob that matters — and
+neither, it turned out, is `HEARTBEAT_INTERVAL`. `POLL_INTERVAL` was, by about twenty times, and it
+was invisible to this analysis because it was a call nobody had thought to look up in the `.did`
+([E-92](#e-92)).
 
 This also re-prices [FINDING 26](SECURITY-FINDINGS.md#finding-26). Its 65x amplification was
 measured against an idle baseline. Against a table with players at it the *multiple* is smaller
@@ -8505,8 +8848,176 @@ That is [H-17](#h-17), which this project closed in wave 3 with the sentence "th
 gate was outside the gate", recurring at four times the scale on the two most recent
 cross-agent findings.*
 
+<a id="h-55"></a>
+### H-55 — high — the drift guard compared one field in eight and said "matches" — STATUS: FIXED (wave 14)
+
+**Found 2026-08-09, while adding [L-04](#l-04)'s lobby leg to the same script.**
+
+`scripts/check-deployed-config.sh` is the answer to [D-12](#d-12): it reads each table's live
+`TableConfig` off the canister and diffs it against `icp.yaml`'s `init_args`, field by field. It
+exists because `btc_table_1` ran on blinds of 10/20 sats and a buy-in range of 1,000-20,000 for its
+entire life while `icp.yaml` declared 100/200 and 10,000-100,000 — ten times larger across every
+field, through nine upgrades and four audits, and found by a player-facing strikethrough rather
+than by us.
+
+It compared one field. This was the extractor:
+
+```sh
+got="$(printf '%s' "$live_raw" | tr ';' '\n' \
+      | grep -E "^[[:space:]]*$f = " | head -1 | grep -oE '[0-9_]+' | head -1 | tr -d '_')"
+[ -n "$got" ] || continue
+```
+
+`[0-9_]+` matches the underscore **inside the field name**. On the real line
+
+```text
+      small_blind = 5_000_000 : nat64
+```
+
+the matches are `_`, `5_000_000`, `64` — in that order — so `head -1` takes the underscore from
+`small_blind`, `tr -d '_'` turns it into the empty string, and the caller's
+`[ -n "$got" ] || continue` skips the field without a word. Measured, field by field:
+
+```text
+  small_blind            extracted=[] <- SKIPPED, never compared
+  big_blind              extracted=[] <- SKIPPED, never compared
+  min_buy_in             extracted=[] <- SKIPPED, never compared
+  max_buy_in             extracted=[] <- SKIPPED, never compared
+  max_players            extracted=[] <- SKIPPED, never compared
+  action_timeout_secs    extracted=[] <- SKIPPED, never compared
+  ante                   extracted=[5000000]
+  time_bank_secs         extracted=[] <- SKIPPED, never compared
+```
+
+`ante` is the only name in `TableConfig` with no underscore in it.
+
+**The conviction, using the guard's own subject.** `table_2`'s contract was moved to
+`action_timeout_secs = 60` with `admin_update_config` while `icp.yaml` declares 45:
+
+```text
+before   ✓ table_2 (4fbx2-kt777-77775-aaabq-cai) matches icp.yaml
+after    ✗ table_2 (4fbx2-kt777-77775-aaabq-cai)
+             action_timeout_secs: declared 45, running 60
+```
+
+**Fixed** by one `field_value()` helper — `sed -E 's/^[^=]*=[[:space:]]*([0-9_]+).*$/\1/'`, which
+reads the value *after the equals sign* — used by both comparisons, and a `--selftest` that reads
+all eight fields out of a sample reply, requires an absent field to read as empty rather than as
+`0` (so "cannot read" stays distinguishable from "read a zero"), and requires a 5x drift not to
+compare equal. A caller that now cannot read a field says so and fails instead of continuing.
+
+This is the standing lesson in the instrument rather than the canister: *an instrument that
+measures nothing passes*. Nothing about the output changed when it went blind, because a green
+tick over zero comparisons looks exactly like a green tick over eight.
+
+<a id="t-45"></a>
+### T-45 — medium — the local gateway port is hardcoded a third time, in the wallet path — STATUS: OPEN
+
+**Found 2026-08-09 while fixing [T-14](#t-14),** by grepping the built bundle for `4943` after the
+fix and finding it still there.
+
+```text
+src/cleardeck_frontend/src/lib/oisy.js:60   const host = isMainnet() ? IC_HOST : 'http://localhost:4943';
+src/cleardeck_frontend/src/lib/oisy.js:165  const host = isMainnet() ? IC_HOST : 'http://localhost:4943';
+src/cleardeck_frontend/src/lib/oisy.js:301  const host = isMainnet() ? IC_HOST : 'http://127.0.0.1:4943';
+```
+
+[T-03](#t-03) removed this from `ic-config.js`, [T-14](#t-14) removed it from the build environment
+that feeds it, and `auth.js` derives the local Internet Identity origin from the same value. The
+OISY wallet path never joined in, so connecting an external wallet against the local replica still
+points at a port this project does not run. The fix is `LOCAL_HOST` from `ic-config.js`, which is
+already imported by its neighbours.
+
+Not fixed here: `src/cleardeck_frontend/**` is another owner's tree.
+
+<a id="t-46"></a>
+### T-46 — high — the mainnet bundle verifier's network detector no longer matches what vite emits — STATUS: OPEN
+
+**Found 2026-08-09 while trying to close [H-46](#h-46)** (the verifier's own self-test is invoked by
+nothing, so the first step was to run it, and it could not get past the unmutated bundle).
+
+```text
+$ npm --workspace src/cleardeck_frontend run build:mainnet
+  ✗ compiled network is "ic"    no network literal compiled in: the bundle would fall back to
+                                sniffing window.location.hostname, which is exactly the guess
+                                docs/DEFECTS.md T-01 forbids
+npm error Lifecycle script `build:mainnet` failed with error: code 1
+```
+
+`build/verify-bundle.mjs` finds the compiled target by anchoring on `MAINNET_HOSTNAMES` and then
+matching the function immediately after it:
+
+```js
+const m = window.match(/function\s+\w+\(\)\{return"(ic|local)"\}/);
+```
+
+That shape came from
+
+```js
+function compiledNetwork() {
+  const raw = import.meta.env.VITE_ICP_NETWORK || import.meta.env.DFX_NETWORK;
+```
+
+which minifies to a bare `return"ic"`. Wave 14 rewrote it as
+
+```js
+const raw = buildValue(() => import.meta.env.VITE_ICP_NETWORK)
+  || buildValue(() => import.meta.env.DFX_NETWORK)
+  || buildValue(() => process.env.DFX_NETWORK);
+```
+
+for a good reason ([FINDING 42](SECURITY-FINDINGS.md#finding-42)'s trusted-table set must be
+loadable outside vite), and the emitted function is now a call through a helper rather than a
+literal return. **The bundle is almost certainly still correct** — vite's `define` substitutes
+`import.meta.env.X` textually wherever it appears, including inside an arrow function — so what has
+broken is the DETECTOR, and that is the worse of the two possibilities: the only gate on
+[T-01](#t-01) now fails on every mainnet build, which is exactly the pressure that got the previous
+Candid drift job muted behind an `exit 0`.
+
+**Not fixed here:** `src/cleardeck_frontend/**` is another owner's tree, and the fix is a judgement
+about what the detector should anchor on (the safest is to stop pattern-matching minified output and
+have the build emit the target as a named export the verifier can read).
+
+**Blocks [H-46](#h-46):** the verifier's self-test cannot be wired into CI until the verifier passes
+on an unmutated bundle, because its first act is to check exactly that.
+
 <a id="h-45"></a>
-### H-45 — high — four money-safety gate targets are named by no target, and they are the gates of the FOURTH and FIFTH cross-agent defects — STATUS: OPEN
+### H-45 — high — four money-safety gate targets are named by no target, and they are the gates of the FOURTH and FIFTH cross-agent defects — STATUS: FIXED (wave 14)
+
+> **FIXED 2026-08-09, and the fix is not the six lines — it is that the question is now asked by a
+> machine, first, before anything else runs.** All six targets have been named in
+> `scripts/dev.sh cmd_test` since commit `134550e`; that closed the instance and not the class,
+> which is what the previous six recurrences also did.
+>
+> Step **[1/9]** of `./scripts/dev.sh test` is now `./scripts/check-suite-wiring.sh`, and it
+> `die`s rather than collecting a failure: a tree containing a test target nothing names does not
+> get to run its gates at all.
+>
+> **RED, PLANTED.** An empty `tests/money_safety/tests/zz_planted_unwired.rs`:
+>
+> ```text
+> $ ./scripts/dev.sh test          # 8 seconds
+> ==> [1/9] the gates' own wiring (docs/DEFECTS.md H-45, D-11)
+>     FAIL  tests/money_safety|zz_planted_unwired is a cargo test target that NOTHING NAMES
+> FATAL: suite wiring is broken -- a test target in this tree is run by nothing.
+> $ echo $?
+> 1
+> ```
+>
+> **RED, UNPLANTED, DURING THIS WAVE.** The first time the step was run for real it went red on
+> `tests/money_safety/tests/solvency_definition.rs` — the gate on
+> [FINDING 43](SECURITY-FINDINGS.md#finding-43)/[38](SECURITY-FINDINGS.md#finding-38), written by
+> another owner minutes earlier and named by nothing. That is **H-45 for the SEVENTH time**, caught
+> in a second rather than in a wave. It is wired now, in `scripts/test-suites.list` and in
+> `cmd_test`, last in the chain so it can hide nothing.
+>
+> **THE SECOND HALF, which no earlier wave named.** `cmd_test`'s money-safety block was a single
+> `&&` list, so **one red target skipped the fifteen after it**. Measured on this tree the same
+> day: a single failing assertion in `deposit_floor` (target 5 of 18) ended the step in 131 seconds
+> having never run `solvency`, `stall_agreement`, `fund_reachability`, `controller_custody` or
+> either fuzz invocation. "Run by nothing" and "skipped because something earlier failed" are the
+> same hole, and the second one has a green tick further up the log. Every target now runs through
+> `run_ms`, which records a failure and carries on, and the step reports the complete list.
 
 **Status: executed 2026-08-06.** Method: every `--test <name>` in `scripts/`, `Makefile` and
 `.github/workflows/` was extracted and compared against `ls tests/money_safety/tests/*.rs`.
@@ -8786,7 +9297,40 @@ which compares every copy of every pinned version and **fails on any unpinned in
 that moves the module hash. Both failure modes verified red on planted drift.
 
 <a id="d-11"></a>
-### D-11 — high — the frontend's Candid bindings are a third copy of the interface, and the fund-safety instruments are missing from it — STATUS: OPEN
+### D-11 — high — the frontend's Candid bindings are a third copy of the interface, and the fund-safety instruments are missing from it — STATUS: FIXED (wave 14)
+
+> **FIXED 2026-08-09, and the drift was larger than this entry recorded.** Measured before the fix
+> by comparing method sets:
+>
+> ```text
+> table_1  canister .did 75 methods, .did.js 61
+>          MISSING 16: admin_audit_deposit_custody, admin_get_deposit_custody,
+>          admin_return_all_chips_to_escrow, claim_external_deposit, get_all_ledger_intents,
+>          get_deposit_custody, get_deposit_replay_state, get_deposit_subaccount,
+>          get_my_ledger_intents, get_solvency, refresh_deposit_custody,
+>          refresh_main_account_custody, refresh_solvency, refund_external_deposit,
+>          resolve_ledger_intent, resolve_my_ledger_intents
+>          EXTRA 2: admin_restore_balance, deposit_from_external  <- the canister has neither
+> history  18 vs 12, MISSING 6
+> lobby    26 vs 24
+> ```
+>
+> `claim_external_deposit` is the sweep an external wallet's deposit needs. `get_solvency` and
+> `refresh_solvency` are [FINDING 35](SECURITY-FINDINGS.md#finding-35)'s whole instrument. The two
+> EXTRA entries are worse than missing: a client that calls them fails at the wire.
+>
+> **The fix is a generator, not an edit.** `tools/gen-declarations` (detached crate, `candid_parser`
+> — the same library `didc bind` uses) emits `<n>.did.js` and `<n>.did.d.ts` from the committed
+> `.did`, and `scripts/check-declarations-js.sh` regenerates into a temp directory and diffs. A
+> hand-written comparison can be wrong about what it compares (see [H-55](#h-55), found the same
+> day, where exactly that had happened); *regenerate and diff* has nothing to be wrong about.
+>
+> **RED on the unfixed tree: 10 of 10 files.** Green after `--write`. The gate `--selftest`s by
+> deleting `get_tables` from a binding and requiring a conviction, and it is in the CI job *Candid
+> interface drift* and in step [1/9] of `dev.sh test`.
+>
+> The app was rebuilt, redeployed to the local asset canister and re-opened in a plain browser
+> afterwards: the lobby still renders three tables from the regenerated bindings.
 
 **Status: measured 2026-08-06, not fixed here — another owner's files.**
 `src/cleardeck_frontend/src/lib/canisters.js` builds every actor from
@@ -8930,7 +9474,34 @@ file, so deleting the section and leaving dangling links read green.
 **This is a disclosure, not a fix.** [E-84](#e-84) is open and mainnet is unchanged.
 
 <a id="h-48"></a>
-### H-48 — high — one of the four unrun gates is RED, and it is M9's own file — STATUS: OPEN
+### H-48 — high — one of the four unrun gates is RED, and it is M9's own file — STATUS: FIXED (wave 14)
+
+> **SETTLED 2026-08-09 by running it, and by answering the question the entry actually asked.**
+>
+> ```text
+> $ cd tests/money_safety && CLEARDECK_TABLE_WASM=… cargo test --test fund_reachability -- --test-threads=1
+> test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.04s
+> ```
+>
+> against wasm `3890a6d4a1861343df40c08772979171bc15fed8c51102c81f3c849346b29a0d`. Not somebody's
+> report: this run.
+>
+> **Which of the two readings was right: the GATE was stale, the code was right.** `git log -p` on
+> the file shows both assertions were rewritten in commit `134550e`, from a single
+> `world.advance(30 + 300 + 5)` to `for _ in 0..12 { world.advance(60) }`, with the reason written
+> into the file:
+>
+> > *Since E-59 a hand is stuck when the canister has WATCHED it fail to move — committed messages
+> > spanning `STUCK_HAND_GRACE_NS` — and not when a wall clock says so. A single `advance(335s)`
+> > gives the canister nothing to witness, so it correctly refuses, and a test that jumped once was
+> > measuring the old semantics.*
+>
+> and the resulting coverage loss recorded rather than hidden: the second test no longer exercises
+> the `hand_is_stuck` branch inside `withdraw`/`cash_out` at all, and its doc comment says so and
+> names what still does. That is the judgement this entry was waiting for.
+>
+> It is run by `dev.sh test` step [5/9] and by the `fast` CI tier, and it carries
+> `m9s_per_step_check_can_actually_fail`, so it is not a gate that cannot go red.
 
 > **WAVE 12: IT IS GREEN NOW, 6 of 6, on the wasm `dev.sh test` builds** — and it is still `OPEN`,
 > because "green today" is not the claim this entry makes. Re-run 2026-08-07 through
@@ -9173,9 +9744,33 @@ explicitly rather than by a method that no longer returns it.
 ---
 
 <a id="e-81"></a>
-### E-81 — medium — the withdrawal refusal states a universal guarantee that the same sentence disproves — STATUS: OPEN
+### E-81 — medium — the withdrawal refusal states a universal guarantee that the same sentence disproves — STATUS: FIXED (wave 14)
 
-**Status** OPEN. Raised by the fifth auditor.
+**Status** FIXED in wave 14, alongside [E-89](#e-89) — it is the sentence the player stranded by
+[FINDING 31](SECURITY-FINDINGS.md#finding-31) reads, so closing one without the other leaves the victim
+of the fixed defect still being told to retry. Raised by the fifth auditor.
+
+> **THE FIX: TWO REFUSALS, BECAUSE THEY ARE TWO SITUATIONS.** A policy floor is something a caller can
+> clear by asking for more. The ledger's own fee is not. They read the same and only one of them can be
+> acted on, so `withdraw` now branches on `balance_now <= transfer_fee` and answers:
+> *"No withdrawal of any size can move this, and that is arithmetic rather than a policy of this table…
+> Not by you, not by this table, and not by a controller: there is deliberately no method here that can
+> edit a balance. IT IS NOT LOST AND IT IS NOT FORGOTTEN — it is counted in get_custody_status() and in
+> get_solvency(), and if you ever put more into this table it comes out with the rest in a single call."*
+> The policy sentence is unchanged for every balance it is actually true of.
+>
+> **AND THE SAME SENTENCE WAS IN THE UI, WHICH IS THE SURFACE THE PLAYER ACTUALLY READS.**
+> `WithdrawModal.svelte` mirrors the canister's floor client-side, deliberately, so a
+> client-side floor cannot become a trap the canister's gates cannot see -- and it mirrored
+> the wrong half: *"…can always be withdrawn in one call whatever its size … **press MAX**"*,
+> to a player whose MAX will be refused. It now branches on the same condition and says the
+> same thing the canister says. `ui_limits` stays green (11/11): every figure is still
+> interpolated from the mirrored constants and no literal came back.
+>
+> **The gate asserts the two absences and the two presences**, because the defect was what the sentence
+> SAID and not whether it errored: no `"can always be withdrawn"`, no `"Minimum withdrawal is"`, and it
+> must name the `network fee` and say `No withdrawal of any size`. Verified red against HEAD, which
+> answers the paragraph quoted below verbatim.
 
 `src/table_canister/src/lib.rs`:
 
@@ -9556,6 +10151,74 @@ root workspace, so it cannot move a deployed module hash.
 
 ---
 
+<a id="t-43"></a>
+### T-43 — high — the frontend turned OFF query-signature verification, so any box on the path could rewrite any query reply — STATUS: FIXED (wave 14)
+
+`createAgent()` in `src/cleardeck_frontend/src/lib/canisters.js` built every `HttpAgent` with
+
+```js
+verifyQuerySignatures: false,   // "Disable query verification for now - there may be subnet key issues"
+```
+
+`false` is not `@dfinity/agent`'s default. Somebody wrote it, speculatively (*"may be"*), and it
+stayed. What it disables is the check that a query reply carries a signature from a node of the
+subnet that hosts the canister. Without it there is nothing tying a reply to the IC at all: a
+boundary node, an HTTP gateway, a corporate proxy or a compromised CDN edge can rewrite any
+query reply this app makes and the client cannot tell.
+
+Every uncertified-reply finding in this project is one class of attacker cheaper because of it.
+[FINDING 42](SECURITY-FINDINGS.md#finding-42) needs a dishonest replica to substitute a table
+canister id in `get_tables()`; with this line, it needed only a position on the wire.
+
+**Fixed by restoring the library default, and MEASURED rather than assumed.** With
+`verifyQuerySignatures: true` the whole app works against the local replica — the lobby list
+(three `get_tables` + `get_player_count` + `get_max_players` queries), the table view and the
+deposit modal all render, with **zero console errors**. Evidence:
+`node tools/shots/repro-finding42.mjs`, `artifacts/finding42/evidence.json`
+(`observed.consoleErrors: []`). The "subnet key issues" the comment speculated about did not
+appear.
+
+**What was NOT tested: mainnet.** This wave does not call mainnet (hard rule 1). Whoever deploys
+next should open the lobby before announcing it. The failure mode is loud — "Failed to load
+tables" — not silent.
+
+**What this does not fix, stated because the opposite is the tempting conclusion.** A verified
+query is still ONE replica's opinion, signed. It binds the reply to a node key; it does not put
+the reply through consensus. A dishonest node can still answer `get_tables()` with any canister
+id it likes and sign it. That is why the deposit address is rooted in `trustedTables.js` — the
+ids the build was published with — and not in anything that arrives over the wire, verified or
+not.
+
+<a id="t-44"></a>
+### T-44 — medium — the two warnings on the screen money leaves from are uncertified query replies, and their reassuring state renders nothing — STATUS: OPEN
+
+`DepositModal.svelte` asks two questions before a player commits money, and both were added
+because a real failure was invisible without them:
+
+* **solvency** — [FINDING 35](SECURITY-FINDINGS.md#finding-35) / [E-70](#e-70): mainnet `table_1`
+  is 2.00 ICP short of its own books and no surface of the canister said so.
+* **cycle runway** — [E-55](#e-55): a canister below its freezing threshold rejects every update
+  call at once, so every player loses access to their own money at the same instant.
+
+Both are read with a `query` (`solvency.js` `readTableSolvency`, `cycleRunway.js`
+`readCycleRunway`). A query is answered by one replica out of its own memory; no consensus is
+involved and, since [T-43](#t-43), the reply is signed by that node and nothing more.
+
+**The dangerous part is the rendering, not the read.** `SolvencyNotice` renders *nothing at all*
+when the verdict is `covered`. So a replica that answers `covered` produces a deposit screen that
+is pixel-identical to a healthy table — the warning does not go wrong, it goes absent, and
+absence is the state a player reads as "fine". The runway block behaves the same way for a
+comfortable answer.
+
+This is the project's standing lesson one level up: **an instrument that measures nothing
+passes.** Both instruments are also anchored INSIDE the canister they are judging, which is the
+other standing lesson.
+
+Two ways to close it, neither done here: read the pre-deposit verdict through an UPDATE call, so
+it goes through consensus like the deposit itself; or say on the screen that the verdict is one
+replica's answer and was not verified. The first is the real fix. The second is honest and costs
+nothing.
+
 <a id="t-42"></a>
 ### T-42 — high — the collusion detector accuses honest winning players and cannot tell them from cheats — STATUS: OPEN
 
@@ -9649,8 +10312,358 @@ it has finished is how a gate stops being run. H-42 is the entry recording that 
 
 ---
 
+<a id="e-99"></a>
+### E-99 — high — a currency flip was accepted with an irreversible 5 ICP withdrawal still open — STATUS: FIXED (wave 14)
+
+Measured on the same tree, by reverting `total_liability()` alone to its five-term sum:
+
+```text
+PRE-FIX   WITH A PAYOUT OPEN: verdict=CanPayEveryone owed=0 guard_liability=0
+                              held=Some(500000000) diff=Some(500000000)
+                              payouts=500000000
+          flip to BTC with a payout in flight -> ACCEPTED currency now BTC
+
+POST-FIX  WITH A PAYOUT OPEN: verdict=CanPayEveryone owed=500000000
+                              guard_liability=500000000 held=Some(500000000)
+                              diff=Some(0) payouts=500000000
+          flip to BTC with a payout in flight -> REFUSED Refusing to change this
+          table's currency from ICP to BTC while it still owes players 5.0000 ICP…
+```
+
+Note the pre-fix line twice over: a canister with zero escrow and a five-ICP withdrawal in
+flight reported `owed = 0` and a **+5 ICP surplus**. That is
+[FINDING 43](SECURITY-FINDINGS.md#finding-43) from a third direction, and it is why the fix is
+one definition rather than a fifth term.
+
+Gate: `cd tests/money_safety && cargo test --test solvency_definition -- the_currency_guard_refuses_while_a_payout_is_still_in_flight`.
+The destructive operation is attempted FIRST in that test, before any assertion about the
+report, so the conviction that fires is the flip itself and not a bookkeeping check on the way
+to it.
+
+<a id="e-96"></a>
+### E-96 — low — money held for somebody the table cannot name renders NOTHING on the deposit screen — STATUS: OPEN
+
+
+> **CORRECTION, wave 14 coherence pass.** This id is also being cited in
+> `artifacts/screens/acknowledged-reds.json` to excuse the OPPOSITE symptom — the
+> deposit screen's token census failing on money figures that DO render. One id
+> cannot carry both. The census red is now **[E-101](#e-101)**; this entry is only
+> about the silence.
+
+
+**Found in wave 14 by RENDERING the shipped component, not by reading it.**
+`tools/shots/test-solvency.mjs` exercises the interpreter; nothing renders
+`SolvencyNotice.svelte`. Compiled for SSR and rendered against each reachable state, on the
+numbers the wave-14 money-safety run actually produced:
+
+```text
+THE FIXED CANISTER, SHORT (context=deposit)
+  ⛔ This table does not hold all the money it owes
+     Owed to players      10.00 ICP (1000000000 e8s)
+     Held on the ledger    9.00 ICP (899980000 e8s)
+     Short by              1.00 ICP (100020000 e8s)
+     Ledger reading 0s ago.
+     THIS CANISTER CANNOT PAY EVERYONE IT OWES … 2.0000 ICP (200000000 e8s) of that is
+     money named by unfinished incoming transfers …
+     Do not deposit. …
+
+THE FINDING 43 STATE — 1 ICP at the shared main account, credited to nobody
+  (NOTHING RENDERS)
+```
+
+The second one is the gap. The canister is right and says so in words: it holds exactly what
+it owes (`difference_e8s = 0`, verdict `CanPayEveryone`) **and** it names
+`unattributed_at_main = 100000000` in `summary`. The component's rule 2 is *"silence is never
+the answer"*, and its `visible` predicate is `state !== covered`, so the whole block —
+summary included — is dropped. `interpretSolvency` does not extract `unattributed_at_main`
+at all, so even an unconditional render would have nothing to show.
+
+**Why it was not fixed in the same wave.** `SolvencyNotice.svelte` carries a note from its
+author: these are MONEY FIGURES, and the moment they render they need a site in
+`tools/shots/lib/chain-agreement.mjs` asserting them against the canister — a
+`token-allowlist.mjs` rule is forbidden for money-shaped tokens by that file's own rule 5.
+Adding an unasserted money figure to the deposit screen to fix an information gap would be
+the trade this project keeps refusing. The fix is: extract `unattributed_at_main`, render an
+informational (not critical) row when it is non-zero, and add the chain-agreement site in the
+same change, with `./scripts/dev.sh shots` green.
+
+<a id="e-98"></a>
+### E-98 — high — wave 12 moved the sweep threshold and left every sentence about it behind — STATUS: FIXED (wave 14)
+
+Wave 12 added the Rule-3 floor: `claim_external_deposit` used to sweep anything the ledger could
+move (`balance > transfer_fee`) and now sweeps only at or above `min_external_deposit`
+(`min_withdrawal + transfer_fee`). The floor is right. **Three player-facing statements were built
+on the old threshold and none of them moved**, so for two waves this canister gave instructions it
+would then refuse to carry out.
+
+| | said | on a build where |
+|---|---|---|
+| the dust refusal | *"sending **2** e8s or more to the SAME address makes the whole balance claimable with claim_external_deposit()"* | 9,999 + 2 = 10,001, and the claim refuses at 10,001 |
+| `deposit_custody_sentence` | *"call claim_external_deposit(), which moves it and credits you 0.0001 ICP"* | the claim refuses the entire band it was being said about |
+| `DepositAddressCustody::sweepable` | `observed_amount > transfer_fee`, under *"true when `claim_external_deposit()` would sweep this amount right now"* | the sweep refuses everything from `fee + 1` to `min_external - 1` |
+
+The third is [E-89](#e-89)'s second half and is written up there. The first two are why this entry
+exists separately: they are not flags a machine reads, they are **the only instructions a stuck
+player has**, and following them costs another ledger fee and ends in another refusal.
+
+### Why nothing caught it, and what the gates do differently
+
+`deposit_custody_sentence` exists because of
+[FINDING 28](SECURITY-FINDINGS.md#finding-28) — it is the ONE place this prose is written, so the
+four surfaces that quote it cannot diverge from each other. They did not diverge. **They agreed
+with each other and disagreed with the code**, which a same-source check cannot see, and the two
+tests that touch the dust path both top up by `2 * ICP` — comfortably over any floor — so the
+figure the canister actually prints was never sent.
+
+Both new gates DRIVE the sentence instead of reading it:
+
+* `the_top_up_the_dust_refusal_names_actually_makes_the_balance_claimable` parses the number out of
+  the refusal, transfers exactly that, and requires the claim to return `Ok`. It cannot agree with
+  a wrong figure, because it uses the figure.
+* `sweepable_and_refundable_predict_what_the_two_doors_actually_do` reads the flag, then calls the
+  method, at `fee`, `fee + 1`, `min_external - 1` and `min_external`, and requires the prediction
+  and the outcome to match.
+
+Verified red against `git show HEAD:src/table_canister/src/lib.rs` in a `cp -Rc` tree: *"THE
+CANISTER'S OWN INSTRUCTION DID NOT WORK. It said to send 2 e8s more to the same address; that was
+done, the address now holds 10001, and the claim still refused."*
+
+---
+
+<a id="e-97"></a>
+### E-97 — medium — the suite that produces the runway table prices an open browser tab as a heartbeat stream — STATUS: OPEN
+
+`tests/money_safety/tests/cycles_runway.rs` is the only thing in this tree that MEASURES a table's
+burn under load, and it is where every published runway figure originally came from. Its per-tab
+rows are built like this:
+
+```rust
+for seats in [2u128, 6] {
+    let burn = idle_per_day
+        + net_per_hand.saturating_mul(500)
+        + hb_per_player_day.saturating_mul(seats);
+    print_runway_table(
+        &format!("500 hands/day with {seats} tabs open (heartbeats at 10 s)"),
+        burn,
+    );
+}
+```
+
+`hb_per_player_day` is the 10-second heartbeat and nothing else. That is
+[E-92](#e-92)'s arithmetic, expressed in code rather than in a comment, and it is the reason the
+same wrong number reached six other files: they were all copying this.
+
+Measured in wave 14 on the local replica (`tools/cycles/tab-burn.mjs`, control-differenced):
+
+| what a tab actually costs | per day |
+|---|---|
+| the heartbeat term this suite uses | 0.0618 T |
+| the FIXED client, measured on a table nobody is playing at | **0.0572 T** |
+| the FIXED client at its policy ceiling | **0.1929 T** |
+| the client this suite was written beside (500 ms poll) | **1.1380 T** |
+
+So even after [E-92](#e-92) the ceiling row reads about **3x low**, and against the client that
+existed when the suite was written it read **18x low**.
+
+**What is NOT wrong here.** The rows that involve no tabs — idle, and N hands/day — are sound. This
+suite's idle figure (0.0442 T/day, PocketIC) and wave 14's independent local-replica control
+(0.0411 T/day, taken twice thirty minutes apart and agreeing to 0.011%) are within 7% of each
+other, which is about what two different execution environments should differ by. The per-unit
+costs it publishes for a hand, a deposit and a withdrawal are carried forward unchanged into
+`tools/cycles/burn-table.json` and labelled as inherited from this suite.
+
+**Why it is not fixed here.** It is another owner's suite, and the honest correction is to add a
+measured per-tab term to the derivation and re-run it under PocketIC — not to edit the format
+strings so the labels stop being false. Replacing one unmeasured constant with another is how the
+226-day figure got written in the first place.
+
+Everything OUTSIDE that suite now reads `tools/cycles/burn-table.json`, which carries the measured
+per-tab prices, so nothing a player or an operator sees depends on this any more.
+
+---
+
+<a id="e-100"></a>
+### E-100 — high — the cycles monitor never read the recent burn rate, and its own selftest could not tell — STATUS: FIXED (wave 14)
+
+
+> **CORRECTION, wave 14 coherence pass.** The headline *"225 days reported for a
+> table burning 2.05 T/day: a 56x error"* is a FIXTURE result, not an observed
+> fleet result. Run against the live local canisters with only the parser line
+> reverted, the **days column is byte-identical** both ways (table_3 = 23 days),
+> because `get_cycle_status` already reports `runway_days` derived from the recent
+> rate and `parse_status` takes `min(stated, derived)`. What the fix actually
+> restored is the script's INDEPENDENT cross-check, dead since it was written, and
+> the printed burn rate — which only diverges while the recent rate differs from the
+> lifetime average. Re-measured by the coherence pass on an idle local fleet, the
+> two parsers print **identical** output on all four tables, days and burn alike;
+> the divergence the wave recorded (table_3 0.131 → 2.210 T/day) was visible only
+> while that canister was hot from the burn matrix. The defect and the gate are
+> real; the severity narrative overstated what was observed on a real canister.
+
+
+`scripts/cycles-runway.sh` exists because a **lifetime burn average reads HIGH on a table that has
+just got busy** — that is [E-55](#e-55)'s reopened half, and the script's own comment says so:
+
+```python
+# THE PESSIMISTIC RATE. A lifetime average alone reads high on a table that has
+# just got busy, which is precisely when the number is needed.
+burn = max(lifetime or 0, recent)
+```
+
+`recent` was always `0`.
+
+```python
+recent   = num('recent_burn_per_day') or 0     # num() matches `field = <digits>`
+```
+
+`recent_burn_per_day` is `opt nat` on the interface, so what the canister actually puts on the wire
+is
+
+```
+recent_burn_per_day = opt (2_604_344_185_140 : nat)
+```
+
+which `num()` cannot match. It returned `None`, `or 0` turned that into zero, and `max()` therefore
+chose the lifetime average on **every real canister, every run, since the script was written**.
+
+### How it was found, and why nothing found it earlier
+
+Found in wave 14 by running the monitor against a live local canister that had just been driven hard
+by the [E-92](#e-92) burn matrix. The canister's own gauge said `recent_burn_per_day = opt
+(2_604_344_185_140 : nat)` — 2.60 T/day — and the script printed `burning 0.133 T/day`, its lifetime
+figure. Reproduced directly:
+
+```
+num('recent_burn_per_day')   = None
+num('observed_burn_per_day') = 132777379425
+```
+
+Nothing found it earlier because **the selftest's fixtures were the wrong shape**. Every one of them
+wrote the field as a bare `nat`:
+
+```
+recent_burn_per_day = 499_412_781_032 : nat
+```
+
+No module has ever emitted that. So the check named *"a busy table whose lifetime average still says
+225"* — the one check in the file that exists specifically to prove the recent rate wins — passed
+against a canister that does not exist, and five green lines proved the parser worked on fiction.
+**An instrument that measures nothing passes.**
+
+### What it cost, measured on the pre-fix parser
+
+The fixture is now written in the wire shape. Replaying it against the parser as it was:
+
+```
+   ✗  a busy table, recent burn as `opt nat` -- THE SHAPE ON THE WIRE -> parsed 225 days, expected 4
+```
+
+**225 days for a table burning 2.05 T/day.** The error is 56x and it is in the direction that makes a
+canister look safe.
+
+It did not produce a wrong ANSWER on the local fleet only because of a second mechanism: the script
+also takes `min(stated runway_days, derived)`, and the canister's own `runway_days` is computed from
+the recent rate, so the canister rescued the monitor. That is luck, not design — the whole point of
+recomputing locally is that a canister reporting a stale or optimistic `runway_days` must not be able
+to talk the monitor round, and against such a canister this parser would have believed it.
+
+### The fix
+
+`opt_num` first, `num` second, absent last — the optional shape the module emits, the bare shape an
+older module would emit, and absent still meaning "fall back to the lifetime figure", which was
+always the intent. The selftest now carries **both** shapes as separate cases, so neither can rot
+unnoticed.
+
+**The JS reader was never affected.** Candid decodes `opt t` to `[]`/`[value]` and
+`src/cleardeck_frontend/src/lib/cycleRunway.js` reads it through `optBig`, which handles the array
+and tolerates a bare value. `tools/shots/test-cycle-runway.mjs` fixtures it as `[44_247_843_312n]`.
+The defect was in the text parser only — which is exactly why a shell script re-implementing a
+decoder deserves fixtures taken from a real reply.
+
+**Gate:** `./scripts/cycles-runway.sh --selftest`, which `./scripts/dev.sh cycles` runs before it
+touches a network. Red on the pre-fix parser with the wire-shaped fixture, exit 1.
+
+---
+
 <a id="e-89"></a>
-### E-89 — high — the fuzzer at its own defaults is RED, and the red is FINDING 31 — STATUS: OPEN
+### E-89 — high — the fuzzer at its own defaults is RED, and the red is FINDING 31 — STATUS: FIXED (wave 14)
+
+> ## WAVE 14 — FIXED. A REFUSAL IS NOT A REMEDY, AND FOR ONE WAVE THAT IS ALL THIS WAS.
+>
+> `./scripts/dev.sh fuzz-default` is GREEN, seed `0xc1ea2dec0002` included, in **49.2 s** against
+> the 303.0 s the red run took (the difference is one shrink pass that no longer has anything to
+> shrink). The drain transcript now contains the line that was missing:
+>
+> ```text
+> ledger intent 17 OPENED:  refund 10002 e8s for lpoz5-…-oae
+> ledger intent 17 SETTLED: refund of 10002 e8s from the deposit subaccount of lpoz5-…-oae
+>                           to their own wallet at block 40
+> ```
+>
+> **Why the wave-12 Rule-3 floor did not close it, which was the question.** The floor was right
+> and it was only half the job. `min_external_deposit()` stops the canister CREDITING an escrow
+> balance it could never pay out — but the money it refuses to sweep is sitting in an account this
+> canister owns, at an address this canister published, and the only instruction the refusal could
+> give was *"send at least X more to the SAME address"*. That asks a player to spend a second
+> ledger fee to rescue the first, and if they decline, the canister holds their money for ever
+> while every arithmetic invariant stays silent. **Refusing to take money is not the same act as
+> giving it back**, and only the second one empties the account.
+>
+> The arithmetic says the two doors are not equivalent, which is why this needed a new one:
+>
+> | route | the player receives | needs a balance of |
+> |---|---|---|
+> | sweep, then `withdraw` | `balance - 2*fee` | `> 2*fee` |
+> | `refund_external_deposit()` | `balance - fee` | `> fee` |
+>
+> So the refund reaches **every amount the ledger can move**, which is the most any canister can
+> promise, and it costs one fee rather than two. Neither its source nor its destination is a
+> parameter: both are derived from `msg_caller()`, so it can drain no account but the caller's own
+> and pay no account but the caller's own, and it never touches `BALANCES`.
+>
+> ### The second defect in this entry — the tolerance — is fixed as a tolerance, not as a number
+>
+> `UNMOVABLE_DUST_E8S` is gone. [`DrainReport::stranded_e8s`] asks the question **per account**:
+> after every legal exit is driven to exhaustion, the only money that may still be owed is money
+> the LEDGER itself cannot move, and that is a fact about one account at a time. An escrow row or
+> a deposit subaccount above one transfer fee is stranded; chips and the pot count in full at any
+> size, because `cash_out` needs no transfer at all. Measured, on the four cases that separate the
+> two rules:
+>
+> | left after the drain | old rule | new rule |
+> |---|---|---|
+> | one address holding 19,999 | **silent** | 19,999 |
+> | two addresses holding 10,001 | 20,002 | 20,002 |
+> | two at 10,000 (dust) + one at 15,000 | 35,000 | **15,000** |
+> | one chip in a seat | **silent** | 1 |
+>
+> ### A third defect, found by driving the instruction instead of reading it
+>
+> The dust refusal named a top-up of `fee + 1 - amount`. That figure was correct until the wave-12
+> floor moved the sweep threshold and was never updated, so a player holding 9,999 e8s was told to
+> send **2 more** — and at 10,001 the claim refuses again, with a different message, for a
+> different reason. Driven on the pre-fix build: *"It said to send 2 e8s more to the same address;
+> that was done, the address now holds 10001, and the claim still refused."* It now names
+> `min_external_deposit - amount`, and the gate sends exactly the number the canister prints.
+>
+> ### Every gate verified RED first, against `git show HEAD:src/table_canister/src/lib.rs`
+>
+> A `cp -Rc` tree with the new tests and the committed canister: **6 passed, 6 failed** — the six
+> pre-existing `deposit_floor` tests still green, all six new ones red, on
+> `CanisterMethodNotFound 'refund_external_deposit'`, on the missing `minimum_deposit` field, on
+> `20000 e8s went to the address this canister published and 0 came back to their wallet`, and on
+> the top-up instruction above. The four tolerance tests were verified red separately, with the
+> old aggregate rule restored in the same tree. And with the new instrument against the OLD
+> canister the fuzzer still convicts, naming the account:
+> *"20002 of that is in accounts the LEDGER could still move: 20002 e8s in deposit address of
+> lpoz5-…-oae"* — so the drain did not go green by going blind.
+>
+> **What is NOT closed by this.** Money at or below one transfer fee is still unrecoverable, by
+> this canister or by anybody, and that is arithmetic rather than a defect
+> ([FINDING 11](SECURITY-FINDINGS.md#finding-11) / [E-12](#e-12)). What changed is that the
+> canister now says so on the address surface **before anything is sent**, and publishes
+> `minimum_deposit` — a number that cannot strand the player who follows it exactly.
+
 
 `./scripts/dev.sh fuzz-default` — the invocation [H-28](#h-28) exists to make sure somebody runs —
 fails, and `./scripts/dev.sh test` fails with it. **Reproduced twice, identically**, 2026-08-07:
@@ -9812,14 +10825,29 @@ not be reachable only through a deployed replica.**
 ---
 
 <a id="e-92"></a>
-### E-92 — high — every cycles-runway figure this wave published omits the 500 ms UPDATE poll, which is the biggest per-tab term — STATUS: OPEN
+### E-92 — high — the render rate was driving an UPDATE loop, and it was the largest single cost of running this game — STATUS: FIXED (wave 14)
+
+
+> **CORRECTION, wave 14 coherence pass.** The per-tab prices labelled *typical* were
+> measured on an EMPTY table: `artifacts/cycles/fixed-{1,3,10}tab.json` contain no
+> `check_timeouts` key at all, so the clock nudger fired zero times in every cell
+> `0.0572 T/day` derives from. Those cells are then multiplied by 6 and 10 in the
+> *"500 hands/day, N tabs open (typical)"* rows — rows that by definition describe a
+> table where the nudger fires between every hand. Filed as
+> **[H-62](#h-62)**; measured correction ≈0.832 T/day for ten tabs (61 days on
+> 51.4 T) rather than 0.6974 (73 days). The LEGACY-vs-FIXED ratio, which is what
+> this entry is about, is unaffected. Separately, nothing gates the link between
+> `+page.svelte` and the policy at all: **[H-58](#h-58)**.
+
 
 Wave 13 measured the cost of a hand, a deposit, a withdrawal and the frontend's 10-second
 heartbeat, and concluded that *"six open browser tabs cost more than eight times what the on-chain
-clock costs"*. There is a second per-tab loop, it was not measured, and it is larger.
+clock costs"*. There was a second per-tab loop, it was not measured, and it was the larger of the
+two by about a factor of twenty: **1.0841 T/day per tab against the heartbeat's 0.0539**, both
+measured against the same control below.
 
 ```js
-// src/cleardeck_frontend/src/routes/+page.svelte
+// src/cleardeck_frontend/src/routes/+page.svelte   (before this wave)
 const POLL_INTERVAL = 500;
 pollInterval = setInterval(loadTableState, POLL_INTERVAL);
 
@@ -9829,62 +10857,137 @@ async function loadTableState() {
 ```
 
 ```rust
-// src/table_canister/src/lib.rs:10397
+// src/table_canister/src/lib.rs
 #[ic_cdk::update]
 fn check_timeouts() -> TimeoutCheckResult {
 ```
 
-`table_canister.did:714` declares it `check_timeouts : () -> (TimeoutCheckResult);` — no `query`.
-So every open tab drives an **update** call in a 500 ms loop, at a measured **6,573,911 cycles**
-each.
+`table_canister.did` declares it `check_timeouts : () -> (TimeoutCheckResult);` — no `query`. So
+every open tab drove an **update** call in a 500 ms loop, forever, whether or not anything was due.
 
-### The rate, honestly bounded
+### MEASURED, not derived
 
-`loadingTableState` blocks re-entry, so the real rate is one call per round trip rather than two per
-second. At mainnet's ~2 s update finality that is ~43,200/day per tab (**0.284 T/day**); at
-PocketIC's near-instant finality it is the full 172,800/day (**1.136 T/day**). Either end of that
-range is the dominant per-tab cost: the heartbeat this wave headlined is **0.0618 T/day**.
+The reason this survived is that every cycles figure in this repository was **derived**: somebody
+added up the price of the things they remembered the frontend does. A derived figure omits whatever
+the deriver forgot. So this entry does not derive anything.
 
-Against the published composition — `0.4994 T/day = idle + 500 hands + six heartbeat streams` — six
-open tabs add **1.7 to 6.8 T/day before a single hand is dealt**.
+`tools/cycles/tab-burn.mjs` opens N simulated tabs against a real table canister on the local
+replica, drives exactly the call pattern the page drives — the same 500 ms poll with the same
+re-entrancy guard, the same 10 s heartbeat, the same 5 s balance refresh, one Ed25519 identity per
+tab — and reads the canister's own cycle balance before and after. The full method, and its two
+stated confounds, are in that file's header. `./tools/cycles/run-matrix.sh` re-runs the whole
+matrix.
 
-### Why it is `high` and why it is not fixed here
+**The control was taken twice, at the start and at the end of a 30-minute matrix, and came out at
+41,141,210,251 and 41,145,603,927 cycles/day — 0.011% apart.** Every marginal figure below is a
+difference against it.
 
-**The error is in the dangerous direction.** [E-55](#e-55) was reopened this wave precisely because
-`runway_days` divided by a lifetime average and therefore READ HIGH; this is the same failure one
-level up, in the numbers a human reads, and it is baked into `FALLBACK_BURN_PER_DAY` — the floor the
-CI monitor alarms on when a canister cannot yet measure its own burn.
+| tabs | client | measured burn | marginal per tab | update calls in 132 s |
+|---|---|---|---|---|
+| 0 | — (control) | **0.0411 T/day** | — | 0 |
+| 1 | 500 ms poll | 1.1791 T/day | **1.1380 T/day** | 251 |
+| 3 | 500 ms poll | 3.4308 T/day | 1.1299 T/day | 754 |
+| 10 | 500 ms poll | **9.7618 T/day** | 0.9721 T/day | 2,161 |
+| 1 | fixed | 0.0951 T/day | 0.0539 T/day | 12 |
+| 3 | fixed | 0.2128 T/day | 0.0572 T/day | 36 |
+| 10 | fixed | **0.5799 T/day** | 0.0539 T/day | 120 |
+| 10 | fixed, jammed table | 0.8947 T/day | 0.0854 T/day | 190 |
+| 1 | fixed, policy ceiling | 0.2340 T/day | 0.1929 T/day | 42 |
+| 10 | fixed, policy ceiling | 1.9333 T/day | 0.1892 T/day | 420 |
 
-It is left open rather than patched because the honest fix is to re-measure the whole table with the
-poll included, in `tests/money_safety/tests/cycles_runway.rs`, and publish one set of numbers. That
-is the owner's work, not a reconciliation pass's; replacing one unverified constant with another is
-how the 226-day figure got written in the first place.
+One `check_timeouts` costs **6,889,049 cycles**, averaged across every cell, which agrees with
+wave 13's independently-measured 6,573,911 to within 5%.
 
-**What is NOT affected:** the canister's own `get_cycle_status`. Its sliding window measures real
-consumption, so it already includes these calls. The defect is in the DOCUMENTED figures and in the
-fallback constant used when the window is too young to speak.
+**Ten open browser tabs on one table burned 9.76 T/day.** Add 500 hands a day and it is
+**11.5 T/day: zero days on the 10 T [E-55](#e-55) headlines, four days on the 51 T the fixtures
+hold.** The freezing reserve — 28,954,245,000 cycles, nominally thirty days — was worth
+**four minutes**.
 
-### Corroborated by the canister's own gauge, on the local replica, in this pass
+### The direction was the dangerous one
 
-`./scripts/dev.sh cycles` immediately after a full 24-shot screenshot sweep — a browser holding a
-table page open, which is the load this entry is about:
+[E-55](#e-55) was reopened in wave 13 precisely because `runway_days` divided by a lifetime average
+and therefore READ HIGH. This was the same failure one level up, in the numbers a human reads, and
+it was baked into `FALLBACK_BURN_PER_DAY` — the floor the CI monitor alarms on when a canister
+cannot yet measure its own burn. That constant was **four times too low**.
 
-```text
-  ✓  btc_table_1: 1138 days (51.380 T spendable, burning 0.045 T/day)     <- never opened in a browser
-  ✓  table_1:      277 days (51.360 T spendable, burning 0.185 T/day)
-  ✗  table_2:       11 DAYS LEFT -- CRITICAL (51.241 T spendable, burning 0.333 T/day)
-  ✗  table_3:       11 DAYS LEFT -- CRITICAL (51.176 T spendable, burning 0.218 T/day)
-```
+**What was never affected:** the canister's own `get_cycle_status`. Its sliding window measures real
+consumption, so it always included these calls. Mid-matrix, `table_3` reported
+`recent_burn_per_day = 605,243,690,623` and dropped its own `runway_days` from 1,035 to 84 while
+every document in the tree still said 0.0442 T/day. **The gauge was right and the documents were
+wrong**, which is the good half of this: the only instrument that was not a transcription saw it.
 
-`btc_table_1` is the control: no browser ever pointed at it, and it reports **0.045 T/day**, which
-is the idle figure this project has been quoting. The three tables a browser did open report
-**4x to 7.4x** that, and the sweep is a handful of hands, not 500. **The gauge is right and the
-documents are wrong** — which is the good half of this: `get_cycle_status`'s sliding window (fixed
-this same wave under [E-55](#e-55)) sees the poll even though no document does.
+### Why it survived every instrument this project had
 
-`dev.sh cycles` is therefore RED on the local replica as of this pass. It is a local fixture running
-low, not a product defect, and it is the same instrument reporting the same thing the entry above
-predicts.
+It is not a bug — the code does what it says. It is not a test failure — the game works. It is not a
+lint — the call is well-formed. The only thing that makes it wrong is a fact in one file (whether
+the Candid declares that method `query`) joined to a fact in another (how often the method is
+called). **Nothing joined them.** `tools/shots/test-poll-updates.mjs` now does.
+
+### The fix: two loops, because they answer to two different rates
+
+Reading the table is a QUERY and its rate is the render rate. Advancing the clock is an UPDATE and
+its rate is the rate at which DEADLINES ARRIVE, which has nothing to do with how often a browser
+repaints. The canister already advances its own clock on an on-chain timer (`schedule_next_wake`
+arms a precise wake at the next deadline, with a 30 s watchdog behind it), so a tab is a backstop,
+not the engine. It has to fire for exactly three things, and `$lib/clockNudge.js` names them:
+
+1. **An action clock at zero on a hand still in progress** — the on-chain timer is late, and a
+   client is the only thing that can rescue the table.
+2. **Between hands with two or more dealt-in seats.** This one is load-bearing rather than a
+   backstop: `advance_table_clock` deliberately does not arm a wake for `auto_deal_at` when the
+   table could actually deal, so without a client asking, `AutoDealReady` is returned to nobody and
+   no hand ever starts.
+3. **A hand nothing can move** — each call is one counted stall opportunity, and three across the
+   grace period is what keeps `abandon_stuck_hand` reachable when a timer is dead
+   ([FINDING 15](SECURITY-FINDINGS.md#finding-15)).
+
+Conditionality alone is still an unbounded loop — a table jammed between hands is "due" forever — so
+every decision passes a floor of 2 s that **widens to 30 s whenever two consecutive calls see the
+table in the same state**, and snaps back the moment it moves. 30 s is `CLOCK_WATCHDOG_SECS`: a tab
+backing up a lost timer has no reason to be faster than the timer's own watchdog.
+
+The tempting alternative — reset the floor whenever the reply is *actionable* — is wrong and
+measurably so. A jammed table answers `AutoDealReady` to every call while `start_new_hand` keeps
+failing, so that rule holds the floor open for as long as the jam lasts: **7,200 calls over four
+jammed hours against 480.** Both figures come from `tools/shots/test-clock-nudge.mjs`, which was
+written first and caught the rule before it shipped.
+
+### One source for the numbers
+
+The table above used to exist in six places: this register, `scripts/cycles-runway.sh`,
+`$lib/cycleRunway.js`, `DepositModal.svelte`, `WithdrawModal.svelte` and
+`.github/workflows/cycles-monitor.yml`. Six transcriptions, no cross-check, all six wrong the same
+way. There is now one generated file — **`tools/cycles/burn-table.json`** — written from the
+measurements by `tools/cycles/build-burn-table.mjs`. `cycles-runway.sh` reads its fallback rate from
+it and **prints the whole table at the top of every run**, so the figure a human sees is the figure
+the tooling is using. The other five carry no numbers at all any more.
+
+It publishes **three** per-tab prices rather than one, because any single number here is a lie:
+the legacy poll (the comparison), the fixed poll measured on a table nobody is playing at (the
+flattering figure), and the fixed poll pinned at its floor all day (the ceiling, unreachable by an
+ordinary game). `fallback_burn_per_day` is built from the **ceiling**, because an alarm threshold is
+the one place the pessimistic figure is the right one.
+
+**A consequence, and it is not a comfortable one:** under the corrected floor, a canister that
+cannot measure its own burn now needs **123.2 T** to clear the 60-day warning. 51.378 T — what the
+local fixtures hold, and roughly what the mainnet tables hold — no longer clears it. That is not the
+instrument being pessimistic. It is the instrument having stopped being wrong.
+
+### The gates, and what each is red on
+
+| gate | red on |
+|---|---|
+| `node tools/shots/test-poll-updates.mjs` | the pre-fix tree, both assertions: `setInterval(loadTableState, 500)` reaching `check_timeouts()`/`start_new_hand()`, and 181,440 worst-case updates/day/tab over a 60,000 budget (exit 1). Also red if `MIN_GAP_MS` or `TICK_MS` is lowered under 2 s, and red if `tab-burn.mjs` stops pricing the same three periods the page runs — verified by drifting its `POLL_INTERVAL` to 1000 ms, because a measurement of a client this repo does not ship is how a number stops being true without anybody editing it |
+| `node tools/shots/test-clock-nudge.mjs` | the "actionable replies reset the floor" rule (0.0607 T/day/tab against a 0.02 T budget), and a policy that is always due. Carries its own control: a policy-free loop must fail the same budget, and if it ever passes, the budget is measuring nothing |
+| `node tools/shots/test-burn-table.mjs` | a missing or self-inconsistent `burn-table.json`, a hardcoded fallback in `cycles-runway.sh`, and any reappearance of a retired burn figure in code |
+
+### What is NOT closed here
+
+`tests/money_safety/tests/cycles_runway.rs` still builds its "with N tabs open" rows as
+`idle + hands + heartbeats x seats` — it prices a tab as a heartbeat stream, which is the arithmetic
+this entry is about, in code rather than in a comment. Filed as [E-97](#e-97) rather than fixed
+here: it is another owner's suite and correcting it means re-running its measurement, not editing
+its labels.
 
 ---
 
@@ -10025,3 +11128,522 @@ rather than being handed them, refuses a contradictory ambient `DFX_NETWORK` as 
 runs `verifyBundle` before exiting 0, deleting `dist` if verification fails. Run locally on this
 tree: build succeeded, **8 of 8 bundle checks passed**, and the local dist was rebuilt afterwards
 because both paths write to the same directory.
+
+---
+
+<a id="t-47"></a>
+### T-47 — fund-theft — the fourth money door: a Bitcoin address fetched from an unpinned canister — STATUS: FIXED (wave 14)
+
+Full write-up: **[FINDING 45](SECURITY-FINDINGS.md#finding-45)**.
+
+Wave 14 closed three doors in `DepositModal.svelte` against a table id supplied by
+`lobby.get_tables()` — an uncertified query. The derived ICP address, the OISY
+transfer (`owner: tableCanisterId`) and the ICRC-2 approval (`spender:
+tableCanisterId`) all refuse. The wave's own summary said *"all three money doors
+refuse together"*, and the gate is named
+`every_money_door_in_the_modal_refuses_an_unpinned_table`.
+
+There were four.
+
+```text
+DepositModal.svelte:444   async function loadBtcDepositAddress() {
+                            ...
+                            const result = await tableActor.get_btc_deposit_address();
+
+DepositModal.svelte:1394  {#if isBTC && depositMethod === 'btc'}
+DepositModal.svelte:1417    <label>Your Bitcoin Deposit Address</label>
+DepositModal.svelte:1419    <span class="address-text">{btcDepositAddress}</span>
+DepositModal.svelte:1424    navigator.clipboard.writeText(btcDepositAddress)
+```
+
+`grep -n tableIsTrusted` over the file returns 51, 53, 378, 618, 619, 896, 1015,
+1335 and 1574. **None of them encloses 1394–1440.**
+
+### Why this is worse than FINDING 42, not a smaller version of it
+
+FINDING 42 was a substituted argument to a hash the client computes. This address
+is not computed at all — it is whatever the canister replied. That is
+[FINDING 40](SECURITY-FINDINGS.md#finding-40), the defect FINDING 42 was the
+sequel to, still unfixed on the BTC path, and Bitcoin sent to an attacker's
+address cannot be reversed, refunded or clawed back by anybody.
+
+The attacker also chooses the branch. `currency={getTableCurrency(currentTableInfo)}`
+in `+page.svelte:1248` reads `Currency = variant { ICP; BTC }` out of the same
+`get_tables()` reply, so a substituted registry naming a hostile canister with
+`currency = variant { BTC }` selects the BTC flow and puts that canister's address
+on screen with a Copy button. The fetch runs on mount.
+
+### The fix and its gate
+
+`loadBtcDepositAddress()` refuses before the fetch, and the render asserts the
+trust root again next to the pixels, because this string is not derived by the
+build from anything it pinned. Verified RED by removing both guards:
+
+```text
+loadBtcDepositAddress() asks an unpinned canister for a Bitcoin address
+(guard at 6033, fetch at 1110) and the modal renders the reply under
+"Your Bitcoin Deposit Address" with a Copy button. Bitcoin sent to it is
+unrecoverable.
+test result: FAILED. 6 passed; 1 failed
+```
+
+and green with them: `test result: ok. 7 passed; 0 failed`.
+
+---
+
+<a id="t-48"></a>
+### T-48 — high — a tab that cannot read the table stopped asking the canister to advance its clock — STATUS: FIXED (wave 14)
+
+`clockNudge.js`'s `decide()` computed, for a view it could not read:
+
+```js
+const seated = view === null
+    ? this.lastCallAt !== null    // we have seen a table before; keep a pulse
+    : ...
+```
+
+`lastCallAt` is set only in `observe()`, which runs only after a call is made. A
+tab that has never obtained a decodable `TableView` has therefore never called, is
+never `seated`, never reaches the 60-second backstop, and emits **nothing**:
+
+```text
+COLD-START null view, one day: 0 calls
+```
+
+`loadTableState()` leaves `tableState` null whenever `get_table_view()` throws or
+returns `[]`; its catch block does not set it. The client this replaced called
+`check_timeouts` as the **first** statement of the 500 ms poll, before
+`get_table_view`, so it kept firing at 2/s in exactly that state.
+
+### Why it is `high`
+
+`check_timeouts` is what records `note_stall_opportunity`, and three of those
+across the grace period is what makes `abandon_stuck_hand` reachable when the
+on-chain timer is dead. A client that goes silent precisely when it cannot read
+the table is [FINDING 15](SECURITY-FINDINGS.md#finding-15)'s fund lock rebuilt on
+the client side — the one outcome `clockNudge.js`'s own header says it must not
+produce.
+
+The comment three lines above the defect said:
+
+> a view that failed to decode reads as "no view" here, which is exactly when a
+> backstop is wanted: "I could not tell" must not become "so I stopped calling".
+
+**The comment stated the requirement and the code did the opposite.** The gate
+beside it asserted `clockIsDue(null).due === false` and said *"the backstop covers
+it"* without ever measuring whether the backstop fired.
+
+### The fix and its gate
+
+An unreadable view now counts as seated. Worst case is the backstop alone:
+
+```text
+COLD-START null view, one day: 1440 calls = 0.0099 T/day (budget 0.0200)
+```
+
+`node tools/shots/test-clock-nudge.mjs` → `a tab that never gets a readable view
+still nudges the clock (T-48)`, verified RED by restoring `this.lastCallAt !== null`.
+
+---
+
+<a id="h-56"></a>
+### H-56 — high — the gate that certified FINDING 42 measured text position, not control flow — STATUS: FIXED (wave 14)
+
+`every_money_door_in_the_modal_refuses_an_unpinned_table` found the byte offset of
+`!tableIsTrusted` inside `handleDeposit` and asserted it was lower than the offsets
+of `icrc2_approve` and `wallet.transfer`. That is equally true of a guard that sets
+an error message and falls through.
+
+Deleting one token — the `return;` inside the guard — left the suite at **7 passed,
+0 failed**, and left `node tools/shots/repro-finding42.mjs` at **exit 0**, printing
+`✓ REFUSED`, while `handleDeposit()` ran on to
+`ledgerActor.icrc2_approve({ spender: { owner: tableCanisterPrincipal } })` against
+the substituted canister. The reproducer scrapes only the Claim button's `disabled`
+(`repro-finding42.mjs:392`); nothing observed the Deposit button or the approval,
+and nothing asserted any `disabled` binding at all.
+
+### The repair needed two attempts, and the second one is the point
+
+The obvious strengthening — *a `return` appears between the check and the money
+call* — was written, and the same one-token mutation was re-run against it. **It
+stayed green**, because the next `return` in that span belongs to the validation
+immediately below:
+
+```text
+if (!tableIsTrusted) {
+  error = untrustedReason;
+                             <-- the deleted token
+}
+if (!depositAmount || Number(depositAmount) <= 0) {
+  error = 'Please enter a valid amount';
+  return;                    <-- this one satisfied the assertion
+}
+```
+
+The assertion is now scoped to the guard's own brace-matched block, and the
+disabled bindings are counted. Both verified RED against their mutations and green
+on the tree.
+
+---
+
+<a id="h-57"></a>
+### H-57 — high — the drain convicted money the canister pays on the very next call — STATUS: FIXED (wave 14)
+
+Wave 14 replaced `check_drain`'s aggregate tolerance (`owed_after > 20_000`) with a
+per-account rule at one ledger fee — the right change — and left `drain()`'s own
+withdraw loop knocking at the old constant:
+
+```rust
+// tests/money_safety/src/invariants/reachability.rs
+let bal = world.get_balance(*who);
+if bal > 20_000 {                     // the drain's knock
+```
+```rust
+// src/table_canister/src/lib.rs
+let sweeping_whole_balance = amount == balance_now && amount > currency.transfer_fee();
+```
+```rust
+// stranded_breakdown(), the conviction
+if *amount > LEDGER_FEE_E8S {         // 10_000
+```
+
+So every escrow row in `(10_000, 20_000]` was convicted by an instrument that never
+asked for it. Measured:
+
+```text
+the drain left 15000 e8s convicted as unreachable:
+  [("escrow of 74yuz-2axoe-…", 15000)]
+but the canister pays any whole balance above one ledger fee.
+The drain transcript is:
+
+  left: 15000
+ right: 0
+```
+
+**The transcript is empty.** After the fix the same fixture reports nothing
+stranded and the player's own ledger wallet is up exactly 5,000 e8s — 15,000 less
+one fee — which is the assertion that keeps the green from being blindness.
+
+### This is FINDING 31's dead band moving, not closing
+
+`refund_external_deposit()` genuinely reaches everything above one fee at a deposit
+subaccount, so the band is gone from the canister. It reappeared one layer out, in
+the thing that measures the canister, where it produces a **false red** on M9 —
+the top-severity invariant here — in `dev.sh test` and `fuzz-default`. This
+repository keeps `artifacts/screens/acknowledged-reds.json` because reds get
+skimmed; an invariant that cries wolf is the failure mode being defended against.
+
+The threshold is now `LEDGER_FEE_E8S`, i.e. the canister's own rule rather than a
+constant of the harness.
+
+---
+
+<a id="h-63"></a>
+### H-63 — high — two gates on one directory, one green and one red, and CI ran the red one — STATUS: FIXED (wave 14)
+
+Each `src/declarations/<n>/` holds three copies of one interface: `<n>.did`,
+`<n>.did.js` and `<n>.did.d.ts`.
+
+* `tools/gen-declarations` **writes** `.did.js` and `.did.d.ts`.
+* `scripts/check-declarations-js.sh` **reads** `.did.js` and `.did.d.ts`.
+* `scripts/check-candid.sh --declarations` **reads** `.did` — and it is the one
+  wired into CI, at `.github/workflows/ci.yml:299`.
+
+Nothing writes `.did`. When the lobby gained `refresh_table_config` and
+`refresh_all_table_configs`, the two gates disagreed on the same directory in the
+same tree:
+
+```text
+$ ./scripts/check-declarations-js.sh
+  ✓ src/declarations/lobby matches src/lobby_canister/lobby_canister.did
+  declarations: all 5 binding set(s) regenerate to exactly what is committed
+
+$ ./scripts/check-candid.sh --declarations
+::error::NEW declaration drift, not in the baseline:
+      lobby	method-missing-from-a	refresh_all_table_configs
+      lobby	method-missing-from-a	refresh_table_config
+exit 1
+```
+
+### Why nobody caught it
+
+The stream that added the lobby methods was reading the gate that cannot see
+`.did`. The stream that saw the red read it correctly as *"another stream's
+concurrent lobby change, not mine"* — true, and it meant neither owner was the one
+who would fix it. Two correct local judgements, one red CI.
+
+Fixed by hand-editing `src/declarations/lobby/lobby.did` (adding `Result_2` and the
+two methods), which is what `check-candid.sh`'s own failure text instructs, because
+that file carries hand-written documentation the extractor does not reproduce.
+`--declarations` is exit 0 and the drift matches the 88-item baseline exactly.
+
+**The durable version of this fix is not done:** the generator still does not write
+`.did`, so the next method added to any canister lands in the same seam. It is
+written down here rather than assumed.
+
+---
+
+<a id="h-58"></a>
+### H-58 — high — nothing ties the shipped page to the clock policy — STATUS: OPEN
+
+Every cycles number wave 14 published for the fixed client rests on `+page.svelte`
+actually consulting `clockNudge.js`. Nothing enforces that link.
+
+* `test-poll-updates.mjs` checks the timer's **period** (2000 ≥ the 2000 ms floor)
+  and a shape budget (51,840 < 60,000).
+* `test-clock-nudge.mjs` exercises the policy module in isolation and never reads
+  `+page.svelte`.
+* `test-burn-table.mjs` reads only JSON.
+
+A `+page.svelte` whose `advanceTableClock` drops the policy and calls
+`check_timeouts` unconditionally on its 2 s timer leaves **all three green**. That
+is 43,200 calls/day/tab ≈ 0.298 T/day: 5.2x the published typical price and 1.54x
+the published policy ceiling, which is the figure `fallback_burn_per_day` is built
+from.
+
+[T-48](#t-48) is the same seam from the other side — the policy itself was wrong,
+and only a test of the policy could see it. Closing this needs a gate that resolves
+`advanceTableClock`'s body and requires the decision to gate the call.
+
+---
+
+<a id="h-59"></a>
+### H-59 — medium — the fix for H-45 blinded 70% of the gate built to catch H-45 — STATUS: FIXED (wave 14)
+
+Check 4 of `check-suite-wiring.sh` — *"every target `scripts/dev.sh` names with
+`--test` has a row, so the local gate cannot run something CI has never heard of"*
+— discovered its subjects with:
+
+```sh
+named="$(grep -oE -- '--test [a-z_0-9]+' "$DEV_SH" | awk '{print $2}' | sort -u)"
+```
+
+Wave 14 replaced sixteen literal `cargo test --test X` lines in `cmd_test` with the
+`run_ms X` helper. Those strings stopped existing:
+
+```text
+at HEAD:  23 subjects
+after:     7 subjects
+```
+
+and it printed `ok` both times. **Only the number inside the message changed, and
+nothing reads the number.** The sixteen it stopped watching were `admin_custody`,
+`coherence_w8`, `cycles_runway`, `deposit_replay`, `deposit_subaccount_anchor`,
+`deposit_surface`, `fund_reachability`, `invariants`, `ledger_boundary`,
+`oldest_cluster`, `regressions`, `solvency`, `stall_agreement`, `timers`,
+`ui_limits` and `wave6_coherence`.
+
+With **zero** subjects it also still passed, because `printf '%s\n' "" | wc -l` is
+1. And check 4 is the only one of the gate's five assertions with no `--selftest`
+case: the selftest plants nine failures, covering checks 1, 2, 3 and 5.
+
+Now it recognises both spellings and refuses an empty subject list:
+`ok 25 target(s) named in dev.sh, all listed`.
+
+---
+
+<a id="h-60"></a>
+### H-60 — medium — the new lobby leg prints a tick over zero comparisons — STATUS: OPEN
+
+`check-deployed-config.sh`'s lobby-vs-contract loop:
+
+```sh
+IFS=',' read -ra pairs <<< "$tfields"
+for p in "${pairs[@]}"; do ... done
+[ -n "$bad" ] || echo "  ✓ lobby row $n (\"$name\") matches $cid"
+```
+
+If the python parse yields no fields for a row, `tfields` is empty, bash builds a
+zero-length array, the body never executes, `bad` stays empty and the row is
+reported as matching. That is [H-55](#h-55)'s shape — a green tick over an empty
+comparison — in the same file, added by the fix for H-55.
+
+The icp.yaml half of the same script guards it explicitly:
+
+```sh
+[ -n "$got" ] || { echo "  ! …could not read…"; fail=1; }
+```
+
+The lobby half has only a whole-registry `lobby_rows -eq 0` check, and `--selftest`
+does not exercise the lobby half at all.
+
+**Latent, not live.** Measured today against the running local lobby, the parser
+extracts 8 of 8 fields from all three rows. It becomes live the first time the
+record shape, a field name, or the CLI's Candid spacing changes — which is exactly
+the event this script exists to survive.
+
+---
+
+<a id="h-61"></a>
+### H-61 — medium — the burn table is verified only against itself — STATUS: OPEN
+
+`test-burn-table.mjs` asserts that every scenario in `tools/cycles/burn-table.json`
+recomputes from that file's **own** measured and inherited components. It never
+compares any of them to the 13 raw runs in `artifacts/cycles/`. Its stated purpose
+is *"a table whose rows do not follow from its own inputs is a table somebody
+typed"* — and a table somebody typed **consistently** is what it lets through.
+
+`scripts/cycles-runway.sh` then reads `FALLBACK_BURN_PER_DAY` straight out of it
+with no verification, so the monitor's alarm floor can be moved silently.
+
+Demonstrated: divide every non-legacy `per_tab_per_day` by 4 and recompute each
+scenario with `build-burn-table.mjs`'s own formula. The gate exits 0 —
+*"all 8 scenarios recompute from their own components"* — while the published
+unknown-burn floor drops 2.0539 → 0.6075 T/day and the 51.4 T column goes from 25
+days to 84, with the raw artifacts untouched.
+
+This is the standing lesson of this repository in the cycles domain: the only
+outside anchor (the runs on disk) is read by the builder and by nothing that gates.
+
+---
+
+<a id="h-62"></a>
+### H-62 — medium — the "typical" per-tab price was measured with the nudger switched off — STATUS: OPEN
+
+```text
+$ python3 -c "...json.load(open('artifacts/cycles/fixed-1tab.json'))..."
+  calls: {'heartbeat': 12, 'get_balance': 24, 'get_table_view': 240, 'get_shuffle_proof': 240}
+  fixed-3tab:  {'heartbeat': 36,  ... }
+  fixed-10tab: {'heartbeat': 120, ... }
+```
+
+**No `check_timeouts` key in any of the three cells.** The table used had 0 of 9
+seats filled, and `clockIsDue` refuses both the predicate and the backstop on an
+empty table, so the clock nudger — the entire mechanism being priced — fired zero
+times in every cell that `fixed_poll_measured_idle_table` (0.0572 T/day) derives
+from.
+
+That price is then multiplied by 6 and 10 in the *"500 hands/day, N tabs open
+(typical)"* rows, which are the rows [E-55](#e-55)'s corrected runway table and
+wave 14's headline both quote. A table dealing 500 hands a day is by definition one
+where the nudger fires between every hand, so the row is internally contradictory.
+
+Measured on an occupied table: 3 `check_timeouts` per tab per 132 s ≈ 1,963/day
+≈ 0.0135 T/day. The 10-tab typical row becomes ≈0.832 T/day (61 days on 51.4 T, 12
+on 10 T) rather than 0.6974 T/day (73 / 14). The direction is safe-looking, and it
+is the same species as [E-92](#e-92) itself: a per-tab price whose measurement
+conditions excluded the thing being priced.
+
+---
+
+<a id="e-101"></a>
+### E-101 — medium — one id excusing two opposite symptoms on one screen — STATUS: OPEN
+
+[E-96](#e-96) says money the table cannot attribute *"renders NOTHING on the
+deposit screen"*. `artifacts/screens/acknowledged-reds.json` cites **E-96** to
+excuse `deposit/desktop` and `deposit/mobile` going red with:
+
+```text
+TOKEN CENSUS FAILED: 8 of 43 numeric tokens on screen are asserted by nothing
+  287.93 / 28792955590 / 8   in section.solvency dl.figures dd
+  "287.9296"                 in section.solvency > p.advice
+```
+
+— money figures that **do** render, one of them inside the `p.advice` sentence wave
+14 rewrote. Both defects are real and they are opposites. A reader who follows the
+acknowledgement to E-96 is told the screen shows nothing.
+
+`SolvencyNotice.svelte`'s own comment states the requirement that was not met:
+
+> NOTE FOR THE HARNESS. These are MONEY FIGURES … they need a site in
+> `tools/shots/lib/chain-agreement.mjs`
+
+Until the census red has its own id, its own site in `chain-agreement.mjs` and a
+repointed acknowledgement, `./scripts/dev.sh shots` exits 1 with the deposit screen
+UNVERIFIED at both viewports — where at `a65868e` both were VERIFIED with
+*"0 unaccounted"*.
+
+
+---
+
+<a id="h-64"></a>
+### H-64 — medium — the drain's stranded leg conserves against the canister's own books — STATUS: OPEN
+
+```rust
+// tests/money_safety/src/invariants/reachability.rs:554
+escrow_after:          after.escrow.clone(),                        // admin_get_all_balances()
+deposit_custody_after: after.canister_deposit_by_principal.clone(), // admin_deposit_custody()
+```
+
+```rust
+// tests/money_safety/src/world.rs:94
+/// The scanned set is the harness's actors, the controller, AND every
+/// principal the canister itself names ...
+pub ledger_deposit_by_principal: BTreeMap<Principal, u64>,   // icrc1_balance_of, per principal
+/// **The CANISTER, per principal.** What it says is at each deposit address.
+pub canister_deposit_by_principal: BTreeMap<Principal, u64>,
+```
+
+`stranded_breakdown()` reads the second and not the first. The ledger scan is in the
+same struct, built for exactly this purpose, and its own comment says the point of
+the pair is that they **can disagree**.
+
+Wave 14's write-up states the principle correctly — *"recoverability is measured at
+the player's wallet on the ledger, never at an escrow row, because an internal
+figure cannot support the claim that money is reachable"* — and it is true of the
+`deposit_floor` tests it was written about. It is not true of `check_drain`'s
+stranded leg, and that is the leg that decides whether `dev.sh fuzz-default` is red.
+
+### Why this is `medium` and not `high`
+
+It is backstopped. `orphaned_e8s()` is anchored to `icrc1_balance_of`, and
+`check_deposit_attribution` compares the canister's per-principal claims against the
+ledger directly. So a canister that under-reported its own deposit custody would
+still be convicted by a sibling leg today. What is missing is that **this** leg
+cannot convict it, and the wave's own prose says it can.
+
+### The fix
+
+Iterate the union of `canister_deposit_by_principal` and
+`ledger_deposit_by_principal` and take the MAX per principal. Max rather than the
+ledger alone, because the canister may legitimately name a principal whose
+subaccount the harness has not scanned, and the safe direction for a
+*money-left-behind* check is to over-report.
+
+
+---
+
+<a id="h-65"></a>
+### H-65 — medium — the deposit shot's fiat leg has a read-ordering race that produces a false red — STATUS: OPEN
+
+```js
+// tools/shots/lib/chain-agreement.mjs
+// Re-read after the settle loop: a quote can land between the two.
+const quote = servedIcpUsd();
+if (dom.usdValues.length === 0) {
+    if (quote && quote.mode !== 'unavailable') {
+        structural.push(
+            `a live quote (${quote.usd} USD/ICP) was served but the modal shows no fiat figure`,
+        );
+    }
+}
+```
+
+The comment identifies the race exactly and the code only half-answers it: `quote`
+is re-read after the settle loop, `dom` is not. If the third-party price lands in
+that window, the harness ends up holding a fresh quote and a DOM snapshot taken
+before the figure rendered, and convicts the product.
+
+Observed once by the wave-14 coherence pass:
+
+```text
+! UNCOVERED PROBLEM on an acknowledged shot: deposit / desktop
+    - DEPOSIT CHAIN DISAGREEMENT: a live quote (2.19 USD/ICP) was served
+      but the modal shows no fiat figure
+```
+
+and **not reproduced** by the immediately following full sweep on the same tree,
+the same replica and the same fixture — where `deposit/desktop`'s only problem was
+the token census again.
+
+### Why it is worth a row rather than a shrug
+
+It lands on the one screen that already carries an acknowledged red
+([E-101](#e-101)). The acknowledgement mechanism is per-problem: an entry lists the
+substrings it `covers`, and any recorded problem outside them fails the gate. So an
+intermittent extra problem on that shot turns `make hygiene` red for a reason that
+is not real, on the shot a reader is already primed to skim — which is the exact
+dynamic `acknowledged-reds.json` exists to prevent, arriving from the harness side.
+
+The fix is to read the DOM's fiat values in the same breath as the quote, so the
+two describe one instant.

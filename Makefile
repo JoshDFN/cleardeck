@@ -13,7 +13,7 @@ DEV := ./scripts/dev.sh
 .PHONY: help doctor local-up local-status wasm test custody archive fuzz \
         fuzz-default diff-full diff-full-sevens settlement settlement-fast \
         shots shots-verdict shots-selftest cycles known-defects hygiene selftest \
-        no-peeking phe-venv check
+        no-peeking phe-venv check declarations deployed-config suite-wiring
 
 help:            ## show this help
 	@$(DEV) help
@@ -73,6 +73,15 @@ cycles:          ## how long before a canister stops honouring withdrawals (DEFE
 
 known-defects:   ## run the markers that are RED on purpose; shouts when one gets fixed
 	@$(DEV) known-defects
+
+declarations:    ## the frontend's Candid bindings must regenerate to what is committed (DEFECTS D-11)
+	@./scripts/check-declarations-js.sh $(ARGS)
+
+deployed-config: ## live TableConfig vs icp.yaml, and every lobby row vs its contract (DEFECTS L-04, H-55)
+	@./scripts/check-deployed-config.sh --selftest --network local $(ARGS)
+
+suite-wiring:    ## every cargo test target on disk is run by something (DEFECTS H-45)
+	@./scripts/check-suite-wiring.sh
 
 hygiene:         ## no large/binary files added; player-protection notices intact
 	@$(DEV) hygiene

@@ -297,6 +297,22 @@ jobs:
         # demoted update call and a changed argument type. A gate that cannot go
         # red is worse than no gate, so this one proves it can, every run.
         run: ./scripts/check-candid.sh --declarations
+      - name: The frontend's Candid BINDINGS must describe the canisters too
+        # docs/DEFECTS.md D-11, THE THIRD COPY. The step above compares the Rust
+        # against the committed `.did`, and `.did` against `src/declarations/<n>/<n>.did`.
+        # Nothing compared `src/declarations/<n>/<n>.did.js`, which is the file
+        # `src/cleardeck_frontend/src/lib/canisters.js` actually builds every actor
+        # from. It had drifted from both: table_1's binding was missing SIXTEEN
+        # methods (claim_external_deposit, get_solvency, refresh_solvency,
+        # get_all_ledger_intents, get_deposit_replay_state ...) and declared TWO
+        # the canister does not have. The custody and solvency instruments built
+        # in waves 7-10 were unreachable from the UI, and nothing said so, because
+        # the app guards its calls -- a missing binding reads as a missing feature.
+        #
+        # This regenerates the bindings from the committed `.did` with the same
+        # candid_parser `didc bind` uses and diffs. It self-tests first, by
+        # deleting a method from a binding and requiring a conviction.
+        run: ./scripts/check-declarations-js.sh --selftest
 
   reproducible-build:
     name: Reproducible build (two paths, byte-identical)

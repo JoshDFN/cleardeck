@@ -147,7 +147,13 @@ done
 
 echo
 echo "== the config each table is RUNNING vs the init_args icp.yaml declares"
-if ./scripts/check-deployed-config.sh --network "$NETWORK" ${IDENTITY:+--identity "$IDENTITY"}; then
+echo "   (and every lobby row vs its own table contract -- docs/DEFECTS.md L-04)"
+# --selftest, ALWAYS. docs/DEFECTS.md H-55: this script's field extractor matched
+# the underscore inside the field name, so seven of the eight TableConfig fields
+# were silently skipped and it reported "matches" over a live 45-vs-60 drift --
+# for the whole time this daily job has been running it against mainnet. The
+# self-test costs milliseconds and it is what stops that being possible again.
+if ./scripts/check-deployed-config.sh --selftest --network "$NETWORK" ${IDENTITY:+--identity "$IDENTITY"}; then
   :
 else
   fail=1

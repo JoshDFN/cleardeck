@@ -40,7 +40,7 @@ import {
   PROXY_PORT, REPO_ROOT, VIEWPORTS, icp,
 } from './lib/config.mjs';
 import { readLocalIds, requireId } from './lib/ids.mjs';
-import { startGatewayProxy } from './lib/proxy.mjs';
+import { overrideDistDir, startGatewayProxy } from './lib/proxy.mjs';
 import { lobbyActor, optional } from './lib/agent.mjs';
 import {
   doAct, phaseOf, sleep, startHand, tableActorFor, view, waitForState,
@@ -700,12 +700,15 @@ async function main() {
   const ids = readLocalIds();
   const frontendId = requireId(ids, 'frontend');
 
+  // docs/DEFECTS.md T-14: same as run.mjs. The bundle carries the real gateway
+  // port now, so a perf number is measured against the URL a human opens rather
+  // than through a reverse proxy that adds a hop nobody else has.
   let proxy = { stats: () => ({ skipped: true }), close: async () => {} };
-  if (GATEWAY_PORT === PROXY_PORT) {
-    setAppOrigin(`http://${frontendId}.${GATEWAY_HOST}:${GATEWAY_PORT}`);
-  } else {
+  if (overrideDistDir()) {
     proxy = await startGatewayProxy({ frontendCanisterId: frontendId, log });
     setAppOrigin(APP_ORIGIN);
+  } else {
+    setAppOrigin(`http://${frontendId}.${GATEWAY_HOST}:${GATEWAY_PORT}`);
   }
 
   const tableNames = await resolveTableNames(ids);

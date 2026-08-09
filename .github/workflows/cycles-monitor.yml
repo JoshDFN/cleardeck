@@ -10,10 +10,14 @@ name: Cycles monitor
 #   TOPS ANYTHING UP. A canister allowed to run all the way to zero is
 #   uninstalled by the IC and its state is gone.
 #
-#   Measured on the real module this wave (tests/money_safety/tests/cycles_runway.rs):
-#   an EMPTY table burns 0.0442 T/day, a table dealing ~500 hands a day with six
-#   tabs open burns 0.4994 T/day, and one dealing continuously burns 3.68 T/day.
-#   On 10 T that is 225 days, 20 days and 2 days respectively.
+#   THE BURN FIGURES ARE NOT WRITTEN HERE ANY MORE (docs/DEFECTS.md E-92). This
+#   comment carried a hand-copied table, as five other files did, and all six were
+#   wrong the same way: they priced an open browser tab as a 10-second heartbeat
+#   stream and omitted the 500 ms `check_timeouts` UPDATE poll, which was larger by
+#   more than an order of magnitude. The measured numbers live in
+#   tools/cycles/burn-table.json and scripts/cycles-runway.sh prints them at the
+#   top of every run, including this one -- so the figures are in the job log
+#   rather than in a comment nobody re-reads.
 #
 # WHAT CHANGED, AND WHY THE PREVIOUS VERSION OF THIS FILE WAS WRONG
 #

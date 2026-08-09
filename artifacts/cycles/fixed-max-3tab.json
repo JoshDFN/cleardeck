@@ -1,0 +1,26 @@
+{
+  "measured_at": "2026-08-09T16:46:54.486Z",
+  "host": "http://localhost:8077",
+  "canister": "4xhad-gd777-77775-aaacq-cai",
+  "seconds": 120,
+  "settle": 12,
+  "runs": [
+    {
+      "tabs": 3,
+      "mode": "fixed-max",
+      "elapsed_s": 132,
+      "cycles_spent": "928386059",
+      "burn_per_day": 607624842797,
+      "burn_per_day_T": 0.6076,
+      "clock_ticks": 4,
+      "calls": {
+        "heartbeat": 36,
+        "get_balance": 72,
+        "get_table_view": 716,
+        "get_shuffle_proof": 716,
+        "check_timeouts": 90
+      },
+      "update_calls": 126
+    }
+  ]
+}

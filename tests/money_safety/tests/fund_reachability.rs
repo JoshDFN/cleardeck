@@ -481,6 +481,66 @@ fn no_trapping_evaluator_is_reachable_from_an_update_entry_point() {
 /// Feeds it a synthetic transcript entry and asserts it fires, and asserts it
 /// stays silent on the two cases it must not fire on: a trap on an empty table
 /// (a robustness bug, not a custody one) and an ordinary `Err` return.
+/// THE DRAIN MUST KNOCK ON EVERY DOOR THE CANISTER ACTUALLY OPENS.
+///
+/// Wave 14 replaced `check_drain`'s aggregate tolerance (`owed_after > 20_000`)
+/// with a PER-ACCOUNT rule at one ledger fee, and left the drain's own withdraw
+/// loop knocking at the old constant. The canister pays any whole balance above
+/// the fee (`sweeping_whole_balance = amount == balance_now && amount >
+/// transfer_fee`), so every escrow row in `(fee, 2*fee]` was reported
+/// `FundsUnreachable` by an instrument that never tried.
+///
+/// That is FINDING 31's dead band MOVED rather than closed: out of the deposit
+/// subaccount, where a refund now reaches it, and into the measuring instrument,
+/// where it produces a FALSE RED on M9 -- the top-severity invariant in this
+/// harness, on a repository that keeps an acknowledged-reds file precisely
+/// because reds get skimmed. An invariant that cries wolf is the failure mode
+/// being defended against.
+///
+/// Anchored at the LEDGER: the assertion is that the player's own wallet grew.
+#[test]
+fn the_drain_tries_every_balance_the_canister_would_pay() {
+    let mut world = World::new(TableConfig::heads_up_icp(), &["alice"]);
+    let alice = world.actor("alice");
+
+    // One ledger fee above the fee, and one below the old 20_000 constant: the
+    // exact band the drain used to skip.
+    world.fund_escrow(alice, 40_000).expect("fund");
+    world.advance(Duration::from_secs(120));
+    world.withdraw(alice, 25_000).expect("withdraw");
+    assert_eq!(
+        world.get_balance(alice),
+        15_000,
+        "fixture: alice must be left inside (10_000, 20_000]"
+    );
+
+    let wallet_before = world.ledger_balance(alice, None);
+    let report = reachability::drain(&mut world);
+    let stranded = report.stranded_e8s();
+
+    assert_eq!(
+        stranded, 0,
+        "the drain left {stranded} e8s convicted as unreachable:\n  {:?}\nbut the canister pays \
+         any whole balance above one ledger fee. The drain transcript is:\n{}\n\nIf the \
+         transcript contains no withdrawal attempt for this balance, the instrument convicted \
+         money it never asked for.",
+        report.stranded_breakdown(),
+        report.log.join("\n")
+    );
+
+    // The outside anchor: the money did not merely stop being convicted, it
+    // arrived. 15_000 out, less one 10_000 ledger fee, is 5_000 into the wallet.
+    let gained = world
+        .ledger_balance(alice, None)
+        .saturating_sub(wallet_before);
+    assert_eq!(
+        gained, 5_000,
+        "the drain reported nothing stranded, but alice's own LEDGER wallet grew by {gained} \
+         e8s, not the 5_000 that 15_000 less one fee delivers. A conviction that goes away \
+         without the money moving is the instrument going blind."
+    );
+}
+
 #[test]
 fn m9s_per_step_check_can_actually_fail() {
     let trapped = StepResult {
@@ -510,5 +570,12 @@ fn m9s_per_step_check_can_actually_fail() {
 
     // The doors this invariant is about, named once so a reader can check the list
     // against the canister's Candid rather than against this comment.
-    assert_eq!(MONEY_DOORS.len(), 6);
+    //
+    // EIGHT since wave 14. The six are the doors out of the TABLE; the two added
+    // are the doors out of a published DEPOSIT ADDRESS, which is the second kind
+    // of ledger account this canister owns and the one it had no exit from for
+    // money below `minimum_deposit` (docs/SECURITY-FINDINGS.md FINDING 31,
+    // docs/DEFECTS.md E-89).
+    assert_eq!(MONEY_DOORS.len(), 8);
+    assert!(MONEY_DOORS.contains(&"refund_external_deposit"));
 }

@@ -37,6 +37,12 @@ the only test command CI ran.
 - **What is in which tier, and why, is one line per suite in `scripts/test-suites.list`.** Both
   workflows call `scripts/ci-fund-safety.sh <tier>`, which executes that file — the rows are not a
   description of what CI runs, they *are* what CI runs.
+- **`Candid interface drift`** now has a second step, `./scripts/check-declarations-js.sh --selftest`,
+  which regenerates `src/declarations/<n>/<n>.did.js` and `.did.d.ts` from the committed `.did` and
+  diffs. That file is what the app builds every actor from and it was a hand-maintained third copy:
+  table_1's binding was missing sixteen methods, including `claim_external_deposit`, `get_solvency`
+  and `refresh_solvency`, and declared two the canister does not have (docs/DEFECTS.md D-11).
+
 - **`suite-wiring`** runs `scripts/check-suite-wiring.sh`, which fails the build when any cargo
   test target in the tree is run by no tier. It `--selftest`s its own ability to go red before it
   judges. Adding a test suite and not wiring it is now a build failure rather than a suite that

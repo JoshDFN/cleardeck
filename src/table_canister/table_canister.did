@@ -327,14 +327,31 @@ type Result_MainCustody = variant { Ok : MainAccountObservation; Err : text };
 // WHAT THIS CANISTER OWES, WHAT IT HOLDS, AND WHETHER THE FIRST FITS INSIDE THE
 // SECOND. docs/SECURITY-FINDINGS.md FINDING 35 / docs/DEFECTS.md E-70.
 //
+// ONE DEFINITION OF HELD, ONE DEFINITION OF OWED, and `owed` and
+// `guard_liability` are the SAME CALL rather than two sums
+// (docs/SECURITY-FINDINGS.md FINDING 43, FINDING 38):
+//
+//   held = main_account + deposit_subaccounts - sweep_fees_in_flight
+//          -- what the LEDGER says, as a lower bound. No in-flight term, ever.
+//   owed = max(escrow + chips + max(pot, committed_stake) + payouts_in_flight
+//                                                         + pulls_in_flight,
+//              main_account)
+//          + (unswept_deposits + the sweep half of unfinished_incoming)
+//
 // After the deposit subaccounts cancel (every e8 observed in one is held by this
 // canister AND owed to the principal it was derived from), the signed difference
 // reduces to one line:
 //
-//   difference = main_account - escrow - chips - pot - payouts_in_flight
+//   difference = min(0, main_account - escrow - chips - pot
+//                        - payouts_in_flight - pulls_in_flight)
 //
-// Everything else here exists so a reader can check that line instead of taking
-// it on trust, and so an UNOBSERVED account is never read as an empty one.
+// THIS IS NEVER POSITIVE. This canister takes no rake and keeps nothing: an e8 at
+// an account it owns that no player is credited with is money held for somebody
+// it cannot yet name, which is a liability. It reported such money as a SURPLUS,
+// on the deposit screen, until wave 14 (FINDING 43).
+//
+// Everything else here exists so a reader can check those lines instead of taking
+// them on trust, and so an UNOBSERVED account is never read as an empty one.
 type SolvencyReport = record {
   currency : text;
   // The ledger this table's currency selects RIGHT NOW.
@@ -353,10 +370,12 @@ type SolvencyReport = record {
   unswept_deposits : nat64;
   // Open pull and sweep intents: value arriving that is not booked yet.
   unfinished_incoming : nat64;
-  // The pull half of unfinished_incoming. The only in-flight term added to the
-  // HELD side too: it is on one side of the ledger boundary or the other, so
-  // counting it on both is what stops an unfinished deposit from manufacturing a
-  // shortfall. unfinished_incoming - pulls_in_flight is the sweep half.
+  // The pull half of unfinished_incoming; unfinished_incoming - pulls_in_flight
+  // is the sweep half. OWED, AND NEVER HELD. It was added to the HELD side too
+  // until FINDING 38, justified by the money "not yet being in the reading" --
+  // while refresh_solvency() is public, anonymous-callable and exists to put it
+  // in the reading. While a pull is open this canister cries poor by this much,
+  // which is the safe direction and one resolve_my_ledger_intents() from clear.
   pulls_in_flight : nat64;
   // Ledger fees an open sweep will burn out of the subaccount it is draining.
   // Subtracted from HELD so the difference does not wobble by one fee per sweep.
@@ -364,6 +383,10 @@ type SolvencyReport = record {
   // Open payout intents: value already debited from escrow and handed to the
   // ledger, not yet seen to leave.
   payouts_in_flight : nat64;
+  // What it owes, and THE SAME NUMBER as guard_liability -- one call, not two
+  // sums (FINDING 43). Rebuildable from the terms above exactly:
+  //   escrow + chips_at_table + max(pot, committed_stake) + unswept_deposits
+  //     + unfinished_incoming + payouts_in_flight + unattributed_at_main
   owed : nat64;
 
   // -- WHAT IT HOLDS --
@@ -393,23 +416,30 @@ type SolvencyReport = record {
   // get_all_ledger_intents uses. Branch on the count above, never on this being
   // empty.
   deposit_accounts_never_observed : vec principal;
-  // main_account + deposit_subaccounts + pulls_in_flight - sweep_fees_in_flight,
-  // exactly. NULL whenever main_account is null: there is no honest total that
-  // treats a never-read account as empty.
+  // main_account + deposit_subaccounts - sweep_fees_in_flight, exactly. NULL
+  // whenever main_account is null: there is no honest total that treats a
+  // never-read account as empty. NO IN-FLIGHT TERM IS EVER ADDED TO THIS
+  // (FINDING 38): this is what the LEDGER says, as a lower bound, and nothing
+  // else.
   held : opt nat64;
 
   // -- THE ANSWER --
-  // held - owed, signed. Negative means it CANNOT pay everyone.
+  // held - owed, signed. Negative means it CANNOT pay everyone. NEVER POSITIVE:
+  // a no-rake custodian has no surplus, and money it holds and cannot attribute
+  // is somebody's (FINDING 43).
   difference_e8s : opt int;
   // The magnitude of a negative difference. null when there is no shortfall OR
   // when the answer is not known -- branch on `verdict`, never on this.
   shortfall_e8s : opt nat64;
-  // Money at the main account that no escrow balance, chip stack, pot or open
-  // payout accounts for: held for somebody this canister cannot yet name.
+  // Money at the main account that no escrow balance, chip stack, pot, open
+  // payout or open pull accounts for: held for somebody this canister cannot yet
+  // name. A LIABILITY, and one of the terms of `owed`. It was published here and
+  // counted nowhere until FINDING 43.
   unattributed_at_main : opt nat64;
   // total_liability(), the single number the currency guard reads, published so
   // an instrument can CHECK the guard instead of having to trigger it.
-  // docs/SECURITY-FINDINGS.md FINDING 37.
+  // docs/SECURITY-FINDINGS.md FINDING 37. EQUAL TO `owed`, always, by
+  // construction: it is the same call.
   guard_liability : nat64;
   verdict : SolvencyVerdict;
   // The answer in words, naming the numbers and the method to call next.
@@ -465,8 +495,22 @@ type DepositAddressCustody = record {
   // The ledger's transfer fee. At or below it, nothing can move the balance on
   // its own -- top the SAME address up past the fee and the whole balance sweeps.
   transfer_fee : nat64;
-  // True when claim_external_deposit() would sweep this amount right now.
+  // The least this canister will SWEEP from this address (min_withdrawal +
+  // transfer_fee, because the sweep pays the fee out of what arrives). Print
+  // THIS beside the address, never the deposit() floor next to it: at the
+  // deposit() floor the swept remainder lands under the withdrawal floor.
+  // docs/SECURITY-FINDINGS.md FINDING 31.
+  minimum_deposit : nat64;
+  // True when claim_external_deposit() would sweep this amount right now:
+  // observed_amount >= minimum_deposit. It used to be `> transfer_fee`, which
+  // claimed money was reachable across the whole band where the claim refuses
+  // (docs/DEFECTS.md E-89).
   sweepable : bool;
+  // True when refund_external_deposit() would send this amount back to your own
+  // wallet right now: anything strictly above transfer_fee, which is everything
+  // the LEDGER can move. Between the fee and the minimum this is true while
+  // `sweepable` is false, and that band is the whole of FINDING 31's remedy.
+  refundable : bool;
   // The plain-language answer, including the dust case. Never empty when
   // observed_amount > 0.
   note : text;
@@ -718,6 +762,23 @@ service : (TableConfig) -> {
   // Claim funds sent to your unique deposit subaccount by an external wallet
   // External wallets transfer to (canister_id, get_deposit_subaccount()), then call this to claim
   claim_external_deposit : () -> (Result_1);
+  // Send what is at YOUR deposit address back to YOUR OWN wallet, less one
+  // ledger fee. Neither the source nor the destination is a parameter: both are
+  // derived from the caller's principal, so this can drain no account but your
+  // own and pay no account but your own. Returns the ledger block index.
+  //
+  // This is the remedy for the band below `minimum_deposit`, where
+  // claim_external_deposit() refuses because sweeping would credit an escrow
+  // balance the withdrawal floor could never pay back. A refusal is not a
+  // remedy: without this method the only instruction was "send more", which
+  // asks you to spend a second fee to rescue the first
+  // (docs/SECURITY-FINDINGS.md FINDING 31, docs/DEFECTS.md E-89).
+  //
+  // It reaches every amount the LEDGER can move -- strictly above transfer_fee,
+  // one fee rather than the two a sweep-then-withdraw costs. At or below
+  // transfer_fee no transfer exists at any price, by this canister or anybody,
+  // and it says so instead of pretending (FINDING 11).
+  refund_external_deposit : () -> (Result_1);
   // Get your unique deposit subaccount for external wallet transfers: the ICRC-1
   // spelling of the SAME account get_deposit_address() returns to you in the
   // legacy 64-hex form. ONE account, two spellings -- pick whichever your wallet

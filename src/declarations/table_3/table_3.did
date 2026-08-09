@@ -335,6 +335,7 @@ service : (TableConfig) -> {
   // Claim funds sent to your unique deposit subaccount by an external wallet
   // External wallets transfer to (canister_id, get_deposit_subaccount()), then call this to claim
   claim_external_deposit : () -> (Result_1);
+  refund_external_deposit : () -> (Result_1);
   // Get your unique deposit subaccount for external wallet transfers
   get_deposit_subaccount : () -> (vec nat8) query;
   // DEV ONLY: Get free test chips for local development

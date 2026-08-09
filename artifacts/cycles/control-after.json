@@ -1,0 +1,20 @@
+{
+  "measured_at": "2026-08-09T16:53:37.434Z",
+  "host": "http://localhost:8077",
+  "canister": "4xhad-gd777-77775-aaacq-cai",
+  "seconds": 120,
+  "settle": 12,
+  "runs": [
+    {
+      "tabs": 0,
+      "mode": "control",
+      "elapsed_s": 132,
+      "cycles_spent": "62867054",
+      "burn_per_day": 41145603927,
+      "burn_per_day_T": 0.0411,
+      "clock_ticks": 4,
+      "calls": {},
+      "update_calls": 0
+    }
+  ]
+}

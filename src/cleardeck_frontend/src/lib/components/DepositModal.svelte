@@ -11,13 +11,47 @@
   import { readCycleRunway } from '$lib/cycleRunway.js';
   import { IS_MAINNET_BUILD, NETWORK } from '$lib/ic-config.js';
   import {
-    deriveDepositAddress,
+    deriveTrustedDepositAddress,
     checkAgainstCanister,
     accountIdentifierHex,
     depositSubaccount,
   } from '$lib/depositAddress.js';
+  import { isTrustedTableId, untrustedTableMessage } from '$lib/trustedTables.js';
 
   const { tableActor, tableCanisterId, onClose, onDepositSuccess, currency = 'ICP' } = $props();
+
+  // ==========================================================================
+  // IS THIS CANISTER ID ONE THIS BUILD HAS EVER HEARD OF?
+  // ASKED BEFORE ANY ADDRESS IS DERIVED AND BEFORE ANY TRANSFER IS ADDRESSED.
+  // ==========================================================================
+  //
+  // docs/SECURITY-FINDINGS.md FINDING 42. `tableCanisterId` reaches this
+  // component from `routes/+page.svelte`, which took it out of
+  // `lobby.get_tables()` -- an ordinary QUERY. One replica answers a query out
+  // of its own memory and signs nothing this client verifies, so those bytes are
+  // attacker-controllable with no canister bug, no majority and no key.
+  //
+  // Everything below that touches money is a function of this id:
+  //
+  //   * the deposit ADDRESS is account_identifier(THIS ID, sha256(...||you)),
+  //   * the OISY transfer is addressed to Account { owner: THIS ID, ... },
+  //   * the ICRC-2 approval names THIS ID as the spender of your ledger balance.
+  //
+  // Substitute it and all three move to a canister the attacker controls, whose
+  // controller can pay its whole ledger balance to itself with one install_code
+  // (FINDING 23 did exactly that for 39.99990000 ICP). The cross-check further
+  // down cannot see it: it asks the canister the substituted id names, and a
+  // substituted canister answers consistently about itself. Reproduced on
+  // rendered pixels by `node tools/shots/repro-finding42.mjs` -- address
+  // published, no warning, every check on the screen green.
+  //
+  // The trust root is `$lib/trustedTables.js`: the ids this build was PUBLISHED
+  // with. A wire-supplied id is fine for DISPLAYING a table; it is never allowed
+  // to be the first argument of a deposit address.
+  const tableIsTrusted = $derived(isTrustedTableId(tableCanisterId));
+  const untrustedReason = $derived(
+    tableIsTrusted ? null : untrustedTableMessage(tableCanisterId)
+  );
 
   // ==========================================================================
   // CAN THIS TABLE PAY BACK WHAT IT ALREADY HOLDS? ASKED BEFORE, NOT AFTER.
@@ -58,18 +92,17 @@
   // own money at the same instant, with no attacker and no in-application
   // remedy. Nothing in this project tops a canister up.
   //
-  // >>> CORRECTION, wave-13 reconciliation (docs/DEFECTS.md E-92). THE FIGURE
-  // >>> BELOW IS STILL OPTIMISTIC. 0.4994 T/day is idle + 500 hands + six
-  // >>> 10-second HEARTBEAT streams and nothing else. The same page also drives
-  // >>> `check_timeouts` -- an UPDATE call -- from a 500 ms setInterval, at a
-  // >>> measured 6,573,911 cycles each: 0.28-1.14 T/day PER OPEN TAB against the
-  // >>> heartbeat's 0.0618. Six tabs is 1.7-6.8 T/day before a hand is dealt.
-  // >>> The canister's own get_cycle_status is unaffected: its sliding window
-  // >>> measures real consumption and already includes these calls.
-  // Measured (`tests/money_safety/tests/cycles_runway.rs`): an EMPTY table burns
-  // 0.0442 T/day, which is 225 days on 10 T. A table with 500 hands a day and six
-  // open tabs burns 0.4994 T/day, which is TWENTY days on the same balance. The
-  // reassuring number in the register is the number for a table nobody is using.
+  // THERE IS NO BURN FIGURE IN THIS COMMENT. It carried one, hand-copied, and it
+  // was wrong the same way five other copies of it were wrong: it priced an open
+  // browser tab as a 10-second heartbeat stream and left out the 500 ms
+  // `check_timeouts` UPDATE poll, which was the larger term by more than an order
+  // of magnitude (docs/DEFECTS.md E-92). The numbers live in ONE measured file
+  // now, `tools/cycles/burn-table.json`. What this modal READS was never affected:
+  // the canister's own sliding window measures real burn and always included those
+  // calls even while no document did.
+  //
+  // The shape of the problem is unchanged: the reassuring runway figure is the
+  // figure for a table NOBODY IS USING.
   //
   // Read on mount, before any amount is typed: a warning that appears after the
   // button is pressed is a receipt, not a warning.
@@ -309,7 +342,10 @@
     }
     let derived;
     try {
-      derived = deriveDepositAddress(tableCanisterId, principal).address;
+      // THE TRUST ROOT IS CHECKED INSIDE THIS CALL, NOT HERE (FINDING 42): the
+      // id came off the wire and `deriveTrustedDepositAddress` refuses to hash
+      // an id this build was not published with.
+      derived = deriveTrustedDepositAddress(tableCanisterId, principal).address;
     } catch (e) {
       depositAddressWarning = e.message || 'Could not derive your deposit address.';
       return;
@@ -337,6 +373,12 @@
 
   // Sweep whatever is at YOUR deposit address into your table balance.
   async function claimExternalDeposit() {
+    // Nothing at an unpinned canister is yours to sweep, and the button that
+    // calls this is only reachable beside an address this build derived.
+    if (!tableIsTrusted) {
+      error = untrustedReason;
+      return;
+    }
     claiming = true;
     error = null;
     success = null;
@@ -401,6 +443,20 @@
   // Get BTC deposit address from the table canister
   async function loadBtcDepositAddress() {
     if (!isBTC || !tableActor) return;
+
+    // THE FOURTH MONEY DOOR (docs/SECURITY-FINDINGS.md FINDING 45). Wave 14 closed
+    // three doors in this component against an unpinned table -- the derived ICP
+    // address, the OISY transfer and the ICRC-2 approval -- and left this one, which
+    // is worse than all three: the BTC address is not DERIVED from the canister id,
+    // it is FETCHED from the canister, so a substituted `get_tables()` naming a
+    // hostile canister with `currency = variant { BTC }` puts an address that
+    // attacker owns on screen under "Your Bitcoin Deposit Address" with a Copy
+    // button. Bitcoin sent there is unrecoverable. The attacker picks this branch
+    // too: `currency` comes off the same uncertified reply.
+    if (!tableIsTrusted) {
+      btcAddressError = untrustedReason;
+      return;
+    }
 
     // Check if user is authenticated - ckBTC minter requires non-anonymous principal
     if (!authState.isAuthenticated) {
@@ -568,6 +624,16 @@
   }
 
   async function handleDeposit() {
+    // FINDING 42, THE OTHER TWO DOORS. The address panel is not the only place
+    // this canister id spends money: below, the ICRC-2 branch names it as the
+    // SPENDER of an approval over the player's ledger balance, and the OISY
+    // branch addresses a transfer to `owner: tableCanisterId`. Both are as
+    // final as paying the address, so both refuse here, before anything is
+    // signed. See the note beside `tableIsTrusted`.
+    if (!tableIsTrusted) {
+      error = untrustedReason;
+      return;
+    }
     if (!depositAmount || Number(depositAmount) <= 0) {
       error = 'Please enter a valid amount';
       return;
@@ -836,7 +902,13 @@
 
 <div class="modal-backdrop" onclick={onClose} role="presentation"></div>
 
-<div class="modal-content" class:btc-modal={isBTC} role="dialog" aria-labelledby="deposit-modal-title">
+<div
+  class="modal-content"
+  class:btc-modal={isBTC}
+  role="dialog"
+  aria-labelledby="deposit-modal-title"
+  data-table-trust={tableIsTrusted ? 'pinned' : 'refused'}
+>
   <div class="modal-header">
     <h2 id="deposit-modal-title">
       {#if isBTC}
@@ -945,6 +1017,21 @@
         can be reached from this bundle.
       {/if}
     </p>
+
+    <!-- IS THIS EVEN A CLEARDECK TABLE? docs/SECURITY-FINDINGS.md FINDING 42.
+         In flow (no position, no z-index: it cannot cover the protected
+         notices), directly under the line that names the destination canister,
+         and above every control that can move money -- a refusal a player reads
+         after pressing the button is a receipt. When this block is showing,
+         `deriveTrustedDepositAddress` has already refused to compute an address
+         and `handleDeposit` refuses before it signs anything, so this paragraph
+         and the behaviour cannot drift apart. -->
+    {#if !tableIsTrusted}
+      <p class="untrusted-table" data-untrusted-table={tableCanisterId ?? 'none'}>
+        <strong>This is not one of this build's tables. Nothing can be sent here.</strong>
+        {untrustedReason}
+      </p>
+    {/if}
 
     <!-- WHETHER THIS TABLE HOLDS WHAT IT OWES, BEFORE ANY AMOUNT IS TYPED.
          In flow, directly under the notices it must never cover, and above every
@@ -1206,6 +1293,17 @@
               <span class="min-why">Sweeping pays the network fee out of what you send, so
               anything less would arrive too small to withdraw again. Sending from a
               connected wallet instead has a lower minimum of {minDepositDisplay}.</span>
+              <!-- WHAT HAPPENS IF YOU SEND LESS, SAID BEFORE YOU SEND IT.
+                   docs/SECURITY-FINDINGS.md FINDING 31 / FINDING 11. The line above
+                   states the minimum; this one states the consequence of missing it,
+                   which is the half a player can only act on beforehand. Both figures
+                   are interpolated -- a literal here is docs/DEFECTS.md T-26. -->
+              <span class="min-why">Send less and it is not swept and it is not lost: above
+              the {feeDisplay} network fee you can ask for it back to your own wallet at any
+              time, less that one fee. <strong>At or below {feeDisplay} nothing can move
+              it</strong> -- a transfer costs more than the amount, so it cannot be swept,
+              refunded or withdrawn by anyone. Top the same address up to the minimum and
+              the whole balance comes out together.</span>
               (network fee {feeDisplay}, charged twice by the ledger, so you need
               {minWalletBalanceDisplay} in your wallet to deposit the minimum)
             </span>
@@ -1248,7 +1346,7 @@
             class="btn-primary"
             class:btc={isBTC}
             onclick={handleDeposit}
-            disabled={processing || !depositAmount || Number(depositAmount) <= 0}
+            disabled={processing || !tableIsTrusted || !depositAmount || Number(depositAmount) <= 0}
           >
             {#if processing}
               <span class="spinner"></span>
@@ -1328,7 +1426,11 @@
             </svg>
             {btcAddressError}
           </div>
-        {:else if btcDepositAddress}
+        {:else if btcDepositAddress && tableIsTrusted}
+          <!-- `tableIsTrusted` is asserted HERE as well as in loadBtcDepositAddress()
+               because this string is not derived by this build from anything it
+               pinned: it is whatever the table canister replied. The guard that
+               matters is the one next to the pixels a player copies from. -->
           <div class="btc-address-box">
             <label>Your Bitcoin Deposit Address</label>
             <div class="address-display">
@@ -1487,7 +1589,7 @@
         <button class="btn-secondary" onclick={onClose}>
           Close
         </button>
-        <button class="btn-primary" onclick={claimExternalDeposit} disabled={claiming || !tableDepositAddress}>
+        <button class="btn-primary" onclick={claimExternalDeposit} disabled={claiming || !tableIsTrusted || !tableDepositAddress}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
           </svg>
@@ -2574,6 +2676,28 @@
      red alpha notice above it, instead of looking like more of the same sentence
      and being skipped. Same 12px/1.5 as its neighbours: this is a notice, not a
      decoration, and it has to survive the same 390x844 as they do. */
+  /* FINDING 42. Louder than the custody notice on purpose: this one says the
+     destination itself is wrong, and it must not read as one more caveat.
+     Position is static and there is no z-index, so it cannot cover the four
+     protected notices above it (HARD RULE 2). */
+  .untrusted-table {
+    margin: 10px 0 0 0;
+    padding: 12px 14px;
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.16);
+    border: 2px solid rgba(239, 68, 68, 0.75);
+    color: #fecaca;
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .untrusted-table strong {
+    display: block;
+    margin-bottom: 4px;
+    color: #fee2e2;
+    font-size: 13px;
+  }
+
   .custody-notice {
     margin: 10px 0 0 0;
     padding: 10px 12px;

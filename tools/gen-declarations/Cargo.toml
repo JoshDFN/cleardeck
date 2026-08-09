@@ -1,0 +1,18 @@
+[package]
+name = "gen_declarations"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Generate src/declarations/<n>/<n>.did.js and .did.d.ts from a canister .did, so the frontend's Candid bindings stop being a hand-maintained third copy of the interface (docs/DEFECTS.md D-11)."
+
+# DETACHED from the root workspace on purpose, for the reason
+# tests/money_safety/Cargo.toml gives: candid_parser drags in a parser stack that
+# has no business in the lockfile of a canister that custodies real ICP.
+[workspace]
+
+[dependencies]
+candid_parser = "0.1"
+
+[[bin]]
+name = "gen-declarations"
+path = "src/main.rs"

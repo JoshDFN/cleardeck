@@ -501,17 +501,29 @@ async function main() {
   const ids = readLocalIds();
   const frontendId = requireId(ids, 'frontend');
 
-  log('\n[4/6] gateway port shim');
-  // The app hardcodes http://127.0.0.1:4943 for the local agent. If the gateway
-  // already listens there, no shim is needed and the asset canister is reached
-  // directly on its own subdomain.
+  log('\n[4/6] app origin');
+  // THE HARNESS OPENS THE URL A HUMAN TYPES (docs/DEFECTS.md T-14).
+  //
+  // This step used to start a reverse proxy on 4943 and photograph the app
+  // through it, because the deployed bundle pointed its agent at 127.0.0.1:4943
+  // while the gateway is on 8077. So every screenshot this project has ever
+  // published was taken through a shim no user has, and the app a person actually
+  // opened showed a fetch stack trace and an empty lobby. `buildEnvFor` now puts
+  // the real gateway port into the bundle, so there is nothing left to shim and
+  // the proxy is out of the path entirely.
+  //
+  // It is still started for SHOTS_SERVE_DIST, whose whole job is to serve an
+  // ALTERNATE build off local disk for an A/B run -- that is a deliberate
+  // departure from what the replica is serving, and it is already labelled as
+  // such in the manifest's assetProvenance.
   let proxy = { origin: null, stats: () => ({ skipped: true }), close: async () => {} };
-  if (GATEWAY_PORT === PROXY_PORT) {
-    setAppOrigin(`http://${frontendId}.${GATEWAY_HOST}:${GATEWAY_PORT}`);
-    log(`  not needed: gateway already on ${PROXY_PORT}; app origin ${getAppOrigin()}`);
-  } else {
+  if (overrideDistDir()) {
     proxy = await startGatewayProxy({ frontendCanisterId: frontendId, log });
     setAppOrigin(APP_ORIGIN);
+    log(`  SHOTS_SERVE_DIST is set: serving an alternate build via ${APP_ORIGIN}`);
+  } else {
+    setAppOrigin(`http://${frontendId}.${GATEWAY_HOST}:${GATEWAY_PORT}`);
+    log(`  app origin ${getAppOrigin()} -- the same URL a human opens (T-14)`);
   }
 
   log('\n[5/6] resolve lobby table names');

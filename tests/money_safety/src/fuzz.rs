@@ -5,6 +5,17 @@
 //! seed replays exactly. Every generated sequence is also written into the report
 //! verbatim, so a reproducer never depends on regenerating it.
 //!
+//! AND `config` AND `actor_names` ARE THEMSELVES A FUNCTION OF THE SEED
+//! (`run_shape`), which is docs/DEFECTS.md H-26. That sentence above was true of
+//! this function and false of the only thing that calls it: the driver picked the
+//! table shape from the seed's POSITION IN THE LIST, so `MONEY_FUZZ_SEEDS=<seed>`
+//! -- the reproducer command this repository prints, records in
+//! `money-fuzz-report.json` and quotes in its register -- replayed a *different
+//! game* from the one that found the violation. Seed `212967420072194` played
+//! heads-up and found nothing when it was first in the list, and 6-max and found
+//! two fund-creation defects when it was second. Nothing about the process, the
+//! machine or the replica was involved; the tuple was simply incomplete.
+//!
 //! After EVERY step the point-in-time invariants (M1, M1b, M2, M4) are evaluated,
 //! and M3 is evaluated at every hand boundary. An upgrade step additionally
 //! evaluates M5 across itself.
@@ -39,6 +50,92 @@ use crate::table_api::{GamePhase, TableConfig};
 use crate::world::{Snapshot, World};
 
 pub const DEFAULT_STEPS: usize = 220;
+
+// ---------------------------------------------------------------------------
+// WHAT A SEED RUNS AGAINST -- docs/DEFECTS.md H-26
+// ---------------------------------------------------------------------------
+
+/// The actor pool every run draws its seats from, longest table first.
+pub const ACTOR_POOL: [&str; 4] = ["alice", "bob", "carol", "attacker"];
+
+/// The three table shapes a run can take, in the order this project has always
+/// numbered them. Named, because a reproducer that says only `seed = N` does not
+/// describe a game.
+pub const SHAPES: [&str; 3] = ["heads_up_icp", "six_max_icp", "six_max_with_ante"];
+
+/// Everything about a run that is not the seed, the step count or the wasm.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunShape {
+    /// Which of [`SHAPES`], by name. Recorded in the report so a reproducer is
+    /// self-describing.
+    pub shape: &'static str,
+    pub config: TableConfig,
+    pub actors: Vec<&'static str>,
+}
+
+/// THE ONE PLACE THAT DECIDES WHAT A SEED PLAYS, AND IT IGNORES `position`.
+///
+/// docs/DEFECTS.md H-26. `position` is the index of this seed in `MONEY_FUZZ_SEEDS`
+/// and it is deliberately still a parameter: the gate
+/// `a_seeds_table_shape_does_not_depend_on_where_it_appears_in_the_list` in
+/// `tests/fuzz.rs` calls this with two different positions and the same seed and
+/// requires the same answer, which is a check that cannot be written against a
+/// function that does not take the argument it must not use. Delete the parameter
+/// and you delete the gate.
+///
+/// **Why `seed - 1` and not `seed`.** The mapping is chosen so that every seed set
+/// this repository actually runs keeps the exact shape it has always had, which
+/// means every figure recorded against `fuzz-default`, against the `fast` smoke row
+/// (`MONEY_FUZZ_SEEDS=1`) and against the 9x600 deep sweep stays comparable across
+/// this change:
+///
+/// ```text
+///   seed                  old (position % 3)   new ((seed-1) % 3)
+///   1                     0 heads_up           0 heads_up
+///   0xC1EA_2DEC_0001      0 heads_up           0 heads_up
+///   0xC1EA_2DEC_0002      1 six_max            1 six_max
+///   0xC1EA_2DEC_0003      2 six_max_ante       2 six_max_ante
+///   212967420072193..201  0,1,2,0,1,2,0,1,2    0,1,2,0,1,2,0,1,2
+/// ```
+///
+/// The deep sweep's nine seeds are consecutive integers starting at one where
+/// `(seed - 1) % 3 == 0`, so consecutive positions and consecutive seeds agree
+/// term for term. Nothing was tuned to make that true; it is why this mapping was
+/// picked over `seed % 3`, which would have permuted all of them.
+pub fn run_shape(position: usize, seed: u64) -> RunShape {
+    // Read and discarded ON PURPOSE. See the doc comment: the gate needs an
+    // argument to vary.
+    let _ = position;
+    let index = (seed.wrapping_sub(1) % 3) as usize;
+    let config = match index {
+        0 => TableConfig::heads_up_icp(),
+        1 => TableConfig::six_max_icp(),
+        _ => TableConfig::six_max_with_ante(),
+    };
+    let actors: Vec<&'static str> = ACTOR_POOL
+        .iter()
+        .copied()
+        .take((config.max_players as usize + 2).min(ACTOR_POOL.len()))
+        .collect();
+    RunShape {
+        shape: SHAPES[index],
+        config,
+        actors,
+    }
+}
+
+/// The exact command that replays one run of this fuzzer, printed next to every
+/// finding and recorded in every reproducer.
+///
+/// It is a whole command rather than a seed because a seed was not enough: see
+/// H-26. If this string ever stops being sufficient, that is the same defect
+/// again and this is where it shows up.
+pub fn replay_command(seed: u64, steps: usize) -> String {
+    format!(
+        "cd tests/money_safety && MONEY_FUZZ_SEEDS={seed} MONEY_FUZZ_STEPS={steps} \
+         cargo test --test fuzz -- --nocapture"
+    )
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Finding {
@@ -146,6 +243,12 @@ pub struct Totals {
 pub struct Reproducer {
     pub signature: String,
     pub seed: u64,
+    /// Which of [`SHAPES`] the run that found this was playing. Recorded because
+    /// for eleven waves it was not, and the seed alone did not identify the game
+    /// (docs/DEFECTS.md H-26).
+    pub shape: &'static str,
+    /// The literal command that replays it.
+    pub replay: String,
     pub ops: Vec<Op>,
     pub violation: Violation,
 }

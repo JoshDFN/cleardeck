@@ -645,52 +645,160 @@ cmd_local_status() { cmd_doctor; }
 # Two independent fixes, because either alone would do and both are one line:
 #   * the watchdog's own output goes to /dev/null, so a leak cannot hold the pipe;
 #   * its children are killed before it is, so there is nothing left to leak.
+#
+# AND THAT FIXED THE WATCHDOG'S LEAK WHILE LEAVING THE BOUND ITSELF VACUOUS
+# (docs/DEFECTS.md H-42, wave 14). H-54 killed the watchdog's children and never
+# killed the BOUNDED COMMAND'S children. `kill -9 "$pid"` reaches exactly one
+# process: the subshell, which bash has usually exec'd into `sh`. Everything that
+# `sh` forked -- `cargo`, the test binary, its PocketIC server -- is orphaned to
+# init and KEEPS THE INHERITED STDOUT PIPE OPEN, so a consumer still blocks for as
+# long as the runaway lives. Measured on this file at HEAD, before the change
+# below:
+#
+#     out="$(with_timeout 2 sh -c 'sleep 60; echo never')"
+#     -> command substitution returned after 60s
+#
+# A two-second bound that returns in sixty seconds is not a bound, and "the
+# consumer blocks with zero CPU anywhere" is H-42's symptom word for word. So the
+# timeout now kills the whole DESCENDANT TREE, deepest first, and does it twice:
+# once when the bound expires and once after the wait, because a runaway can fork
+# between the survey and the kill.
+
+# Every descendant of $1, deepest first. `ps` is the only portable process table
+# on macOS and Linux both; `pkill -P` is one level only, which is what made the
+# old form vacuous.
+descendants() {
+  local root="$1" kid
+  for kid in $(ps -eo pid=,ppid= | awk -v p="$root" '$2 == p { print $1 }'); do
+    descendants "$kid"
+    printf '%s\n' "$kid"
+  done
+}
+
+# Kill $1 and everything below it. Children FIRST: killing a parent first is what
+# orphans its children onto init still holding the pipe.
+kill_tree() {
+  local root="$1" sig="${2:-KILL}" p
+  for p in $(descendants "$root"); do kill -"$sig" "$p" 2>/dev/null || true; done
+  kill -"$sig" "$root" 2>/dev/null || true
+}
+
 with_timeout() {
   local secs="$1"; shift
+  local t0 elapsed
+  t0="$(date +%s)"
   ( "$@" ) & local pid=$!
-  ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) >/dev/null 2>&1 & local wd=$!
+  ( sleep "$secs"; kill_tree "$pid" ) >/dev/null 2>&1 & local wd=$!
   wait "$pid"; local rc=$?
-  # Children first: killing the subshell first is what orphans the `sleep`.
-  pkill -P "$wd" 2>/dev/null || true
-  kill "$wd" 2>/dev/null || true
+  # A SECOND SWEEP ONLY WHEN THE WATCHDOG ACTUALLY FIRED.
+  #
+  # A runaway can fork between the watchdog's `ps` survey and its kill, so one
+  # pass is not enough. But `$pid` has been reaped by `wait`, and a pid is
+  # reusable the moment it is reaped -- sweeping it unconditionally is a small
+  # chance of killing a stranger's process tree every time a step passes, which
+  # is not a trade a test runner gets to make. So: only after a kill, and only
+  # if something still answers to that pid.
+  if [ "$rc" -ge 128 ] && kill -0 "$pid" 2>/dev/null; then
+    kill_tree "$pid" >/dev/null 2>&1 || true
+  fi
+  # The watchdog is normally still alive here, sleeping out the rest of the
+  # bound. Children first: killing the subshell first is what orphans the `sleep`
+  # onto init with the pipe still open, which is docs/DEFECTS.md H-54.
+  if kill -0 "$wd" 2>/dev/null; then
+    kill_tree "$wd" >/dev/null 2>&1 || true
+  fi
   wait "$wd" 2>/dev/null || true
+  elapsed=$(( $(date +%s) - t0 ))
   if [ "$rc" -ge 128 ]; then
-    printf '    %sTIMED OUT%s after %ss: %s\n' "$E" "$R" "$secs" "$*" >&2
+    printf '    %sTIMED OUT%s after %ss (bound %ss): %s\n' "$E" "$R" "$elapsed" "$secs" "$*" >&2
+    # A killed command must never look like a pass, whatever signal did it.
+    return 124
   fi
   return "$rc"
 }
 
-cmd_test() {
-  local failed=()
+# `with_timeout` plus a one-line "how long did that actually take", because H-42
+# could name the wall-clock total and NOT the step, which is what turned a
+# reproducible hang into a wave of guessing.
+timed_step() {
+  local secs="$1" label="$2"; shift 2
+  local t0 rc
+  t0="$(date +%s)"
+  with_timeout "$secs" "$@"; rc=$?
+  printf '    %s took %ss (bound %ss)\n' "$label" "$(( $(date +%s) - t0 ))" "$secs"
+  return "$rc"
+}
 
-  step "[1/8] cargo test --workspace"
-  cargo test --workspace || failed+=("cargo test --workspace")
+# EVERY STEP OF THE PRIMARY GATE HAS A TIME BOUND, AND THE BOUNDS ARE HERE
+# (docs/DEFECTS.md H-42).
+#
+# H-42 is `./scripts/dev.sh test` hanging for 33 minutes with zero CPU on both the
+# test binary and its own PocketIC, and the entry's own diagnosis was "the
+# money-safety targets have NO time bound". They have one now, and so does every
+# other step, because "which step is it in" was the question nobody could answer.
+#
+# Each bound is roughly 2.5x the measured wall clock of that step on this machine,
+# recorded next to it. The multiple is deliberately large: a bound that trips on a
+# slow laptop teaches people to raise bounds, which is how a bound stops meaning
+# anything. What it has to catch is a step that has stopped making progress at all,
+# and every one of those in this register has been a hang, not a slowdown.
+# Measured end to end on this machine on 2026-08-09, in the run that turned this
+# gate green (total 1894 s, about 32 minutes):
+BOUND_WORKSPACE=900          # measured 24 s
+BOUND_WASM=900               # measured 0 s warm; a cold build is ~180 s
+BOUND_DIFFERENTIAL=900       # measured 3 s
+BOUND_MONEY_SAFETY=3600      # measured 1610 s -- 22 cargo targets, the long pole
+BOUND_SETTLEMENT=900         # measured 101 s
+BOUND_SETTLEMENT_PINNED=300  # measured 13 s
+BOUND_SHOTS_SELFTEST=600     # measured 4 s
+BOUND_ARCHIVE=600            # measured 88 s
+BOUND_NO_PEEKING=900         # measured 42 s
 
-  step "[2/8] table_canister wasm build"
-  cmd_wasm || failed+=("wasm build")
+# The money-safety fast subset, as its own function so `with_timeout` can bound it.
+# A bound cannot be put around a bare `( ... )` block, and putting the block behind
+# a name is also what lets the step be run on its own while debugging.
+#
+# EVERY TARGET RUNS, EVEN AFTER ONE OF THEM GOES RED.
+#
+# This block used to be a single `&&` list, and that is docs/DEFECTS.md H-45
+# wearing its third face: `cargo test --test deposit_floor && cargo test --test
+# admin_custody && ...` means ONE red target SKIPS THE FIFTEEN AFTER IT. Measured
+# on this tree during wave 14: a single failing assertion in `deposit_floor`
+# (target 5 of 18) ended the step in 131 seconds having never run `solvency`,
+# `stall_agreement`, `fund_reachability`, `controller_custody` or either fuzz
+# invocation -- so a wave could fix the deposit-floor red, see the step go green,
+# and never learn that a money invariant had been silently skipped in between.
+# "Run by nothing" and "skipped because something before it failed" are the same
+# hole; only the second one has a green tick further up the log.
+#
+# So each target is invoked through `run_ms`, which records a failure and carries
+# on, and the function reports the whole list at the end.
+run_ms() {
+  local target="$1"; shift
+  cargo test --test "$target" "$@" || ms_failed+=("$target")
+}
 
-  step "[3/8] differential fast subset (tools/differential)"
-  ( cd tools/differential && cargo test ) || failed+=("differential fast subset")
-
-  step "[4/8] money-safety fast subset + the fuzzer at its own defaults"
+money_safety_fast_subset() {
   announce_wasm
   (
     cd tests/money_safety
     export CLEARDECK_TABLE_WASM="$WASM_PATH"
-    cargo test --test invariants  -- --test-threads=2 &&
-    cargo test --test regressions -- --test-threads=2 &&
+    # Collected, not short-circuited. See the comment above run_ms.
+    local ms_failed=()
+    run_ms invariants   -- --test-threads=2
+    run_ms regressions  -- --test-threads=2
     # deposit_replay carries the E-02 FUND-THEFT reproducer and the ten regressions
     # that keep it shut. It is a cargo-auto-discovered target, so for the whole of
     # wave 2 it was named by NO make target and run by nobody: the project's only
     # proven fund-theft primitive had its gate outside the gate. Named explicitly
     # here so that cannot recur silently -- if the file is renamed, this line fails.
-    cargo test --test deposit_replay -- --test-threads=2 &&
+    run_ms deposit_replay  -- --test-threads=2
     # ui_limits reads src/table_canister/src/lib.rs and the two money modals and
     # fails when a limit the UI STATES stops matching the limit the canister
     # ENFORCES (docs/DEFECTS.md T-26: the withdraw modal said 1,000 sats and the
     # canister accepted 11). Two file reads, no replica, so it belongs in the fast
     # gate. Named explicitly for the deposit_replay reason above.
-    cargo test --test ui_limits &&
+    run_ms ui_limits
     # deposit_floor is the gate on THE FLOOR INVARIANT
     # (docs/SECURITY-FINDINGS.md FINDING 27, docs/DEFECTS.md E-62: the canister
     # accepted 20,000 e8s at its own advertised minimum and `withdraw` refused
@@ -699,7 +807,7 @@ cmd_test() {
     # PocketIC: the old dead band, the sub-floor residue the pot produces that no
     # equal-floors fix reaches, and the boundary at the ledger fee itself.
     # Named explicitly for the deposit_replay reason above.
-    cargo test --test deposit_floor -- --test-threads=2 &&
+    run_ms deposit_floor  -- --test-threads=2
     # admin_custody is the gate on the ADMIN CUSTODY SURFACE
     # (docs/SECURITY-FINDINGS.md FINDING 07: one controller call destroyed 100% of a
     # funded table's chips, and it survived four waves because nothing in the project
@@ -708,7 +816,7 @@ cmd_test() {
     # the canister owes players without paying them -- and the census that fails when
     # a NEW controller-gated method appears unaudited. Named explicitly for the
     # deposit_replay reason above.
-    cargo test --test admin_custody -- --test-threads=2 &&
+    run_ms admin_custody  -- --test-threads=2
     # ledger_boundary is the gate on M14 LEDGER/BOOKS COHERENCE
     # (docs/SECURITY-FINDINGS.md FINDING 29: `deposit`, `claim_external_deposit` and
     # `withdraw` each move real money on the ledger and settle the canister's own
@@ -719,7 +827,7 @@ cmd_test() {
     # accounted for, that the OWNER can recover it with a player-only call, that
     # recovering twice does not credit twice, and that the journal survives an
     # upgrade. Named explicitly for the deposit_replay reason above.
-    cargo test --test ledger_boundary -- --test-threads=2 &&
+    run_ms ledger_boundary  -- --test-threads=2
     # coherence_w8 is the gate on THE CURRENCY GUARD'S LAST TERM
     # (docs/SECURITY-FINDINGS.md FINDING 33). `total_liability()` is the ONLY
     # number the guard reads and it has no query, no surface and -- until this
@@ -730,7 +838,7 @@ cmd_test() {
     # undone, and THREE reviewers drove it in wave 8 without leaving a gate --
     # which is exactly why it survived its own wave. Named explicitly for the
     # deposit_replay reason above.
-    cargo test --test coherence_w8 -- --test-threads=2 &&
+    run_ms coherence_w8  -- --test-threads=2
     # deposit_surface is the gate on THE ONE DEPOSIT ADDRESS
     # (docs/SECURITY-FINDINGS.md FINDING 06, 11, 34, 39). `get_deposit_address()`
     # published the canister's MAIN account -- the same 64 characters to every
@@ -743,14 +851,22 @@ cmd_test() {
     # derives its address locally (which is what removes the uncertified query from
     # the trust path) cannot silently derive a WRONG one. Named explicitly for the
     # deposit_replay reason above.
-    cargo test --test deposit_surface -- --test-threads=2 &&
+    run_ms deposit_surface  -- --test-threads=2
+    # deposit_trust_root is the gate on WHERE THE CANISTER ID CAME FROM
+    # (docs/SECURITY-FINDINGS.md FINDING 42). deposit_surface above proves the
+    # derivation's ARITHMETIC agrees with the canister, and stays green while the
+    # id being hashed is one a lobby QUERY supplied -- substitute it and every
+    # derived address moves into a canister the attacker controls, with the
+    # modal's cross-check still passing because it asks that same canister. Six
+    # file reads and two node runs, no replica, so it belongs in the fast gate.
+    run_ms deposit_trust_root
     # deposit_subaccount_anchor is the gate on THE ACCOUNT CENSUS
     # (docs/SECURITY-FINDINGS.md FINDING 28, FINDING 21, FINDING 11). Eleven tests,
     # one per re-anchoring, each proved to go red on its own revert. It was
     # cargo-auto-discovered and named by NOTHING, so FINDING 11's only gate --
     # "dust is visible and recoverable by topping up" -- was outside every target
     # that anyone runs. Named explicitly for the deposit_replay reason above.
-    cargo test --test deposit_subaccount_anchor -- --test-threads=2 &&
+    run_ms deposit_subaccount_anchor  -- --test-threads=2
     # wave6_coherence carries probe1 (the first auditor's fund lock, reached by real
     # silence), probe4 (docs/SECURITY-FINDINGS.md FINDING 17: the fold-out winner
     # must be PAID the pot -- an OUTCOME assertion, because the totals were exact
@@ -758,7 +874,7 @@ cmd_test() {
     # file spent wave 6 outside every target because two of them only RECORDED
     # defects, and a target that passes while the defect is present teaches nobody
     # anything. Named explicitly for the deposit_replay reason above.
-    cargo test --test wave6_coherence -- --test-threads=1 &&
+    run_ms wave6_coherence  -- --test-threads=1
     # oldest_cluster is the gate on THE OLDEST CLUSTER IN THE REGISTER
     # (docs/SECURITY-FINDINGS.md FINDING 02, 05, 08, 09, 17 and 22). Five of the six
     # were closed in waves 2, 7 and 8 and their headers never said so; this target is
@@ -768,7 +884,7 @@ cmd_test() {
     # project could see. Named explicitly for the deposit_replay reason above, and
     # wired in the same change that files the fix: a FIXED row whose gate no target
     # runs is docs/DEFECTS.md H-45, which this wave is trying to shrink, not grow.
-    cargo test --test oldest_cluster -- --test-threads=2 &&
+    run_ms oldest_cluster  -- --test-threads=2
     # fund_reachability, solvency and stall_agreement were cargo-auto-discovered and
     # named by NOTHING -- 20 tests run by no target, no make rule and no CI job.
     # That is docs/DEFECTS.md H-45, and it is not academic: fund_reachability is the
@@ -777,9 +893,9 @@ cmd_test() {
     # measuring the pre-on-chain-clock semantics. A gate nothing runs does not decay
     # into a useless gate, it decays into a MISLEADING one: the register cites it as
     # what holds a finding closed.
-    cargo test --test fund_reachability -- --test-threads=1 &&
-    cargo test --test solvency -- --test-threads=2 &&
-    cargo test --test stall_agreement -- --test-threads=1 &&
+    run_ms fund_reachability  -- --test-threads=1
+    run_ms solvency  -- --test-threads=2
+    run_ms stall_agreement  -- --test-threads=1
     # timers is the gate on THE ON-CHAIN CLOCK (docs/SECURITY-FINDINGS.md FINDING 19,
     # docs/DEFECTS.md E-54/E-55/E-56). Every test in it drives the table with NO
     # ingress message at all after setup -- only subnet ticks and queries -- so it is
@@ -792,19 +908,21 @@ cmd_test() {
     # proof that check_timeouts and the clock reach the same state, and the measured
     # idle-table cycle burn the clock adds. Named explicitly for the deposit_replay
     # reason above.
-    cargo test --test timers -- --test-threads=1 &&
+    run_ms timers  -- --test-threads=1
     # cycles_runway is the gate on THE RUNWAY (docs/DEFECTS.md E-55,
     # docs/SECURITY-FINDINGS.md FINDING 24/26). `timers` measures the IDLE burn, and
-    # idle is the number for a table nobody is using: measured here, a table dealing
-    # ~500 hands a day with six tabs open burns 0.4994 T/day against 0.0442 idle, so
-    # 10 T is TWENTY days rather than 225. It also carries the port of FINDING 24's
+    # idle is the number for a table nobody is using. THIS SUITE'S OWN "with N tabs
+    # open" ROWS ARE STILL WRONG (docs/DEFECTS.md E-97): they price a tab as a
+    # heartbeat stream only. The measured cost of an open tab, and the runway table
+    # every other consumer reads, is tools/cycles/burn-table.json. It also carries
+    # the port of FINDING 24's
     # probe -- a frozen canister rejects QUERIES too, which the finding says is the
     # load-bearing sentence of the whole cycles plan and which nothing in this tree
     # executed -- and the gate on `get_cycle_status` itself: a lifetime burn average
     # reads HIGH on a table that has just got busy, and a fuel gauge that reads high
     # is the failure that matters. Named explicitly for the deposit_replay reason
     # above. ~4 min.
-    cargo test --test cycles_runway -- --test-threads=1 &&
+    run_ms cycles_runway  -- --test-threads=1
     # controller_custody is the gate on THE CONTROLLER SEAT
     # (docs/SECURITY-FINDINGS.md FINDING 23). One controller principal per canister,
     # and `install_code --mode reinstall` or `uninstall_code` on a funded table
@@ -818,11 +936,11 @@ cmd_test() {
     # that controllership is not transitive. Named explicitly for the deposit_replay
     # reason above; wired in the same change that files the guardian, because a
     # mitigation whose gate no target runs is docs/DEFECTS.md H-45.
-    cargo test --test controller_custody -- --test-threads=2 &&
-    MONEY_FUZZ_SEEDS="${CLEARDECK_SMOKE_FUZZ_SEEDS:-1}" \
-    MONEY_FUZZ_STEPS="${CLEARDECK_SMOKE_FUZZ_STEPS:-40}" \
-    MONEY_FUZZ_SHRINK=10 \
-      cargo test --test fuzz &&
+    run_ms controller_custody  -- --test-threads=2
+    env MONEY_FUZZ_SEEDS="${CLEARDECK_SMOKE_FUZZ_SEEDS:-1}" \
+        MONEY_FUZZ_STEPS="${CLEARDECK_SMOKE_FUZZ_STEPS:-40}" \
+        MONEY_FUZZ_SHRINK=10 \
+      cargo test --test fuzz || ms_failed+=("fuzz (smoke seeds)")
     # AND THE SAME BINARY WITH NOTHING IN THE ENVIRONMENT (docs/DEFECTS.md H-28).
     #
     # The line above is steerable, which is a feature and was also the hole: every
@@ -837,8 +955,82 @@ cmd_test() {
     # is deliberately NO opt-out: an environment variable that skips this is how the
     # hole gets dug a second time. `make fuzz-default` runs exactly this alone.
     env -u MONEY_FUZZ_SEEDS -u MONEY_FUZZ_STEPS -u MONEY_FUZZ_SHRINK -u MONEY_FUZZ_REPORT \
-      cargo test --test fuzz
-  ) || failed+=("money-safety fast subset")
+      cargo test --test fuzz || ms_failed+=("fuzz (own defaults)")
+    # solvency_definition is the gate on ONE DEFINITION OF HELD AND OWED
+    # (docs/SECURITY-FINDINGS.md FINDING 43 and FINDING 38). It is here, LAST in the
+    # chain, for a reason worth stating: it was written during wave 14 by another
+    # owner and named by nothing, which is docs/DEFECTS.md H-45 for the SEVENTH
+    # time -- and this time step [1/9] said so within a second instead of a human
+    # finding it a wave later. Last in the chain because this is an `&&` list: a
+    # target that fails skips every target after it, so the newest arrival goes
+    # where it can hide nothing.
+    run_ms solvency_definition  -- --test-threads=2
+
+    if [ ${#ms_failed[@]} -eq 0 ]; then
+      ok "money-safety: all $MS_TARGET_COUNT cargo targets green"
+      exit 0
+    fi
+    printf '    %sMONEY-SAFETY TARGETS FAILED (%d of %d):%s %s\n' \
+      "$E" "${#ms_failed[@]}" "$MS_TARGET_COUNT" "$R" "${ms_failed[*]}" >&2
+    info "every other target above still RAN; this list is COMPLETE, not first-failure"
+    exit 1
+  )
+}
+
+# How many `run_ms` invocations the block above makes, computed from the file so
+# it cannot drift from the list. Printed in the summary so "all targets green" is
+# a countable claim rather than an adjective.
+MS_TARGET_COUNT="$(( $(grep -cE '^[[:space:]]+run_ms ' "${BASH_SOURCE[0]}") + 2 ))"
+
+cmd_test() {
+  local failed=()
+
+  # THE CHEAPEST GATE IN THE FILE, AND IT GOES FIRST (docs/DEFECTS.md H-45).
+  #
+  # H-45 is "six money-safety suites, 31 tests, run by no target", and it is H-17,
+  # H-50 and H-53 wearing the same clothes: the fourth, fifth and sixth time a test
+  # file was added to this repository and named by nothing. Every one of those was
+  # found by a human reading a directory listing a wave later.
+  #
+  # `check-suite-wiring.sh` is that reading, mechanised: it lists every cargo test
+  # target on disk, requires each to appear in scripts/test-suites.list, and
+  # requires every row there to name a tier something actually runs. It has been in
+  # CI since wave 13 -- and CI is not what a developer runs before pushing, and by
+  # this project's own reckoning nothing in CI is a required check anyway (H-23).
+  # It costs under a second and it is the only step here that can catch a suite
+  # NOBODY RUNS, so it runs before the suites do, and a failure is fatal rather
+  # than collected: there is no point measuring coverage with a list you know is
+  # wrong.
+  step "[1/9] the gates' own wiring (docs/DEFECTS.md H-45, D-11)"
+  timed_step 120 "suite wiring" ./scripts/check-suite-wiring.sh \
+    || die "suite wiring is broken -- a test target in this tree is run by nothing. Fix scripts/test-suites.list before trusting anything below."
+  # AND THE THIRD COPY OF EVERY INTERFACE (docs/DEFECTS.md D-11).
+  #
+  # `src/declarations/<n>/<n>.did.js` is what the app builds its actors from, and
+  # it is neither the Rust nor the committed `.did`. It was missing sixteen
+  # methods on the table binding alone -- among them `get_solvency` and
+  # `refresh_solvency`, so the custody instruments this gate spends twenty minutes
+  # exercising could not be called from the product at all. Regenerate-and-diff,
+  # seconds, no replica; it is here rather than in a wasm-building step because a
+  # binding that cannot reach a method is a defect in the shipped app, not in the
+  # build.
+  timed_step 300 "candid bindings" ./scripts/check-declarations-js.sh \
+    || failed+=("frontend Candid bindings (./scripts/check-declarations-js.sh --write)")
+
+  step "[2/9] cargo test --workspace"
+  timed_step "$BOUND_WORKSPACE" "workspace" cargo test --workspace \
+    || failed+=("cargo test --workspace")
+
+  step "[3/9] table_canister wasm build"
+  timed_step "$BOUND_WASM" "wasm build" cmd_wasm || failed+=("wasm build")
+
+  step "[4/9] differential fast subset (tools/differential)"
+  timed_step "$BOUND_DIFFERENTIAL" "differential" \
+    sh -c 'cd tools/differential && cargo test' || failed+=("differential fast subset")
+
+  step "[5/9] money-safety fast subset + the fuzzer at its own defaults"
+  timed_step "$BOUND_MONEY_SAFETY" "money-safety fast subset" money_safety_fast_subset \
+    || failed+=("money-safety fast subset")
 
   # THE SETTLEMENT ORACLE IS IN THE DEFAULT GATE ON PURPOSE.
   #
@@ -850,10 +1042,12 @@ cmd_test() {
   # leaves money-safety `invariants` at 30/30 green and `regressions` at 6/6 green,
   # and is caught here. For the whole of wave 2 this suite lived behind its own
   # `make settlement` that no default target and no CI job invoked.
-  step "[5/8] settlement oracle (tests/settlement)"
-  with_timeout 900 sh -c 'cd tests/settlement && cargo test --test settlement -- --test-threads=1' \
+  step "[6/9] settlement oracle (tests/settlement)"
+  timed_step "$BOUND_SETTLEMENT" "settlement oracle" \
+    sh -c 'cd tests/settlement && cargo test --test settlement -- --test-threads=1' \
     || failed+=("settlement oracle")
-  with_timeout 300 sh -c 'cd tests/settlement && cargo test --test disagreements -- --test-threads=1' \
+  timed_step "$BOUND_SETTLEMENT_PINNED" "settlement pinned reproducers" \
+    sh -c 'cd tests/settlement && cargo test --test disagreements -- --test-threads=1' \
     || failed+=("settlement pinned reproducers")
 
   # THE SCREENSHOT HARNESS'S OWN GATES, WHICH NOTHING RAN.
@@ -863,8 +1057,9 @@ cmd_test() {
   # cannot run without a replica, so its self-tests are the ONLY part of it a
   # default gate can execute. They need ~20 s and no replica. Among them is the
   # no-rake gate's own failing case (docs/DEFECTS.md E-61).
-  step "[6/8] screenshot-harness self-tests (no replica)"
-  cmd_shots_selftest || failed+=("screenshot-harness self-tests")
+  step "[7/9] screenshot-harness self-tests (no replica)"
+  timed_step "$BOUND_SHOTS_SELFTEST" "shots self-tests" cmd_shots_selftest \
+    || failed+=("screenshot-harness self-tests")
 
   # THE ARCHIVE ANALYSER'S 39 GATES, WHICH NOTHING RAN (docs/DEFECTS.md H-50).
   #
@@ -879,16 +1074,18 @@ cmd_test() {
   # second, independent implementation of docs/SHUFFLE-SPEC.md, which makes it the
   # only thing in the tree that can catch poker_core and the canister being wrong
   # together. A second opinion nobody runs is one opinion.
-  step "[7/8] archive analyser self-tests (no replica, no network)"
-  cmd_archive || failed+=("archive analyser self-tests")
+  step "[8/9] archive analyser self-tests (no replica, no network)"
+  timed_step "$BOUND_ARCHIVE" "archive self-tests" cmd_archive \
+    || failed+=("archive analyser self-tests")
 
   # THE SEALED-DEALER SPIKE'S HARNESS, WHICH NOTHING RAN (docs/DEFECTS.md H-53).
   # Five [[test]] targets, 36 tests, named in their own Cargo.toml so that nothing
   # would be auto-discovered -- and then named by no target at all, in the wave that
   # closed H-45. ~30 s once built. See cmd_no_peeking for why a spike is in the
   # default gate.
-  step "[8/8] sealed-dealer spike harness (no replica needed: PocketIC)"
-  cmd_no_peeking || failed+=("no-peeking harness")
+  step "[9/9] sealed-dealer spike harness (no replica needed: PocketIC)"
+  timed_step "$BOUND_NO_PEEKING" "no-peeking harness" cmd_no_peeking \
+    || failed+=("no-peeking harness")
 
   step "result"
   if [ ${#failed[@]} -eq 0 ]; then
@@ -1583,10 +1780,17 @@ ${B}ClearDeck dev entry point${R}   (make <target> works for all of these)
   ${B}local-status${R}    alias for doctor
   ${B}wasm${R}            build table_canister.wasm and print its sha256
 
-  ${B}test${R}            FAST gate: workspace tests + wasm build + differential fast
-                  subset + money-safety invariants/regressions/ui_limits + a short
-                  fuzz run AND the fuzzer at its own defaults (docs/DEFECTS.md H-28).
-                  No replica needed.
+  ${B}test${R}            THE PRIMARY GATE, nine steps, every one time-bounded
+                  (docs/DEFECTS.md H-42). Step 1 is the cheapest and goes first:
+                  every cargo test target on disk must be named by something
+                  (H-45) and every Candid binding must regenerate to what is
+                  committed (D-11); a tree that fails either does not get to run
+                  its gates. Then the workspace tests, the wasm, the differential
+                  fast subset, the eighteen money-safety targets (which no longer
+                  short-circuit: a red target cannot skip the ones after it),
+                  a short fuzz run AND the fuzzer at its own defaults (H-28),
+                  the settlement oracle, and the shots/archive/no-peeking
+                  self-tests. No replica needed.
   ${B}custody${R}         THE CONTROLLER SEAT, on its own, with the transcript
                   (docs/SECURITY-FINDINGS.md FINDING 23). Reproduces the auditor's
                   wipe -- one 'install_code --mode reinstall' with the same wasm
@@ -1644,6 +1848,17 @@ ${B}ClearDeck dev entry point${R}   (make <target> works for all of these)
                   jurisdiction and no-rake notices present and not weakened
                   since ${BASELINE_COMMIT}
   ${B}selftest${R}        prove the mainnet guard refuses every hostile argument shape
+
+  Standalone gates, all cheap, all also reachable as make targets:
+    ${B}make suite-wiring${R}     every cargo test target on disk is run by something
+                          (docs/DEFECTS.md H-45). Step [1/9] of 'test' runs it too.
+    ${B}make declarations${R}     the frontend's Candid bindings must regenerate to
+                          exactly what is committed (docs/DEFECTS.md D-11).
+                          '--write' is the ONLY sanctioned way to change them.
+    ${B}make deployed-config${R}  the live TableConfig vs icp.yaml AND every lobby
+                          row vs its own table contract (L-04), with the extractor
+                          self-test that H-55 is why it has (it used to compare
+                          one field in eight and say "matches"). LOCAL by default.
 
   ${B}phe-venv${R}        install the third reference evaluator (phevaluator) locally
 

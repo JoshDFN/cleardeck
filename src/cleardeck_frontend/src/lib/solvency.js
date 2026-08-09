@@ -98,6 +98,30 @@ export const SOLVENCY_STATES = Object.freeze({
 //      canister states one, and the derivation is only the fallback for a
 //      surface that does not.
 
+// ---------------------------------------------------------------------------
+// ORDERED MATCHERS, AND WHY THE ORDER HAS TO BE HONOURED BY THE PICKER
+// ---------------------------------------------------------------------------
+//
+// These lists are written most-specific-first. That intent was documented from
+// the first draft and it was NOT IMPLEMENTED: `pick()` walked the RECORD's keys
+// and applied `HELD_FIELDS.some(...)`, so the winner was whichever KEY came first
+// in the decoded object, not whichever MATCHER came first in this list.
+//
+// `@dfinity/candid` emits record fields in CANDID HASH ORDER, and for the shipped
+// `SolvencyReport` that order begins:
+//
+//   pot, main_observed_at_ns, chips_at_table, main_account, held, ...
+//
+// `main_account` before `held`. So the deposit and withdraw screens would have
+// labelled the MAIN ACCOUNT BALANCE as "Held on the ledger" -- a figure that
+// excludes every deposit subaccount, on a screen whose entire job is to say
+// whether the table holds what it owes. Same shape for `owed`, whose loose
+// fallback `/(liabilit|claims|obligation)/` matches `guard_liability`.
+//
+// [`pickOrdered`] is what makes the documented priority real. A comment shipped
+// describing behaviour the code did not implement is the shape of
+// docs/SECURITY-FINDINGS.md FINDING 33.
+
 /** Ordered: the first matcher that hits wins, so priority is explicit. */
 const HELD_FIELDS = [
   (n) => n === 'held',
@@ -113,10 +137,18 @@ const OBSERVED_AT_FIELDS = [
   (n) => /(observed_at|checked_at|read_at|measured_at)/.test(n),
 ];
 
+// What the canister's own books say it owes. `^owed$` FIRST: the loose fallback
+// also matches `guard_liability`, which is the same number on a healthy build and
+// was the LARGER of two disagreeing totals on the build
+// docs/SECURITY-FINDINGS.md FINDING 43 was measured on.
+const OWED_FIELDS = [
+  (n) => n === 'owed',
+  (n) => /(liabilit|claims|obligation)/.test(n),
+];
+
 const FIELD = Object.freeze({
   held: (n) => HELD_FIELDS.some((f) => f(n)),
-  // What the canister's own books say it owes.
-  owed: (n) => /^owed$/.test(n) || /(liabilit|claims|obligation)/.test(n),
+  owed: (n) => OWED_FIELDS.some((f) => f(n)),
   // The canister's own arithmetic, when it does it for us.
   shortfall: (n) => /(shortfall|deficit|uncovered|unbacked|missing)/.test(n),
   // When the LEDGER was asked. `null`/absent means NEVER, not "empty".
@@ -284,6 +316,28 @@ function pick(record, predicate) {
 }
 
 /**
+ * `pick`, with the MATCHER list's order deciding, not the record's key order.
+ *
+ * Every matcher is tried against every key before the next matcher is tried at
+ * all, so "most specific first" means what it says. `pick` cannot do this: it
+ * walks the record, and a Candid decode hands its keys back in hash order --
+ * `main_account` before `held`, for the shipped `SolvencyReport`.
+ *
+ * @param {unknown} record
+ * @param {((name:string)=>boolean)[]} matchers most specific first
+ */
+function pickOrdered(record, matchers) {
+  if (!record || typeof record !== 'object') return undefined;
+  const keys = Object.keys(record);
+  for (const matcher of matchers) {
+    for (const key of keys) {
+      if (matcher(key)) return record[key];
+    }
+  }
+  return undefined;
+}
+
+/**
  * Turns whatever the canister returned into the four facts a player needs.
  *
  * Deliberately tolerant about SHAPE and intolerant about MEANING: a record that
@@ -306,10 +360,13 @@ export function interpretSolvency(raw) {
   }
   const record = unwrapped.value;
 
-  const held = toBigInt(unwrapOpt(pick(record, FIELD.held)));
-  const owed = toBigInt(unwrapOpt(pick(record, FIELD.owed)));
+  // ORDERED. `pick` here would return whichever KEY the Candid decoder happened
+  // to emit first -- `main_account` for `held`, which is the main account alone
+  // and not what this canister holds. See the matcher lists above.
+  const held = toBigInt(unwrapOpt(pickOrdered(record, HELD_FIELDS)));
+  const owed = toBigInt(unwrapOpt(pickOrdered(record, OWED_FIELDS)));
   const statedShort = toBigInt(unwrapOpt(pick(record, FIELD.shortfall)));
-  const observedAtNs = toBigInt(unwrapOpt(pick(record, FIELD.observedAt)));
+  const observedAtNs = toBigInt(unwrapOpt(pickOrdered(record, OBSERVED_AT_FIELDS)));
   const adviceRaw = pick(record, FIELD.advice);
   const advice = typeof adviceRaw === 'string' ? adviceRaw : '';
   const solventFlag = pick(record, FIELD.solvent);

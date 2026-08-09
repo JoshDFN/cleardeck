@@ -8,6 +8,7 @@ type PlayerProfile = record {
 };
 type Result = variant { Ok; Err : text };
 type Result_1 = variant { Ok : PlayerProfile; Err : text };
+type Result_2 = variant { Ok : vec nat64; Err : text };
 type StakeLevel = variant { Low; VIP; High; Medium; Micro };
 type TableConfig = record {
   small_blind : nat64;
@@ -80,6 +81,13 @@ service : () -> {
   update_player_count : (nat64, nat8) -> (Result);
   // Update a table's name (admin only)
   update_table_name : (nat64, text) -> (Result);
+  // Copy one table's REGISTERED config from the table contract itself (admin only).
+  // docs/DEFECTS.md L-04. Deliberately not a setter -- it reads get_table_view()
+  // and copies, so the registry cannot be told a figure the contract does not charge.
+  refresh_table_config : (nat64) -> (Result);
+  // The same, for every registered table. Replies with the ids it refreshed, or
+  // an error naming every id it could not reach.
+  refresh_all_table_configs : () -> (Result_2);
   // Update player stats (called by table canister after hand completes)
   // SECURITY: Only authorized table canisters or admin can update
   update_player_stats : (principal, int64, nat64) -> (Result);

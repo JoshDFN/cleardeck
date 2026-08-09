@@ -33,6 +33,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import { IDL } from '@dfinity/candid';
+import { Principal } from '@dfinity/principal';
 
 // `solvency.js` imports `declarations/table_1/table_1.did.js`, a VITE ALIAS that
 // Node knows nothing about. Rather than mock the Candid — which would make this
@@ -306,14 +307,93 @@ check('a name-only decoy is NOT adopted', () => {
   assert.equal(s.read, null, 'a method whose payload carries no figures must not be wired');
 });
 
-check('THE REAL DECLARATIONS, today: no solvency surface', () => {
+// ---------------------------------------------------------------------------
+// THE SHIPPED DECLARATIONS MUST EXPOSE WHAT THE COMMITTED CANISTER EXPORTS.
+// ---------------------------------------------------------------------------
+//
+// This module DISCOVERS its surface from `declarations/table_1/table_1.did.js`
+// rather than naming a method, and an Actor only has the methods its IDL
+// declares. So a declarations bundle that is older than the canister does not
+// degrade the solvency screen -- it DELETES it: `tableActor.get_solvency` is
+// undefined no matter what the canister exports, `readTableSolvency()` answers
+// `unsupported`, and every table on earth shows the loudest warning this app has,
+// permanently, including tables that can answer perfectly.
+//
+// **That state was live in this repository until 2026-08-09.** Measured, by
+// running the app's own discovery against the committed bundle:
+// `describeSolvencySurface()` returned `{read: null, refresh: null}` while
+// `src/table_canister/table_canister.did` exported `get_solvency` and
+// `refresh_solvency`. It fails SAFE, which is why it is a defect and not a
+// finding -- but a warning that is always on is a warning nobody reads, and this
+// repository has already paid for that twice.
+//
+// The two halves are asserted separately so a failure says which one moved.
+check('the shipped declarations expose the solvency surface the canister exports', () => {
   const s = describeSolvencySurface();
-  assert.equal(s.read, null,
-    `expected no solvency surface on the shipped Candid, found "${s.read}". `
-    + 'If the canister half has landed, that is good news — re-read this test and the '
-    + 'deposit scenario rather than deleting the assertion.');
+  const canisterDid = fs.readFileSync(
+    path.join(REPO_ROOT, 'src/table_canister/table_canister.did'), 'utf8',
+  );
+  const canisterExports = /(^|\n)\s*get_solvency\s*:/.test(canisterDid);
+  console.log(`      canister .did exports get_solvency : ${canisterExports}`);
+  console.log(`      declarations expose it             : ${s.read !== null}`);
   assert.ok(s.methods.length > 20, 'the shipped service should have been enumerated');
   assert.ok(s.methods.includes('get_custody_status'), 'enumeration should see real methods');
+
+  // Whatever else is true, an undiscoverable surface must warn and must never
+  // read as an all-clear.
+  assert.equal(severityOf(SOLVENCY_STATES.UNSUPPORTED), 'warning');
+  assert.equal(shouldWarnBeforeDeposit(SOLVENCY_STATES.UNSUPPORTED), true,
+    'a table whose solvency cannot be read must discourage a deposit');
+
+  assert.equal(canisterExports, true,
+    'the committed canister interface must still export get_solvency; if it was renamed, '
+    + 'rename it here and regenerate src/declarations in the same change');
+  assert.equal(s.read, 'get_solvency',
+    "the app builds its table actor from src/declarations/table_1/table_1.did.js. If that "
+    + 'bundle does not declare get_solvency, the running app CANNOT CALL IT, and every '
+    + 'player sees "this table cannot say whether it holds your money" on a table that can. '
+    + 'Regenerate the declarations from src/table_canister/table_canister.did.');
+  assert.equal(s.refresh, 'refresh_solvency',
+    'and the public, permissionless re-read must be reachable too, or the warning has no '
+    + 'action attached to it');
+});
+
+// ---------------------------------------------------------------------------
+// THE PICK IS ORDERED. docs/SECURITY-FINDINGS.md FINDING 43's frontend half.
+// ---------------------------------------------------------------------------
+check('`held` wins over `main_account`, and `owed` over `guard_liability`', () => {
+  // Round-tripped through the REAL Candid, so the key order is the one
+  // `@dfinity/candid` actually produces: hash order, in which `main_account`
+  // comes BEFORE `held`. Every fixture above happens to give those two fields
+  // the same value, so none of them could ever have caught this.
+  const record = shippedReport({
+    ledger: Principal.fromText('ryjl3-tyaaa-aaaaa-aaaba-cai'),
+    main_ledger: [Principal.fromText('ryjl3-tyaaa-aaaaa-aaaba-cai')],
+    main_account: [400_000_000n],     // the main account alone
+    deposit_subaccounts: 200_000_000n, // plus money at published deposit addresses
+    held: [600_000_000n],              // = what this canister actually holds
+    unswept_deposits: 200_000_000n,
+    owed: 900_000_000n,
+    guard_liability: 950_000_000n,     // the second total FINDING 43 published
+    difference_e8s: [-300_000_000n],
+    shortfall_e8s: [300_000_000n],
+  });
+  const [decoded] = IDL.decode([SolvencyReportT], IDL.encode([SolvencyReportT], [record]));
+  const order = Object.keys(decoded);
+  assert.ok(
+    order.indexOf('main_account') < order.indexOf('held'),
+    'the trap this test exists for is that Candid hash order puts main_account first; '
+    + `it did not here (${order.join(', ')}), so this test is measuring nothing`,
+  );
+
+  const r = interpretSolvency(decoded);
+  assert.equal(r.held, 600_000_000n,
+    'the screen labels this "Held on the ledger". Picking `main_account` instead drops '
+    + 'every deposit subaccount from the figure a player uses to decide whether to deposit.');
+  assert.equal(r.owed, 900_000_000n,
+    'and `owed` must be the published `owed`, not whichever field matched the loose '
+    + '/liabilit/ fallback first');
+  assert.equal(r.state, SOLVENCY_STATES.SHORT);
 });
 
 console.log('\n  solvency reader — interpreting the answer\n');

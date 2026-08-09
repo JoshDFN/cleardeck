@@ -462,15 +462,16 @@ column.
 **Sorted worst-first: everything `OPEN` before everything closed, by severity inside that.**
 | finding | sev | status | wave | gate — what would catch it coming back | DEFECTS.md | one line |
 |---|---|---|---|---|---|---|
+| [FINDING 45](#finding-45) | fund-theft | FIXED | 14 | `cd tests/money_safety && cargo test --test deposit_trust_root -- every_money_door_in_the_modal_refuses_an_unpinned_table` — verified RED by removing the two guards on the tree that has them: *"loadBtcDepositAddress() asks an unpinned canister for a Bitcoin address (guard at 6033, fetch at 1110)"*, `6 passed; 1 failed`; green with them, `7 passed; 0 failed` | [T-47](DEFECTS.md#t-47) | **[FINDING 42](#finding-42) closed three money doors in the deposit modal and there were four.** The native-Bitcoin address is not derived from the pinned canister id — `loadBtcDepositAddress()` calls `get_btc_deposit_address()` on the id `lobby.get_tables()` supplied and the template renders whatever comes back under **"Your Bitcoin Deposit Address"** with a Copy Address button, with no trust check anywhere in that subtree. That is [FINDING 40](#finding-40) unfixed, on a chain where a transfer cannot be reversed. The attacker picks the branch as well: `currency` comes off the same uncertified reply, so a substituted registry naming a hostile canister with `currency = variant { BTC }` selects the flow. **The gate that missed it is named `every_money_door_in_the_modal_refuses_an_unpinned_table`**, and the browser reproducer exited 0 printing `✓ REFUSED` while this door stood open — it scrapes the Claim button and never looks at the BTC panel. Found by wave 14's critic pass, closed by its coherence pass |
 | [FINDING 39](#finding-39) | high | FIXED | 13 | `dev.sh test` step 4 -> `cargo test --test regressions` -> `reg39_a_settled_hand_is_never_settled_a_second_time`, both legs verified red on the unfixed build; plus `dev.sh test` step 1 -> `cargo test --workspace` -> `payout_tests::e41_*`, one test per guard, each verified red when its own guard alone is removed | [E-41](DEFECTS.md#e-41) | **the canister owed 4,000,000 e8s it did not hold, because A HAND SETTLED TWICE.** `finish_hand` empties `state.pot` and leaves `total_bet_this_hand` standing, so between hands the table holds a complete payout basis over an empty pot. `use_time_bank` never asked whether a hand was in progress and armed an action clock on a finished one; the clock then folded a seat out of a hand already paid, and `advance_game` handed the finished hand to `end_hand_single_winner`, which paid the whole basis again. `plan.conserves()` was TRUE at every step, so nothing trapped. Shrunk from 400 steps x 2 seeds to **one limped heads-up hand and five ordinary player calls** |
 | [FINDING 23](#finding-23) | fund-theft | OPEN | — | — | [E-84](DEFECTS.md#e-84) | `uninstall_code` and `install_code --mode reinstall` are FINDING 07 at full scale and the wave-7 audit does not cover them. **The fifth auditor EXECUTED it** — 5 ICP deposited as a player, one `icp canister install --mode reinstall` with the same wasm and no code change, and her balance read 0 while the ledger still held her 5 ICP at the canister's account. **Wave 12: reproduced at 40.00000000 ICP by `./scripts/dev.sh custody`, given the DEFECTS.md id it never had ([E-84](DEFECTS.md#e-84)), disclosed in the README and on the deposit screen ([D-13](DEFECTS.md#d-13)), and mitigated by `src/guardian_canister/` — which is BUILT AND GATED BUT NOT DEPLOYED, so mainnet is unchanged and this stays OPEN.** The gate column stays `—` on purpose: the tests measure the defect, they do not stop it. **WAVE 12, AFTER THE DISCLOSURE LANDED: THE WORST CASE IS THEFT, NOT DESTRUCTION.** The disclosure told a depositor the operator could not pay the money to themselves. A controller is not bound to the ClearDeck wasm: a 500-byte module installed with the SAME verb as the wipe moved **39.99990000 ICP** of player deposits into a wallet the operator owns ([FINDING 23c](#finding-23), `finding23c_*`, [D-14](DEFECTS.md#d-14)) |
-| [FINDING 19](#finding-19) | high | OPEN | — | — | [E-54](DEFECTS.md#e-54), [E-55](DEFECTS.md#e-55) | **the clock half is FIXED (wave 7, gated by `timers`); the cycles half is OPEN and the fix made it worse.** Nothing on chain moved the game, so liveness was outsourced to whoever had a browser tab open. The on-chain clock closed that and raised idle burn ~630x, and **nothing tops a canister up**. Open until [FINDING 24](#finding-24) and [FINDING 26](#finding-26) are |
+| [FINDING 19](#finding-19) | high | OPEN | — | — | [E-54](DEFECTS.md#e-54), [E-55](DEFECTS.md#e-55), [E-92](DEFECTS.md#e-92) | **the clock half is FIXED (wave 7, gated by `timers`); the cycles half is OPEN and NOTHING TOPS A CANISTER UP.** Liveness was originally outsourced to whoever had a browser tab open. The on-chain clock closed that and raised idle burn ~630x — and wave 14 measured what the browser tabs were costing all along, which was **more than the clock by a factor of 28 per tab** (1.1380 T/day against 0.0411 idle, control-differenced on the local replica). Ten tabs on a table dealing 500 hands a day: **11.5 T/day, zero days on 10 T**. The poll is fixed ([E-92](DEFECTS.md#e-92)) and the same table is now 4–14 days on 10 T. **Days, not months, and still nobody pays the bill.** Open until [FINDING 24](#finding-24) and [FINDING 26](#finding-26) are |
 | [FINDING 22](#finding-22) | high | FIXED | 11 | `dev.sh test` -> `oldest_cluster` -> `finding22_the_recovery_door_refuses_a_hand_that_can_still_be_played` + `finding22_a_hand_a_controller_does_end_is_closed_and_permanently_marked`; `dev.sh test` -> `admin_custody::admin_reinit_table_mid_hand_returns_the_pot_to_the_players_who_put_it_in` + `admin_custody::a_controller_ending_a_hand_pays_a_vacated_seats_stake_to_its_owner_not_its_new_occupant` (added in the wave-11 reconciliation: the chair-changed-hands seam, asserted PER PRINCIPAL) | [E-78](DEFECTS.md#e-78) | the FINDING 07 fix gave a controller a new power: **void any live hand after reading every hole card**, conserving to the e8 so no invariant could see it. Reproduced on this tree, then narrowed: the door refuses unless nothing can move the hand, closes it through the permissionless `settle_unmovable_hand`, and marks every credit `pot_type="refund:ended-by-controller"` in the permanent record |
-| [FINDING 24](#finding-24) | high | OPEN | — | — | [E-55](DEFECTS.md#e-55) | a frozen table answers **nothing**, not "queries only": the mitigation this project documented in four places does not exist, and the freezing reserve is about one hour, not 30 days |
-| [FINDING 26](#finding-26) | high | OPEN | — | — | [E-55](DEFECTS.md#e-55) | the 226-day runway assumes nobody is hostile: a free, permissionless ingress flood burns a table 65x faster, collapsing it to about three days |
-| [FINDING 31](#finding-31) | critical | OPEN | — | — | — | **FINDING 27 is only half closed.** A deposit of exactly the advertised minimum, made to the address the canister publishes, is still unwithdrawable: the sweep fee comes out of the money, so 20,000 sent becomes 10,000 in escrow and `withdraw` refuses it. Not one of `deposit_floor.rs`'s six tests sends anything to a deposit subaccount. **Raised from `high` to `critical` in wave 11: the fifth auditor re-derived it independently and it is a silent 100% loss at the number the product prints.** The dead band for the external route is `(10_000, 20_000]` e8s and the advertised minimum is the TOP of it — the largest fully unrecoverable deposit is exactly the number on the screen, while the in-app approve route at the identical number is safe. **WAVE 12: THE FUZZER NOW CONVICTS IT.** `./scripts/dev.sh fuzz-default` is RED at seed `0xc1ea2dec0002`, twice, byte for byte: two players each send 10,001 e8s to their own published deposit address and 20,002 e8s ends up unreachable, with the drain transcript printing `sweepable=true` beside each one. Five-op minimal reproducer, filed as [E-89](DEFECTS.md#e-89). This is the gate this finding never had, and it is why `./scripts/dev.sh test` is red on `main` |
+| [FINDING 24](#finding-24) | high | OPEN | — | — | [E-55](DEFECTS.md#e-55), [E-92](DEFECTS.md#e-92) | a frozen table answers **nothing**, not "queries only": the mitigation this project documented in four places does not exist. **And the reserve is worth far less than the "about one hour" this row used to claim.** Measured in wave 14 against the same reserve (28,954,245,000 cycles): **17 hours idle, 1.2 hours with ten tabs open, and FOUR MINUTES with ten tabs open before [E-92](DEFECTS.md#e-92) was fixed.** How much cushion sits under a table is a function of how many browser windows happen to be pointed at it |
+| [FINDING 26](#finding-26) | high | OPEN | — | — | [E-55](DEFECTS.md#e-55), [E-92](DEFECTS.md#e-92) | the runway assumes nobody is hostile: a free, permissionless ingress flood burns a table 65x faster at no cost to the attacker. **The 65x was measured against an IDLE baseline, and wave 14 showed the honest baseline is not idle.** Before [E-92](DEFECTS.md#e-92), ten ordinary browser tabs already burned 9.76 T/day — **238x idle, with nobody hostile at all** — so the flood's multiple was never the frightening number. The absolute burn is, and it composes: an attacker adds their flood on top of whatever the real players are already costing |
+| [FINDING 31](#finding-31) | critical | FIXED | 14 | `./scripts/dev.sh test` step 4 → `cargo test --test deposit_floor` — 10 NEW tests that SEND to a deposit subaccount, led by `every_amount_sent_to_the_published_deposit_address_comes_back_or_is_impossible` and `the_advertised_minimum_sent_to_the_published_address_is_not_a_total_loss`; plus `./scripts/dev.sh fuzz-default` seed `0xc1ea2dec0002` | [E-89](DEFECTS.md#e-89) | **FINDING 27 is only half closed.** A deposit of exactly the advertised minimum, made to the address the canister publishes, is still unwithdrawable: the sweep fee comes out of the money, so 20,000 sent becomes 10,000 in escrow and `withdraw` refuses it. Not one of `deposit_floor.rs`'s six tests sends anything to a deposit subaccount. **Raised from `high` to `critical` in wave 11: the fifth auditor re-derived it independently and it is a silent 100% loss at the number the product prints.** The dead band for the external route is `(10_000, 20_000]` e8s and the advertised minimum is the TOP of it — the largest fully unrecoverable deposit is exactly the number on the screen, while the in-app approve route at the identical number is safe. **WAVE 12: THE FUZZER NOW CONVICTS IT.** `./scripts/dev.sh fuzz-default` is RED at seed `0xc1ea2dec0002`, twice, byte for byte: two players each send 10,001 e8s to their own published deposit address and 20,002 e8s ends up unreachable, with the drain transcript printing `sweepable=true` beside each one. Five-op minimal reproducer, filed as [E-89](DEFECTS.md#e-89). This is the gate this finding never had, and it is why `./scripts/dev.sh test` is red on `main` |
 | [FINDING 32](#finding-32) | high | OPEN | — | — | — | the screenshot harness's NO-RAKE gate cannot go red on any rake this canister is capable of taking. [E-61](DEFECTS.md#e-61) fixed the `rake=NaN` half and `test-rake.mjs` now proves the gate goes red on a 1-e8 rake read from `get_hand`; **the second clause was not re-examined in the wave-11 pass** and this finding's own "what would close it" — drive a rake-taking canister end to end — is still undone. No DEFECTS.md id; it is scheduled from this table |
-| [FINDING 38](#finding-38) | high | OPEN | — | — | — | `get_solvency()` counts an open `pull` on BOTH sides on the strength of the reading not yet containing the money, and wave 10 shipped a public button that makes the reading contain it: **one anonymous `refresh_solvency()` turns a real shortfall into a published SURPLUS.** Newest finding, wave-10 critic. No DEFECTS.md id; it is scheduled from this table |
+| [FINDING 38](#finding-38) | high | FIXED | 14 | `cd tests/money_safety && cargo test --test solvency_definition -- an_anonymous_refresh_can_never_flip_a_real_shortfall_into_an_all_clear an_open_pull_is_owed_and_never_held` — verified RED on the pre-fix wasm (`sha256 7dc74045…`): refresh #1 answered `CanPayEveryone … a surplus of 99980000 e8s` on a canister the LEDGER says is SHORT 100020000. Plus `cargo test --test solvency -- every_solvency_leg_can_go_red`, whose new `an in-flight pull added to the HELD side` case fires `canister_claims_to_hold_more_than_the_ledger_holds` — the leg that was silent by construction while `pulls_in_flight` was inside its own bound | — | `get_solvency()` counted an open `pull` on BOTH sides on the strength of the reading not yet containing the money, and wave 10 shipped a public button that makes the reading contain it: **one anonymous `refresh_solvency()` turned a real shortfall into a published SURPLUS.** Wave-10 critic. **CLOSED IN WAVE 14 together with [FINDING 43](#finding-43), as one defect:** there is now one definition of what the canister holds and one of what it owes, both stated in the section comment above `total_liability` in `lib.rs`, and every reader is on them. A pull is OWED and never HELD. Ten anonymous `refresh_solvency()` calls against a real shortfall now leave the verdict at `CannotPayEveryone` with `shortfall_e8s` equal to the ledger-implied figure to the e8. No DEFECTS.md id; it is scheduled from this table |
 | [FINDING 04](#finding-04) | low | OPEN | — | — | [E-13](DEFECTS.md#e-13) | `detect_straight` prefers the wheel over a higher straight. Latent: unreachable today, a trap for the obvious optimisation. Watched by `dev.sh known-defects` |
 | [FINDING 10](#finding-10) | fund-theft | FIXED | 2 | `dev.sh test` → `deposit_replay` (dr00–dr10) | [E-02](DEFECTS.md#e-02) | **the only completed theft in this project.** One real on-ledger transfer credited to escrow twice and the excess withdrawn as real ICP, leaving the attacker 2.9997 ICP up in her own wallet and another player's escrow unbacked |
 | [FINDING 16](#finding-16) | fund-theft | FIXED | 5 | `dev.sh test` → `regressions::reg09`; `cargo test --workspace hand_membership` | [E-32](DEFECTS.md#e-32), [E-06](DEFECTS.md#e-06) | player-to-player fund theft, demonstrated: a player who stopped answering kept a claim on the pot without paying for it — a free showdown for money already in, measured at 0.98 big blinds a hand |
@@ -490,22 +491,22 @@ column.
 | [FINDING 18](#finding-18) | high | FIXED | 7 | `dev.sh test` → `invariants::custody` (M10, which reads the canister as the PLAYER rather than as a controller) | [E-57](DEFECTS.md#e-57) | `cash_out` of a stuck hand walked away from your own stake and nothing anywhere said so |
 | [FINDING 20](#finding-20) | high | FIXED | 7 | `dev.sh test` → `admin_custody::currency_cannot_be_changed_while_the_canister_owes_anybody_anything` | [E-45](DEFECTS.md#e-45) | a controller could re-denominate a funded table, making every balance unpayable, without ever writing `BALANCES` |
 | [FINDING 21](#finding-21) | high | FIXED | 8 | `dev.sh test` → `coherence_w8::finding_33_an_open_sweep_keeps_the_currency_guard_shut_and_the_flip_is_reversible` | [E-45](DEFECTS.md#e-45) | the FINDING 20 guard measured the wrong total, so a funded table could still be re-denominated. **Its own `**Status:**` line still read OPEN five waves after the header said FIXED** — corrected in wave 11 |
-| [FINDING 25](#finding-25) | high | FIXED | 7 | `stall_agreement` (M13 ONE BELIEF, 138 forked states) — **NOT RUN BY ANY TARGET**, see [H-45](DEFECTS.md#h-45). Run by hand 2026-08-06: 2 passed | [E-59](DEFECTS.md#e-59) | **the fourth cross-agent defect.** After a stall, one permissionless call voided the hand the clock would have played out; the player who was losing had the incentive and `get_custody_status()` told them to press the button |
+| [FINDING 25](#finding-25) | high | FIXED | 7 | `stall_agreement` (M13 ONE BELIEF, 138 forked states) — **run by `dev.sh test` step [5/9] and the `deep` CI tier since wave 14**, [H-45](DEFECTS.md#h-45) closed | [E-59](DEFECTS.md#e-59) | **the fourth cross-agent defect.** After a stall, one permissionless call voided the hand the clock would have played out; the player who was losing had the incentive and `get_custody_status()` told them to press the button |
 | [FINDING 27](#finding-27) | high | FIXED | 7 | `dev.sh test` → `deposit_floor` (6 tests) + `const _: () = assert!(min_withdrawal <= min_deposit)` | [E-62](DEFECTS.md#e-62) | the ICP deposit floor was below the withdrawal floor, so money arriving at the product's own documented minimum could never leave. **This closes the ICRC-2 `deposit()` door only** — the subaccount door is [FINDING 31](#finding-31) |
-| [FINDING 28](#finding-28) | high | FIXED | 8 | `deposit_subaccount_anchor` (11 tests) — **NOT RUN BY ANY TARGET**, see [H-45](DEFECTS.md#h-45). Run by hand 2026-08-06: 11 passed | — | money at the canister's OWN published deposit address was reported as zero by every balance surface and the error text told the player to send more. **Its own `**Status:**` line still read OPEN after the header said FIXED** — corrected in wave 11 |
+| [FINDING 28](#finding-28) | high | FIXED | 8 | `deposit_subaccount_anchor` (11 tests) — **run by `dev.sh test` step [5/9] and the `fast` CI tier**; 11 passed in the wave-14 run, [H-45](DEFECTS.md#h-45) closed | — | money at the canister's OWN published deposit address was reported as zero by every balance surface and the error text told the player to send more. **Its own `**Status:**` line still read OPEN after the header said FIXED** — corrected in wave 11 |
 | [FINDING 29](#finding-29) | high | FIXED | 8 | `dev.sh test` → `ledger_boundary` (8 tests, M14) + fault injection on one fuzz run in four | [E-69](DEFECTS.md#e-69) | all three money doors moved real money on the ledger **before** writing any record of intent, with no journal and no recovery. Driven: 3.0 ICP pulled out of a player's wallet, 0 credited, eleven doors out of that state all closed |
 | [FINDING 30](#finding-30) | high | FIXED | 8 | `dev.sh test` → `invariants::archive` (M12); `record::check_archived_participants` on every fuzz step | [E-66](DEFECTS.md#e-66) | the permanent hand archive was built from the seats as they stood at settlement, so it omitted anyone who left mid-hand and invented anyone who sat down — and the shuffle spec told verifiers to count from it |
 | [FINDING 34](#finding-34) | high | FIXED | 11 | `dev.sh test` → `deposit_surface` (10 tests, wired in wave 11); `solvency` for the visibility half | [E-70](DEFECTS.md#e-70) | `get_deposit_address()` published the canister's MAIN account -- the same 64 characters to every player -- under the name "deposit address". **This row said FIXED (wave 10) on a tree where it was still live**: FINDING 35's `MAIN_CUSTODY` made the money VISIBLE to an operator and did nothing about the address being published, which is the half that costs a player their deposit. Reproduced on the current tree in wave 11 (alice, bob and the main account all one string), then closed: the method now returns the legacy 64-hex spelling of the caller's OWN deposit account, and a player sending 3 ICP to the address they are given is credited 2.9999 in their own escrow and withdraws it |
 | [FINDING 40](#finding-40) | high | FIXED | 11 | `dev.sh test` → `deposit_surface::a_substituted_address_is_a_completed_theft_and_local_derivation_is_what_prevents_it` + `::the_frontends_own_derivation_agrees_with_the_canister_for_every_principal` | — | the deposit address was served over an **uncertified query**, so one dishonest replica substituting one reply is a completed theft: alice paid bob's address, bob swept 4.9999 ICP, **and every money invariant was silent because no e8 went missing.** Closed by removing the canister from the trust path rather than certifying it: the client DERIVES the address from its own principal and never asks, and the gate runs the real frontend module in node against the real canister, principal by principal. No DEFECTS.md id; it is scheduled from this table |
 | [FINDING 41](#finding-41) | fund-theft | FIXED | 11 | `dev.sh test` → `deposit_surface::the_oisy_transfer_destination_is_derived_locally_and_not_fetched` (follows the value the transfer is addressed to) + `::the_frontends_32_byte_derivation_agrees_with_the_canister_for_every_principal` | — | **FINDING 40 WAS HALF CLOSED.** The display path derived the address locally; the OISY path, forty lines up the same file, still called `get_deposit_subaccount()` — the same uncertified query, in its 32-byte spelling — and transferred straight to the account it named, with no address ever shown to the player. Closed in the wave-11 reconciliation: the branch derives `depositSubaccount(sessionPrincipal)` locally, cross-checks the canister's reply and **aborts the transfer** on a disagreement instead of warning about it. The 64-hex gate could not see this and stayed green with the defect present, so the new gate follows the value the wallet is actually paid. No DEFECTS.md id; it is scheduled from this table |
-| [FINDING 43](#finding-43) | high | OPEN | — | — | — | **THE SEVENTH CROSS-AGENT DEFECT.** The public solvency instrument calls the money at the shared main account a **surplus**, in the same reply that names it as unattributed. `total_liability()` — the number the currency guard reads — has five terms and the fifth is `main_uncredited_observed()` ([FINDING 35](#finding-35)); `get_solvency()`'s own `owed` has six terms and that is not one of them, while `held` DOES include the main-account balance. The same e8 is an asset and not a liability. Executed 2026-08-06: 1 ICP at the main account gives `owed = 0`, `guard_liability = 100000000`, `unattributed_at_main = Some(100000000)`, verdict `CanPayEveryone`, summary *"it owes 0.0000 ICP … a surplus of 100000000 e8s"*. This is exactly the money [FINDING 34](#finding-34)'s shared address collected for eleven waves, and there is ICP at that account on mainnet today. No DEFECTS.md id; it is scheduled from this table |
+| [FINDING 43](#finding-43) | high | FIXED | 14 | `cd tests/money_safety && cargo test --test deposit_surface -- the_solvency_verdict_counts_money_at_the_main_account_as_surplus` (the wave-11 marker, no longer `#[ignore]`d) and `cargo test --test solvency_definition -- money_at_the_main_account_that_nobody_is_credited_with_is_never_a_surplus`. Both verified RED on the pre-fix wasm (`sha256 7dc74045…`): `owed=500000000 guard_liability=600000000 difference=+100000000`, summary *"a surplus of 100000000 e8s"*. Plus two new legs in `invariants::solvency` that run on EVERY fuzz snapshot — `solvency_reports_a_surplus` and `solvency_summary_claims_a_surplus` — and the strengthened `guard_liability_disagrees_with_the_published_terms`, which now demands `guard_liability == owed` instead of a documented DIFFERENCE between two sums; all three proved able to go red by `cargo test --test solvency -- every_solvency_leg_can_go_red` | — | **THE SEVENTH CROSS-AGENT DEFECT. CLOSED IN WAVE 14 together with [FINDING 38](#finding-38), as one defect: two sides of one comparison computed from different definitions.** There is one definition of held and one of owed now, stated in the section comment above `total_liability` in `lib.rs`, and `owed` IS `guard_liability` — the same call, not two sums. Money at the main account that no player is credited with is a LIABILITY, so `difference_e8s` can never be positive and the summary no longer contains the word *surplus* at all; it names the unattributed money in the sentence a player reads instead. The old instrument called the money at the shared main account a **surplus**, in the same reply that named it as unattributed. `total_liability()` — the number the currency guard reads — has five terms and the fifth is `main_uncredited_observed()` ([FINDING 35](#finding-35)); `get_solvency()`'s own `owed` has six terms and that is not one of them, while `held` DOES include the main-account balance. The same e8 is an asset and not a liability. Executed 2026-08-06: 1 ICP at the main account gives `owed = 0`, `guard_liability = 100000000`, `unattributed_at_main = Some(100000000)`, verdict `CanPayEveryone`, summary *"it owes 0.0000 ICP … a surplus of 100000000 e8s"*. This is exactly the money [FINDING 34](#finding-34)'s shared address collected for eleven waves, and there is ICP at that account on mainnet today. No DEFECTS.md id; it is scheduled from this table |
 | [FINDING 44](#finding-44) | high | FIXED | 13 | `dev.sh test` step 4 → `cargo test --test invariants` → `m3s_window_is_closed_by_money_arriving_at_a_deposit_subaccount_not_only_at_the_main_account`, which measures all three facts at once (the main account does NOT move, the ledger's total holdings DO, and `internal_total` moves with them) and is **verified to go red**: reverting `external_money_moved` to `ledger_main` fails it | [E-89](DEFECTS.md#e-89) is the other red in the same row, and is the one that is TRUE | **NO MONEY WAS CREATED. THE INSTRUMENT CONVICTED THE INNOCENT, and it was filed as a `high` fund-creation defect against a clean module.** The shrunk 7-op reproducer is literally `ExternalDepositThenClaim { actor: 3, amount: 10_000 }` inside a hand: a third party paid one ledger fee of real ICP into the deposit address the canister published for them. M3's window guard asked whether `ledger_main` had moved — the money went to a SUBACCOUNT, so it had not — while `internal_total()` has counted `canister_unswept_deposits` since wave 8. Two different sets of accounts on the two sides of one equation. Measured: `ledger_main 1600000000 → 1600000000`, `ledger_holdings 1600000000 → 1600010000`, `unswept 0 → 10000`. **It reproduces byte-identically on the wave-12 canister source**, so it was never a canister defect: `git show HEAD:src/table_canister/src/lib.rs` + this wave's generator gives the same seed, the same 2 hands / 4 upgrades and the same `+10000`. Fixed by asking the question of every ledger account the canister owns |
-| [FINDING 42](#finding-42) | fund-theft | OPEN | — | — | — | the local derivation is rooted in a canister id the client takes from **`lobby.get_tables()`, another uncertified query**, not from "the build's own configuration" as [FINDING 40](#finding-40) states. Substitute the canister id and every derived address moves with it, and the modal's cross-check passes because the substituted canister answers consistently. `ic-config.js` already carries the trusted mainnet id list and no deposit path consults it. No DEFECTS.md id; it is scheduled from this table |
-| [FINDING 35](#finding-35) | high | FIXED | 10 | `solvency` (12 tests) — **NOT RUN BY ANY TARGET**, see [H-45](DEFECTS.md#h-45). Run by hand 2026-08-06: 12 passed. Plus `invariants::solvency` on every fuzz step, which `dev.sh test` does run | [E-70](DEFECTS.md#e-70) | **the fifth cross-agent defect.** An observation record for every deposit SUBACCOUNT and none for the MAIN account, so `admin_audit_deposit_custody` replied `(1 audited, 0 held, 0 unaudited)` on a canister holding 5 ICP. **The 2.00 ICP shortfall on mainnet table_1 is real and is not fixed by this**; nothing here edits a balance and `no_setter_was_added_to_fix_the_books` keeps it that way |
-| [FINDING 36](#finding-36) | high | FIXED | 10 | `solvency::components_sum_to_total` — **NOT RUN BY ANY TARGET**, see [H-45](DEFECTS.md#h-45). Run by hand 2026-08-06: 12 passed | [E-72](DEFECTS.md#e-72) | the harness's `CustodyStatus` mirror was missing the field carrying FINDING 29's money, under a comment saying it is "Mirrored in FULL on purpose" |
+| [FINDING 42](#finding-42) | fund-theft | FIXED | 14 | `dev.sh test` → `cargo test --test deposit_trust_root` (7 tests, all verified RED on `4e08c6d` in a `cp -Rc` tree and green after; two plausible WRONG fixes also caught, one test each), and end to end on rendered pixels: `node tools/shots/repro-finding42.mjs` **exits 1 pre-fix and 0 post-fix** | [T-43](DEFECTS.md#t-43) is the transport half; [T-44](DEFECTS.md#t-44) is what is left open | the local derivation was rooted in a canister id the client takes from **`lobby.get_tables()`, another uncertified query**, not from "the build's own configuration" as [FINDING 40](#finding-40) stated. **Reproduced in a browser before it was fixed:** a lobby that names one substituted table, the real frontend built against it, and the modal publishes `aa86e03e…` — an account inside a canister the build never named — under the heading *"Yours alone, at this table"*, with no warning anywhere on the screen (`artifacts/finding42/pre-fix/`). Closed by giving the derivation a trust root that predates the network: `trustedTables.js` holds the ids THIS BUILD WAS PUBLISHED WITH (the pinned mainnet list on `ic`, the ids the bundle was compiled against locally), `deriveTrustedDepositAddress()` refuses anything else, and the ICRC-2 approval and the OISY transfer refuse with it. A wire-supplied id may still DISPLAY a table. No DEFECTS.md id; it is scheduled from this table |
+| [FINDING 35](#finding-35) | high | FIXED | 10 | `solvency` (12 tests) — **run by `dev.sh test` step [5/9] and the `fast` CI tier**; 12 passed in the wave-14 run, [H-45](DEFECTS.md#h-45) closed. Plus `invariants::solvency` on every fuzz step | [E-70](DEFECTS.md#e-70) | **the fifth cross-agent defect.** An observation record for every deposit SUBACCOUNT and none for the MAIN account, so `admin_audit_deposit_custody` replied `(1 audited, 0 held, 0 unaudited)` on a canister holding 5 ICP. **The 2.00 ICP shortfall on mainnet table_1 is real and is not fixed by this**; nothing here edits a balance and `no_setter_was_added_to_fix_the_books` keeps it that way |
+| [FINDING 36](#finding-36) | high | FIXED | 10 | `solvency::components_sum_to_total` — **run by `dev.sh test` step [5/9] and the `fast` CI tier**; 12 passed in the wave-14 run, [H-45](DEFECTS.md#h-45) closed | [E-72](DEFECTS.md#e-72) | the harness's `CustodyStatus` mirror was missing the field carrying FINDING 29's money, under a comment saying it is "Mirrored in FULL on purpose" |
 | [FINDING 37](#finding-37) | high | FIXED | 10 | `dev.sh test` → `fuzz` (`invariants::solvency::check_solvency_report_is_coherent` on every step) | [E-73](DEFECTS.md#e-73) | `total_liability()` — the last custody guard's only input — had one caller, no query, no surface and no gate, so the only way to sample it was to attempt the destructive operation it guards |
 | [FINDING 03](#finding-03) | medium | FIXED | 11 | CI `candid-check` → `./scripts/check-candid.sh --declarations` (0 structural differences, verified 2026-08-06) | [E-08](DEFECTS.md#e-08) | the committed `table_canister.did` did not describe the deployed code. The `.did` ships on-chain as `candid:service` metadata, so a stale one is a canister lying about itself |
-| [FINDING 11](#finding-11) | low | BY-DESIGN | 7 | `dev.sh test` → `deposit_subaccount_anchor::dust_below_the_fee_is_accounted_for_and_recoverable_by_topping_up` + `deposit_surface::dust_at_the_published_address_is_visible_and_recovered_by_topping_up_the_same_address` — **both RUN as of wave 11**, [H-45](DEFECTS.md#h-45) instance closed | [E-12](DEFECTS.md#e-12) | dust at or below the transfer fee in a deposit subaccount cannot move alone. The arithmetic cannot be changed; it is visible on every surface and recoverable by topping the same address up. **Wave 11 re-drove it through the 64-hex address a player is actually given, and wired the target: its gate had been outside `dev.sh test` since wave 8** |
+| [FINDING 11](#finding-11) | low | BY-DESIGN | 7 | `dev.sh test` → `deposit_subaccount_anchor::dust_below_the_fee_is_accounted_for_and_recoverable_by_topping_up` + `deposit_surface::dust_at_the_published_address_is_visible_and_recovered_by_topping_up_the_same_address` — **both RUN as of wave 11**, [H-45](DEFECTS.md#h-45) instance closed | [E-12](DEFECTS.md#e-12) | dust at or below the transfer fee in a deposit subaccount cannot move alone. The arithmetic cannot be changed; it is visible on every surface and recoverable by topping the same address up. **Wave 11 re-drove it through the 64-hex address a player is actually given, and wired the target: its gate had been outside `dev.sh test` since wave 8.** **WAVE 14: the top-up figure this row calls the remedy was WRONG for two waves** — wave 12's Rule-3 floor moved the sweep threshold and the sentence went on naming `fee + 1 - amount`, so a player following it exactly sent 2 e8s and was refused again ([E-98](DEFECTS.md#e-98)). It now names `min_external_deposit - amount`, the address surface states the fee rule BEFORE anything is sent, and `deposit_floor::the_top_up_the_dust_refusal_names_actually_makes_the_balance_claimable` sends the figure the canister prints rather than a comfortable one |
 
 Detailed write-ups that predate this file live alongside it:
 
@@ -3802,6 +3803,15 @@ simulated hour on a PocketIC 13-node application subnet:
 | before the clock | 0.00007 T/day | ~39 years | ~390 years | ~1,950 years |
 | after the clock | **0.0442 T/day** | **22 days** | **226 days** | **1,130 days** |
 
+**AND THE TABLE ABOVE IS STILL THE IDLE CASE, WHICH IS THE CASE NOBODY IS IN.** Wave 14
+([E-92](DEFECTS.md#e-92)) measured what an open browser tab costs, against a no-tabs control on a
+real canister on the local replica, and it was **1.1380 T/day per tab** — twenty-eight times the
+whole on-chain clock. Ten tabs on one table: **9.7618 T/day**, or **11.5 T/day** once it is also
+dealing 500 hands a day, which is **zero days on 10 T and four days on the 51 T these canisters
+hold**. That was true with every player behaving normally and nobody hostile anywhere. The poll is
+fixed; the same table is now 4 to 14 days on 10 T. The point that survives is the one this section
+makes: **the reassuring row is the row for a table nobody is using.**
+
 Per tick: **15,361,360 cycles** at a 30 s watchdog, 15,386,002 at 60 s -- exactly linear, so
 `CLOCK_WATCHDOG_SECS` prices the whole design: `86400 / period * 15.4M` cycles per day. For
 comparison, the bare repeating interval this finding originally suggested costs 485 T/year per
@@ -3916,7 +3926,7 @@ canister that **disappears**. Every consequence gets worse:
 * **The failure is indistinguishable from a subnet problem** to anybody outside, which is how
   an operator loses hours before looking at cycles at all.
 
-### The freezing reserve is not 30 days any more, it is about one hour
+### The freezing reserve is not 30 days any more. On an idle table it is hours; with tabs open it was MINUTES
 
 Measured on the same build, from outside the canister:
 
@@ -3925,6 +3935,24 @@ Measured on the same build, from outside the canister:
 | `reserved_for_freezing` | 2,129,748,540 cycles |
 | observed burn (external, one simulated hour) | 1,843,363,680 cycles/hour = 44,240,728,320/day |
 | **what the reserve is worth at that burn** | **1.16 hours** |
+
+**AND THAT IS THE IDLE FIGURE, WHICH IS THE ONE NOBODY IS EVER IN.** The burn above is a table
+with nobody looking at it. Wave 14 ([E-92](DEFECTS.md#e-92)) measured the same reserve
+(28,954,245,000 cycles on the wave-14 local fixtures) against the burn a table actually
+experiences, control-differenced against a no-tabs run:
+
+| what the table is doing | burn/day | what the reserve buys |
+|---|---|---|
+| idle, nobody looking at it | 0.0411 T | ~17 hours |
+| ten browser tabs open, after [E-92](DEFECTS.md#e-92) | 0.5799 T | **~1.2 hours** |
+| ten browser tabs open, **before** [E-92](DEFECTS.md#e-92) | 9.7618 T | **~4 MINUTES** |
+
+**How much cushion sits under a funded table was a function of how many browser windows happened
+to be pointed at it.** Four minutes is not a warning window; it is shorter than the interval
+between two runs of any monitor this project has. Nothing about this is fixed by the reserve —
+the reserve is computed from idle consumption and cannot see message execution at all — so the
+only usable warning remains `runway_days`, and per the section above it stops being readable at
+exactly the moment it matters.
 
 The freezing threshold is `freezing_threshold_seconds x idle resource consumption`, and idle
 resource consumption counts memory and compute allocation only -- it knows nothing about a
@@ -4364,6 +4392,40 @@ charges to the canister, not to the caller**. Extrapolated, that is 2.886 T/day,
 holding 10 T cycles has **3.5 days** of runway rather than 226, and the attacker pays nothing
 and needs no funds, no seat and no privilege. All 3,000 calls were accepted; none was rate
 limited.
+
+### WAVE 14: THE ATTACK AND THE SHIPPED CLIENT WERE THE SAME CALL, AND THE CLIENT WAS FASTER
+
+The flood above is `check_timeouts` at **5 calls per simulated second from one principal**. Until
+wave 14 the ClearDeck frontend drove `check_timeouts` at **2 calls per second per open browser
+tab**, from `setInterval(loadTableState, 500)`, as the first statement of its render poll
+([E-92](DEFECTS.md#e-92)). Nobody had noticed that the finding's attack and the product's own poll
+were the same method at a comparable rate.
+
+Measured in wave 14 against a no-tabs control, on a real canister on the local replica:
+
+| | ingress calls | burn |
+|---|---|---|
+| this finding's flood, extrapolated | 5/s | 2.886 T/day |
+| **ten ordinary browser tabs, before [E-92](DEFECTS.md#e-92)** | **16.4/s** | **9.76 T/day** |
+| ten ordinary browser tabs, after | 0.9/s | 0.58 T/day |
+
+**Ten people watching one table were three times the flood this finding describes as an attack**,
+and the per-call cost the two measurements arrive at independently agrees: 6,679,554 cycles here,
+**6,889,049** there.
+
+Two things follow, and one of them is uncomfortable.
+
+* **The 65x amplification was measured against an idle baseline, and idle was never the baseline.**
+  The multiple is the least interesting number in this finding. The absolute burn is the finding,
+  and it composes: an attacker's flood lands on top of whatever the real players are already
+  costing, so the "3.5 days" figure was itself the optimistic reading.
+* **Rate limiting `check_timeouts` would have hit the product before it hit an attacker.** Any
+  budget tight enough to matter to a 5/s flood would have throttled the shipped client at 2/s per
+  tab, and the game would have stopped dealing hands. That is why the fix in
+  [E-92](DEFECTS.md#e-92) is on the CALLER — a client that only asks when a deadline is actually
+  crossable, floored at one call per 2 s and backing off to 30 s — rather than a limit on the
+  method. It does not close this finding: a hostile caller ignores a client-side policy entirely.
+  It removes the excuse for not limiting the method, which was that the product needed the rate.
 
 ### Why it matters here specifically
 
@@ -5029,7 +5091,70 @@ which ones go red says what broke.
   record correctly says they had not left at settlement time.
 
 <a id="finding-31"></a>
-## FINDING 31 (high) -- FINDING 27 IS ONLY HALF CLOSED: a deposit of exactly the advertised minimum, made to the address the canister publishes, is still unwithdrawable — STATUS: OPEN
+## FINDING 31 (critical) -- FINDING 27 IS ONLY HALF CLOSED: a deposit of exactly the advertised minimum, made to the address the canister publishes, is still unwithdrawable — STATUS: FIXED (wave 14)
+
+
+> **CORRECTION, wave 14 coherence pass.** The dead band is genuinely gone from the
+> canister: `refund_external_deposit()` reaches everything above one ledger fee at
+> a deposit subaccount, measured at the player's own wallet. But the same wave
+> moved the band one layer out. `check_drain`'s new per-account tolerance convicts
+> every account above one fee while `drain()`'s own withdraw loop still knocked at
+> `bal > 20_000`, so every ESCROW row in `(10_000, 20_000]` was reported
+> unreachable by an instrument that never asked for it — a **false red** on M9.
+> Filed and closed as **[H-57](DEFECTS.md#h-57)**. The claim that the new tolerance
+> *"turns on whether the money was recoverable"* was false when written: it turned
+> on whether the drain's loop bothered to try.
+
+
+> ## WAVE 14 — FIXED, AND THE MISSING HALF WAS A DOOR AND NOT A NUMBER
+>
+> Wave 12 added the number: `Currency::min_external_deposit()` = `min_withdrawal + transfer_fee`,
+> and `claim_external_deposit` refuses below it. That stops the canister taking money it cannot
+> pay back, and it does **nothing at all** for money that is already at the address — which is
+> every e8 this finding is about. The refusal's only instruction was *"send at least X more to
+> the SAME address"*: a second ledger fee, spent to rescue the first, and no remedy whatsoever for
+> a player who declines. The fuzzer said so at its own default seeds and `./scripts/dev.sh test`
+> was red on it for two waves ([E-89](DEFECTS.md#e-89)).
+>
+> **The fix is `refund_external_deposit()`**: it sends what is at the caller's own deposit address
+> back to the caller's own wallet, less one ledger fee. Neither the source
+> (`compute_deposit_subaccount(caller)`) nor the destination (`caller`) is a parameter, so it can
+> drain no account but the caller's own and pay no account but the caller's own, and it never
+> touches `BALANCES`. It reaches every amount above one transfer fee — strictly more than the
+> sweep-then-withdraw route, which needs twice that.
+>
+> Driven, same shape as the reproduction above, wallet measured on the LEDGER:
+>
+> ```text
+> sent  10001 -> claim REFUSED (names the refund) -> refund Ok -> wallet +1
+> sent  19999 -> claim REFUSED (names the refund) -> refund Ok -> wallet +9999
+> sent  20000 -> claim REFUSED (names the refund) -> refund Ok -> wallet +10000   <-- THE ADVERTISED MINIMUM
+> sent  20001 -> claim REFUSED (names the refund) -> refund Ok -> wallet +10001
+> sent  30000 -> claim Ok(20000) -> withdraw Ok             -> wallet +10000   <-- THE PUBLISHED MINIMUM
+> sent   9999 -> claim REFUSED, refund REFUSED, money still at the address, 0 recovered
+> sent  10000 -> claim REFUSED, refund REFUSED, money still at the address, 0 recovered
+> ```
+>
+> The last two are the honest answer, and it has not changed: at or below the ledger's own fee
+> there is no transfer at any price. What changed is that **the canister says so before anything is
+> sent** rather than after. `DepositAddressCustody` now carries `minimum_deposit` and `refundable`
+> beside `sweepable`; the note on an address nobody has looked at names the minimum, the fee and
+> the dust rule; and `DepositModal.svelte` states the same thing in the player's words on the
+> screen that shows the address.
+>
+> **Three smaller lies went with it.** (1) `sweepable` was `> transfer_fee` under a doc comment
+> saying *"true when `claim_external_deposit()` would sweep this amount right now"* — false across
+> the whole dead band, and the money-safety drain printed it back as evidence that stranded money
+> was reachable. It is now `>= minimum_deposit`. (2) `deposit_custody_sentence` told a player
+> holding 20,000 to *"call claim_external_deposit(), which moves it and credits you 0.0001 ICP"* —
+> an instruction the canister would refuse. (3) the sub-fee dust sentence named a top-up of
+> `fee + 1 - amount`, which stopped working when the floor moved; the gate now sends exactly the
+> figure the canister prints and requires the claim to succeed.
+>
+> **What would catch it coming back:** `cd tests/money_safety && cargo test --test deposit_floor`,
+> which `./scripts/dev.sh test` names explicitly. Ten new tests, every one verified red against
+> `git show HEAD:src/table_canister/src/lib.rs` in a `cp -Rc` tree before the fix existed.
+
 
 **Severity:** HIGH. Fund LOCK. No malice at any step. Reachable by following the application's own
 printed instructions, at the exact number the application prints.
@@ -5328,7 +5453,9 @@ changes made in the same wave.**
 * `observed_deposit_total()` deliberately **subtracts** open sweeps:
   `observed.saturating_sub(open_sweep_total())`, where `open_sweep_total()` is
   `amount + fee` per open `Sweep` intent. Its comment says the sweep is "counted here instead
-  of there, exactly once".
+  of there, exactly once". *(Renamed `open_deposit_exit_total()` in wave 14, when a second kind
+  of movement out of a deposit subaccount was added -- `RefundDeposit`. Same arithmetic, one
+  more kind in the filter; see [FINDING 31](#finding-31).)*
 * `journalled_incoming_total()`'s own comment says it counts "`Pull` AND `Sweep`, and no double
   count ... so the sweep is counted here instead of there".
 * **Its code is `.filter(|i| i.kind == LedgerIntentKind::Pull)`.**
@@ -5954,7 +6081,78 @@ nobody can gate, and this project has now shipped three defects inside exactly t
 ---
 
 <a id="finding-38"></a>
-## FINDING 38 (high) -- `get_solvency()` counts an open `pull` on BOTH sides on the strength of the reading not yet containing the money, and wave 10 shipped a public button that makes the reading contain it: one anonymous `refresh_solvency()` turns a real, correctly-reported shortfall into a published SURPLUS — STATUS: OPEN
+## FINDING 38 (high) -- `get_solvency()` counts an open `pull` on BOTH sides on the strength of the reading not yet containing the money, and wave 10 shipped a public button that makes the reading contain it: one anonymous `refresh_solvency()` turns a real, correctly-reported shortfall into a published SURPLUS — STATUS: FIXED (wave 14)
+
+
+> **CORRECTION, wave 14 coherence pass.** The write-up says the anchor is computed
+> *"never from a figure the canister collected"*. That is true of the HELD side
+> only. In `solvency_definition.rs` the owed side is
+> `let true_owed = snap.escrow_total + pull;`, and `escrow_total` is
+> `admin_get_all_balances()` — the canister's own escrow ledger. `ledger_holdings()`
+> (built from `icrc1_balance_of`) is the outside-anchored half. The gate survives
+> because it separately asserts `true_short == hole + TRANSFER_FEE`, pinning the
+> figure to an externally known drained amount, but the prose claims more than the
+> code does, and the standing lesson of this repository is precisely that a
+> conservation figure sourced from the party being audited is not an anchor.
+
+
+> ## ✅ CLOSED IN WAVE 14, TOGETHER WITH [FINDING 43](#finding-43), AS ONE DEFECT
+>
+> The two findings are the same failure seen from two sides: **the two sides of the
+> solvency comparison were computed from different definitions, and a caller could move
+> the boundary between them.** There is one definition of each now, written down in the
+> section comment above `total_liability()` in `src/table_canister/src/lib.rs`, and every
+> reader is on it -- the currency guard, `get_solvency`, `get_custody_status`'s advice,
+> `withdraw`'s refusals and the money-safety harness's own legs.
+>
+> ```text
+>   HELD = total_holdings()  = main_balance_now + deposit_subaccounts_observed
+>                              - open_deposit_exit_leakage
+>          -- what the LEDGER says, as a lower bound. NO IN-FLIGHT TERM, EVER.
+>   OWED = total_liability() = max(escrow + chips + max(pot, committed)
+>                                    + payouts_in_flight + pulls_in_flight,
+>                                  main_balance_now)
+>                              + (observed_deposit_total + sweeps_in_flight)
+>   difference = min(0, main_balance_now - (escrow + chips + pot + payouts + pulls))
+> ```
+>
+> **An open `pull` is OWED and never HELD.** If it landed it is already inside
+> `main_balance_now`, so it is held once and owed once; if it did not, the canister cries
+> poor by the pull amount, which is the safe direction, one `resolve_my_ledger_intents()`
+> from being cleared, and named in the summary in words.
+>
+> ### Measured on the pre-fix wasm and then on the fixed one
+>
+> `tests/money_safety/tests/solvency_definition.rs::an_anonymous_refresh_can_never_flip_a_real_shortfall_into_an_all_clear`,
+> the FINDING 29 injector, the real mainnet ICP ledger wasm on PocketIC:
+>
+> ```text
+> BEFORE (sha256 7dc74045e7aa4c18b6cddfb58d8c8432bde396b9a0caceb2e3a8b48f23fbd45b)
+>   STEP 1 truly short   verdict=CannotPayEveryone diff=-100020000
+>   STEP 2 injection     bob's 2 ICP lands at the main account, bob credited 0, pull OPEN
+>   ANCHOR (the ledger)  holds 899980000, really owes 1000000000  => SHORT 100020000
+>   STEP 3 ONE anonymous refresh_solvency()
+>                        verdict=CanPayEveryone   diff=+99980000
+>                        summary "...a surplus of 99980000 e8s."
+>
+> AFTER
+>   STEP 3 refresh #1 .. #10, all as Principal::anonymous()
+>                        verdict=CannotPayEveryone  diff=-100020000
+>                        shortfall_e8s=100020000    == the LEDGER-implied figure, to the e8
+> ```
+>
+> `refresh_solvency()` is still public, still unpermissioned, still anonymous-callable --
+> deliberately, because a player must be able to check whether the table can pay them
+> without asking anybody. It can no longer change the verdict in the reassuring direction,
+> and the test hammers it ten times to say so.
+>
+> ### And the leg that could not have caught it
+>
+> `check_written_down_holdings_are_not_overstated`'s bound was
+> `ledger_holdings + payouts_in_flight + pulls_in_flight`, and the overstated `held`
+> landed on it **exactly**, so the check was silent by construction on the one state it
+> existed for. The bound is `ledger_holdings + payouts_in_flight` now. An open pull can
+> only make a written reading stale LOW, so it can never be the reason `held` is too high.
 
 > **What was executed.** `tests/money_safety` on PocketIC with the real mainnet ICP ledger wasm,
 > against the wave-10 build (`table_canister.wasm` sha256
@@ -6340,11 +6538,32 @@ reproducer nobody ran.
 > | | what it does | what is left |
 > |---|---|---|
 > | **certified query** | `set_certified_data` over the derivation, reply carries a certificate, client verifies it against the IC root key | the canister is still in the trust path. The client must implement certificate verification correctly, must actually reject an unverifiable reply rather than falling back, and the certified value has to be maintained by the canister across upgrades. It hardens a call that does not need to exist |
-> | **client derives locally** ✅ | the address is a pure function of `(table canister id, your principal)`, both of which the client already holds -- the canister id from the build's own configuration, the principal from the signed-in identity. The client computes it and never asks | **nothing to substitute.** There is no reply, so there is no reply to tamper with. The failure mode moves from "a replica lied" to "our own arithmetic is wrong", which is a thing a test can check exhaustively and a lying replica cannot influence |
+> | **client derives locally** ✅ | the address is a pure function of `(table canister id, your principal)`. ~~both of which the client already holds -- the canister id from the build's own configuration~~ **THAT HALF WAS FALSE WHEN WRITTEN. See the correction under this table.** The principal comes from the signed-in identity; the canister id came from `lobby.get_tables()`, and since wave 14 it must be one the build was published with. The client computes the address and never asks for it | **nothing to substitute ON THE TABLE CANISTER.** There is no reply about the ADDRESS, so there is no address reply to tamper with. There was still a reply about the CANISTER ID until wave 14 -- see [FINDING 42](#finding-42). The failure mode moves from "a replica lied" to "our own arithmetic is wrong", which is a thing a test can check exhaustively and a lying replica cannot influence |
 >
 > **Chosen: local derivation.** It is strictly stronger, because it deletes the trust
 > relationship instead of auditing it, and it is smaller: one pure module, no certificate
 > plumbing, no upgrade-time state.
+
+> ### ⚠️ CORRECTION, WAVE 14: THE SENTENCE ABOVE WAS WRONG, AND IT COST THREE WAVES
+>
+> *"the canister id from the build's own configuration"* was not true of any build this project
+> has ever produced. The canister id came from `lobby.get_tables()` --
+> `get_tables : () -> (vec TableInfo) query` -- which is an ordinary query with **exactly the
+> property this finding is about**. So the address was a pure function of one value the client
+> holds and one value a replica supplies, and substituting the second moves every derived address
+> into a canister the attacker controls, with this modal's own cross-check still passing, because
+> the check asks the canister the substituted id names.
+>
+> This finding removed the TABLE canister from the trust path and left the LOBBY in it. That is a
+> real reduction in exposure, and it is not the property this write-up claimed. The claim was
+> repeated verbatim in `depositAddress.js`'s header, which is where anybody would have gone to
+> check it.
+>
+> [FINDING 42](#finding-42) is the other half. It was open from wave 11 to wave 14, reproduced in
+> a browser (the modal publishing an attacker-controlled address with every check on the screen
+> green), and is now closed by rooting the derivation in `trustedTables.js` -- the ids the build
+> was PUBLISHED with. The gate is `cargo test --test deposit_trust_root`, and one of its seven
+> tests exists purely to keep this sentence corrected.
 >
 > ### What shipped
 >
@@ -6488,7 +6707,25 @@ reproducer nobody ran.
 
 <a id="finding-42"></a>
 
-## FINDING 42 (fund-theft) -- the local derivation is rooted in a canister id that arrives over ANOTHER uncertified query, so FINDING 40's substitution is still one reply away — STATUS: OPEN, FOUND BY THE WAVE-11 CRITIC
+## FINDING 42 (fund-theft) -- the local derivation is rooted in a canister id that arrives over ANOTHER uncertified query, so FINDING 40's substitution is still one reply away — STATUS: FIXED (wave 14), FOUND BY THE WAVE-11 CRITIC
+
+
+> **CORRECTION, wave 14 coherence pass.** This finding's write-up and the wave
+> summary state that *"all three money doors refuse together"*. **There were
+> four.** `loadBtcDepositAddress()` fetches a Bitcoin address from the
+> wire-supplied canister id and the modal renders it with a Copy button, with no
+> trust check in that subtree — filed and closed as
+> **[FINDING 45](#finding-45) / [T-47](DEFECTS.md#t-47)**. FINDING 42's own three
+> doors are genuinely closed and this row stays `FIXED`; the completeness claim
+> was not. Two further corrections to this entry: the gate
+> `every_money_door_in_the_modal_refuses_an_unpinned_table` measured the byte
+> POSITION of the guard rather than whether it returned, so deleting one `return;`
+> left all seven tests green and the browser reproducer exiting 0
+> ([H-56](DEFECTS.md#h-56)); and the claim that the app built *every* agent with
+> `verifyQuerySignatures: false` is wrong — five other `new HttpAgent` sites
+> (`auth.js:243`, `oisy.js:302`, `WalletButton.svelte:273/311/409`) never set the
+> option and always had the library default. Only `canisters.js` set it false.
+
 
 > **Where:** `src/cleardeck_frontend/src/routes/+page.svelte:307`, `:364-367`, `:1154`;
 > `src/lobby_canister/lobby_canister.did:61`.
@@ -6540,10 +6777,188 @@ reproducer nobody ran.
 
 ---
 
-<a id="finding-43"></a>
-## FINDING 43 (high) -- THE SEVENTH CROSS-AGENT DEFECT: the solvency instrument calls the money at the shared main account a SURPLUS, in the same reply that names it as money held for somebody the canister cannot name — STATUS: OPEN, FOUND IN THE WAVE-11 RECONCILIATION
+### ✅ CLOSED IN WAVE 14. REPRODUCED IN A BROWSER FIRST, ON RENDERED PIXELS.
 
-**Status:** OPEN. Reproduced by an executable, red-on-purpose marker on the current tree.
+**The reproducer is a command, and it is checked in:**
+
+```
+node tools/shots/repro-finding42.mjs      # exit 1 = the substitution reached the player
+                                          # exit 0 = the deposit path refused it
+```
+
+It stands up a table canister at an id this build never named, stands up a lobby that returns
+that id from `get_tables()`, builds the REAL frontend against it, serves that bundle through the
+harness's existing `SHOTS_SERVE_DIST` path while every `/api` call still goes to the real local
+replica, logs in, opens the deposit modal and photographs it. Nothing deployed is touched: the
+two hostile canisters are new, and the substituted bundle never reaches the asset canister.
+
+**A lobby that lies and a replica that lies produce the same bytes.** The client cannot tell them
+apart, which is the whole property: `get_tables : () -> (vec TableInfo) query` is answered by ONE
+replica out of its own memory, and this client verifies no certificate over it.
+
+**What the pre-fix build did** (`artifacts/finding42/pre-fix/`, revision `4e08c6d`):
+
+```
+victim principal                     4tgka-ghyhm-…-zqe
+address at the PINNED table_1        8ad30532f9cfef73db25a4ecac2060573b19eb24191006cd8700a83fc9c4e531
+address at the SUBSTITUTED canister  aa86e03ef768732ea696ba66eaef1c78b3f6abdce41d2c9dac2af183bd94a05e
+
+rendered to the player               aa86e03ef768732ea696ba66eaef1c78b3f6abdce41d2c9dac2af183bd94a05e
+warning rendered beside it           (none -- every check on the screen reads green)
+```
+
+Under the heading **"YOUR DEPOSIT ADDRESS -- Yours alone, at this table. Send ICP here from any
+wallet or exchange, then Claim"**, with a Copy Address button and an enabled Claim Deposit
+button. The account is inside `55icz-et777-77775-aaafq-cai`, whose controller can pay its whole
+ledger balance to itself with one `install_code` -- the capability
+[FINDING 23](#finding-23) executed for 39.99990000 ICP. Not one instrument in this project can
+see it: no e8 goes missing, the canister that receives the money behaves perfectly, and
+`deposit_surface`'s derivation gates stay green because **the arithmetic is right. The wrong
+canister id is hashed correctly.**
+
+### The fix: a trust root that predates the network
+
+`src/cleardeck_frontend/src/lib/trustedTables.js` (new) is the set of table canister ids **this
+build was published with**:
+
+* **mainnet** — the frozen list in `ic-config.js`, kept in step with
+  `.icp/data/mappings/ic.ids.json`, the file `icp -e ic` itself resolves. It was already sitting
+  there with a comment saying it exists so a build can check what it is wired to, and no deposit
+  path consulted it, exactly as the critic wrote.
+* **local** — the ids compiled in by whatever deployed the stack (`./scripts/dev.sh local-up` →
+  `frontend-build.mjs` exports `CANISTER_ID_TABLE_*`; verified they land in `dist/*.js`).
+* **no ids compiled in** — the set is EMPTY and every deposit refuses, loudly. The failure mode of
+  a missing trust root must be "you cannot deposit", never "we will trust whatever the lobby
+  said".
+
+`deriveTrustedDepositAddress()` is the only derivation the app may call; `deriveDepositAddress()`
+survives as arithmetic-only for the gates that compare it against a fresh PocketIC canister, and
+says so in capitals. **All three money doors refuse together**, because closing one and leaving
+the others is exactly how FINDING 40 shipped half closed and had to be reopened as
+[FINDING 41](#finding-41): the address panel, the OISY transfer (`owner: tableCanisterId`) and
+the ICRC-2 approval (`spender: tableCanisterId`, over the player's whole ledger balance).
+
+A wire-supplied canister id may still DISPLAY a table. It may never be the first argument of a
+deposit address.
+
+**What the player sees instead** (`artifacts/finding42/post-fix/`):
+
+> **This is not one of this build's tables. Nothing can be sent here.** Nothing can be deposited
+> to 55icz-et777-77775-aaafq-cai: this table's canister id was sent to your browser by the lobby,
+> over an ordinary query that carries no proof, and it is NOT one of the canister ids this build
+> was published with. Your deposit address is computed FROM that id, so if the id is wrong the
+> address belongs to whoever owns that canister and the money is theirs the moment you send it.
+> The tables this build knows about are: …
+
+### The gate, and the two wrong fixes it also catches
+
+```
+cd tests/money_safety && cargo test --test deposit_trust_root       # 7 tests
+```
+
+Wired in `scripts/test-suites.list` (fast tier) and named by `scripts/dev.sh test`. It needs no
+replica and no wasm -- file reads and two `node` runs, ~0.1 s.
+
+**Verified RED on the unfixed build**, in a `cp -Rc` copy of this tree with
+`git checkout HEAD -- src/cleardeck_frontend/src/lib` and `trustedTables.js` removed:
+`test result: FAILED. 0 passed; 7 failed`, including
+`SyntaxError: … does not provide an export named 'deriveTrustedDepositAddress'`.
+
+Five of those seven go red because the module is absent, which on its own would be a weak claim,
+so two PLAUSIBLE WRONG FIXES were also driven against the fixed tree:
+
+| mutation | result |
+|---|---|
+| `deriveTrustedDepositAddress` exists but skips `assertTrustedTableId` | `the_deposit_derivation_refuses_a_canister_id_this_build_never_named` FAILS, 5 others pass |
+| the address panel is fixed, the `handleDeposit` guard is removed | `every_money_door_in_the_modal_refuses_an_unpinned_table` FAILS, 5 others pass |
+
+And the end-to-end version, on rendered pixels: `node tools/shots/repro-finding42.mjs` **exits 1
+on the pre-fix tree and 0 on this one**, from the same command, against the same replica.
+
+### What this does NOT claim
+
+It does not claim a wire-supplied canister id is now harmless. It is still what the app opens a
+table with, still what it polls, and still what it shows in the "this moves REAL ICP to canister
+X" line. A substituted id now yields a table you cannot deposit to rather than an address that
+takes your money, which is the difference between a bad afternoon and a theft.
+
+It does not fix the lobby. A player who reaches ClearDeck through a substituted lobby sees three
+tables, two of which work. Making the lobby's reply itself verifiable (a certified variable, or
+a signed table registry) is a separate, larger piece of work and is not started here.
+
+It says nothing about mainnet by measurement: **this wave does not call mainnet**. What is
+claimed for mainnet is structural -- the trusted set for an `ic` build is a frozen literal
+compiled into the bundle, so there is no runtime path that can widen it.
+
+
+---
+
+<a id="finding-43"></a>
+## FINDING 43 (high) -- THE SEVENTH CROSS-AGENT DEFECT: the solvency instrument calls the money at the shared main account a SURPLUS, in the same reply that names it as money held for somebody the canister cannot name — STATUS: FIXED (wave 14)
+
+**Status:** FIXED in wave 14, together with [FINDING 38](#finding-38), as ONE defect. The
+wave-11 marker that reproduced it is no longer `#[ignore]`d and is an ordinary gate.
+
+> ## ✅ THERE IS ONE DEFINITION NOW, AND `owed` IS `guard_liability`
+>
+> Not "two sums that agree" -- **the same call**. `build_solvency_report()` sets
+> `owed = total_liability()` and `guard_liability = total_liability()`, and
+> `held = total_holdings()`, and those two functions are the only definitions in the file.
+> The arithmetic and the reasoning are in the section comment above `total_liability()`
+> in `src/table_canister/src/lib.rs` and are reproduced under
+> [FINDING 38](#finding-38).
+>
+> **The consequence worth stating on its own: THIS CANISTER CAN NEVER REPORT A SURPLUS.**
+> It takes no rake and keeps nothing, so an e8 at an account it owns that no player is
+> credited with is money held for somebody it cannot yet name -- a liability, not profit.
+> `difference_e8s` is `min(0, …)` by construction, the word *surplus* is gone from the
+> player-facing sentence, and the unattributed money is NAMED in that sentence instead:
+>
+> ```text
+> BEFORE (sha256 7dc74045…): alice has 5 ICP of escrow, a stranger sends 1 ICP to the
+>   shared main account, anybody calls refresh_solvency()
+>     owed=500000000  guard_liability=600000000  held=600000000  difference=+100000000
+>     unattributed_at_main=100000000  verdict=CanPayEveryone
+>     "…it owes 5.0000 ICP and holds 6.0000 ICP, a surplus of 100000000 e8s."
+>
+> AFTER
+>     owed=600000000  guard_liability=600000000  held=600000000  difference=0
+>     unattributed_at_main=100000000  verdict=CanPayEveryone
+>     "This canister holds at least what it owes … so it is short by nothing. 1.0000 ICP
+>      (100000000 e8s) of what it holds is at its own main account and is credited to
+>      NOBODY: it is money held for somebody this canister cannot yet name, it is counted
+>      as owed and not as profit, and it is not available to pay anybody else…"
+> ```
+>
+> **The verdict stays `CanPayEveryone` and that is correct**: the canister holds exactly
+> what it owes. What was wrong was never the verdict -- it was calling a player's money
+> the house's.
+>
+> ### Three instruments now hold it, and all three were proved able to go red
+>
+> * `invariants::solvency::check_solvency_report_is_coherent` demands
+>   `guard_liability == owed`. It used to assert a documented RELATION between two
+>   different sums (`guard = owed - payouts + unattributed`), which is a check that two
+>   totals differ in the expected way -- and it passed for two waves while the public
+>   report was reporting a player's money as a surplus.
+> * The same leg's term sum now includes `unattributed_at_main`, so a term in the
+>   breakdown and not in the total is a violation.
+> * Two new legs, `solvency_reports_a_surplus` and `solvency_summary_claims_a_surplus`,
+>   run on every snapshot the fuzzer takes.
+>
+> ### The frontend half, found by RENDERING the notice rather than reading it
+>
+> `interpretSolvency()` documented its field matchers as *"ordered: the first matcher that
+> hits wins"* and did not implement it: `pick()` walked the RECORD's keys, and
+> `@dfinity/candid` emits them in Candid hash order, which puts **`main_account` before
+> `held`** and would have matched `guard_liability` for `owed`. So the deposit and
+> withdraw screens would have labelled the MAIN ACCOUNT BALANCE "Held on the ledger" --
+> a figure that excludes every deposit subaccount. Every fixture in
+> `tools/shots/test-solvency.mjs` gave those two fields the same value, so none of them
+> could catch it. Fixed with `pickOrdered()`, gated by
+> ``node tools/shots/test-solvency.mjs`` ->
+> ``` `held` wins over `main_account`, and `owed` over `guard_liability` ```, verified red
+> against the previous picker.
 
 > ### CORRECT TOTALS, WRONG RECIPIENT, EVERY INVARIANT SILENT
 >
@@ -6814,3 +7229,116 @@ first.
 finding and for [E-89](DEFECTS.md#e-89) together. A nightly that is red on its first run and
 every run after it is a nightly people stop opening, so this is not only a fund finding, it is
 the thing that will make the deep tier unreadable if it is left open.
+
+---
+
+<a id="finding-45"></a>
+## FINDING 45 — fund-theft — the fourth money door: a Bitcoin address fetched from a canister the build never named — STATUS: FIXED (wave 14)
+
+### What was true
+
+[FINDING 42](#finding-42) established that a ClearDeck deposit address is
+
+```text
+account_identifier( TABLE CANISTER ID , sha256("cleardeck-deposit:" || YOU) )
+```
+
+and that the first argument arrives over `lobby.get_tables()`, an **uncertified
+query**. Wave 14 gave that argument a trust root: `trustedTables.js` holds the ids
+the build was published with, and three doors in `DepositModal.svelte` refuse
+anything else — the derived ICP address, the OISY transfer (`owner:
+tableCanisterId`) and the ICRC-2 approval (`spender: tableCanisterId`). The wave's
+summary said *"all three money doors refuse together, because closing one and
+leaving the others is exactly how FINDING 40 shipped half closed."*
+
+There were four.
+
+```text
+DepositModal.svelte:444   async function loadBtcDepositAddress() {
+                            if (!isBTC || !tableActor) return;
+                            ...
+                            const result = await tableActor.get_btc_deposit_address();
+                            if ('Ok' in result) btcDepositAddress = result.Ok;
+
+DepositModal.svelte:1394  {#if isBTC && depositMethod === 'btc'}
+DepositModal.svelte:1417    <label>Your Bitcoin Deposit Address</label>
+DepositModal.svelte:1419    <span class="address-text">{btcDepositAddress}</span>
+DepositModal.svelte:1424    navigator.clipboard.writeText(btcDepositAddress)
+```
+
+`grep -n tableIsTrusted` over that file returns lines 51, 53, 378, 618, 619, 896,
+1015, 1335 and 1574. **None of them encloses 1394–1440.** The fetch runs on mount.
+
+### Why this is worse than FINDING 42, not a smaller version of it
+
+FINDING 42 substituted an argument to a hash **the client computes**. Here the
+address is not computed at all. It is whatever the canister said — which is
+[FINDING 40](#finding-40), the defect FINDING 42 was the sequel to, still unfixed
+on the Bitcoin path.
+
+And the consequence does not have an undo. An ICP misdirection lands in an account
+on a ledger this project can read and reason about. Bitcoin sent to an address an
+attacker controls is gone: no refund, no clawback, no `refund_external_deposit()`.
+
+The attacker also selects the branch. `+page.svelte:1248` passes
+`currency={getTableCurrency(currentTableInfo)}`, and `lobby_canister.did` declares
+`Currency = variant { ICP; BTC }` — so `currency` comes out of the same substituted
+`get_tables()` reply that names the canister. One reply chooses both the hostile
+canister and the flow that asks it for an address.
+
+### Why every instrument was silent
+
+* `deposit_surface.rs` proves the ICP derivation's arithmetic agrees with the
+  canister, principal by principal. It is green under substitution, because the
+  wrong canister id is hashed perfectly — and it says nothing about a value that is
+  fetched rather than derived.
+* `deposit_trust_root.rs`'s door test is named
+  `every_money_door_in_the_modal_refuses_an_unpinned_table` and enumerated three.
+* `node tools/shots/repro-finding42.mjs` **exits 0** with this door open: it scrapes
+  `claimDisabled` (`repro-finding42.mjs:392`) and the ICP address panel, and never
+  opens the BTC panel.
+* `make hygiene` and the screenshot sweep check the four protected notices and the
+  token census; neither has an opinion about where an address came from.
+
+The one shared property: every instrument was pointed at the ICP path, because that
+is the path the previous two findings were about.
+
+### The fix
+
+`loadBtcDepositAddress()` refuses before the fetch, and the render asserts the trust
+root again beside the pixels — because this string, unlike the ICP address, is not
+derived by the build from anything it pinned, so the assertion that matters is the
+one next to what a player copies.
+
+### The gate, and how it was proved
+
+Verified RED by removing both guards on the fixed tree:
+
+```text
+loadBtcDepositAddress() asks an unpinned canister for a Bitcoin address
+(guard at 6033, fetch at 1110) and the modal renders the reply under
+"Your Bitcoin Deposit Address" with a Copy button. Bitcoin sent to it is
+unrecoverable.
+
+test result: FAILED. 6 passed; 1 failed
+```
+
+and green with them restored (sha256 of the restored file identical to the backup):
+
+```text
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+The same test now also asserts that `handleDeposit`'s trust guard **returns**
+(see [H-56](DEFECTS.md#h-56)) rather than merely appearing before the money call,
+and that at least two controls carry `!tableIsTrusted` in their `disabled` binding.
+
+### What is still open
+
+`ckBTC` deposits on a **pinned** table are unaffected and untested by this gate
+beyond the refusal path; nothing here verifies that a pinned table's BTC address is
+the one its own minter would produce. That is the BTC analogue of
+[FINDING 40](#finding-40)'s cross-check and it does not exist. The registry itself
+also remains unverifiable ([FINDING 42](#finding-42)'s own open leftover): a
+substituted `get_tables()` now yields a table you cannot deposit to, rather than an
+address that takes your money.

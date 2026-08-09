@@ -16,10 +16,7 @@
 
 use money_safety::fuzz::*;
 use money_safety::invariants::Violation;
-use money_safety::table_api::TableConfig;
 use money_safety::wasms;
-
-const ACTORS: [&str; 4] = ["alice", "bob", "carol", "attacker"];
 
 fn env_usize(key: &str, default: usize) -> usize {
     std::env::var(key)
@@ -40,12 +37,67 @@ fn seeds() -> Vec<u64> {
     }
 }
 
-fn config_for(index: usize) -> TableConfig {
-    match index % 3 {
-        0 => TableConfig::heads_up_icp(),
-        1 => TableConfig::six_max_icp(),
-        _ => TableConfig::six_max_with_ante(),
+/// THE GATE ON docs/DEFECTS.md H-26, AND IT NEEDS NO REPLICA.
+///
+/// For eleven waves the table shape was `config_for(i)` where `i` was the seed's
+/// INDEX IN `MONEY_FUZZ_SEEDS`, while every reproducer this harness printed,
+/// wrote into `money-fuzz-report.json` and got quoted by in docs/DEFECTS.md named
+/// the SEED and nothing else. So the documented reproducer command replayed a
+/// different game from the one that found the violation, and the register's
+/// standing observation -- "seed 212967420072194 finds nothing alone and two
+/// fund-creation findings when 212967420072193 ran before it" -- was that defect,
+/// not a nondeterministic replica.
+///
+/// This test asks the only question that matters: does moving a seed change what
+/// it plays. It runs in milliseconds, so there is no excuse for it not being in
+/// the same binary as the fuzzer it guards.
+#[test]
+fn a_seeds_table_shape_does_not_depend_on_where_it_appears_in_the_list() {
+    // Seeds spanning the three shapes, the two the register names, the smoke
+    // row's seed, and the three defaults.
+    let seeds: [u64; 9] = [
+        0,
+        1,
+        2,
+        212_967_420_072_193,
+        212_967_420_072_194,
+        0xC1EA_2DEC_0001,
+        0xC1EA_2DEC_0002,
+        0xC1EA_2DEC_0003,
+        u64::MAX,
+    ];
+    for seed in seeds {
+        let first = run_shape(0, seed);
+        for position in 1..6 {
+            let moved = run_shape(position, seed);
+            assert_eq!(
+                first, moved,
+                "seed {seed:#x} plays a DIFFERENT GAME at position {position} than at position 0: \
+                 {} vs {}. A reproducer that names only the seed therefore does not reproduce, \
+                 which is docs/DEFECTS.md H-26.",
+                first.shape, moved.shape
+            );
+            // The generated sequence is what actually reaches the canister, so
+            // assert on that too rather than trusting that equal shapes imply
+            // equal ops.
+            let a = generate(seed, 60, &first.config, first.actors.len());
+            let b = generate(seed, 60, &moved.config, moved.actors.len());
+            assert_eq!(
+                a, b,
+                "seed {seed:#x} generates a different op sequence at position {position}"
+            );
+        }
     }
+
+    // And the shapes are still all reachable: a mapping that collapsed every seed
+    // onto one table would pass everything above and test a third as much.
+    let reached: std::collections::BTreeSet<&str> =
+        (0u64..64).map(|s| run_shape(0, s).shape).collect();
+    assert_eq!(
+        reached.len(),
+        SHAPES.len(),
+        "the seed -> shape mapping no longer reaches all of {SHAPES:?}; it reached {reached:?}"
+    );
 }
 
 #[test]
@@ -61,19 +113,21 @@ fn hostile_sequences_never_create_chips_double_pay_or_lose_state_across_an_upgra
     let mut documented_sigs: Vec<String> = Vec::new();
 
     for (i, seed) in seed_list.iter().copied().enumerate() {
-        let config = config_for(i);
-        let actors: Vec<&str> = ACTORS
-            .iter()
-            .copied()
-            .take((config.max_players as usize + 2).min(ACTORS.len()))
-            .collect();
+        // docs/DEFECTS.md H-26: `i` is passed so the gate above has an argument to
+        // vary, and `run_shape` ignores it. The shape is the seed's, not the
+        // position's, which is what makes `MONEY_FUZZ_SEEDS=<seed>` a reproducer.
+        let shape = run_shape(i, seed);
+        let config = shape.config.clone();
+        let actors: Vec<&str> = shape.actors.clone();
         let ops = generate(seed, steps, &config, actors.len());
 
         eprintln!(
-            "money-fuzz: seed {seed:#x}, {} ops, {}-max table, ante {}",
+            "money-fuzz: seed {seed:#x}, shape {}, {} ops, {}-max table, ante {} -- replay with: {}",
+            shape.shape,
             ops.len(),
             config.max_players,
-            config.ante
+            config.ante,
+            replay_command(seed, steps)
         );
         let (report, violations) = run_sequence(seed, &ops, config.clone(), &actors);
         total_steps += report.steps_executed;
@@ -156,6 +210,8 @@ fn hostile_sequences_never_create_chips_double_pay_or_lose_state_across_an_upgra
             reproducers.push(Reproducer {
                 signature: sig,
                 seed,
+                shape: shape.shape,
+                replay: replay_command(seed, steps),
                 ops: minimal,
                 violation: v,
             });
@@ -262,11 +318,13 @@ fn hostile_sequences_never_create_chips_double_pay_or_lose_state_across_an_upgra
         reproducers
             .iter()
             .map(|r| format!(
-                "  {} (seed {:#x}, {} ops) -- {}",
+                "  {} (seed {:#x}, shape {}, {} ops) -- {}\n    replay: {}",
                 r.signature,
                 r.seed,
+                r.shape,
                 r.ops.len(),
-                r.violation.detail
+                r.violation.detail,
+                r.replay
             ))
             .collect::<Vec<_>>()
             .join("\n")

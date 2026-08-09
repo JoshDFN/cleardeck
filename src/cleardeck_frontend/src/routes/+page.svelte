@@ -32,6 +32,11 @@
     compareHash, displayHash, liveHashCommandForAll, readLiveModuleHash,
   } from "$lib/deployed-build.js";
   import { currencyOf, formatTokenAmount } from "$lib/utils.js";
+  // docs/DEFECTS.md E-92: the 500 ms render poll used to open with an UPDATE call
+  // (`check_timeouts`), so every open tab drove an update loop that no cycles
+  // figure in this tree counted. The decision of when the clock actually needs
+  // advancing lives in one pure module, so it can be gated without a replica.
+  import { ClockNudgePolicy, CLOCK_NUDGE } from "$lib/clockNudge.js";
   import { HttpAgent } from '@dfinity/agent';
   import { Principal } from '@dfinity/principal';
 
@@ -370,6 +375,34 @@
     startPolling();
   }
 
+  // =========================================================================
+  // READING THE TABLE IS A QUERY. ADVANCING ITS CLOCK IS NOT. (docs/DEFECTS.md E-92)
+  // =========================================================================
+  //
+  // This function used to open with `await tableActor.check_timeouts()`, and it
+  // is driven by `setInterval(..., POLL_INTERVAL)` at 500 ms. `check_timeouts` is
+  // `#[ic_cdk::update]` in `src/table_canister/src/lib.rs` and carries no `query`
+  // in `table_canister.did`, so THE RENDER RATE WAS DRIVING AN UPDATE LOOP — one
+  // per open browser tab, forever, whether or not anything was due.
+  //
+  // Measured on the local replica with `tools/cycles/tab-burn.mjs`, ten tabs open
+  // on an idle table: the loop cost more than the whole rest of the canister put
+  // together, and no cycles figure in this repository counted it. Every runway
+  // number in the tree therefore read HIGH — the dangerous direction, and the
+  // same failure [E-55](docs/DEFECTS.md#e-55) was reopened for one level down.
+  //
+  // So the two jobs are now two loops:
+  //
+  //   this function        QUERIES ONLY, at the render rate. It may never call an
+  //                        update method. `tools/shots/test-poll-updates.mjs`
+  //                        reads the committed .did and this file and fails if it
+  //                        ever does again.
+  //   advanceTableClock()  the update, on `$lib/clockNudge.js`'s policy: only when
+  //                        a deadline is actually crossable, never faster than a
+  //                        floor, backing off when calls change nothing.
+  //
+  // The `loadingTableState` re-entrancy guard is kept: a query is cheap for the
+  // canister but not free for the browser, and overlapping polls still race.
   async function loadTableState() {
     if (!tableActor) return;
 
@@ -381,44 +414,6 @@
     const requestId = ++loadTableStateRequestId;
 
     try {
-      // Check for timeouts and auto-deal first
-      const timeoutResult = await tableActor.check_timeouts();
-
-      // Discard stale response if a newer request was started
-      if (requestId !== loadTableStateRequestId) return;
-
-      // Handle auto-deal if ready
-      if (timeoutResult && 'AutoDealReady' in timeoutResult) {
-        // Only try to start if we're not already in a hand (client-side guard)
-        const currentPhase = tableState?.phase ? Object.keys(tableState.phase)[0] : null;
-        const canStartHand = !currentPhase || currentPhase === 'WaitingForPlayers' || currentPhase === 'HandComplete';
-
-        if (canStartHand) {
-          try {
-            playSound('deal');
-            const result = await tableActor.start_new_hand();
-            if ('Ok' in result) {
-              shuffleProof = result.Ok;
-            } else if ('Err' in result) {
-              // Silently ignore expected race condition errors
-              const errMsg = result.Err.toLowerCase();
-              if (!errMsg.includes('active players') && !errMsg.includes('already in progress') && !errMsg.includes('in progress')) {
-                logger.error('Auto-deal failed:', result.Err);
-              }
-            }
-          } catch (e) {
-            // Silently ignore expected race condition errors
-            const errMsg = (e.message || e.toString() || '').toLowerCase();
-            if (!errMsg.includes('already in progress') && !errMsg.includes('in progress')) {
-              logger.error('Auto-deal failed:', e);
-            }
-          }
-        }
-      }
-
-      // Double-check tableActor is still valid (could be cleared if user left table)
-      if (!tableActor) return;
-
       // Use get_table_view which properly hides opponent cards
       const [viewResult, proofResult] = await Promise.all([
         tableActor.get_table_view(),
@@ -500,13 +495,94 @@
     }
   }
 
-  // Fast polling - 500ms for responsive gameplay
+  // Fast polling - 500ms for responsive gameplay. QUERIES ONLY (E-92).
   const POLL_INTERVAL = 500;
   const HEARTBEAT_INTERVAL = 10000; // Send heartbeat every 10 seconds
   const BALANCE_REFRESH_INTERVAL = 5000; // Refresh balance every 5 seconds
   let actionPending = $state(false);
   let heartbeatInterval = null;
   let balanceRefreshInterval = null;
+  let clockNudgeInterval = null;
+  let clockPolicy = null;
+  let clockNudgeInFlight = false;
+
+  // =========================================================================
+  // THE UPDATE HALF OF THE OLD POLL (docs/DEFECTS.md E-92)
+  // =========================================================================
+  //
+  // `check_timeouts` is the only update the old 500 ms poll made, and it is still
+  // needed for three things — an action clock the on-chain timer has not resolved,
+  // the between-hands `AutoDealReady` signal (which the on-chain clock deliberately
+  // never delivers to anybody by itself), and the stall opportunities that make
+  // `abandon_stuck_hand` reachable when a timer is lost.
+  //
+  // What it is NOT needed for is a repaint. `$lib/clockNudge.js` holds the whole
+  // decision — is anything due, and may we call yet — and it is pure, so
+  // `tools/shots/test-clock-nudge.mjs` simulates a day of table states against it
+  // offline and asserts a ceiling on the calls one tab can emit.
+  //
+  // `clockNudgeInFlight` is the same guard the poll has, for the same reason: an
+  // update takes ~2 s to finalise on mainnet and the driver ticks every 2 s, so
+  // without it a slow reply would queue calls the policy never authorised.
+  //
+  // The policy is re-read after the await rather than captured before it: leaving
+  // the table clears it, and calling `observe` on the policy of a table this tab
+  // is no longer at would teach the NEXT table's clock about this one's.
+  async function advanceTableClock() {
+    if (!tableActor || !clockPolicy || clockNudgeInFlight) return;
+    const viewAtDecision = tableState;
+    const decision = clockPolicy.decide(viewAtDecision, Date.now());
+    if (!decision.call) return;
+
+    clockNudgeInFlight = true;
+    let result = null;
+    try {
+      result = await tableActor.check_timeouts();
+    } catch (e) {
+      // A failed nudge is still a nudge: `observe` below has to see it, or the
+      // policy cannot back off on a canister that is refusing — which is the one
+      // time backing off matters most. Not surfaced to the player: the poll's own
+      // error path already reports a table that has stopped answering.
+      logger.debug('check_timeouts failed:', e);
+    } finally {
+      clockNudgeInFlight = false;
+      if (clockPolicy) clockPolicy.observe(viewAtDecision, result, Date.now());
+    }
+
+    if (!tableActor || !result) return;
+
+    // Handle auto-deal if ready. Unchanged from the old poll except for where it
+    // is called from: the canister decides whether a hand may start, this only
+    // asks. The client-side phase guard stays because `start_new_hand` is a
+    // separate message and the phase can move underneath it.
+    if ('AutoDealReady' in result) {
+      const currentPhase = tableState?.phase ? Object.keys(tableState.phase)[0] : null;
+      const canStartHand = !currentPhase || currentPhase === 'WaitingForPlayers' || currentPhase === 'HandComplete';
+      if (canStartHand) {
+        try {
+          playSound('deal');
+          const startResult = await tableActor.start_new_hand();
+          if ('Ok' in startResult) {
+            shuffleProof = startResult.Ok;
+          } else if ('Err' in startResult) {
+            // Silently ignore expected race condition errors
+            const errMsg = startResult.Err.toLowerCase();
+            if (!errMsg.includes('active players') && !errMsg.includes('already in progress') && !errMsg.includes('in progress')) {
+              logger.error('Auto-deal failed:', startResult.Err);
+            }
+          }
+        } catch (e) {
+          // Silently ignore expected race condition errors
+          const errMsg = (e.message || e.toString() || '').toLowerCase();
+          if (!errMsg.includes('already in progress') && !errMsg.includes('in progress')) {
+            logger.error('Auto-deal failed:', e);
+          }
+        }
+        // Show the new hand immediately rather than up to POLL_INTERVAL later.
+        loadTableState();
+      }
+    }
+  }
 
   async function sendHeartbeat() {
     if (!tableActor) return;
@@ -564,6 +640,12 @@
     heartbeatInterval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL);
     // Refresh balances periodically
     balanceRefreshInterval = setInterval(refreshAllBalances, BALANCE_REFRESH_INTERVAL);
+    // The clock, on its own loop and its own rate (docs/DEFECTS.md E-92). A fresh
+    // policy per table: the floor and the backoff are state about THIS table, and
+    // carrying them across a table change would let one table's stall silence the
+    // next table's clock.
+    clockPolicy = new ClockNudgePolicy();
+    clockNudgeInterval = setInterval(advanceTableClock, CLOCK_NUDGE.TICK_MS);
   }
 
   function stopPolling() {
@@ -579,6 +661,11 @@
       clearInterval(balanceRefreshInterval);
       balanceRefreshInterval = null;
     }
+    if (clockNudgeInterval) {
+      clearInterval(clockNudgeInterval);
+      clockNudgeInterval = null;
+    }
+    clockPolicy = null;
   }
 
   // Get current balance
@@ -791,6 +878,12 @@
       if (balanceRefreshInterval) {
         clearInterval(balanceRefreshInterval);
         balanceRefreshInterval = null;
+      }
+      // The clock nudger is the one loop here that sends UPDATE calls, so a leaked
+      // one costs cycles rather than bandwidth (docs/DEFECTS.md E-92).
+      if (clockNudgeInterval) {
+        clearInterval(clockNudgeInterval);
+        clockNudgeInterval = null;
       }
     };
   });

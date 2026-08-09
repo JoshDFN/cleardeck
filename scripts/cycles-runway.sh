@@ -9,28 +9,28 @@
 #   Nothing in this tree tops a canister up, and until this script there was no
 #   monitoring anywhere either.
 #
-#   Measured on the real module (tests/money_safety/tests/cycles_runway.rs):
+#   THERE IS NO RUNWAY TABLE IN THIS COMMENT ANY MORE, AND THAT IS THE POINT.
 #
-#       empty table, on-chain clock only ....... 0.0442 T/day -> 10 T = 225 days
-#       ~200 hands/day ......................... 0.0779 T/day -> 10 T = 128 days
-#       ~1000 hands/day ........................ 0.2126 T/day -> 10 T =  47 days
-#       500 hands/day, six tabs open ........... 0.4994 T/day -> 10 T =  20 days
+#   docs/DEFECTS.md E-92. This header used to carry a hand-copied five-row table.
+#   So did src/cleardeck_frontend/src/lib/cycleRunway.js, DepositModal.svelte,
+#   WithdrawModal.svelte, .github/workflows/cycles-monitor.yml and the register.
+#   Six transcriptions of one measurement, and every one of them was wrong in the
+#   SAME way: they priced an open browser tab as a 10-second heartbeat stream and
+#   left out the 500 ms `check_timeouts` poll -- an UPDATE call -- which was
+#   larger by more than an order of magnitude. Nothing checked any copy against
+#   any other, and the error was in the direction that makes a canister look
+#   safer than it is.
 #
-#   CORRECTION, wave-13 reconciliation -- docs/DEFECTS.md E-92. Those rows count
-#   the frontend's 10-second HEARTBEAT and NOT its 500 ms `check_timeouts` poll,
-#   which is an UPDATE call at a measured 6,573,911 cycles: 0.28-1.14 T/day PER
-#   OPEN TAB against the heartbeat's 0.0618. FALLBACK_BURN_PER_DAY below is
-#   therefore a floor that is itself too low, and it is used only when a canister
-#   cannot yet measure its own burn. Left as-is on purpose: the honest fix is to
-#   re-measure the whole table with the poll included, in
-#   tests/money_safety/tests/cycles_runway.rs, and publish one set of numbers.
-#       dealing continuously ................... 3.68   T/day -> 10 T =   2 days
+#   The numbers now live in ONE file, tools/cycles/burn-table.json, written from
+#   measurements by tools/cycles/build-burn-table.mjs. This script READS it: for
+#   the fallback burn rate below, and to print the table at the top of every run
+#   so the figure a human sees is the figure the tooling is using.
 #
 #   The burn rate moves by two orders of magnitude with load, which is why this
 #   script alarms on RUNWAY DAYS and never on a cycles figure. The workflow it
-#   replaced used a flat 1 T floor; 1 T is 22 days on an idle table and under
-#   SEVEN HOURS on one dealing continuously, so the same number meant two
-#   completely different things depending on who was playing.
+#   replaced used a flat 1 T floor; 1 T is three weeks on an idle table and a few
+#   hours on a busy one, so the same number meant two completely different things
+#   depending on who was playing.
 #
 # THE TWO THINGS THAT MAKE THIS DIFFERENT FROM AN ORDINARY BALANCE CHECK
 #
@@ -87,11 +87,45 @@ CRITICAL_DAYS=21
 # success while knowing nothing. Measured: this is exactly what happened the
 # first time this script was run against a freshly topped-up local replica.
 #
-# So "unknown" is turned into a FLOOR instead of a shrug. 0.4994 T/day is the
-# measured burn of a table dealing ~500 hands a day with six tabs open
-# (tests/money_safety/tests/cycles_runway.rs), i.e. a fully occupied table -- not
-# the idle figure, which would flatter every canister by a factor of eleven.
-FALLBACK_BURN_PER_DAY=499412781032
+# So "unknown" is turned into a FLOOR instead of a shrug, and the floor is the
+# burn of a BUSY table -- not the idle figure, which would flatter every canister
+# by more than an order of magnitude.
+#
+# READ, NOT TYPED. This was a bare integer literal in this file until
+# docs/DEFECTS.md E-92. It was the busiest scenario wave 13 knew how to price, and
+# it left out the entire cost of an open browser tab -- so the floor a monitor
+# alarms on was itself four times too low. A number typed into a script is a
+# number nothing can correct.
+# Absolute: this script `cd`s to the repo root further down, and a relative path
+# resolved before and after a `cd` is two different files.
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BURN_TABLE="$REPO_ROOT/tools/cycles/burn-table.json"
+read_burn_table() { # read_burn_table <dotted.key>
+  python3 - "$BURN_TABLE" "$1" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception as e:
+    print(f"::error::cannot read the burn table: {e}", file=sys.stderr)
+    sys.exit(1)
+cur = data
+for part in sys.argv[2].split('.'):
+    if not isinstance(cur, dict) or part not in cur:
+        print(f"::error::{sys.argv[2]} is not in the burn table", file=sys.stderr)
+        sys.exit(1)
+    cur = cur[part]
+print(cur)
+PY
+}
+# A MISSING TABLE IS A HARD FAILURE, NOT A DEFAULT. Falling back to a built-in
+# number here would restore exactly the thing E-92 is about: a figure with no
+# provenance, quietly used, that nobody can correct.
+FALLBACK_BURN_PER_DAY="$(read_burn_table fallback_burn_per_day)" || {
+  echo "::error::no tools/cycles/burn-table.json. Every runway figure this script would" >&2
+  echo "::error::print comes from that file; without it this check proves nothing." >&2
+  echo "::error::Regenerate it: ./tools/cycles/run-matrix.sh && node tools/cycles/build-burn-table.mjs" >&2
+  exit 1
+}
 
 NETWORK="local"
 SELFTEST=0
@@ -101,7 +135,10 @@ while [ $# -gt 0 ]; do
     --warn-days)     WARN_DAYS="$2"; shift 2 ;;
     --critical-days) CRITICAL_DAYS="$2"; shift 2 ;;
     --selftest)      SELFTEST=1; shift ;;
-    -h|--help)       sed -n '2,58p' "$0"; exit 0 ;;
+    # The whole leading comment block, found rather than counted. It used to be
+    # `sed -n '2,58p'`, and a hardcoded line range is a help text that silently
+    # starts printing the wrong thing the first time somebody edits above it.
+    -h|--help)       sed -n '2,/^set -euo pipefail$/p' "$0" | sed '$d'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -136,10 +173,29 @@ def opt_num(field):
 liquid   = num('liquid_balance')
 balance  = num('balance')
 lifetime = num('observed_burn_per_day')
-# Absent on a module older than this tree, which is not an error: it is the
-# reason `recent_burn_per_day` exists at all. Treated as 0 so the max() below
-# falls back to the lifetime figure.
-recent   = num('recent_burn_per_day') or 0
+# THIS READ WAS BROKEN FROM THE DAY IT WAS WRITTEN (docs/DEFECTS.md E-100).
+#
+# `recent_burn_per_day` is `opt nat` on the interface, so the wire says
+#     recent_burn_per_day = opt (2_604_344_185_140 : nat)
+# and `num()` -- which matches `field = <digits>` -- never matched it. Against
+# every real canister this parsed as absent, fell back to `or 0`, and the max()
+# below therefore ALWAYS used the lifetime average: the exact gauge this script
+# was written to stop trusting, and it reads HIGH on a table that has just got
+# busy. Verified on the local replica: `num('recent_burn_per_day')` returned
+# None while the canister was reporting 2.60 T/day.
+#
+# It passed its own selftest because every fixture in it wrote the field as a
+# BARE nat, which is a shape the module has never emitted. An instrument that
+# measures nothing passes.
+#
+# `opt_num` first (the real shape), `num` second (a bare nat, which is what a
+# module older than the optional would emit), absent last -- and absent still
+# means 0 so the max() falls back to the lifetime figure, which is the original
+# intent and is correct.
+recent   = opt_num('recent_burn_per_day')
+if recent is None:
+    recent = num('recent_burn_per_day')
+recent   = recent or 0
 days     = opt_num('runway_days')
 ticks    = num('clock_ticks')
 meaningful = 'measurement_is_meaningful = true' in text
@@ -197,8 +253,27 @@ if [ "$SELFTEST" -eq 1 ]; then
   # The DEFECT this whole wave is about: a canister whose LIFETIME average is
   # reassuring and whose RECENT burn is not. The monitor must believe the recent
   # one, or it repeats the gauge that reads high.
-  BUSY='(record { balance = 10_000_000_000_000 : nat; liquid_balance = 9_997_800_000_000 : nat; observed_burn_per_day = 44_247_843_312 : nat; recent_burn_per_day = 499_412_781_032 : nat; runway_days = opt (225 : nat64); measurement_is_meaningful = true; clock_ticks = 240 : nat64; })'
-  check "a busy table whose lifetime average still says 225" 20 "$BUSY"
+  #
+  # THE BUSY RATE IS THE MEASURED ONE, READ FROM THE BURN TABLE, and the expected
+  # answer is derived from it rather than typed. This fixture used to hardcode the
+  # wave-13 "busy" rate and expect 20 days -- a figure that priced an open browser
+  # tab as a heartbeat stream (docs/DEFECTS.md E-92). A self-test carrying a stale
+  # constant proves the parser works on a table that does not exist.
+  #
+  # AND THE FIXTURE IS IN THE SHAPE THE MODULE ACTUALLY EMITS (docs/DEFECTS.md
+  # E-100). `recent_burn_per_day` is `opt nat`, so the wire is
+  # `recent_burn_per_day = opt (N : nat)`. Every fixture here used to write it as
+  # a BARE nat -- a shape no module has ever produced -- so the parser's failure
+  # to read the optional was invisible to its own selftest, and against every
+  # real canister this script silently used the lifetime average instead. The
+  # bare form is kept as a SECOND case, because a module older than the optional
+  # would emit it and must still parse.
+  BUSY_EXPECT="$(python3 -c "print(9997800000000 // $FALLBACK_BURN_PER_DAY)")"
+  BUSY="(record { balance = 10_000_000_000_000 : nat; liquid_balance = 9_997_800_000_000 : nat; observed_burn_per_day = 44_247_843_312 : nat; recent_burn_per_day = opt (${FALLBACK_BURN_PER_DAY} : nat); runway_days = opt (225 : nat64); measurement_is_meaningful = true; clock_ticks = 240 : nat64; })"
+  check "a busy table, recent burn as \`opt nat\` -- THE SHAPE ON THE WIRE" "$BUSY_EXPECT" "$BUSY"
+
+  BUSY_BARE="(record { balance = 10_000_000_000_000 : nat; liquid_balance = 9_997_800_000_000 : nat; observed_burn_per_day = 44_247_843_312 : nat; recent_burn_per_day = ${FALLBACK_BURN_PER_DAY} : nat; runway_days = opt (225 : nat64); measurement_is_meaningful = true; clock_ticks = 240 : nat64; })"
+  check "the same as a bare nat (an older module)" "$BUSY_EXPECT" "$BUSY_BARE"
 
   # An older module with no recent_burn_per_day at all. Must still parse.
   OLD='(record { balance = 1_408_677_590_920 : nat; liquid_balance = 1_379_728_176_820 : nat; observed_burn_per_day = 54_999_400_485 : nat; runway_days = opt (25 : nat64); measurement_is_meaningful = true; clock_ticks = 3_942 : nat64; })'
@@ -229,10 +304,19 @@ if [ "$SELFTEST" -eq 1 ]; then
   # and the floor is what alarms. A monitor that reported success here would be
   # green for the whole window after every top-up -- measured, on the local
   # replica, the first time this script ran after one.
-  # 10 T is E-55's headline balance and it alarms here, which is correct and is
-  # the point: 10 T is 225 days on an IDLE table and 20 days on a busy one, so a
-  # canister at 10 T that cannot tell you which it is has not earned a green run.
-  for pair in "51378000000000 0" "30000000000000 0" "10000000000000 1" "5000000000000 1" "1000000000000 1"; do
+  #
+  # THE BREAK-EVEN MOVED A LONG WAY IN WAVE 14, AND IT MOVED THE RIGHT WAY.
+  # Under the old fallback (which priced an open browser tab as a 10-second
+  # heartbeat) a canister needed about 30 T to clear the 60-day floor. Under the
+  # measured one it needs the balance printed below, because a table with ten
+  # people watching it burns what it burns whether or not a document says so.
+  # 51.378 T -- the balance the local fixtures carry, and roughly what the mainnet
+  # tables hold -- NO LONGER CLEARS IT. That is not the instrument being
+  # pessimistic; it is the instrument having stopped being wrong.
+  BREAK_EVEN="$(python3 -c "print($WARN_DAYS * $FALLBACK_BURN_PER_DAY)")"
+  echo "   .. a canister that cannot measure itself needs $(python3 -c \
+      "print('%.1f T' % ($BREAK_EVEN/1e12))") to clear the ${WARN_DAYS}-day floor"
+  for pair in "200000000000000 0" "130000000000000 0" "120000000000000 1" "51378000000000 1" "10000000000000 1" "1000000000000 1"; do
     liq="${pair%% *}"; want="${pair##* }"
     est="$(python3 -c "print(int($liq) // $FALLBACK_BURN_PER_DAY)")"
     got=0
@@ -310,6 +394,31 @@ $1"; echo "$1"; }
 echo "== cycle runway, $NETWORK (read-only, anonymous, no identity)"
 echo "   warn below ${WARN_DAYS} days, critical below ${CRITICAL_DAYS} days"
 echo
+
+# THE TABLE IS PRINTED, NOT COMMENTED. A figure in a header comment is a figure
+# nobody reads at the moment they need it and nothing corrects when it goes
+# stale -- docs/DEFECTS.md E-92, where six copies of one table were all wrong the
+# same way. This prints what the tooling is actually using.
+python3 - "$BURN_TABLE" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+m = d["measured"]
+print("== what a table burns, measured (%s)" % d["generated_at"][:10])
+print("   source %s" % d["method"].split(",")[0])
+print("   an open browser tab costs %.4f T/day (was %.4f before docs/DEFECTS.md E-92)"
+      % (m["per_tab_per_day"]["fixed_poll_ceiling"] / 1e12,
+         m["per_tab_per_day"]["legacy_poll"] / 1e12))
+print()
+print("   %-52s %8s %8s %8s" % ("scenario", "T/day", "10 T", "51 T"))
+for s in d["scenarios"]:
+    print("   %-52s %8.4f %7dd %7dd"
+          % (s["name"][:52], s["burn_per_day_T"],
+             s["runway_days"]["10T"], s["runway_days"]["51.4T"]))
+print()
+print("   unknown-burn floor: %.4f T/day (%s)"
+      % (d["fallback_burn_per_day"] / 1e12, "500 hands/day, 10 tabs open"))
+print()
+PY
 
 seen=0
 for n in $RUNWAY_CANISTERS; do

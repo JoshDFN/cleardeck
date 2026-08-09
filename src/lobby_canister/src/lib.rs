@@ -515,6 +515,103 @@ fn update_table_name(table_id: u64, new_name: String) -> Result<(), String> {
     })
 }
 
+/// The shape `get_table_view()` replies with, narrowed to the one field this
+/// canister has any business copying.
+///
+/// Candid decodes a wide record into a narrow one by dropping the fields the
+/// reader does not declare, which is normally how an interface drifts silently
+/// (docs/DEFECTS.md D-11). Here it is used deliberately and in the safe
+/// direction: the lobby wants `config` and nothing else, and declaring the rest
+/// would create a fourth copy of `TableView` to keep in step.
+#[derive(CandidType, Deserialize)]
+struct TableViewConfigOnly {
+    config: TableConfig,
+}
+
+/// THE REGISTERED CONFIG IS COPIED FROM THE CONTRACT, NEVER TYPED IN.
+///
+/// docs/DEFECTS.md L-04. The lobby registered `small_blind`, `big_blind`,
+/// `min_buy_in` and `max_buy_in` at creation time and then never looked again, so
+/// ids 2 and 3 advertised 0.01/0.02 while their contracts charged 0.05/0.10 and
+/// 0.10/0.20 -- four wrong figures per row, on the screen a player uses to choose
+/// a table. Wave 13 removed the price from the NAME, which fixed the half a
+/// string could carry; the registered `config` record is the other half, and
+/// there was no method in this canister that could rewrite it. `update_table_name`
+/// had a sibling and it was missing.
+///
+/// It is deliberately NOT `update_table_config(id, config)`. An admin setter can
+/// be given a wrong number, which is the defect it would be fixing. This one asks
+/// the table canister what it charges and copies the answer, so the only way for
+/// the registry to be wrong is for the contract to be wrong -- and then it is not
+/// a registry defect at all. That makes `scripts/check-deployed-config.sh`'s new
+/// lobby leg a check on ONE fact rather than a negotiation between two.
+///
+/// Admin-only, because it is an inter-canister call and an open one is a
+/// cycles-drain surface. It can only ever make the registry agree with the
+/// contract, so nothing about it needs privilege beyond that.
+#[ic_cdk::update]
+async fn refresh_table_config(table_id: u64) -> Result<(), String> {
+    if !is_admin() {
+        return Err("Unauthorized: admin only".to_string());
+    }
+
+    let canister_id = TABLES.with(|tables| {
+        tables
+            .borrow()
+            .get(&table_id)
+            .ok_or_else(|| "Table not found".to_string())
+            .and_then(|t| {
+                t.canister_id
+                    .ok_or_else(|| format!("Table {table_id} has no canister id registered"))
+            })
+    })?;
+
+    let response = ic_cdk::call::Call::unbounded_wait(canister_id, "get_table_view")
+        .await
+        .map_err(|e| format!("Could not reach table {table_id} at {canister_id}: {e:?}"))?;
+    let view = response
+        .candid::<Option<TableViewConfigOnly>>()
+        .map_err(|e| format!("Could not decode get_table_view() from {canister_id}: {e:?}"))?
+        .ok_or_else(|| format!("Table {canister_id} returned no view"))?;
+
+    TABLES.with(|tables| {
+        let mut tables = tables.borrow_mut();
+        let table = tables.get_mut(&table_id).ok_or("Table not found")?;
+        // The currency lives on the record as well as inside the config, and both
+        // are the contract's to state.
+        table.currency = view.config.currency.clone();
+        table.config = view.config;
+        Ok(())
+    })
+}
+
+/// Every registered table, refreshed from its own contract. Returns the ids it
+/// could not refresh with the reason, rather than stopping at the first: a lobby
+/// with one unreachable table must still be able to correct the others.
+#[ic_cdk::update]
+async fn refresh_all_table_configs() -> Result<Vec<u64>, String> {
+    if !is_admin() {
+        return Err("Unauthorized: admin only".to_string());
+    }
+    let ids: Vec<u64> = TABLES.with(|tables| tables.borrow().keys().copied().collect());
+    let mut refreshed = Vec::new();
+    let mut failures = Vec::new();
+    for id in ids {
+        match refresh_table_config(id).await {
+            Ok(()) => refreshed.push(id),
+            Err(e) => failures.push(format!("{id}: {e}")),
+        }
+    }
+    if failures.is_empty() {
+        Ok(refreshed)
+    } else {
+        Err(format!(
+            "refreshed {refreshed:?}; could not refresh: {}",
+            failures.join("; ")
+        ))
+    }
+}
+
 /// Update player count for a table (called by table canister)
 /// SECURITY: Only authorized table canisters or admin can update
 #[ic_cdk::update]

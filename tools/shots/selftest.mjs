@@ -52,6 +52,19 @@ const REQUIRED = {
     'test-hand-identity.mjs':
         'THE HISTORY-CHAIN JOIN (docs/DEFECTS.md E-71): red when a hand is matched to the '
         + 'archive by hand_number, which answers to 70 records',
+    'test-poll-updates.mjs':
+        'THE POLL-LOOP GATE (docs/DEFECTS.md E-92): joins the committed .did to the frontend\'s '
+        + 'timers and goes red when a repeating timer under 2 s can reach an update method — '
+        + 'which is how a 500 ms `check_timeouts` loop cost every open tab ~1.1 T/day with no '
+        + 'instrument anywhere red about it',
+    'test-clock-nudge.mjs':
+        'THE CLOCK-POLICY BUDGET (docs/DEFECTS.md E-92): simulates a day of table states against '
+        + '$lib/clockNudge.js and fails if one open tab could cost more than half the '
+        + 'canister\'s own idle burn — with a policy-free control that must fail the same budget',
+    'test-burn-table.mjs':
+        'THE ONE SOURCE FOR THE RUNWAY NUMBERS (docs/DEFECTS.md E-92/E-55): tools/cycles/'
+        + 'burn-table.json must recompute from its own components, cycles-runway.sh must read it '
+        + 'rather than carry a copy, and no retired burn figure may reappear in code',
 };
 
 const discovered = fs.readdirSync(HERE)

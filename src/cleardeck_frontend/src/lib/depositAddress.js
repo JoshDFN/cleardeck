@@ -15,10 +15,24 @@
 //
 //     (the table canister id, YOUR principal)
 //
-// both of which this client already holds -- the canister id from the build's own
-// configuration, the principal from the signed-in identity -- so there is no
-// reply to substitute. This module is that function. It makes NO network calls,
-// on purpose; a network call is exactly what it exists to avoid.
+// >>> CORRECTION, wave 14 (docs/SECURITY-FINDINGS.md FINDING 42).
+// >>> This comment used to finish that sentence with "both of which this client
+// >>> already holds -- the canister id from the build's own configuration". THE
+// >>> CANISTER ID DID NOT COME FROM THE BUILD'S CONFIGURATION. It came from
+// >>> `lobby.get_tables()`, which is an ordinary query with exactly the property
+// >>> this file exists to avoid, and substituting it moved every derived address
+// >>> into a canister the attacker controls while the cross-check below still
+// >>> passed. Deriving locally from a wire-supplied id removed the TABLE
+// >>> canister from the trust path and left the LOBBY in it.
+// >>>
+// >>> The id is now checked against `./trustedTables.js` -- the ids this build
+// >>> was published with -- before any address is derived from it. Use
+// >>> `deriveTrustedDepositAddress()`. `deriveDepositAddress()` below is
+// >>> ARITHMETIC ONLY and decides nothing about trust.
+//
+// The principal comes from the signed-in identity, so once the id is pinned
+// there is no reply to substitute. This module is that function. It makes NO
+// network calls, on purpose; a network call is exactly what it exists to avoid.
 //
 //     subaccount = sha256("cleardeck-deposit:" || principal_bytes)
 //     hash       = sha224(0x0A || "account-id" || canister_bytes || subaccount)
@@ -32,6 +46,7 @@
 import { Principal } from '@dfinity/principal';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { sha224 } from '@noble/hashes/sha2.js';
+import { assertTrustedTableId } from './trustedTables.js';
 
 /// The domain separator the canister hashes into every deposit subaccount.
 const DEPOSIT_DOMAIN = 'cleardeck-deposit:';
@@ -139,7 +154,17 @@ export function accountIdentifierHex(owner, subaccount) {
 }
 
 /**
- * YOUR deposit address at a table, derived with no network call.
+ * ARITHMETIC ONLY. The account identifier that `(tableCanisterId, principal)`
+ * hashes to, with no network call -- and NO judgement about whether
+ * `tableCanisterId` is a canister this build has ever heard of.
+ *
+ * **The app must not call this.** It exists so the derivation can be compared,
+ * principal by principal, against the canister's own two lines
+ * (`tests/money_safety/tests/deposit_surface.rs`), which needs an id the build
+ * was never published with -- a fresh PocketIC canister. Anything that leads to
+ * a player sending money must go through {@link deriveTrustedDepositAddress}:
+ * an address derived from an unpinned id is FINDING 42, and it is a completed
+ * theft with every money invariant in this project silent.
  *
  * @param {Principal|string} tableCanisterId
  * @param {Principal|string} principal the signed-in player
@@ -160,6 +185,26 @@ export function deriveDepositAddress(tableCanisterId, principal) {
     subaccount,
     canisterId: table.toText(),
   };
+}
+
+/**
+ * YOUR deposit address at a table THIS BUILD NAMES, derived with no network call.
+ *
+ * This is the only derivation the app is allowed to use. The trust root is
+ * `./trustedTables.js`: the mainnet ids pinned in this bundle, or for a local
+ * build the ids the bundle was compiled against. The canister id that arrives
+ * in `lobby.get_tables()` is a QUERY REPLY -- one replica, no certificate this
+ * client checks -- so it may name a table on screen and may never be the first
+ * argument of this hash. docs/SECURITY-FINDINGS.md FINDING 42.
+ *
+ * @param {Principal|string} tableCanisterId the id the lobby handed the client
+ * @param {Principal|string} principal the signed-in player
+ * @returns {{ address: string, subaccount: Uint8Array, canisterId: string }}
+ * @throws {Error} written for the player, when the id is not one this build names
+ */
+export function deriveTrustedDepositAddress(tableCanisterId, principal) {
+  assertTrustedTableId(tableCanisterId);
+  return deriveDepositAddress(tableCanisterId, principal);
 }
 
 /**

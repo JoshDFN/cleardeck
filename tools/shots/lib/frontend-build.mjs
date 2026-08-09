@@ -10,7 +10,9 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ENV, FRONTEND_DIR, FRONTEND_DIST, ICP_LEDGER_CANISTER_ID, REPO_ROOT } from './config.mjs';
+import {
+  ENV, FRONTEND_DIR, FRONTEND_DIST, GATEWAY_HOST, GATEWAY_PORT, ICP_LEDGER_CANISTER_ID, REPO_ROOT,
+} from './config.mjs';
 import { assertNotMainnet, icp, readLocalIds, resolveControllerIdentity } from './ids.mjs';
 import { CONTROLLER_IDENTITY, FUNDER_IDENTITIES } from './config.mjs';
 
@@ -30,6 +32,25 @@ export function buildEnvFor(ids) {
     ...process.env,
     DFX_NETWORK: 'local',
     NODE_ENV: 'production',
+    // THE GATEWAY PORT THE BUNDLE WILL TALK TO (docs/DEFECTS.md T-14).
+    //
+    // `ic-config.js` has read this since T-03 and defaults to 4943 when it is
+    // absent; `auth.js` derives the local Internet Identity origin from the same
+    // value. This function is THE ONLY WIRED BUILD PATH for the local app, and it
+    // never set it -- so every bundle ever deployed to the local asset canister
+    // pointed its agent at 127.0.0.1:4943 while this project's gateway is pinned
+    // to 8077 in icp.yaml. The screenshot harness papered over that with a
+    // reverse proxy listening on 4943, which is a thing NO USER HAS: a human
+    // opening http://<frontend-id>.localhost:8077/ got a raw fetch stack trace
+    // and "The lobby canister is reporting no tables" while the lobby was
+    // reporting three. T-03 was recorded as fixed by "it now comes from the build
+    // environment"; the build environment is this object, and it did not supply it.
+    VITE_LOCAL_GATEWAY_PORT: String(GATEWAY_PORT),
+    // Same origin as the page itself, so the agent call is not cross-origin.
+    // Without this the default is `http://127.0.0.1:<port>` while the page is
+    // served from `http://<canister-id>.localhost:<port>`, which is a different
+    // host and puts every ingress call behind CORS for no reason.
+    VITE_LOCAL_HOST: `http://${GATEWAY_HOST}:${GATEWAY_PORT}`,
     // The two IDs the bundle genuinely needs (table ids come from the lobby).
     VITE_CANISTER_ID_LOBBY: ids.lobby,
     VITE_CANISTER_ID_HISTORY: ids.history,
@@ -87,6 +108,38 @@ export function assertBundleWiredTo(lobbyId) {
   return { files: hits, bytes };
 }
 
+/**
+ * THE BUNDLE MUST TALK TO THE GATEWAY THIS PROJECT ACTUALLY RUNS (docs/DEFECTS.md T-14).
+ *
+ * `assertBundleWiredTo` above proves the bundle carries the right CANISTER IDS.
+ * It was green for every build that shipped T-14: the ids were right and the PORT
+ * was 4943 while the gateway is on 8077, so the app was wired to the correct
+ * canisters at an address nothing was listening on. The screenshot harness hid it
+ * behind a reverse proxy, so the only person who ever saw the failure was a human
+ * opening the URL, and there was no human in the loop.
+ *
+ * So the port is asserted the same way the ids are: read out of the built files.
+ * `ic-config.js` compiles `LOCAL_GATEWAY_PORT` and `LOCAL_HOST` in from the build
+ * environment, so both appear literally in the bundle.
+ *
+ * @param {number} port
+ * @returns {{files:string[]}}
+ */
+export function assertBundleLocalGateway(port) {
+  const files = walk(FRONTEND_DIST).filter((f) => f.endsWith('.js'));
+  const wanted = `:${port}`;
+  const hits = files.filter((f) => fs.readFileSync(f, 'utf8').includes(wanted));
+  if (hits.length === 0) {
+    throw new Error(
+      `ABORT: the built bundle in ${path.relative(REPO_ROOT, FRONTEND_DIST)} contains no reference ` +
+        `to the local gateway port ${port}. VITE_LOCAL_GATEWAY_PORT did not reach the build, so the ` +
+        'app will point its agent at the ic-config.js default (4943) and a person opening it gets a ' +
+        'fetch stack trace and an empty lobby. See docs/DEFECTS.md T-14.',
+    );
+  }
+  return { files: hits.map((f) => path.relative(REPO_ROOT, f)) };
+}
+
 /** `npm run build` in the frontend workspace with local IDs in the environment. */
 export function buildFrontend({ log = console.log } = {}) {
   const ids = readLocalIds();
@@ -104,7 +157,9 @@ export function buildFrontend({ log = console.log } = {}) {
   });
   const proof = assertBundleWiredTo(ids.lobby);
   log(`  bundle wired: local lobby id found in ${proof.files.length} built file(s)`);
-  return { ids, proof };
+  const gateway = assertBundleLocalGateway(GATEWAY_PORT);
+  log(`  bundle gateway: port ${GATEWAY_PORT} found in ${gateway.files.length} built file(s) (T-14)`);
+  return { ids, proof, gateway };
 }
 
 /**

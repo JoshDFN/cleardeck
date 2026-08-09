@@ -302,9 +302,27 @@ main() {
   done
 
   # -- 4. dev.sh cannot name a target CI has never heard of ------------------
+  #
+  # TWO SPELLINGS, BECAUSE THIS CHECK WENT BLIND ONCE (docs/DEFECTS.md H-59).
+  # Wave 14 replaced sixteen literal `cargo test --test X` lines in cmd_test with
+  # the `run_ms X` helper. Those strings stopped existing, this discovery went
+  # from 23 subjects to 7, and it printed `ok` both times -- only the count in the
+  # message changed, and nothing reads the count. A check that silently narrows
+  # its own subject list is the exact instrument-side failure this file exists to
+  # catch, so it now recognises the helper as well as the raw flag, and REFUSES to
+  # pass on an empty subject list.
   step "every target scripts/dev.sh names has a row"
-  local named unknown=0
-  named="$(grep -oE -- '--test [a-z_0-9]+' "$DEV_SH" | awk '{print $2}' | sort -u)"
+  local named unknown=0 named_count
+  named="$( { grep -oE -- '--test [a-z_0-9]+' "$DEV_SH" | awk '{print $2}';
+              grep -oE '^[[:space:]]*run_ms [a-z_0-9]+' "$DEV_SH" | awk '{print $2}'; } \
+            | sort -u )"
+  named_count="$(printf '%s' "$named" | grep -c . || true)"
+  if [ "$named_count" -eq 0 ]; then
+    bad "this check found NO test targets named in scripts/dev.sh, which cannot be true"
+    note "the discovery pattern has stopped matching how cmd_test invokes cargo. It went"
+    note "from 23 subjects to 7 that way once and still said 'ok'. See docs/DEFECTS.md H-59."
+    fail=1
+  fi
   for t in $named; do
     if ! rows | awk -F'|' '{print $2}' | grep -qxF "$t"; then
       bad "scripts/dev.sh runs '--test $t' and there is no inventory row for it"
@@ -313,7 +331,7 @@ main() {
       fail=1
     fi
   done
-  [ "$unknown" = 0 ] && ok "$(printf '%s\n' "$named" | wc -l | tr -d ' ') target(s) named in dev.sh, all listed"
+  [ "$unknown" = 0 ] && [ "$named_count" -gt 0 ] && ok "$named_count target(s) named in dev.sh, all listed"
 
   # -- 5. the gates that have caught fund defects stay in the REQUIRED tier --
   step "no gate that has convicted a fund defect has been demoted out of 'fast'"

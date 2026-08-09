@@ -36,11 +36,43 @@
 
 const MAINNET_HOSTNAMES = ['icp0.io', 'ic0.app', 'internetcomputer.org'];
 
+/**
+ * Reads ONE build-time value.
+ *
+ * Two constraints meet here and both are load-bearing:
+ *
+ *   1. The expression handed in must be a LITERAL member access
+ *      (`() => import.meta.env.VITE_X`, `() => process.env.CANISTER_ID_X`),
+ *      because vite's `define` substitutes those exact texts at build time.
+ *      `import.meta.env[name]` is never substituted and silently reads
+ *      `undefined` in the bundle -- which for the deposit trust root would mean
+ *      an EMPTY trusted set that nobody notices until money moves.
+ *   2. It must not throw outside a bundler. `import.meta.env` does not exist in
+ *      bare node and `process` does not exist in a browser, and this module is
+ *      imported by `trustedTables.js`, which is imported by the deposit
+ *      derivation, which is run in node by its gates
+ *      (`tests/money_safety/tests/deposit_trust_root.rs`). A module that cannot
+ *      be loaded outside vite is a module its gate cannot execute.
+ *
+ * @param {() => unknown} read
+ * @returns {string|undefined}
+ */
+export function buildValue(read) {
+  try {
+    const v = read();
+    return typeof v === 'string' && v.length > 0 ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** @typedef {'local'|'ic'} IcNetwork */
 
 /** @returns {IcNetwork|null} the target compiled in at build time, if any. */
 function compiledNetwork() {
-  const raw = import.meta.env.VITE_ICP_NETWORK || import.meta.env.DFX_NETWORK;
+  const raw = buildValue(() => import.meta.env.VITE_ICP_NETWORK)
+    || buildValue(() => import.meta.env.DFX_NETWORK)
+    || buildValue(() => process.env.DFX_NETWORK);
   if (raw === 'ic' || raw === 'local') return raw;
   return null;
 }
@@ -83,17 +115,17 @@ export function isLocal() {
  * environment — the same place the canister ids come from.
  */
 export const LOCAL_GATEWAY_PORT =
-  Number(import.meta.env.VITE_LOCAL_GATEWAY_PORT) || 4943;
+  Number(buildValue(() => import.meta.env.VITE_LOCAL_GATEWAY_PORT)) || 4943;
 
 /** Local replica host used for both the agent and (with a canister-id prefix) II. */
 export const LOCAL_HOST =
-  import.meta.env.VITE_LOCAL_HOST || `http://127.0.0.1:${LOCAL_GATEWAY_PORT}`;
+  buildValue(() => import.meta.env.VITE_LOCAL_HOST) || `http://127.0.0.1:${LOCAL_GATEWAY_PORT}`;
 
 // Mainnet agent gateway host (env-overridable for rollback).
-export const IC_HOST = import.meta.env.VITE_IC_HOST || 'https://icp-api.io';
+export const IC_HOST = buildValue(() => import.meta.env.VITE_IC_HOST) || 'https://icp-api.io';
 
 // Mainnet Internet Identity provider (env-overridable for rollback). MUST end in /authorize.
-export const II_URL = import.meta.env.VITE_II_URL || 'https://id.ai/authorize';
+export const II_URL = buildValue(() => import.meta.env.VITE_II_URL) || 'https://id.ai/authorize';
 
 /**
  * Agent host for the current environment.
@@ -126,6 +158,23 @@ export const MAINNET_CANISTER_IDS = Object.freeze({
 
 /** Every mainnet id, for the "did a local build wire a mainnet canister?" check. */
 export const MAINNET_ID_LIST = Object.freeze(Object.values(MAINNET_CANISTER_IDS));
+
+/**
+ * The mainnet canisters that can legitimately hold a player's deposit: the
+ * tables, and nothing else. This is the TRUST ROOT for a mainnet deposit
+ * address (see `trustedTables.js`), which is why it is a frozen literal here
+ * rather than anything read at runtime.
+ *
+ * docs/SECURITY-FINDINGS.md FINDING 42. The list above was already written down
+ * "so a build can check what it is wired to", and no deposit path consulted it,
+ * so the deposit address was rooted in whatever `lobby.get_tables()` said.
+ */
+export const MAINNET_TABLE_IDS = Object.freeze([
+  MAINNET_CANISTER_IDS.table_1,
+  MAINNET_CANISTER_IDS.table_2,
+  MAINNET_CANISTER_IDS.table_3,
+  MAINNET_CANISTER_IDS.btc_table_1,
+]);
 
 /**
  * @param {unknown} id

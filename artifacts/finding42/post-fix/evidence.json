@@ -1,0 +1,47 @@
+{
+  "finding": 42,
+  "ranAt": "2026-08-09T17:09:04.324Z",
+  "revision": "eb819a8d74a87824ffb35bb00a6789452c1e86d9",
+  "hostileLobby": "5iptu-f3777-77775-aaaga-cai",
+  "hostileTable": "55icz-et777-77775-aaafq-cai",
+  "pinnedTable1": "4caro-hl777-77775-aaaba-cai",
+  "victimPrincipal": "4tgka-ghyhm-4ebbe-3xqm4-alsxm-onnix-mi73y-5bcjg-ecekb-coffw-zqe",
+  "addressAtPinnedTable": "8ad30532f9cfef73db25a4ecac2060573b19eb24191006cd8700a83fc9c4e531",
+  "addressAtSubstitutedCanister": "aa86e03ef768732ea696ba66eaef1c78b3f6abdce41d2c9dac2af183bd94a05e",
+  "pinnedTableIdsFoundInBundle": [
+    "4caro-hl777-77775-aaaba-cai",
+    "4fbx2-kt777-77775-aaabq-cai",
+    "4xhad-gd777-77775-aaacq-cai"
+  ],
+  "observed": {
+    "trustAttribute": "refused",
+    "addressShown": null,
+    "addressSectionPresent": true,
+    "warning": "No address is shown, on purpose: Nothing can be deposited to 55icz-et777-77775-aaafq-cai: this table's canister id was sent to your browser by the lobby, over an ordinary query that carries no proof, and it is NOT one of the canister ids this build was published with. Your deposit address is computed FROM that id, so if the id is wrong the address belongs to whoever owns that canister and the money is theirs the moment you send it. The tables this build knows about are: 4caro-hl777-77775-aaaba-cai, 4fbx2-kt777-77775-aaabq-cai, 4xhad-gd777-77775-aaacq-cai, 4qggx-l3777-77775-aaaca-cai (the local canister ids this bundle was built against).",
+    "refusal": "This is not one of this build's tables. Nothing can be sent here. Nothing can be deposited to 55icz-et777-77775-aaafq-cai: this table's canister id was sent to your browser by the lobby, over an ordinary query that carries no proof, and it is NOT one of the canister ids this build was published with. Your deposit address is computed FROM that id, so if the id is wrong the address belongs to whoever owns that canister and the money is theirs the moment you send it. The tables this build knows about are: 4caro-hl777-77775-aaaba-cai, 4fbx2-kt777-77775-aaabq-cai, 4xhad-gd777-77775-aaacq-cai, 4qggx-l3777-77775-aaaca-cai (the local canister ids this bundle was built against).",
+    "networkLine": "local build. This moves test ICP on your own replica, to canister 55icz-et777-77775-aaafq-cai. No real funds can be reached from this bundle.",
+    "claimDisabled": true,
+    "consoleErrors": []
+  },
+  "control": {
+    "trustAttribute": "pinned",
+    "addressShown": "3ae862c32316e3d625d3310826c9b6eba20ce5fe4a78c33424b54491b385ad98",
+    "addressSectionPresent": true,
+    "warning": null,
+    "refusal": null,
+    "networkLine": "local build. This moves test ICP on your own replica, to canister 4fbx2-kt777-77775-aaabq-cai. No real funds can be reached from this bundle.",
+    "claimDisabled": false,
+    "consoleErrors": [],
+    "tableCanisterId": "4fbx2-kt777-77775-aaabq-cai",
+    "addressOk": true,
+    "trustOk": true,
+    "expectedAddress": "3ae862c32316e3d625d3310826c9b6eba20ce5fe4a78c33424b54491b385ad98",
+    "ok": true
+  },
+  "substitutionSucceeded": false,
+  "refused": true,
+  "screenshots": [
+    "artifacts/finding42/deposit-substituted-full.png",
+    "artifacts/finding42/deposit-substituted-modal.png"
+  ]
+}

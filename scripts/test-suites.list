@@ -53,9 +53,11 @@ tests/money_safety|admin_custody|fast|2|-|-|FINDING 07, the admin custody surfac
 tests/money_safety|ledger_boundary|fast|2|-|-|FINDING 29, M14: a discarded post-await continuation leaves real ledger movement with no book entry.
 tests/money_safety|coherence_w8|fast|2|-|-|FINDING 33, the currency guard's last term. total_liability() has no other instrument.
 tests/money_safety|deposit_surface|fast|2|-|-|FINDING 06/11/34/39. The only target that spends through the ledger's LEGACY transfer endpoint, the door a 64-hex address is paid through.
+tests/money_safety|deposit_trust_root|fast|-|-|-|FINDING 42: WHERE THE CANISTER ID CAME FROM. `deposit_surface` proves the derivation's arithmetic and is green while the id being hashed is one `lobby.get_tables()` (an uncertified query) supplied. Six file reads and two node runs, no replica, no wasm -- milliseconds, so it costs a pull request nothing.
 tests/money_safety|deposit_subaccount_anchor|fast|2|-|-|FINDING 28/21/11, eleven re-anchorings. The only gate on E-12, and it was outside every target from wave 8 to wave 11.
 tests/money_safety|oldest_cluster|fast|2|-|-|FINDING 02/05/08/09/17/22, including the recovery door that could void a live hand while conserving to the e8.
 tests/money_safety|solvency|fast|2|-|-|FINDING 35 / E-70: can this canister pay everyone, and can it say so. A real 2.00 ICP mainnet shortfall no surface could see.
+tests/money_safety|solvency_definition|fast|2|-|-|FINDING 43 / FINDING 38: ONE definition of held and owed, and an anonymous refresh_solvency() that cannot flip a shortfall into an all-clear. H-45's SEVENTH recurrence -- it landed unwired during wave 14 and this gate is what said so within a minute.
 tests/money_safety|controller_custody|fast|2|-|-|FINDING 23, the controller seat. THE CUSTODY GATE. install_code --mode reinstall on a funded table, and the guardian that stops it.
 tests/money_safety|wave6_coherence|fast|1|-|-|probe1 (fund lock by real silence), probe4 (FINDING 17: the fold-out winner must be PAID), probe5 (FINDING 07).
 tests/money_safety|fund_reachability|fast|1|-|-|M9, added after an auditor locked ~420 ICP. It sat RED for a wave because nothing ran it (H-48).

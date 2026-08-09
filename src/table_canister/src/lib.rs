@@ -2211,6 +2211,18 @@ enum LedgerIntentKind {
     /// `withdraw()`: send from this canister's main account to the owner. Value
     /// LEAVING; escrow was already debited before the movement.
     Payout,
+    /// `refund_external_deposit()`: send from the owner's deposit SUBACCOUNT
+    /// straight back to the owner's own wallet. Value LEAVING, and it never
+    /// touched escrow or the main account at any point.
+    ///
+    /// **This is the only movement in this canister whose source and destination
+    /// are both outside the main account**, which is why every `match` on this
+    /// enum has an arm of its own for it rather than falling into `Payout`'s.
+    /// `Payout`'s settle path removes a pending withdrawal, starts the withdrawal
+    /// cooldown and, on refusal, CREDITS `intent.amount` back to escrow -- and
+    /// that last one, applied here, would mint escrow out of money that was never
+    /// in it. docs/SECURITY-FINDINGS.md FINDING 31.
+    RefundDeposit,
 }
 
 impl LedgerIntentKind {
@@ -2219,12 +2231,35 @@ impl LedgerIntentKind {
             LedgerIntentKind::Pull => "pull",
             LedgerIntentKind::Sweep => "sweep",
             LedgerIntentKind::Payout => "payout",
+            LedgerIntentKind::RefundDeposit => "refund",
         }
     }
 
     /// Does settling this intent ADD to the owner's escrow?
     fn credits_on_success(self) -> bool {
         matches!(self, LedgerIntentKind::Pull | LedgerIntentKind::Sweep)
+    }
+
+    /// Was escrow debited BEFORE the movement, so that a refusal has to give it
+    /// back?
+    ///
+    /// Only `Payout`. This predicate used to be spelled `!credits_on_success()`,
+    /// which was the same set while `Payout` was the only outgoing kind and stops
+    /// being the same set the moment a second one exists.
+    fn debits_escrow_up_front(self) -> bool {
+        matches!(self, LedgerIntentKind::Payout)
+    }
+
+    /// Does this movement take money OUT of the owner's deposit subaccount?
+    ///
+    /// Both of these debit that account by `amount + fee`, so both have to be
+    /// netted out of [`observed_deposit_total`] while they are open, or the
+    /// canister goes on counting money that has already left.
+    fn leaves_the_deposit_subaccount(self) -> bool {
+        matches!(
+            self,
+            LedgerIntentKind::Sweep | LedgerIntentKind::RefundDeposit
+        )
     }
 }
 
@@ -2417,6 +2452,11 @@ fn settle_intent(id: u64, outcome: IntentOutcome, now: u64) -> Result<u64, Strin
                     note_main_credit(intent.amount, intent.created_at_time)
                 }
                 LedgerIntentKind::Payout => note_main_debit(intent.amount),
+                // THE MAIN ACCOUNT DID NOT MOVE. A refund goes from the owner's
+                // deposit subaccount straight to the owner's wallet, so noting
+                // either a credit or a debit here would be this canister writing
+                // down a movement of an account that did not have one.
+                LedgerIntentKind::RefundDeposit => {}
             }
 
             if intent.kind.credits_on_success() {
@@ -2469,6 +2509,30 @@ fn settle_intent(id: u64, outcome: IntentOutcome, now: u64) -> Result<u64, Strin
                     new_balance
                 );
                 Ok(new_balance)
+            } else if intent.kind == LedgerIntentKind::RefundDeposit {
+                // A refund that really left. Nothing was ever debited from
+                // escrow, so there is nothing to reconcile there; what HAS
+                // changed is the deposit subaccount, which is now empty of the
+                // amount and its fee. Replace the observation for the same
+                // reason the `Sweep` branch above does: the reading was taken
+                // before the movement and the money is gone from that account
+                // whether this ran in the original continuation or in a later
+                // `resolve_my_ledger_intents()`.
+                record_deposit_observation(
+                    intent.who,
+                    get_table_currency().ledger_canister(),
+                    0,
+                    now,
+                );
+                ic_cdk::println!(
+                    "ledger intent {} SETTLED: refund of {} e8s from the deposit subaccount of \
+                     {} to their own wallet at block {}",
+                    id,
+                    intent.amount,
+                    intent.who,
+                    block
+                );
+                Ok(block)
             } else {
                 // A payout that really left. The escrow debit already happened
                 // before the movement, so settling is: stop calling it pending,
@@ -2493,7 +2557,12 @@ fn settle_intent(id: u64, outcome: IntentOutcome, now: u64) -> Result<u64, Strin
             let Some(intent) = take_ledger_intent(id) else {
                 return Err(reason);
             };
-            if !intent.kind.credits_on_success() {
+            // `debits_escrow_up_front()` and NOT `!credits_on_success()`. The two
+            // predicates named the same set for as long as `Payout` was the only
+            // outgoing kind; `RefundDeposit` is outgoing and never touched escrow,
+            // so crediting `intent.amount` here would mint escrow out of money
+            // that was only ever at a deposit subaccount.
+            if intent.kind.debits_escrow_up_front() {
                 // The money never left, so give the escrow back. This is the
                 // refund that used to live only in a continuation that could be
                 // discarded; it is now reachable from the resume path as well.
@@ -2514,8 +2583,9 @@ fn settle_intent(id: u64, outcome: IntentOutcome, now: u64) -> Result<u64, Strin
                 );
             } else {
                 ic_cdk::println!(
-                    "ledger intent {} CLOSED unmoved: nothing was pulled for {} ({})",
+                    "ledger intent {} ({}) CLOSED unmoved: nothing moved for {} ({})",
                     id,
+                    intent.kind.as_str(),
                     intent.who,
                     reason
                 );
@@ -2598,7 +2668,7 @@ fn classify_ledger_error_for(
             // The source is the owner's deposit SUBACCOUNT. Same principle: the
             // refusal is a reading of that account, so write it down rather than
             // go on reporting the figure that turned out to be wrong.
-            LedgerIntentKind::Sweep => {
+            LedgerIntentKind::Sweep | LedgerIntentKind::RefundDeposit => {
                 record_deposit_observation(intent.who, ledger_id, held, now);
             }
             // The source is the OWNER's wallet, which is not an account of this
@@ -2682,6 +2752,29 @@ fn sweep_args(intent: &LedgerIntent, canister: Principal, fee: u64) -> TransferA
     }
 }
 
+/// The exact wire arguments for a `RefundDeposit`.
+///
+/// Source: the owner's deposit subaccount, exactly as [`sweep_args`] addresses
+/// it, derived from the intent's OWNER so a retry cannot address a different
+/// account. Destination: the owner's OWN wallet, derived from the same principal
+/// -- never a parameter, so there is no address here for a caller to choose and
+/// no third party this can pay. The owner receives `intent.amount` and the ledger
+/// burns `fee` out of the same subaccount, so the account is debited
+/// `amount + fee` (see [`open_deposit_exit_total`]).
+fn refund_args(intent: &LedgerIntent, fee: u64) -> TransferArg {
+    TransferArg {
+        from_subaccount: Some(compute_deposit_subaccount(&intent.who)),
+        to: Account {
+            owner: intent.who,
+            subaccount: None,
+        },
+        amount: Nat::from(intent.amount),
+        fee: Some(Nat::from(fee)),
+        memo: Some(intent.memo.to_be_bytes().to_vec().into()),
+        created_at_time: Some(intent.created_at_time),
+    }
+}
+
 /// The exact wire arguments for a `Payout`.
 ///
 /// The player receives `amount - fee`, which is what `transfer_tokens` has always
@@ -2732,6 +2825,18 @@ async fn attempt_intent(intent: &LedgerIntent) -> IntentOutcome {
                 Err((code, msg)) => {
                     IntentOutcome::Unknown(format!("Failed to sweep deposit: {code:?} - {msg}"))
                 }
+            }
+        }
+        LedgerIntentKind::RefundDeposit => {
+            let args = refund_args(intent, fee);
+            let out: Result<(Result<Nat, TransferError>,), _> =
+                ic_cdk::call(ledger_id, "icrc1_transfer", (args,)).await;
+            match out {
+                Ok((Ok(block),)) => IntentOutcome::Moved(nat_to_u64_saturating(&block)),
+                Ok((Err(e),)) => classify_ledger_error_for(intent, &e, ledger_id, currency),
+                Err((code, msg)) => IntentOutcome::Unknown(format!(
+                    "Failed to refund deposit: {code:?} - {msg}"
+                )),
             }
         }
         LedgerIntentKind::Payout => {
@@ -3481,6 +3586,17 @@ async fn claim_external_deposit() -> Result<u64, String> {
     // one the dust path already gives, and it works for the same reason: the
     // sweep takes the WHOLE address balance, so anything added to it comes out
     // with the rest.
+    // A REFUSAL IS NOT A REMEDY, AND FOR ONE WAVE THIS WAS ONLY A REFUSAL.
+    //
+    // Wave 12 added the floor and stopped the canister crediting an escrow
+    // balance it could never pay out. It did not give the money a way home: the
+    // only instruction was "send more", which asks a player to spend a second
+    // ledger fee to recover the first. Money strictly above the ledger's own fee
+    // is money the LEDGER CAN STILL MOVE, and the account it is sitting in is
+    // derived from this caller's principal, so there is exactly one destination
+    // it can honestly go to and this canister does not need anybody's permission
+    // to send it there. That is `refund_external_deposit()`, named here.
+    // docs/DEFECTS.md E-89.
     let min_external = currency.min_external_deposit();
     if balance > transfer_fee && balance < min_external {
         let credited = balance - transfer_fee;
@@ -3489,9 +3605,12 @@ async fn claim_external_deposit() -> Result<u64, String> {
              ({} e8s). Sweeping it costs the {} ledger fee ({} e8s), which would leave {} \
              in your table balance -- and this table's withdrawal floor is {}, so that {} \
              could never be withdrawn again. Rather than take it and refuse to give it \
-             back, nothing was moved. Send at least {} more to the SAME address and claim \
-             again; the sweep takes the whole balance, so the amount already there comes \
-             out with it. docs/SECURITY-FINDINGS.md FINDING 40.",
+             back, nothing was moved. TWO WAYS OUT, BOTH YOURS. (1) Send at least {} more \
+             to the SAME address and claim again; the sweep takes the whole balance, so the \
+             amount already there comes out with it. (2) Call refund_external_deposit() and \
+             this canister sends {} straight back to your own wallet now, out of that same \
+             address -- the {} e8 ledger fee comes out of it and nothing else does. \
+             docs/SECURITY-FINDINGS.md FINDING 31, FINDING 40.",
             currency.format_amount(balance),
             balance,
             currency.symbol(),
@@ -3500,6 +3619,8 @@ async fn claim_external_deposit() -> Result<u64, String> {
             currency.format_amount(currency.min_withdrawal()),
             currency.format_amount(credited),
             currency.format_amount(min_external - balance),
+            currency.format_amount(credited),
+            transfer_fee,
         ));
     }
 
@@ -3596,6 +3717,131 @@ async fn claim_external_deposit() -> Result<u64, String> {
     // The observation reset is `settle_intent`'s job, not this function's: doing
     // it here would mean a discarded continuation never does it, which is the
     // whole defect. See the `Sweep` branch there.
+    settle_intent(intent.id, outcome, now)
+}
+
+/// SEND WHAT IS AT YOUR DEPOSIT ADDRESS BACK TO YOUR OWN WALLET.
+///
+/// # Why this method exists (docs/SECURITY-FINDINGS.md FINDING 31, docs/DEFECTS.md E-89)
+///
+/// The published deposit address has a floor: `min_external_deposit()`, which is
+/// `min_withdrawal + transfer_fee`, because the sweep pays the ledger fee out of
+/// what arrives and this canister must not credit an escrow balance it cannot pay
+/// back. Below that floor `claim_external_deposit()` refuses. **A refusal leaves
+/// the money exactly where it was, which is inside an account this canister owns**
+/// -- and until this method existed, the ONLY instruction the canister could give
+/// was "send more". That asks somebody to spend a second ledger fee to rescue the
+/// first, and if they decline, the canister holds their money forever while every
+/// arithmetic invariant stays silent, because nothing went missing.
+///
+/// The fuzzer convicted exactly that at its own default seeds: 20,002 e8s at one
+/// published address, ten rounds of every legal player-side exit, and not one e8
+/// moved.
+///
+/// # The arithmetic, which is the whole reason this is a separate door
+///
+/// | route | player receives | needs a balance of |
+/// |---|---|---|
+/// | sweep, then `withdraw` | `balance - 2*fee` | `> 2*fee` |
+/// | this method | `balance - fee` | `> fee` |
+///
+/// One fee instead of two, because the money never enters escrow and never has to
+/// come out again. So this reaches every amount the LEDGER can move, which is the
+/// most any canister can promise. At or below `transfer_fee` there is no transfer
+/// at any price and this method says so rather than pretending
+/// (docs/SECURITY-FINDINGS.md FINDING 11).
+///
+/// # Why it cannot be used to steal
+///
+/// Neither the source nor the destination is a parameter. The source is
+/// `compute_deposit_subaccount(caller)` and the destination is `caller`'s own main
+/// account, both derived inside this function from `msg_caller()` captured before
+/// any await. There is no address here for a caller to choose, so there is no
+/// account but their own that this can drain and none but their own it can pay.
+/// It also never touches `BALANCES`: escrow is not a party to this movement.
+///
+/// # Available at ANY balance above the fee, not only below the floor
+///
+/// Above the floor a player has both doors open and can pick. Restricting this to
+/// the dead band would make the remedy depend on a floor that has already moved
+/// once, and a player who has changed their mind about sitting at this table is
+/// entitled to their money back without first putting it in escrow.
+#[ic_cdk::update]
+async fn refund_external_deposit() -> Result<u64, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers have no deposit address".to_string());
+    }
+    let currency = get_table_currency();
+    let ledger_id = currency.ledger_canister();
+    let transfer_fee = currency.transfer_fee();
+
+    // Ask the ledger, and WRITE THE ANSWER DOWN BEFORE DECIDING ANYTHING -- the
+    // same order and the same reason as `claim_external_deposit`. A refusal that
+    // leaves the canister still unaware of money it is holding is FINDING 28.
+    let balance = query_deposit_subaccount_balance(caller, ledger_id).await?;
+    record_deposit_observation(caller, ledger_id, balance, ic_cdk::api::time());
+
+    if balance <= transfer_fee {
+        return Err(format!(
+            "There is nothing here this canister can send back. Your deposit address holds {} \
+             ({} e8s) and the {} ledger charges {} e8s to move anything at all, so a refund \
+             would cost more than the amount. {}",
+            currency.format_amount(balance),
+            balance,
+            currency.symbol(),
+            transfer_fee,
+            if balance == 0 {
+                format!(
+                    "Nothing has been sent to it, or it has already been swept -- \
+                     get_deposit_custody() and get_my_ledger_intents() say which. Your address \
+                     is (canister {}, subaccount get_deposit_subaccount()), the same account as \
+                     the 64-hex address [{}].",
+                    canister_id(),
+                    deposit_address_for(caller, currency),
+                )
+            } else {
+                deposit_custody_sentence(balance, currency)
+            }
+        ));
+    }
+
+    // The owner receives everything the ledger will let out of the account: the
+    // balance less the one fee the transfer itself costs. Nothing is kept here,
+    // by this canister or by anybody -- the no-rake property, applied to the exit.
+    let refund_amount = balance - transfer_fee;
+    let now = ic_cdk::api::time();
+
+    // WRITE THE INTENT BEFORE THE IRREVERSIBLE CALL (FINDING 29). From here the
+    // money is accounted for by `open_deposit_exit_total()`, which nets it out of
+    // the deposit observation for as long as this stays open, so the canister does
+    // not go on reporting that it holds money it has handed to the ledger.
+    let intent = open_ledger_intent(caller, LedgerIntentKind::RefundDeposit, refund_amount, now)?;
+    let transfer_args = refund_args(&intent, transfer_fee);
+
+    let transfer_result: Result<(Result<Nat, TransferError>,), _> =
+        ic_cdk::call(ledger_id, "icrc1_transfer", (transfer_args,)).await;
+
+    // -- CONTINUATION. May never run; the intent above is what makes that
+    //    survivable. Everything below must reach `settle_intent`. --
+
+    let outcome = match transfer_result {
+        Ok((Ok(block),)) => IntentOutcome::Moved(nat_to_u64_saturating(&block)),
+        Ok((Err(e),)) => match classify_ledger_error_for(&intent, &e, ledger_id, currency) {
+            IntentOutcome::Moved(b) => IntentOutcome::Moved(b),
+            _ => IntentOutcome::Refused(format!(
+                "Refund transfer failed: {:?}. Your {} is still at your deposit address and this \
+                 canister is still accounting for it -- see get_deposit_custody().",
+                e,
+                currency.format_amount(balance)
+            )),
+        },
+        Err((code, msg)) => IntentOutcome::Unknown(format!(
+            "Failed to refund deposit: {:?} - {}",
+            code, msg
+        )),
+    };
+
     settle_intent(intent.id, outcome, now)
 }
 
@@ -3792,34 +4038,39 @@ fn observed_deposit_total() -> u64 {
     // the amount in flight. Summing both would count the same e8s twice, and a
     // canister that overstates what it holds is a canister whose books stop
     // agreeing with the chain.
-    observed.saturating_sub(open_sweep_total())
+    observed.saturating_sub(open_deposit_exit_total())
 }
 
-/// Money named by open `sweep` intents: seen at a deposit subaccount, already on
-/// its way to the main account.
+/// Money named by open intents that DEBIT a deposit subaccount: a `sweep` on its
+/// way to the main account, or a `refund` on its way back to the owner's wallet.
 ///
-/// **Gross, not net.** A sweep of `amount` debits the deposit subaccount by
-/// `amount + fee`: the recipient gets `amount` and the ledger burns the fee out
+/// **Gross, not net.** Either movement of `amount` debits the deposit subaccount
+/// by `amount + fee`: the recipient gets `amount` and the ledger burns the fee out
 /// of the same account. The observation has to be reduced by everything that
 /// leaves, or the netted figure keeps claiming a fee that no longer exists
 /// anywhere.
-fn open_sweep_total() -> u64 {
+///
+/// The two kinds differ in where the money goes, and that difference is handled
+/// where it belongs: a `sweep` stays inside this canister and is added back by
+/// [`journalled_incoming_total`], a `refund` leaves the canister entirely and is
+/// added back by nothing, because there is nothing left to owe.
+fn open_deposit_exit_total() -> u64 {
     let fee = get_table_currency().transfer_fee();
     LEDGER_INTENTS.with(|j| {
         j.borrow()
             .values()
-            .filter(|i| i.kind == LedgerIntentKind::Sweep)
+            .filter(|i| i.kind.leaves_the_deposit_subaccount())
             .fold(0u64, |acc, i| acc.saturating_add(i.amount.saturating_add(fee)))
     })
 }
 
 /// The same netting for one principal.
-fn open_sweep_for(who: Principal) -> u64 {
+fn open_deposit_exit_for(who: Principal) -> u64 {
     let fee = get_table_currency().transfer_fee();
     LEDGER_INTENTS.with(|j| {
         j.borrow()
             .values()
-            .filter(|i| i.who == who && i.kind == LedgerIntentKind::Sweep)
+            .filter(|i| i.who == who && i.kind.leaves_the_deposit_subaccount())
             .fold(0u64, |acc, i| acc.saturating_add(i.amount.saturating_add(fee)))
     })
 }
@@ -4123,8 +4374,30 @@ pub struct DepositAddressCustody {
     pub observed_at_ns: Option<u64>,
     /// The ledger's transfer fee. An amount at or below it cannot move on its own.
     pub transfer_fee: u64,
+    /// The least this canister will SWEEP from this address, i.e.
+    /// `Currency::min_external_deposit()`. Published here so a client can print
+    /// the figure the canister actually applies rather than the `deposit()` floor
+    /// beside it, which is the number that cost the fifth auditor a whole deposit
+    /// (docs/SECURITY-FINDINGS.md FINDING 31).
+    pub minimum_deposit: u64,
     /// True when `claim_external_deposit()` would sweep this amount right now.
+    ///
+    /// **`>= minimum_deposit`, not `> transfer_fee`.** It was the second, and it
+    /// was a lie for the whole band between the two: `claim_external_deposit`
+    /// refuses there, so `sweepable = true` was a claim that money was reachable
+    /// through a door that would not open. The drain in the money-safety harness
+    /// prints this flag beside every stranded balance it finds, so the instrument
+    /// was repeating the canister's own wrong answer back to it
+    /// (docs/DEFECTS.md E-89).
     pub sweepable: bool,
+    /// True when `refund_external_deposit()` would send this amount back to the
+    /// owner's own wallet right now: anything the LEDGER can move, i.e. strictly
+    /// above `transfer_fee`.
+    ///
+    /// The two flags are deliberately different questions. Between the fee and
+    /// the minimum, money at this address cannot be swept INTO the table and can
+    /// be returned OUT of it, which is the whole of the remedy for FINDING 31.
+    pub refundable: bool,
     /// The plain-language answer, including the dust case. Never empty when
     /// `observed_amount > 0`.
     pub note: String,
@@ -4140,11 +4413,12 @@ pub struct DepositAddressCustody {
 /// holding the player's 10,000 e8s.
 fn deposit_custody_sentence(amount: u64, currency: Currency) -> String {
     let fee = currency.transfer_fee();
+    let min_external = currency.min_external_deposit();
     if amount == 0 {
         return String::new();
     }
     let formatted = format!("{} ({} e8s)", currency.format_amount(amount), amount);
-    if amount > fee {
+    if amount >= min_external {
         format!(
             "{formatted} of yours is at the deposit address this canister published for you. It \
              is held by this canister and it is NOT withdrawable until it is swept into your \
@@ -4154,19 +4428,65 @@ fn deposit_custody_sentence(amount: u64, currency: Currency) -> String {
             currency.symbol(),
             fee,
         )
+    } else if amount > fee {
+        // THE DEAD BAND, AND THE SENTENCE THAT USED TO LIE ABOUT IT.
+        //
+        // This branch used to be part of the one above: it told a player holding
+        // 20,000 e8s at their own address to "call claim_external_deposit(),
+        // which moves it and credits you 0.0001 ICP". `claim_external_deposit`
+        // refuses this band -- crediting it would put an amount in escrow that
+        // `withdraw` can never pay out -- so the instruction was one the canister
+        // would not carry out, printed by the only surface that says where a
+        // player's money is (docs/SECURITY-FINDINGS.md FINDING 31, FINDING 28).
+        //
+        // BOTH remedies are named, because they are not the same trade. Topping
+        // up keeps every e8 in play and costs another ledger fee to send; the
+        // refund costs one ledger fee out of the money and ends the matter.
+        format!(
+            "{formatted} of yours is at the deposit address this canister published for you. It \
+             is held by this canister and it is BELOW the {} minimum this table will sweep from \
+             that address, so claim_external_deposit() will NOT take it: the {} ledger charges \
+             {} e8s for the sweep and what survived would be under the {} withdrawal floor, \
+             which is money this canister would be holding and could not pay back. Two ways \
+             out, both yours: send {} e8s or more to the SAME address and claim the whole \
+             balance, or call refund_external_deposit() and this canister sends {} back to your \
+             own wallet now (the ledger charges {} e8s for that transfer, out of this amount). \
+             docs/SECURITY-FINDINGS.md FINDING 31.",
+            currency.format_amount(min_external),
+            currency.symbol(),
+            fee,
+            currency.format_amount(currency.min_withdrawal()),
+            min_external.saturating_sub(amount),
+            currency.format_amount(amount.saturating_sub(fee)),
+            fee,
+        )
     } else {
-        let top_up = fee.saturating_add(1).saturating_sub(amount);
+        // THE TOP-UP FIGURE HAS TO BE ONE THAT ACTUALLY WORKS.
+        //
+        // It was `fee + 1 - amount`, which was the right number for exactly as
+        // long as `claim_external_deposit` swept anything the ledger could move.
+        // The Rule-3 floor raised the sweep threshold to `min_external_deposit`
+        // and left this arithmetic behind, so a player holding 9,999 e8s was told
+        // to send 2 more -- and at 10,001 the claim refuses, with a different
+        // message, for a different reason. An instruction the canister will not
+        // honour is worse than no instruction: it is a second wasted ledger fee
+        // and a second refusal. docs/DEFECTS.md E-89.
+        let top_up = min_external.saturating_sub(amount);
         format!(
             "{formatted} of yours is at the deposit address this canister published for you. It \
              is held by this canister and it is at or below the {} ledger's transfer fee ({} \
              e8s), so no transfer can move it on its own -- a sweep would cost more than the \
-             amount. IT IS NOT LOST AND IT IS NOT FORGOTTEN: it is counted in everything this \
-             canister reports it holds for you, and sending {} e8s or more to the SAME address \
-             makes the whole balance claimable with claim_external_deposit(). Until you do, treat \
-             it as unrecoverable dust. docs/SECURITY-FINDINGS.md FINDING 11 / FINDING 28.",
+             amount, and so would sending it back to you. IT IS NOT LOST AND IT IS NOT \
+             FORGOTTEN: it is counted in everything this canister reports it holds for you, and \
+             sending {} e8s or more to the SAME address takes the whole balance to this table's \
+             {} minimum, after which claim_external_deposit() sweeps all of it. Until you do, \
+             treat it as unrecoverable dust: below the ledger's own fee there is no transfer at \
+             any price, by this canister or by anybody. \
+             docs/SECURITY-FINDINGS.md FINDING 11 / FINDING 28 / FINDING 31.",
             currency.symbol(),
             fee,
             top_up,
+            currency.format_amount(min_external),
         )
     }
 }
@@ -4183,12 +4503,30 @@ fn deposit_custody_sentence(amount: u64, currency: Currency) -> String {
 /// `CustodyStatus::unswept_deposit_observed_at_ns == null`, is on the general
 /// surface and is documented to mean "never asked", not "empty".
 fn deposit_unknown_sentence(currency: Currency) -> String {
+    // THE TWO NUMBERS THAT HAVE TO BE SAID BEFORE ANY MONEY IS SENT, not after.
+    //
+    // This sentence is what a player reads at the moment they are looking at the
+    // address and have sent nothing. Every other sentence about this account is a
+    // post-mortem. The minimum belongs here because it is the number that decides
+    // whether the deposit works, and the fee belongs here because below it the
+    // ledger itself cannot move the money and no version of this canister ever
+    // will (docs/SECURITY-FINDINGS.md FINDING 11, FINDING 31).
     format!(
-        "This canister has not asked the {} ledger what is at your deposit address, so it cannot \
-         tell you whether anything is sitting there. That is NOT a statement that the address is \
-         empty. Call refresh_deposit_custody(), which asks and writes the answer down, or \
-         claim_external_deposit(), which asks and then sweeps.",
-        currency.symbol()
+        "This canister has not asked the {sym} ledger what is at your deposit address, so it \
+         cannot tell you whether anything is sitting there. That is NOT a statement that the \
+         address is empty. Call refresh_deposit_custody(), which asks and writes the answer \
+         down, or claim_external_deposit(), which asks and then sweeps. BEFORE YOU SEND \
+         ANYTHING: the least this table will sweep from this address is {min} ({min_e8s} e8s), \
+         because the sweep pays the {sym} ledger's {fee} e8 fee out of what you send and what \
+         survives has to clear the {floor} withdrawal floor. Send less than that and it will \
+         not be swept -- above {fee} e8s you can call refund_external_deposit() to get it back \
+         to your own wallet less one {fee} e8 ledger fee, and AT OR BELOW {fee} e8s no transfer \
+         can move it at all, by this canister or by anybody, so it is unrecoverable dust.",
+        sym = currency.symbol(),
+        min = currency.format_amount(currency.min_external_deposit()),
+        min_e8s = currency.min_external_deposit(),
+        fee = currency.transfer_fee(),
+        floor = currency.format_amount(currency.min_withdrawal()),
     )
 }
 
@@ -4210,7 +4548,9 @@ fn deposit_custody_of(who: Principal) -> DepositAddressCustody {
         observed_amount,
         observed_at_ns,
         transfer_fee: fee,
-        sweepable: observed_amount > fee,
+        minimum_deposit: currency.min_external_deposit(),
+        sweepable: observed_amount >= currency.min_external_deposit(),
+        refundable: observed_amount > fee,
         note: if entry.is_some() {
             deposit_custody_sentence(observed_amount, currency)
         } else {
@@ -4475,12 +4815,47 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
     let sweeping_whole_balance = amount == balance_now && amount > currency.transfer_fee();
 
     if amount < min_withdrawal && !sweeping_whole_balance {
+        // TWO REFUSALS, BECAUSE THESE ARE TWO DIFFERENT SITUATIONS (docs/DEFECTS.md
+        // E-81). One is a policy floor the caller can clear by asking for more; the
+        // other is the ledger's own arithmetic, which no request clears. They read
+        // the same and only one of them can be acted on.
+        //
+        // The single sentence that used to cover both was:
+        //
+        //   "Minimum withdrawal is 0.0002 ICP. Your whole remaining balance can
+        //    always be withdrawn in one call whatever its size, as long as it is
+        //    more than the 0.0001 ICP network fee -- you have 0.0001 ICP."
+        //
+        // Every clause true, the paragraph unusable: it opens with a policy number,
+        // states a universal guarantee, then excludes this exact balance in a
+        // subordinate clause. It is the message the player stranded by FINDING 31
+        // was shown, and the fifth auditor's note was that a reader concludes they
+        // made a formatting mistake and retries. There is no retry that works.
+        let fee = currency.transfer_fee();
+        if balance_now > 0 && balance_now <= fee {
+            return Err(format!(
+                "No withdrawal of any size can move this, and that is arithmetic rather than a \
+                 policy of this table. Your whole remaining balance is {} ({} e8s), and the {} \
+                 ledger charges a network fee of {} ({} e8s) on every transfer it performs -- so \
+                 sending this would cost at least as much as the amount, and the ledger refuses. \
+                 Not by you, not by this table, and not by a controller: there is deliberately no \
+                 method here that can edit a balance. IT IS NOT LOST AND IT IS NOT FORGOTTEN -- \
+                 it is counted in get_custody_status() and in get_solvency(), and if you ever put \
+                 more into this table it comes out with the rest in a single call. \
+                 docs/SECURITY-FINDINGS.md FINDING 11.",
+                currency.format_amount(balance_now),
+                balance_now,
+                currency.symbol(),
+                currency.format_amount(fee),
+                fee,
+            ));
+        }
         return Err(format!(
             "Minimum withdrawal is {}. Your whole remaining balance can always be withdrawn in \
              one call whatever its size, as long as it is more than the {} network fee -- you \
              have {}.",
             currency.format_amount(min_withdrawal),
-            currency.format_amount(currency.transfer_fee()),
+            currency.format_amount(fee),
             currency.format_amount(balance_now)
         ));
     }
@@ -5701,9 +6076,67 @@ fn escrow_total() -> u64 {
     })
 }
 
-/// Everything this canister owes anybody: escrow + seated chips + the pot + every
-/// e8 it has seen sitting in one of its own deposit subaccounts + every
-/// unfinished ledger operation.
+// ===========================================================================
+// THE ONE DEFINITION OF WHAT THIS CANISTER HOLDS AND WHAT IT OWES
+// ===========================================================================
+//
+// docs/SECURITY-FINDINGS.md FINDING 43 and FINDING 38 are ONE defect: the two
+// sides of the solvency comparison were computed from different definitions, and
+// a caller could move the boundary between them.
+//
+// Until this comment existed there were THREE totals of one liability in this
+// file. `total_liability()` -- what the currency guard reads -- had five terms.
+// `get_solvency().owed` had six, a different six. `held` carried the
+// main-account balance that neither `owed` term did, so every e8 at the shared
+// main account was an asset and never a liability, and the difference published
+// it as a SURPLUS in the same reply whose `unattributed_at_main` field calls it
+// "money held for somebody this canister cannot yet name". And `pulls_in_flight`
+// was added to BOTH sides on the argument that the money "is not yet in the
+// reading" -- while `refresh_solvency()` is public, anonymous-callable, and
+// exists for no other purpose than to put it in the reading.
+//
+// There are now exactly two functions, and every reader uses them: the currency
+// guard, `get_solvency`, `get_custody_status`'s advice, `withdraw`'s refusals,
+// and the money-safety harness's own legs.
+//
+//   HELD  = [`total_holdings`]
+//         = main_balance_now + deposit_subaccounts_observed - exit_leakage
+//
+//     Every e8 the canister can point to ON THE LEDGER OF RECORD, as a LOWER
+//     BOUND, and NOTHING ELSE. No in-flight term is ever added to it. A movement
+//     that has landed is already in the reading; one that has not is not this
+//     canister's money yet. `None` when the main account has never been read,
+//     because there is no honest total that treats a never-read account as zero.
+//
+//   OWED  = [`total_liability`]
+//         = max(escrow + chips + pot + payouts_in_flight + pulls_in_flight,
+//               main_balance_now)
+//           + (observed_deposit_total + sweeps_in_flight)
+//
+//     Every e8 somebody could ask this canister for, as an UPPER BOUND. The
+//     `max` is the whole of FINDING 43: money at the main account is owed either
+//     to somebody the canister can name (escrow, chips, the pot, a payout it has
+//     already committed to) or to somebody it cannot yet name -- and the second
+//     case is a LIABILITY, not profit. THIS CANISTER TAKES NO RAKE AND KEEPS
+//     NOTHING, so it can never have a surplus, and after this change it can never
+//     report one: `difference = min(0, main_balance_now - attributed)`.
+//
+// Two consequences worth stating, because both are load-bearing:
+//
+//   * THE DEPOSIT-SUBACCOUNT TERMS CANCEL EXACTLY. They appear identically on
+//     both sides, which is why a deposit address nobody has read cannot turn a
+//     shortfall into a surplus -- the claim `SolvencyVerdict::CannotPayEveryone`
+//     rests on, now true by construction rather than by argument.
+//
+//   * AN UNFINISHED LEDGER OPERATION IS OWED AND NEVER HELD. While a `pull` is
+//     open the canister cries poor by the pull amount, which is the safe
+//     direction and one `resolve_my_ledger_intents()` from being cleared. The
+//     alternative -- what shipped in wave 10 -- is that one free, unpermissioned
+//     `refresh_solvency()` turns a real shortfall into a published surplus, which
+//     is FINDING 38, measured at 1.0002 ICP.
+
+/// Everything this canister owes anybody. **THE ONE DEFINITION** -- see the
+/// section comment above, and do not add a second sum anywhere.
 ///
 /// **The deposit-subaccount term is the whole point of the "THE ACCOUNT CENSUS"
 /// section.** This function was `escrow + chips + pot`, which is the money in
@@ -5719,12 +6152,74 @@ fn escrow_total() -> u64 {
 /// the retry to a ledger where the original transaction does not exist: the
 /// deduplication would not fire and it would move money a second time, on the
 /// wrong chain. A table with unfinished ledger operations is a funded table.
+///
+/// # This is never smaller than the sum it replaced where it matters
+///
+/// `refuse_currency_change_while_funded` branches on `== 0`, and this is zero
+/// only when escrow, the table, every open intent AND the main-account reading
+/// are all zero -- a strictly stronger condition than the old sum, which could
+/// read ZERO with an open `payout` in flight because a payout was in no term of
+/// it at all.
 fn total_liability() -> u64 {
+    main_account_liability().saturating_add(deposit_account_liability())
+}
+
+/// Everything the canister can point to on the ledger of record. `None` means
+/// **nobody has ever read the main account**, which is not zero.
+///
+/// **THE ONE DEFINITION** of the held side -- see the section comment above.
+fn total_holdings() -> Option<u64> {
+    observed_main_entry().map(|m| {
+        m.balance_now()
+            .saturating_add(observed_deposit_gross())
+            .saturating_sub(open_deposit_exit_leakage())
+    })
+}
+
+/// What is owed against the MAIN account and is attributed to somebody this
+/// canister can name: escrow, chips and the pot, plus every open ledger
+/// operation whose money is at that account or is on its way to it.
+///
+/// `open_pull_total()` is here and NOT on the held side, which is FINDING 38.
+/// `open_payout_total()` is here because a payout is money already handed to the
+/// ledger and not yet seen to leave: until it leaves, the person who asked for it
+/// still has not been paid.
+fn main_attributed_claims() -> u64 {
     escrow_total()
         .saturating_add(table_claims())
-        .saturating_add(observed_deposit_total())
-        .saturating_add(journalled_incoming_total())
-        .saturating_add(main_uncredited_observed())
+        .saturating_add(open_payout_total())
+        .saturating_add(open_pull_total())
+}
+
+/// The main-account half of [`total_liability`]: the LARGER of what is attributed
+/// to that account and what is sitting in it.
+///
+/// Equivalently `main_attributed_claims() + main_uncredited_observed()`, and that
+/// identity is what makes `owed` rebuildable from the published terms of
+/// [`SolvencyReport`].
+fn main_account_liability() -> u64 {
+    main_attributed_claims().max(observed_main_balance().unwrap_or(0))
+}
+
+/// The deposit-subaccount half of [`total_liability`]: every e8 observed in one
+/// of this canister's own deposit subaccounts, gross of the exits in flight.
+///
+/// `observed_deposit_total()` nets an open `sweep` or `refund` OUT of the
+/// observation; the sweep half is added straight back here, because a sweep moves
+/// money between two accounts this canister already owns and is still owed to the
+/// depositor either way. A `refund` is not added back: it leaves the canister
+/// entirely and there is nothing left to owe.
+///
+/// This term appears IDENTICALLY on the held side (`observed_deposit_gross() -
+/// open_deposit_exit_leakage()`), so it cancels out of the difference exactly.
+/// That cancellation is what entitles `SolvencyVerdict::CannotPayEveryone` to be
+/// stated even while a deposit address is unread.
+fn deposit_account_liability() -> u64 {
+    // Pulls and sweeps, minus the pulls: the sweep amounts alone. Derived from
+    // `journalled_incoming_total()` rather than re-folded from the journal so the
+    // two can never drift apart.
+    let sweeps_in_flight = journalled_incoming_total().saturating_sub(open_pull_total());
+    observed_deposit_total().saturating_add(sweeps_in_flight)
 }
 
 /// Everything the live table is holding for the people at it: seated chips plus
@@ -5767,11 +6262,10 @@ fn main_uncredited_observed() -> u64 {
     let Some(main) = observed_main_balance() else {
         return 0;
     };
-    main.saturating_sub(
-        escrow_total()
-            .saturating_add(table_claims())
-            .saturating_add(open_payout_total()),
-    )
+    // THE RESIDUAL AFTER EXACTLY THE TERMS [`total_liability`] ALREADY CARRIES,
+    // and that is what makes it impossible for this to double count. Add a term
+    // to `main_attributed_claims` and it comes out of here in the same message.
+    main.saturating_sub(main_attributed_claims())
 }
 
 /// Money named by open `payout` intents: debited from escrow, handed to the
@@ -5793,12 +6287,21 @@ fn open_payout_total() -> u64 {
 /// Money named by open `pull` intents: on its way from a player's own wallet into
 /// this canister's main account, and on one side of that boundary or the other.
 ///
-/// Counted on BOTH sides of the solvency report on purpose. If the pull happened,
-/// the canister holds it (in the main account, not yet in the reading) and owes
-/// it; if it did not, it neither holds nor owes it. Either way the two terms are
-/// equal, so an unfinished deposit can never by itself manufacture a shortfall --
-/// which is the false alarm that would otherwise fire on every `deposit()` call
-/// in flight.
+/// **COUNTED ON THE OWED SIDE ONLY, AND NEVER ON THE HELD SIDE. That one word is
+/// docs/SECURITY-FINDINGS.md FINDING 38.** It used to be on both, justified in a
+/// comment that read *"if the pull happened, the canister holds it (in the main
+/// account, **not yet in the reading**)"*. That parenthesis is a claim about the
+/// AGE of a reading, and `refresh_solvency()` is public, unpermissioned,
+/// anonymous-callable and exists for no other purpose than to make the reading
+/// current -- at which point `main_account` already contained the money and this
+/// term added it a second time. Measured: one anonymous call turned a canister
+/// that was really 1.0002 ICP short into a published surplus of 0.9998 ICP.
+///
+/// On the owed side alone the arithmetic is right in both branches. If the money
+/// landed it is in `main_balance_now`, so it is held once and owed once. If it did
+/// not, the canister cries poor by the pull amount for as long as the intent is
+/// open -- the safe direction, one `resolve_my_ledger_intents()` from being
+/// cleared, and the summary says so in words.
 fn open_pull_total() -> u64 {
     LEDGER_INTENTS.with(|j| {
         j.borrow()
@@ -5808,20 +6311,34 @@ fn open_pull_total() -> u64 {
     })
 }
 
-/// The ledger fees an open `sweep` will burn out of the deposit subaccounts it is
-/// draining.
+/// What an open exit from a deposit subaccount will REMOVE FROM THIS CANISTER
+/// ALTOGETHER, as opposed to move between two of its own accounts.
 ///
-/// [`open_sweep_total`] is gross (`amount + fee`) because it is netted OUT of the
-/// deposit observation; this is the fee half alone, and it is subtracted from the
-/// HELD side of the solvency report so that the difference does not wobble by one
-/// transfer fee per sweep for as long as the sweep is in flight.
-fn open_sweep_fee_total() -> u64 {
+/// [`open_deposit_exit_total`] is gross (`amount + fee`) because it is netted OUT of the
+/// deposit observation. This is the part that stops being ANYWHERE in the
+/// canister, and it is subtracted from the HELD side of the solvency report,
+/// which reads a deposit observation taken before the movement started:
+///
+/// * a `Sweep` moves `amount` from a subaccount to the main account and burns the
+///   `fee`, so exactly one fee leaves;
+/// * a `RefundDeposit` sends `amount` to the OWNER'S OWN WALLET and burns the
+///   `fee`, so `amount + fee` leaves.
+///
+/// Counting a refund as a sweep here is how the in-flight window would report a
+/// phantom SURPLUS: `owed` drops by `amount + fee` the moment the intent opens
+/// (`observed_deposit_total` nets it out) and `held` has to drop with it, or the
+/// same e8s become an asset this canister owes to nobody
+/// (docs/SECURITY-FINDINGS.md FINDING 43).
+fn open_deposit_exit_leakage() -> u64 {
     let fee = get_table_currency().transfer_fee();
     LEDGER_INTENTS.with(|j| {
-        j.borrow()
-            .values()
-            .filter(|i| i.kind == LedgerIntentKind::Sweep)
-            .fold(0u64, |acc, _| acc.saturating_add(fee))
+        j.borrow().values().fold(0u64, |acc, i| match i.kind {
+            LedgerIntentKind::Sweep => acc.saturating_add(fee),
+            LedgerIntentKind::RefundDeposit => {
+                acc.saturating_add(i.amount.saturating_add(fee))
+            }
+            _ => acc,
+        })
     })
 }
 
@@ -5971,11 +6488,15 @@ pub struct SolvencyReport {
     /// Open `pull` and `sweep` intents: value arriving that has not been booked.
     pub unfinished_incoming: u64,
     /// The `pull` half of `unfinished_incoming`: value on its way from a player's
-    /// own wallet. Published separately because it is the only in-flight term
-    /// that is added to the HELD side as well -- it is on one side of the ledger
-    /// boundary or the other, so counting it on both sides is what stops an
-    /// unfinished deposit from manufacturing a shortfall. `unfinished_incoming -
-    /// pulls_in_flight` is the sweep half.
+    /// own wallet. `unfinished_incoming - pulls_in_flight` is the sweep half.
+    ///
+    /// **OWED, AND NEVER HELD.** It was added to the HELD side too until
+    /// docs/SECURITY-FINDINGS.md FINDING 38, on the argument that the money "is
+    /// not yet in the reading" -- while `refresh_solvency()` is public,
+    /// anonymous-callable and exists to make the reading current. While a pull is
+    /// open this canister therefore cries poor by exactly this much, which is the
+    /// safe direction, one `resolve_my_ledger_intents()` from being cleared, and
+    /// named in `summary`.
     pub pulls_in_flight: u64,
     /// The ledger fees an open sweep will burn out of the deposit subaccount it
     /// is draining. Subtracted from the HELD side, so the difference does not
@@ -5984,8 +6505,21 @@ pub struct SolvencyReport {
     /// Open `payout` intents: value already debited from escrow and handed to the
     /// ledger, not yet seen to leave.
     pub payouts_in_flight: u64,
-    /// The sum of the terms above (`pot` and `committed_stake` counted once, at
-    /// the larger of the two).
+    /// **What this canister owes, and the SAME NUMBER as `guard_liability`** --
+    /// they are one call to `total_liability()`, not two sums. Two totals of one
+    /// liability in one reply is docs/SECURITY-FINDINGS.md FINDING 43.
+    ///
+    /// Rebuildable from the terms above exactly:
+    ///
+    /// ```text
+    ///   escrow + chips_at_table + max(pot, committed_stake) + unswept_deposits
+    ///     + unfinished_incoming + payouts_in_flight + unattributed_at_main
+    /// ```
+    ///
+    /// `unattributed_at_main` is the term that used to be missing, and it is the
+    /// one that makes this an UPPER bound: money at the main account is owed
+    /// either to somebody this canister can name or to somebody it cannot yet
+    /// name, and the second is a liability rather than profit.
     pub owed: u64,
 
     // -- WHAT IT HOLDS -----------------------------------------------------
@@ -6032,27 +6566,45 @@ pub struct SolvencyReport {
     /// else's principals, and this method is callable by anyone including an
     /// anonymous caller. Branch on the count above, never on this being empty.
     pub deposit_accounts_never_observed: Vec<Principal>,
-    /// `main_account + deposit_subaccounts + pulls_in_flight -
-    /// sweep_fees_in_flight`, exactly. **`null` whenever `main_account` is
-    /// null**: there is no honest total that treats a never-read account as
-    /// empty.
+    /// `main_account + deposit_subaccounts - sweep_fees_in_flight`, exactly.
+    /// **`null` whenever `main_account` is null**: there is no honest total that
+    /// treats a never-read account as empty.
+    ///
+    /// **NO IN-FLIGHT TERM IS EVER ADDED TO THIS.** `pulls_in_flight` was, until
+    /// docs/SECURITY-FINDINGS.md FINDING 38. This is what the LEDGER says, as a
+    /// lower bound, and nothing else.
     pub held: Option<u64>,
 
     // -- THE ANSWER --------------------------------------------------------
     /// `held - owed`, signed. Negative means the canister CANNOT pay everyone.
     /// `null` when `held` is null.
+    ///
+    /// **THIS IS NEVER POSITIVE.** This canister takes no rake and keeps nothing,
+    /// so it has no surplus: an e8 at its own accounts that no player is credited
+    /// with is money held for somebody it cannot yet name, and `owed` carries it.
+    /// A positive number here would be docs/SECURITY-FINDINGS.md FINDING 43
+    /// coming back.
     pub difference_e8s: Option<i128>,
     /// The magnitude of a negative difference, for a reader that only wants the
     /// bad number. `null` when there is no shortfall OR when the answer is not
     /// known -- branch on `verdict`, never on this being null.
     pub shortfall_e8s: Option<u64>,
-    /// Money at the main account that no escrow balance, chip stack, pot or open
-    /// payout accounts for: held for somebody this canister cannot yet name.
-    /// `null` when the main account has never been read.
+    /// Money at the main account that no escrow balance, chip stack, pot, open
+    /// payout or open pull accounts for: held for somebody this canister cannot
+    /// yet name. `null` when the main account has never been read.
+    ///
+    /// **A LIABILITY, and one of the terms of `owed`.** It was published here and
+    /// counted nowhere until docs/SECURITY-FINDINGS.md FINDING 43, so the same
+    /// e8s were an asset in `held` and in no term of `owed`, and the report called
+    /// a player's money a surplus in the same reply that named it unattributed.
     pub unattributed_at_main: Option<u64>,
     /// `total_liability()`, the single number the currency guard reads, published
     /// so an instrument can check the guard instead of having to trigger it.
     /// docs/SECURITY-FINDINGS.md FINDING 37.
+    ///
+    /// **EQUAL TO `owed`, ALWAYS, BY CONSTRUCTION** -- it is the same call. It is
+    /// still published, because an instrument that asserts the equality is how the
+    /// guard and the report are stopped from coming apart again (FINDING 43).
     pub guard_liability: u64,
     /// The answer, in one of three states.
     pub verdict: SolvencyVerdict,
@@ -6079,14 +6631,16 @@ fn build_solvency_report() -> SolvencyReport {
     let unswept_deposits = observed_deposit_total();
     let unfinished_incoming = journalled_incoming_total();
     let pulls_in_flight = open_pull_total();
-    let sweep_fees_in_flight = open_sweep_fee_total();
+    let sweep_fees_in_flight = open_deposit_exit_leakage();
     let payouts_in_flight = open_payout_total();
-    let owed = escrow
-        .saturating_add(chips_at_table)
-        .saturating_add(pot.max(committed_stake))
-        .saturating_add(unswept_deposits)
-        .saturating_add(unfinished_incoming)
-        .saturating_add(payouts_in_flight);
+    // ONE DEFINITION, ONE FUNCTION. `owed` and `guard_liability` below are the
+    // SAME CALL, not two sums that happen to agree: two totals of one liability
+    // in one reply is docs/SECURITY-FINDINGS.md FINDING 43, and the published
+    // terms re-derive this exactly --
+    //   escrow + chips + max(pot, committed) + unswept_deposits +
+    //   unfinished_incoming + payouts_in_flight + unattributed_at_main
+    // -- which `invariants::solvency` asserts on every snapshot the fuzzer takes.
+    let owed = total_liability();
 
     // `observed_main_entry`, not `recorded_main_entry`: a reading taken on the
     // ledger this table USED to be denominated in is not a reading of the account
@@ -6113,12 +6667,11 @@ fn build_solvency_report() -> SolvencyReport {
             .collect()
     };
 
-    let held = main.as_ref().map(|m| {
-        m.balance_now()
-            .saturating_add(deposit_subaccounts)
-            .saturating_add(pulls_in_flight)
-            .saturating_sub(sweep_fees_in_flight)
-    });
+    // ONE DEFINITION, ONE FUNCTION, and NO IN-FLIGHT TERM. `pulls_in_flight` was
+    // added here on the strength of the reading not yet containing the money,
+    // and `refresh_solvency()` is the public button that makes it contain it:
+    // docs/SECURITY-FINDINGS.md FINDING 38.
+    let held = total_holdings();
     let difference_e8s = held.map(|h| h as i128 - owed as i128);
     let shortfall_e8s = difference_e8s.and_then(|d| (d < 0).then(|| (-d) as u64));
     let unattributed_at_main = main.as_ref().map(|_| main_uncredited_observed());
@@ -6259,7 +6812,7 @@ fn solvency_summary(
             let short = difference.map(|d| -d).unwrap_or(0);
             format!(
                 "THIS CANISTER CANNOT PAY EVERYONE IT OWES. It owes {} ({} e8s) and it holds {} \
-                 ({} e8s): it is SHORT {} e8s. Withdrawals will keep working until the money \
+                 ({} e8s): it is SHORT {} e8s.{} Withdrawals will keep working until the money \
                  runs out and then they will start failing at the ledger, and the last people \
                  to ask will be the ones who are not paid. Nothing here can fix that by editing \
                  a balance and nothing here will try -- this canister has no method that lets \
@@ -6272,24 +6825,77 @@ fn solvency_summary(
                 held.map(|h| currency.format_amount(h)).unwrap_or_default(),
                 held.unwrap_or(0),
                 short,
+                in_flight_sentence(currency),
                 main.map(|m| age(m.observed_at_ns))
                     .unwrap_or_else(|| "never".to_string()),
             )
         }
+        // NO SURPLUS, EVER. This canister takes no rake and keeps nothing, so the
+        // difference cannot be positive and this sentence must not offer a number
+        // that reads like profit. "A surplus of 100000000 e8s", published about a
+        // player's own money sitting at the shared main account, is exactly what
+        // docs/SECURITY-FINDINGS.md FINDING 43 measured.
         SolvencyVerdict::CanPayEveryone => format!(
-            "This canister can pay everyone it owes, on the readings it has: it owes {} ({} \
-             e8s) and holds {} ({} e8s), a surplus of {} e8s. Every account it can enumerate \
-             has been read. The main-account reading was taken {}, and a reading is not the \
-             present: call refresh_solvency() for a fresh one.",
+            "This canister holds at least what it owes, on the readings it has: it owes {} ({} \
+             e8s) and holds {} ({} e8s), so it is short by nothing.{} Every account it can \
+             enumerate has been read. The main-account reading was taken {}, and a reading is \
+             not the present: call refresh_solvency() for a fresh one.",
             currency.format_amount(owed),
             owed,
             held.map(|h| currency.format_amount(h)).unwrap_or_default(),
             held.unwrap_or(0),
-            difference.unwrap_or(0),
+            unattributed_sentence(currency),
             main.map(|m| age(m.observed_at_ns))
                 .unwrap_or_else(|| "never".to_string()),
         ),
     }
+}
+
+/// The sentence that names money this canister is holding for somebody it cannot
+/// yet name, or the empty string when there is none.
+///
+/// **The datum was already published in `unattributed_at_main` and it was in no
+/// sentence anybody reads.** docs/SECURITY-FINDINGS.md FINDING 43 is what
+/// happens when a report carries the right number in a field and the wrong word
+/// in the summary: the reply named 1 ICP as unattributed three fields above
+/// calling the same 1 ICP a surplus.
+fn unattributed_sentence(currency: Currency) -> String {
+    let unattributed = main_uncredited_observed();
+    if unattributed == 0 {
+        return String::new();
+    }
+    format!(
+        " {} ({} e8s) of what it holds is at its own main account and is credited to NOBODY: \
+         it is money held for somebody this canister cannot yet name, it is counted as owed \
+         and not as profit, and it is not available to pay anybody else. If it is yours, it \
+         arrived at the shared address this canister used to publish -- call \
+         get_custody_status() and follow the recovery it names.",
+        currency.format_amount(unattributed),
+        unattributed,
+    )
+}
+
+/// The sentence that names an unfinished incoming transfer as the reason the
+/// canister is crying poor, or the empty string when there is none.
+///
+/// docs/SECURITY-FINDINGS.md FINDING 38. An open `pull` is counted as owed and
+/// never as held, so while one is open the difference is understated by exactly
+/// its amount. That is the safe direction and it must not be silent, or a routine
+/// deposit reads as an insolvency.
+fn in_flight_sentence(currency: Currency) -> String {
+    let pulls = open_pull_total();
+    if pulls == 0 {
+        return String::new();
+    }
+    format!(
+        " {} ({} e8s) of that is money named by unfinished incoming transfers: this canister \
+         counts them as owed and never as held, on purpose, so that a transfer it has not seen \
+         arrive makes it cry poor rather than claim money it may not have. Call \
+         resolve_my_ledger_intents() -- it is public and it needs no permission -- to finish \
+         them, and this figure will be right either way.",
+        currency.format_amount(pulls),
+        pulls,
+    )
 }
 
 /// The shortfall sentence, or the empty string when the canister is not KNOWN to
@@ -6308,13 +6914,20 @@ fn shortfall_sentence_from(report: &SolvencyReport) -> String {
     format!(
         "AND A WARNING ABOUT THE WHOLE TABLE, NOT JUST YOU: this canister currently owes more \
          than it holds. It owes {} ({} e8s) across every player and it holds {} ({} e8s), so it \
-         is SHORT {} e8s. That means somebody's withdrawal will fail. Call get_solvency() for \
+         is SHORT {} e8s. That means somebody's withdrawal will fail.{} Call get_solvency() for \
          the full breakdown and refresh_solvency() to take a fresh reading yourself.",
         currency.format_amount(report.owed),
         report.owed,
         currency.format_amount(report.held.unwrap_or(0)),
         report.held.unwrap_or(0),
         report.shortfall_e8s.unwrap_or(0),
+        // THE SAME SENTENCE THE REPORT CARRIES, ON THE SURFACE EVERY PLAYER READS.
+        // An open pull is owed and never held, so while one is in flight this
+        // canister cries poor by its amount -- deliberately
+        // (docs/SECURITY-FINDINGS.md FINDING 38), and a warning that does not say
+        // why is a warning people learn to ignore. `get_custody_status().advice`
+        // puts this sentence FIRST for every player at the table.
+        in_flight_sentence(currency),
     )
 }
 
@@ -9902,7 +10515,7 @@ fn get_custody_status() -> CustodyStatus {
         .as_ref()
         .map(|o| o.amount)
         .unwrap_or(0)
-        .saturating_sub(open_sweep_for(caller));
+        .saturating_sub(open_deposit_exit_for(caller));
     let unswept_deposit_observed_at_ns = deposit.as_ref().map(|o| o.observed_at_ns);
     let deposit_advice =
         deposit_custody_sentence(unswept_deposit, get_table_currency());

@@ -49,17 +49,17 @@
   // own money at the same instant, with no attacker and no in-application
   // remedy. Nothing in this project tops a canister up.
   //
-  // >>> CORRECTION, wave-13 reconciliation (docs/DEFECTS.md E-92). THE FIGURE
-  // >>> BELOW IS STILL OPTIMISTIC. 0.4994 T/day is idle + 500 hands + six
-  // >>> 10-second HEARTBEAT streams and nothing else. The same page also drives
-  // >>> `check_timeouts` -- an UPDATE call -- from a 500 ms setInterval, at a
-  // >>> measured 6,573,911 cycles each: 0.28-1.14 T/day PER OPEN TAB against the
-  // >>> heartbeat's 0.0618. What this modal READS is unaffected: the canister's
-  // >>> sliding window measures real burn and already includes those calls.
-  // Measured (`tests/money_safety/tests/cycles_runway.rs`): an EMPTY table burns
-  // 0.0442 T/day, which is 225 days on 10 T. A table with 500 hands a day and six
-  // open tabs burns 0.4994 T/day, which is TWENTY days on the same balance. The
-  // reassuring number in the register is the number for a table nobody is using.
+  // THERE IS NO BURN FIGURE IN THIS COMMENT. It carried one, hand-copied, and it
+  // was wrong the same way five other copies of it were wrong: it priced an open
+  // browser tab as a 10-second heartbeat stream and left out the 500 ms
+  // `check_timeouts` UPDATE poll, which was the larger term by more than an order
+  // of magnitude (docs/DEFECTS.md E-92). The numbers live in ONE measured file
+  // now, `tools/cycles/burn-table.json`. What this modal READS was never affected:
+  // the canister's own sliding window measures real burn and always included those
+  // calls even while no document did.
+  //
+  // The shape of the problem is unchanged: the reassuring runway figure is the
+  // figure for a table NOBODY IS USING.
   //
   // Read on mount, before any amount is typed: a warning that appears after the
   // button is pressed is a receipt, not a warning.
@@ -272,7 +272,28 @@
       amountSmallest === balanceSmallest && amountSmallest > TRANSFER_FEE;
 
     // Both bounds, in the same words the canister uses, from the same numbers.
+    //
+    // TWO REFUSALS, MIRRORED (docs/DEFECTS.md E-81). One is a policy floor the
+    // player clears by pressing MAX; the other is the ledger's own fee, which no
+    // request clears. The single sentence that covered both told the player whose
+    // balance can never leave that the whole balance can always be withdrawn, and
+    // pointed them at a MAX button that will refuse -- so they press it, read the
+    // same paragraph, and conclude they made a formatting mistake. This modal is
+    // the surface that player actually reads, so mirroring only the canister's
+    // policy sentence would leave the defect standing where no canister-side gate
+    // can see it.
     if (amountSmallest < MIN_WITHDRAWAL && !sweepingWholeBalance) {
+      if (balanceSmallest > 0n && balanceSmallest <= TRANSFER_FEE) {
+        error =
+          `No withdrawal of any size can move this, and that is arithmetic rather than a `
+          + `policy of this table. Your whole remaining balance is `
+          + `${formatExact(balanceSmallest)}, and the `
+          + `ledger charges a ${feeDisplay} network fee on every transfer -- so sending it `
+          + `would cost at least as much as the amount. It is not lost: it is counted in `
+          + `everything this table reports it holds for you, and if you ever put more in, it `
+          + `comes out with the rest in one call.`;
+        return;
+      }
       error =
         `Minimum withdrawal is ${minDisplay}. Your whole remaining balance can always be `
         + `withdrawn in one call whatever its size, as long as it is more than the `

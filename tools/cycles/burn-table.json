@@ -1,0 +1,243 @@
+{
+  "schema": 1,
+  "generated_by": "tools/cycles/build-burn-table.mjs",
+  "generated_at": "2026-08-09T16:53:55.866Z",
+  "defect": "docs/DEFECTS.md E-92 (the poll), E-55 (the runway)",
+  "method": "tools/cycles/tab-burn.mjs, local replica, real module, control-differenced. See that file's header for the procedure and its two stated confounds.",
+  "environment": "local replica (icp 1.0.2). Absolute prices are a local measurement; the ratio between the legacy and fixed polls is what E-92 is about and is robust to the price list.",
+  "measured": {
+    "idle_burn_per_day": 41143407089,
+    "control_before_per_day": 41141210251,
+    "control_after_per_day": 41145603927,
+    "control_drift": 0,
+    "cycles_per_check_timeouts": 6889049,
+    "per_tab_per_day": {
+      "legacy_poll": 1137973560555,
+      "fixed_poll_measured_idle_table": 57207425460,
+      "fixed_poll_ceiling": 192864145060
+    },
+    "cells": {
+      "legacy": [
+        {
+          "tabs": 1,
+          "burn_per_day": 1179116967644,
+          "per_tab": 1137973560555,
+          "update_calls": 251,
+          "elapsed_s": 132,
+          "cycles_per_update": 6926577
+        },
+        {
+          "tabs": 3,
+          "burn_per_day": 3430817397332,
+          "per_tab": 1129891330081,
+          "update_calls": 754,
+          "elapsed_s": 132,
+          "cycles_per_update": 6868261
+        },
+        {
+          "tabs": 10,
+          "burn_per_day": 9761838354064,
+          "per_tab": 972069494698,
+          "update_calls": 2161,
+          "elapsed_s": 132,
+          "cycles_per_update": 6872310
+        }
+      ],
+      "fixed": [
+        {
+          "tabs": 1,
+          "burn_per_day": 95050003315,
+          "per_tab": 53906596226,
+          "update_calls": 12,
+          "elapsed_s": 132,
+          "cycles_per_update": 6863108
+        },
+        {
+          "tabs": 3,
+          "burn_per_day": 212765683470,
+          "per_tab": 57207425460,
+          "update_calls": 36,
+          "elapsed_s": 132,
+          "cycles_per_update": 7283353
+        },
+        {
+          "tabs": 10,
+          "burn_per_day": 579896541565,
+          "per_tab": 53875313448,
+          "update_calls": 120,
+          "elapsed_s": 132,
+          "cycles_per_update": 6859126
+        }
+      ],
+      "fixed_max": [
+        {
+          "tabs": 1,
+          "burn_per_day": 234007552149,
+          "per_tab": 192864145060,
+          "update_calls": 42,
+          "elapsed_s": 132,
+          "cycles_per_update": 7015561
+        },
+        {
+          "tabs": 3,
+          "burn_per_day": 607624842797,
+          "per_tab": 188827145236,
+          "update_calls": 126,
+          "elapsed_s": 132,
+          "cycles_per_update": 6868712
+        },
+        {
+          "tabs": 10,
+          "burn_per_day": 1933340912961,
+          "per_tab": 189219750587,
+          "update_calls": 420,
+          "elapsed_s": 132,
+          "cycles_per_update": 6882994
+        }
+      ]
+    },
+    "fixed_stuck_10tab": {
+      "burn_per_day": 894686860871,
+      "update_calls": 190
+    }
+  },
+  "inherited": {
+    "source": "tests/money_safety/tests/cycles_runway.rs (wave 13); not re-measured in wave 14",
+    "hand_cycles": 168300000,
+    "deposit_cycles": 12700000,
+    "withdrawal_cycles": 12700000,
+    "heartbeat_cycles": 7160000
+  },
+  "scenarios": [
+    {
+      "name": "idle, nobody at the table",
+      "tabs": 0,
+      "hands_per_day": 0,
+      "tab_cost_basis": null,
+      "tab_cost_basis_label": null,
+      "burn_per_day": 41143407089,
+      "burn_per_day_T": 0.0411,
+      "runway_days": {
+        "1T": 24,
+        "10T": 243,
+        "20T": 486,
+        "51.4T": 1249
+      },
+      "note": null
+    },
+    {
+      "name": "500 hands/day, no tab open",
+      "tabs": 0,
+      "hands_per_day": 500,
+      "tab_cost_basis": null,
+      "tab_cost_basis_label": null,
+      "burn_per_day": 125293407089,
+      "burn_per_day_T": 0.1253,
+      "runway_days": {
+        "1T": 7,
+        "10T": 79,
+        "20T": 159,
+        "51.4T": 410
+      },
+      "note": null
+    },
+    {
+      "name": "500 hands/day, 6 tabs open (typical)",
+      "tabs": 6,
+      "hands_per_day": 500,
+      "tab_cost_basis": "fixed_typical",
+      "tab_cost_basis_label": "fixed poll, measured on a table nobody is playing at",
+      "burn_per_day": 468537959849,
+      "burn_per_day_T": 0.4685,
+      "runway_days": {
+        "1T": 2,
+        "10T": 21,
+        "20T": 42,
+        "51.4T": 109
+      },
+      "note": null
+    },
+    {
+      "name": "500 hands/day, 10 tabs open (typical)",
+      "tabs": 10,
+      "hands_per_day": 500,
+      "tab_cost_basis": "fixed_typical",
+      "tab_cost_basis_label": "fixed poll, measured on a table nobody is playing at",
+      "burn_per_day": 697367661689,
+      "burn_per_day_T": 0.6974,
+      "runway_days": {
+        "1T": 1,
+        "10T": 14,
+        "20T": 28,
+        "51.4T": 73
+      },
+      "note": null
+    },
+    {
+      "name": "500 hands/day, 6 tabs open (policy ceiling)",
+      "tabs": 6,
+      "hands_per_day": 500,
+      "tab_cost_basis": "fixed_ceiling",
+      "tab_cost_basis_label": "fixed poll, policy pinned at its 2 s floor all day",
+      "burn_per_day": 1282478277449,
+      "burn_per_day_T": 1.2825,
+      "runway_days": {
+        "1T": 0,
+        "10T": 7,
+        "20T": 15,
+        "51.4T": 40
+      },
+      "note": null
+    },
+    {
+      "name": "500 hands/day, 10 tabs open (policy ceiling)",
+      "tabs": 10,
+      "hands_per_day": 500,
+      "tab_cost_basis": "fixed_ceiling",
+      "tab_cost_basis_label": "fixed poll, policy pinned at its 2 s floor all day",
+      "burn_per_day": 2053934857689,
+      "burn_per_day_T": 2.0539,
+      "runway_days": {
+        "1T": 0,
+        "10T": 4,
+        "20T": 9,
+        "51.4T": 25
+      },
+      "note": "the figure fallback_burn_per_day is taken from."
+    },
+    {
+      "name": "500 hands/day, 6 tabs open — BEFORE the E-92 fix",
+      "tabs": 6,
+      "hands_per_day": 500,
+      "tab_cost_basis": "legacy",
+      "tab_cost_basis_label": "legacy 500 ms poll (pre-E-92), measured",
+      "burn_per_day": 6953134770419,
+      "burn_per_day_T": 6.9531,
+      "runway_days": {
+        "1T": 0,
+        "10T": 1,
+        "20T": 2,
+        "51.4T": 7
+      },
+      "note": "what the poll cost until wave 14. Kept as the comparison, not as a live figure."
+    },
+    {
+      "name": "500 hands/day, 10 tabs open — BEFORE the E-92 fix",
+      "tabs": 10,
+      "hands_per_day": 500,
+      "tab_cost_basis": "legacy",
+      "tab_cost_basis_label": "legacy 500 ms poll (pre-E-92), measured",
+      "burn_per_day": 11505029012639,
+      "burn_per_day_T": 11.505,
+      "runway_days": {
+        "1T": 0,
+        "10T": 0,
+        "20T": 1,
+        "51.4T": 4
+      },
+      "note": "the headline of E-92: ten open browser tabs and 10 T is under a day."
+    }
+  ],
+  "fallback_burn_per_day": 2053934857689,
+  "fallback_rationale": "What a canister that cannot yet measure its own burn is ASSUMED to be burning. It is the busiest shipped-client scenario (500 hands/day, 10 tabs open), not the idle figure, because \"I cannot say\" must not be turned into \"you have plenty\"."
+}
