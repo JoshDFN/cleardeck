@@ -435,6 +435,8 @@ is true.
 
 | id | sev | status | wave | gate — what would catch it coming back | where | one line |
 |---|---|---|---|---|---|---|
+| [E-102](#e-102) | high | OPEN | — | — (**the gate exists and is RED**: `./scripts/check-fleet-coherence.sh --network ic`, committed at `eb819a8`. The row stays gateless because the DEFECT is live on mainnet: a gate that reports a split fleet does not un-split it. It flips to FIXED when the fleet is redeployed from one build and the same command exits 0) | the mainnet deployment itself; `scripts/check-deployed.sh` and `scripts/check-deployed-config.sh`, which are both per-canister | **two different engines are running on mainnet right now, and no gate in this repository could ever have said so.** `table_1`, `table_2`, `table_3` and `btc_table_1` are four instances of ONE package, `table_canister`. They differ only in `init_args`, which are install-time arguments and not part of the module, so all four **must** report the same module hash. Certified state says `table_1` is `4511ab187cff8b90…` and the other three are `9c0ed3a138a3753d…`. Whoever sits at the older table plays with every money defect closed since that build. It happened when a deploy went out from a tree that was being edited ([E-79](#e-79)) and it survived every wave since, because `check-deployed.sh` compares each canister against an expectation and `check-deployed-config.sh` compares each canister against `icp.yaml` — **both are per-canister, so a fleet that is individually plausible and collectively incoherent passes both.** It also breaks the only trust story this project has: `README.md` tells a stranger to build the Docker image and compare hashes, that image builds `table_canister` once, so a verifier following our own instructions matches one canister of four and correctly concludes the rest are not the code we published |
+| [E-103](#e-103) | high | FIXED | 14 | `./scripts/check-fleet-coherence.sh --network ic` reads CERTIFIED state via `dfx canister info --identity anonymous`, and its `module_hash()` carries the measurement that retired the dashboard. Verified by construction: the dashboard path is gone, so it cannot be silently reintroduced without editing a function whose comment is the incident | `README.md` "Verify the Code"; any verifier who reads `https://ic-api.internetcomputer.org` | **the source we point a stranger at for "what the IC reports" served a hash that was silently stale, and it changed the answer.** Building [E-102](#e-102)'s gate on the public dashboard API looked right — it needs no key, so anyone on earth can run it. Within one hour the same endpoint returned two different module hashes for `table_3` (`511c9d0e6d508d62…` then `9c0ed3a138a3753d…`) with **nothing deployed in between**: every deploy in that window was `-e local`, confirmed by scanning the five builders' transcripts. The dashboard is an INDEX over the IC, it lags, and it is not certified. The first reading of [E-102](#e-102) was consequently wrong in public — reported as three engines when certified state says two — and the error direction is the dangerous one in both senses: a verifier can read fraud where there is none, or all-clear over a split fleet. **A trust instrument may not rest on an uncertified cache.** This is [FINDING 42](SECURITY-FINDINGS.md#finding-42)'s lesson (*the wire is not the trust root*) arriving at the verification path instead of the deposit path, one wave later, found by an instrument written for a different defect |
 | [D-14](#d-14) | fund-theft | FIXED | 12 | `dev.sh hygiene` -> `the retracted custody claim has not come back (FINDING 23c)` (an INVERTED check: the two retracted sentences must be absent from `README.md` and the frontend) + `dev.sh custody` -> `finding23c_the_operator_can_pay_the_ledger_balance_to_themselves`, which executes the theft | `DepositModal.svelte` `.custody-notice`; `README.md` "What that means for a deposit" | **the custody disclosure understated a fund-THEFT capability as destruction, on the screen a player deposits from.** It promised that the money would be "unreachable by anybody, including the operator", and the README's decision table answered "Can the operator take the ICP out of the canister to their own wallet?" with **No**. Both false. A controller is not bound to the ClearDeck wasm: a 500-byte module installed with the SAME verb as the wipe moved **39.99990000 ICP** into a wallet the operator owns. Every presence check in [D-13](#d-13)'s gate was GREEN while the paragraph lied, which is why the retraction needed an inverted gate of its own |
 | [H-65](#h-65) | medium | OPEN | — | — | `tools/shots/lib/chain-agreement.mjs` `~1518`, the fiat leg | **the deposit shot has an intermittent FALSE RED, produced by the harness's own read ordering.** The fiat check re-reads the SERVED QUOTE after the settle loop — its comment says *"a quote can land between the two"* — and then compares it against `dom.usdValues`, which was read BEFORE the loop and is never re-read. When the third-party quote lands in that window the harness holds a quote and a stale-empty DOM, and reports `DEPOSIT CHAIN DISAGREEMENT: a live quote (2.19 USD/ICP) was served but the modal shows no fiat figure`. **Observed once by the wave-14 coherence pass** on `deposit/desktop` and not reproduced in the immediately following full sweep on the same tree, same replica, same fixture. It lands on the deposit screen, which is already carrying an acknowledged red ([E-101](#e-101)) — so the failure mode is that an intermittent red arrives on a shot people have learned to expect a red on, and the `covers` rule then fails the whole gate for a reason that is not real. The fix is to re-read the DOM in the same breath as the quote |
 | [H-64](#h-64) | medium | OPEN | — | — | `tests/money_safety/src/invariants/reachability.rs` `DrainReport::stranded_breakdown()`; `Snapshot` in `tests/money_safety/src/world.rs` | **the drain's stranded leg is measured against the CANISTER, not the ledger — this repository's standing lesson, re-created inside the fix for that lesson.** `stranded_breakdown()`'s deposit term reads `DrainReport::deposit_custody_after`, which is `Snapshot::canister_deposit_by_principal`: the reply from `admin_deposit_custody()`, i.e. **what the canister says it observed**. The escrow term is `admin_get_all_balances()`, the canister's own escrow book. The same `Snapshot` already carries `ledger_deposit_by_principal`, built per principal from `icrc1_balance_of`, and its own doc comment says *"The whole value of this field is that it can DISAGREE with the ledger scan"* — and `stranded_breakdown()` does not consult it. So wave 14's claim that *"recoverability is measured at the player's wallet on the ledger, never at an escrow row"* is true of the `deposit_floor` tests and false of `check_drain`'s stranded leg, which is the leg that decides whether `fuzz-default` is red. **Not blind today:** `orphaned_e8s()` is ledger-anchored (but AGGREGATE, and reduced by `Exemptions::unobserved_subaccount`) and `check_deposit_attribution` backstops it. The fix is to iterate the union of both maps and take the MAX per principal, which cannot under-report |
@@ -11647,3 +11649,114 @@ dynamic `acknowledged-reds.json` exists to prevent, arriving from the harness si
 
 The fix is to read the DOM's fiat values in the same breath as the quote, so the
 two describe one instant.
+
+---
+
+<a id="e-102"></a>
+### E-102 — high — two different engines are live on mainnet, and nothing could have said so — STATUS: OPEN
+
+`table_1`, `table_2`, `table_3` and `btc_table_1` are four instances of one package,
+`table_canister`. They differ only in `init_args`. Init args are install-time
+arguments; they are not part of the module. So all four **must** report the same
+module hash.
+
+Read out of CERTIFIED state, 2026-08-09, `dfx canister info <id> --network ic
+--identity anonymous`:
+
+```text
+table_1      4511ab187cff8b90202c4ba2c4e22aab4745636235aa4f3b2e9c69e79c42c608
+table_2      9c0ed3a138a3753df5f415932e7822b88f625eaf5f81d5e2c9644dd45dfd537c
+table_3      9c0ed3a138a3753df5f415932e7822b88f625eaf5f81d5e2c9644dd45dfd537c
+btc_table_1  9c0ed3a138a3753df5f415932e7822b88f625eaf5f81d5e2c9644dd45dfd537c
+```
+
+`table_1` is alone. Whoever sits at whichever of these is older is playing with every
+money defect that has since been closed on the other.
+
+#### Why no gate could see it
+
+There were two gates on deployed state and **both are per-canister**:
+
+| gate | axis it checks |
+|---|---|
+| `scripts/check-deployed.sh` | each canister against an expectation |
+| `scripts/check-deployed-config.sh` | each canister's live `TableConfig` against `icp.yaml` |
+
+A fleet in which every canister is individually plausible, and which is collectively
+incoherent, passes both. Nothing ever compared the canisters **to each other** —
+which is the easiest invariant in this repository, because it needs no expectation at
+all, only the observation that four things built from one source cannot differ.
+
+`scripts/check-fleet-coherence.sh` (committed at `eb819a8`) is that missing axis. It
+groups by package out of `icp.yaml` and fails if a group disagrees with itself.
+Proven in both directions before it was believed:
+
+```text
+--network local   exit 0   all 3 package group(s) coherent
+--network ic      exit 1   ✗ 2 DIFFERENT MODULES for one package
+```
+
+#### It also breaks the verification story
+
+`README.md` tells a stranger to build the Docker image, read one sha256 per canister
+and compare against what the IC reports. That image builds `table_canister` **once**,
+so it prints one hash for the table modules. Against a split fleet, a verifier who
+follows our own instructions exactly matches one canister of four and correctly
+concludes the other three are not the code we published. The instructions are not
+wrong; the deployment is.
+
+#### How it happened, and what closes it
+
+[E-79](#e-79): a deploy went out from a tree that agents were actively editing, and
+`table_1` matched the tree while the rest did not. The lesson was written down and the
+fleet was never brought back into line, so the split rode through every wave since.
+
+Closing it is one operation, and the first step is the one that was skipped:
+
+```bash
+git status --porcelain                    # must be EMPTY. this is how it broke.
+SKIP_CONFIRM=1 IDENTITY=cleardeck-prod ./scripts/deploy-mainnet.sh
+./scripts/check-fleet-coherence.sh --network ic --expect HASHES.txt
+```
+
+`--mode upgrade` throughout; `reinstall` wipes balances and is what
+[FINDING 23](SECURITY-FINDINGS.md#finding-23) is about.
+
+---
+
+<a id="e-103"></a>
+### E-103 — high — the source we point verifiers at served a stale hash — STATUS: FIXED (wave 14)
+
+[E-102](#e-102)'s gate was first built on the public dashboard API,
+`https://ic-api.internetcomputer.org/api/v3/canisters/<id>`, for a good reason: it
+needs no key, so any stranger can run it against our deployment without our
+cooperation. That is exactly the property a verification instrument wants.
+
+Within one hour the same endpoint returned two different module hashes for the same
+canister, with **nothing deployed in between**:
+
+```text
+10:30   table_3   511c9d0e6d508d627357af22930b02daf252753621a17dd8a9fd0d5ab3796ba4
+11:05   table_3   9c0ed3a138a3753df5f415932e7822b88f625eaf5f81d5e2c9644dd45dfd537c
+```
+
+Every deploy in that window was `-e local` — verified by scanning all five wave-14
+builders' transcripts for mainnet commands, of which there were none. Certified state
+says `9c0ed3a1…`. The dashboard is an INDEX over the IC. It lags, and it is not
+certified.
+
+**The first public reading of [E-102](#e-102) was wrong because of this** — reported
+as three engines when the truth is two. That is the harmless direction. The other
+direction is a verifier reading all-clear over a split fleet, or reading fraud into an
+honest deployment, and there is no way to tell from the reply which one you got.
+
+The fix is to read certified state. `dfx canister info <id> --network ic --identity
+anonymous` reads the module hash out of the certified tree and still needs no key, so
+the stranger property survives; the cost is one extra tool to install. The dashboard
+path is **removed**, not demoted, so it cannot be reintroduced by someone
+simplifying a `curl` back into place — the function carries the incident above it.
+
+This is [FINDING 42](SECURITY-FINDINGS.md#finding-42)'s lesson — *the wire is not the
+trust root* — arriving at the verification path one wave after it arrived at the
+deposit path, and found by an instrument that was being written for a different
+defect entirely.
