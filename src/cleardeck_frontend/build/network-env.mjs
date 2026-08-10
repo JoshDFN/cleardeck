@@ -177,7 +177,25 @@ export function prepareBuildEnv({ repoRoot, env = process.env }) {
   const wrongRole = [];
 
   for (const name of REQUIRED_CANISTERS) {
-    const id = idFromEnv(env, name);
+    // ON MAINNET, THE TRACKED MAPPING IS THE DEFAULT, NOT JUST THE CHECK.
+    //
+    // Below, a mainnet id that disagrees with .icp/data/mappings/ic.ids.json is
+    // rejected, and that error says in as many words: the repo-root .env "is
+    // untracked and hand-edited", the tracked mapping "is what `icp -e ic`
+    // resolves and what the deployment actually is, so it wins".
+    //
+    // It won every argument and supplied nothing. With .env present the build
+    // worked; on a FRESH CLONE, where .env cannot exist because it is untracked,
+    // `npm run build:mainnet` aborted with "no canister id for LOBBY, HISTORY"
+    // while the authoritative answer sat in a committed file two directories up.
+    // A mainnet build that only succeeds on machines carrying an untracked file
+    // is not a build anyone else can reproduce, and reproducing it is the entire
+    // claim README makes to a stranger.
+    //
+    // So: read env first (an explicit id still wins, and is still checked
+    // against the mapping by role below), and fall back to the mapping.
+    const id = idFromEnv(env, name)
+      || (network === 'ic' ? mainnetByRole[name.toLowerCase()] : undefined);
     if (!id) {
       missing.push(name);
       continue;
