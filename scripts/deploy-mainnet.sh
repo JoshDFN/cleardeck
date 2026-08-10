@@ -97,7 +97,22 @@ echo "━━━ STEP 1: Build frontend ━━━"
 IDS=".icp/data/mappings/${ENVIRONMENT}.ids.json"
 export VITE_CANISTER_ID_LOBBY="$(jq -r '.lobby' "$IDS")"
 export VITE_CANISTER_ID_HISTORY="$(jq -r '.history' "$IDS")"
-( cd src/cleardeck_frontend && npm install && npm run build )
+# The build must be TOLD it is for mainnet, and it must be the VERIFIED path.
+#
+#   DFX_NETWORK: `prepareBuildEnv()` refuses to guess (docs/DEFECTS.md T-01, whose
+#   original form was a bare `npm run build` silently wiring a local dev bundle to
+#   the live fund-holding canisters). It aborts the vite build before a byte is
+#   emitted if the target network is not stated. This script did not state it, so
+#   STEP 1 failed and the mainnet deploy path could not reach a canister at all.
+#
+#   build:mainnet, not build: it runs the same vite build and then puts the
+#   emitted bundle through build/verify-bundle.mjs -- 13 checks, including that
+#   the network is compiled in rather than sniffed from the hostname, that LOBBY
+#   and HISTORY resolve to exactly one id each and that no local replica id
+#   survived. `build` emits; only `build:mainnet` checks what was emitted, and
+#   this is the one place where the difference is in front of real money.
+export DFX_NETWORK=ic
+( cd src/cleardeck_frontend && npm install && npm run build:mainnet )
 [ -d src/cleardeck_frontend/dist ] || { echo "❌ frontend build failed (no dist/)"; exit 1; }
 grep -rq "$VITE_CANISTER_ID_LOBBY" src/cleardeck_frontend/dist 2>/dev/null \
     || { echo "❌ frontend bundle missing lobby canister ID — aborting"; exit 1; }

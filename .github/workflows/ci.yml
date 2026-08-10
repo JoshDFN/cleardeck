@@ -158,10 +158,44 @@ jobs:
     # What is in each, and why, is one line per suite in scripts/test-suites.list.
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # FULL HISTORY, not the default depth-1.
+          #
+          # tests/money_safety/src/wasms.rs builds the PREVIOUS RELEASE with
+          # `git archive 801aa79` so `m7_state_written_by_the_previous_release_
+          # survives_the_upgrade_exactly` can install it, write state, and
+          # upgrade to HEAD -- an upgrade with the OLD Candid type on one side,
+          # which is the only way a record-field addition is tested as an
+          # addition. On a shallow clone that commit is not in the object store:
+          #     git archive 801aa79 failed: fatal: not a valid object name
+          # and that kills the whole `invariants` binary. It reports `0 passed`,
+          # not "one failed", so the M-invariants it also carries went unrun
+          # while the run looked merely broken.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Install the frontend's dependencies (the money gates run its real code)
+        # WITHOUT THIS, THREE SUITES CANNOT RUN AND ONE OF THEM IS THE FUND-THEFT
+        # GATE.
+        #
+        # `deposit_trust_root` (FINDING 42 / FINDING 45) and `deposit_surface` do
+        # not re-implement the deposit derivation in Rust -- re-implementing it
+        # is how the frontend and the canister came to disagree in the first
+        # place. They shell out to node and run
+        # src/cleardeck_frontend/src/lib/depositAddress.js, the module the app
+        # actually ships. It imports @dfinity/principal, so with no node_modules
+        # every test in both binaries dies at load:
+        #     Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@dfinity/principal'
+        # and the suite reports `0 passed` and FAILS. That reads like a harness
+        # problem; it is the gate for a fund-theft vector never having executed
+        # in CI even once. It passed on a laptop because node_modules happened to
+        # be there. docs/DEFECTS.md H-45, again.
+        run: npm ci
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           # The fund-safety harnesses are DETACHED crates with their own
