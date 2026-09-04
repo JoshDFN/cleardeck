@@ -1,0 +1,4033 @@
+{
+  "touchMinPx": 44,
+  "results": [
+    {
+      "scene": "lobby",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "18 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Unmute sounds\"); document 390x2094 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-lobby-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "header > div.header-right > button.sound-toggle-btn",
+          "text": "Unmute sounds",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 71.5,
+            "y": 351.5,
+            "w": 44,
+            "h": 44,
+            "right": 115.5,
+            "bottom": 395.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.login-buttons > div.dev-login-container > button.wallet-btn.dev",
+          "text": "Developer login options",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 131.5,
+            "y": 351.5,
+            "w": 86,
+            "h": 44,
+            "right": 217.6,
+            "bottom": 395.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-container > div.login-buttons > button.wallet-btn.connect",
+          "text": "Connect Wallet",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 225.6,
+            "y": 351.5,
+            "w": 152.4,
+            "h": 44,
+            "right": 378,
+            "bottom": 395.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill.on",
+          "text": "All tables",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 434.5,
+            "w": 71.6,
+            "h": 44,
+            "right": 83.6,
+            "bottom": 478.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Open seats",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 89.6,
+            "y": 434.5,
+            "w": 83.6,
+            "h": 44,
+            "right": 173.3,
+            "bottom": 478.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill.on",
+          "text": "Any stake",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 179.3,
+            "y": 434.5,
+            "w": 75.4,
+            "h": 44,
+            "right": 254.6,
+            "bottom": 478.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Micro",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 260.6,
+            "y": 434.5,
+            "w": 52.8,
+            "h": 44,
+            "right": 313.4,
+            "bottom": 478.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Low",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 319.4,
+            "y": 434.5,
+            "w": 44.6,
+            "h": 44,
+            "right": 364,
+            "bottom": 478.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr.selected",
+          "text": "Open 9-Max",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 483.5,
+            "w": 366,
+            "h": 166.4,
+            "right": 378,
+            "bottom": 649.9
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr",
+          "text": "Open 6-Max",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 655.9,
+            "w": 366,
+            "h": 166.4,
+            "right": 378,
+            "bottom": 822.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr",
+          "text": "Open Heads Up",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 828.3,
+            "w": 366,
+            "h": 165.4,
+            "right": 378,
+            "bottom": 993.6
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > p.foot-copy > button.linkish.mono",
+          "text": "4qggx…aaaca-cai",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 14,
+            "y": 1032.2,
+            "w": 99,
+            "h": 44,
+            "right": 113,
+            "bottom": 1076.2
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > p.foot-copy > button.link-btn",
+          "text": "How it works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 131.1,
+            "y": 1111.4,
+            "w": 73.7,
+            "h": 44,
+            "right": 204.9,
+            "bottom": 1155.4
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > div.pane-actions > button.btn.ghost",
+          "text": "Refresh tables",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 14,
+            "y": 1165.4,
+            "w": 89.4,
+            "h": 44,
+            "right": 103.4,
+            "bottom": 1209.4
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.intro-copy > div.intro-actions > button.btn.primary",
+          "text": "Connect wallet",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 28,
+            "y": 1385.2,
+            "w": 130,
+            "h": 44,
+            "right": 158,
+            "bottom": 1429.2
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.intro-copy > div.intro-actions > button.btn.ghost",
+          "text": "How it works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 166,
+            "y": 1385.2,
+            "w": 117.4,
+            "h": 44,
+            "right": 283.4,
+            "bottom": 1429.2
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-bottom > div.footer-center > button.footer-link",
+          "text": "How It Works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 153.9,
+            "y": 1930.5,
+            "w": 82.2,
+            "h": 44,
+            "right": 236.1,
+            "bottom": 1974.5
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-bottom > div.footer-center > button.footer-link",
+          "text": "Verify Code",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 153.9,
+            "y": 2010,
+            "w": 82.2,
+            "h": 44,
+            "right": 236.1,
+            "bottom": 2054
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 2094,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "lobby (toast up)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "1 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Dismiss\"); document 390x2094 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-lobby-toast-up-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app > div.toast.error > button.toast-close",
+          "text": "Dismiss",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 337,
+            "y": 713,
+            "w": 44,
+            "h": 44,
+            "right": 381,
+            "bottom": 757
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 2094,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "lobby (dev login menu open)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "4 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Player 1\"); document 390x2094 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-lobby-dev-login-menu-open-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.dev-login-container > div.dev-menu > button",
+          "text": "Player 1",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 136.5,
+            "y": 404.5,
+            "w": 90,
+            "h": 44,
+            "right": 226.5,
+            "bottom": 448.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.dev-login-container > div.dev-menu > button",
+          "text": "Player 2",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 136.5,
+            "y": 450.5,
+            "w": 90,
+            "h": 44,
+            "right": 226.5,
+            "bottom": 494.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.dev-login-container > div.dev-menu > button",
+          "text": "Player 3",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 136.5,
+            "y": 496.5,
+            "w": 90,
+            "h": 44,
+            "right": 226.5,
+            "bottom": 540.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.dev-login-container > div.dev-menu > button",
+          "text": "Player 4",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 136.5,
+            "y": 542.5,
+            "w": 90,
+            "h": 44,
+            "right": 226.5,
+            "bottom": 586.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 2094,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "table-preflop",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "18 interactive elements, 0 under the 44 px floor; smallest painted box 42 px (\"+ Sit Seat 3\"); document 390x844 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-table-preflop-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app.on-table > div.alpha-warning-banner.on-table > button.banner-strip",
+          "text": "Open the full player-protection terms",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 0,
+            "y": 3,
+            "w": 390,
+            "h": 54,
+            "right": 390,
+            "bottom": 57
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-left > button.back-btn",
+          "text": "Back to the lobby",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 8,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 52,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-right > button.history-btn",
+          "text": "Hand history",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 242,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 286,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-right > button.verify-btn",
+          "text": "Verify fair",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 290,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 334,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-container > div.wallet-connected > button.wallet-btn.connected",
+          "text": "ShadowDragon71",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 338,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 382,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner > div.seat.seat-left > button.join-seat",
+          "text": "+ Sit Seat 3",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 53.7,
+            "y": 293.8,
+            "w": 82.4,
+            "h": 42,
+            "right": 136,
+            "bottom": 335.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner > div.seat.seat-center > button.join-seat",
+          "text": "+ Sit Seat 4",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 153.9,
+            "y": 177.5,
+            "w": 82.7,
+            "h": 42,
+            "right": 236.5,
+            "bottom": 219.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner > div.seat.seat-right > button.join-seat",
+          "text": "+ Sit Seat 5",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 254.2,
+            "y": 294.1,
+            "w": 82.1,
+            "h": 42,
+            "right": 336.3,
+            "bottom": 336.1
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner > div.seat.seat-right > button.join-seat",
+          "text": "+ Sit Seat 6",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 253.9,
+            "y": 457.5,
+            "w": 82.4,
+            "h": 42,
+            "right": 336.3,
+            "bottom": 499.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-dock > div.dock-aux.dock-left > button.log-toggle",
+          "text": "Log",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 8,
+            "y": 711.2,
+            "w": 44,
+            "h": 44,
+            "right": 52,
+            "bottom": 755.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-dock > div.dock-aux.dock-left > button.sound-btn",
+          "text": "Unmute sounds",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 60,
+            "y": 711.2,
+            "w": 44,
+            "h": 44,
+            "right": 104,
+            "bottom": 755.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-stack > div.actions > button.action-btn.secondary",
+          "text": "Fold (F)",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 8,
+            "y": 788,
+            "w": 72.1,
+            "h": 48,
+            "right": 80.1,
+            "bottom": 836
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-stack > div.actions > button.action-btn.primary",
+          "text": "Check (C)",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 86.1,
+            "y": 788,
+            "w": 87.6,
+            "h": 48,
+            "right": 173.7,
+            "bottom": 836
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.actions > span.raise-group > button.action-btn.raise",
+          "text": "Raise to 0.20 (R)",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 179.7,
+            "y": 788,
+            "w": 62.7,
+            "h": 48,
+            "right": 242.4,
+            "bottom": 836
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.actions > span.raise-group > button.action-btn.raise",
+          "text": "Choose bet size",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 244.4,
+            "y": 788,
+            "w": 44,
+            "h": 48,
+            "right": 288.4,
+            "bottom": 836
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-stack > div.actions > button.action-btn.danger",
+          "text": "All in (A, twice)",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 294.4,
+            "y": 788,
+            "w": 87.6,
+            "h": 48,
+            "right": 382,
+            "bottom": 836
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-panel > div.wallet-actions > button.wallet-action-btn.deposit",
+          "text": "Deposit",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 200.2,
+            "y": 691.3,
+            "w": 71.1,
+            "h": 44,
+            "right": 271.3,
+            "bottom": 735.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-panel > div.wallet-actions > button.wallet-action-btn.withdraw",
+          "text": "Withdraw",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 277.3,
+            "y": 691.3,
+            "w": 82.9,
+            "h": 44,
+            "right": 360.2,
+            "bottom": 735.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 14.6,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 2,
+          "smallestPx": 18.2,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 12,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 19.1,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 13.9,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 1,
+          "smallestPx": 23.7,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 5,
+          "smallestPx": 14,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "table-preflop (toast up)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "1 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Dismiss\"); document 390x844 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-table-preflop-toast-up-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app.on-table > div.toast.error > button.toast-close",
+          "text": "Dismiss",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 337,
+            "y": 181,
+            "w": 44,
+            "h": 44,
+            "right": 381,
+            "bottom": 225
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 14.6,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 2,
+          "smallestPx": 18.2,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 12,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 19.1,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 13.9,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 1,
+          "smallestPx": 23.7,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 5,
+          "smallestPx": 14,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "table-preflop (sizer open)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "11 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"The minimum raise (key 1)\"); document 390x844 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-table-preflop-sizer-open-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.raise-slider-panel.compact > div.preset-buttons > button.on",
+          "text": "The minimum raise (key 1)",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 17,
+            "y": 671,
+            "w": 56,
+            "h": 44,
+            "right": 73,
+            "bottom": 715
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.raise-slider-panel.compact > div.preset-buttons > button",
+          "text": "2.5 times the bet in front, or the big b",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 77,
+            "y": 671,
+            "w": 56,
+            "h": 44,
+            "right": 133,
+            "bottom": 715
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.raise-slider-panel.compact > div.preset-buttons > button",
+          "text": "3 times the bet in front, or the big bli",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 137,
+            "y": 671,
+            "w": 56,
+            "h": 44,
+            "right": 193,
+            "bottom": 715
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.raise-slider-panel.compact > div.preset-buttons > button",
+          "text": "4 times the bet in front, or the big bli",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 197,
+            "y": 671,
+            "w": 56,
+            "h": 44,
+            "right": 253,
+            "bottom": 715
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.raise-slider-panel.compact > div.preset-buttons > button",
+          "text": "Call, then raise by the pot (key 5)",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 257,
+            "y": 671,
+            "w": 56,
+            "h": 44,
+            "right": 313,
+            "bottom": 715
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.raise-slider-panel.compact > div.preset-buttons > button",
+          "text": "Everything (key 6)",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 317,
+            "y": 671,
+            "w": 56,
+            "h": 44,
+            "right": 373,
+            "bottom": 715
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.raise-slider-panel.compact > div.sizer-row > button.step",
+          "text": "One big blind less",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 17,
+            "y": 725,
+            "w": 44,
+            "h": 44,
+            "right": 61,
+            "bottom": 769
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.raise-slider-panel.compact > div.sizer-row > input.raise-slider",
+          "text": "Raise amount",
+          "tag": "input",
+          "type": "range",
+          "box": {
+            "x": 67,
+            "y": 725,
+            "w": 71.4,
+            "h": 44,
+            "right": 138.4,
+            "bottom": 769
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.raise-slider-panel.compact > div.sizer-row > button.step",
+          "text": "One big blind more",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 144.4,
+            "y": 725,
+            "w": 44,
+            "h": 44,
+            "right": 188.4,
+            "bottom": 769
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.sizer-row > label.amount-field > input.raise-input.cd-money",
+          "text": "Raise to",
+          "tag": "input",
+          "type": "text",
+          "box": {
+            "x": 201.4,
+            "y": 725,
+            "w": 88,
+            "h": 44,
+            "right": 289.4,
+            "bottom": 769
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.raise-slider-panel.compact > div.sizer-row > button.step.close-slider",
+          "text": "Close bet size",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 329,
+            "y": 725,
+            "w": 44,
+            "h": 44,
+            "right": 373,
+            "bottom": 769
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 14.6,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 2,
+          "smallestPx": 18.2,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 12,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 19.1,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 13.9,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 1,
+          "smallestPx": 23.7,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 5,
+          "smallestPx": 14,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "table-facing-bet",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "18 interactive elements, 0 under the 44 px floor; smallest painted box 41.3 px (\"+ Sit Seat 3\"); document 390x844 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-table-facing-bet-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app.on-table > div.alpha-warning-banner.on-table > button.banner-strip",
+          "text": "Open the full player-protection terms",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 0,
+            "y": 3,
+            "w": 390,
+            "h": 54,
+            "right": 390,
+            "bottom": 57
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-left > button.back-btn",
+          "text": "Back to the lobby",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 8,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 52,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-right > button.history-btn",
+          "text": "Hand history",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 242,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 286,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-right > button.verify-btn",
+          "text": "Verify fair",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 290,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 334,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-container > div.wallet-connected > button.wallet-btn.connected",
+          "text": "ShadowDragon71",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 338,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 382,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner > div.seat.seat-left > button.join-seat",
+          "text": "+ Sit Seat 3",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 56.5,
+            "y": 288.4,
+            "w": 82.4,
+            "h": 41.3,
+            "right": 138.8,
+            "bottom": 329.7
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner > div.seat.seat-center > button.join-seat",
+          "text": "+ Sit Seat 4",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 153.8,
+            "y": 175.4,
+            "w": 82.7,
+            "h": 41.3,
+            "right": 236.5,
+            "bottom": 216.7
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner > div.seat.seat-right > button.join-seat",
+          "text": "+ Sit Seat 5",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 251.4,
+            "y": 288.7,
+            "w": 82.1,
+            "h": 41.3,
+            "right": 333.5,
+            "bottom": 330
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner > div.seat.seat-right > button.join-seat",
+          "text": "+ Sit Seat 6",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 251.1,
+            "y": 447.5,
+            "w": 82.4,
+            "h": 41.3,
+            "right": 333.5,
+            "bottom": 488.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-dock > div.dock-aux.dock-left > button.log-toggle",
+          "text": "Log",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 8,
+            "y": 695.1,
+            "w": 44,
+            "h": 44,
+            "right": 52,
+            "bottom": 739.1
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-dock > div.dock-aux.dock-left > button.sound-btn",
+          "text": "Unmute sounds",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 60,
+            "y": 695.1,
+            "w": 44,
+            "h": 44,
+            "right": 104,
+            "bottom": 739.1
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-stack > div.actions > button.action-btn.secondary",
+          "text": "Fold (F)",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 8,
+            "y": 788,
+            "w": 72.1,
+            "h": 48,
+            "right": 80.1,
+            "bottom": 836
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-stack > div.actions > button.action-btn.primary",
+          "text": "Call (C)",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 86.1,
+            "y": 788,
+            "w": 87.6,
+            "h": 48,
+            "right": 173.7,
+            "bottom": 836
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.actions > span.raise-group > button.action-btn.raise",
+          "text": "Raise to 0.30 (R)",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 179.7,
+            "y": 788,
+            "w": 62.7,
+            "h": 48,
+            "right": 242.4,
+            "bottom": 836
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.actions > span.raise-group > button.action-btn.raise",
+          "text": "Choose bet size",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 244.4,
+            "y": 788,
+            "w": 44,
+            "h": 48,
+            "right": 288.4,
+            "bottom": 836
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-stack > div.actions > button.action-btn.danger",
+          "text": "All in (A, twice)",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 294.4,
+            "y": 788,
+            "w": 87.6,
+            "h": 48,
+            "right": 382,
+            "bottom": 836
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-panel > div.wallet-actions > button.wallet-action-btn.deposit",
+          "text": "Deposit",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 200.2,
+            "y": 675.2,
+            "w": 71.1,
+            "h": 44,
+            "right": 271.3,
+            "bottom": 719.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-panel > div.wallet-actions > button.wallet-action-btn.withdraw",
+          "text": "Withdraw",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 277.3,
+            "y": 675.2,
+            "w": 82.9,
+            "h": 44,
+            "right": 360.2,
+            "bottom": 719.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 14.2,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 2,
+          "smallestPx": 17.7,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 11.7,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 18.6,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 13.5,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 1,
+          "smallestPx": 23,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 5,
+          "smallestPx": 14,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "table-facing-bet (toast up)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "1 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Dismiss\"); document 390x844 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-table-facing-bet-toast-up-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app.on-table > div.toast.error > button.toast-close",
+          "text": "Dismiss",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 337,
+            "y": 181,
+            "w": 44,
+            "h": 44,
+            "right": 381,
+            "bottom": 225
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 14.2,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 2,
+          "smallestPx": 17.7,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 11.7,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 18.6,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 13.5,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 1,
+          "smallestPx": 23,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 5,
+          "smallestPx": 14,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "table-showdown",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "13 interactive elements, 0 under the 44 px floor; smallest painted box 42 px (\"+ Sit Seat 3\"); document 390x844 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-table-showdown-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app.on-table > div.alpha-warning-banner.on-table > button.banner-strip",
+          "text": "Open the full player-protection terms",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 0,
+            "y": 3,
+            "w": 390,
+            "h": 54,
+            "right": 390,
+            "bottom": 57
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-left > button.back-btn",
+          "text": "Back to the lobby",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 8,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 52,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-right > button.history-btn",
+          "text": "Hand history",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 242,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 286,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-right > button.verify-btn",
+          "text": "Verify fair",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 290,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 334,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-container > div.wallet-connected > button.wallet-btn.connected",
+          "text": "ShadowDragon71",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 338,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 382,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner.all-in-moment > div.seat.seat-left > button.join-seat",
+          "text": "+ Sit Seat 3",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 53.7,
+            "y": 293.8,
+            "w": 82.4,
+            "h": 42,
+            "right": 136,
+            "bottom": 335.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner.all-in-moment > div.seat.seat-center > button.join-seat",
+          "text": "+ Sit Seat 4",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 153.9,
+            "y": 177.5,
+            "w": 82.7,
+            "h": 42,
+            "right": 236.5,
+            "bottom": 219.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner.all-in-moment > div.seat.seat-right > button.join-seat",
+          "text": "+ Sit Seat 5",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 254.2,
+            "y": 294.1,
+            "w": 82.1,
+            "h": 42,
+            "right": 336.3,
+            "bottom": 336.1
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner.all-in-moment > div.seat.seat-right > button.join-seat",
+          "text": "+ Sit Seat 6",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 253.9,
+            "y": 457.5,
+            "w": 82.4,
+            "h": 42,
+            "right": 336.3,
+            "bottom": 499.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-dock > div.dock-aux.dock-left > button.log-toggle",
+          "text": "Log",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 8,
+            "y": 711.2,
+            "w": 44,
+            "h": 44,
+            "right": 52,
+            "bottom": 755.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-dock > div.dock-aux.dock-left > button.sound-btn",
+          "text": "Unmute sounds",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 60,
+            "y": 711.2,
+            "w": 44,
+            "h": 44,
+            "right": 104,
+            "bottom": 755.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-panel > div.wallet-actions > button.wallet-action-btn.deposit",
+          "text": "Deposit",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 200.2,
+            "y": 691.3,
+            "w": 71.1,
+            "h": 44,
+            "right": 271.3,
+            "bottom": 735.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-panel > div.wallet-actions > button.wallet-action-btn.withdraw",
+          "text": "Withdraw",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 277.3,
+            "y": 691.3,
+            "w": 82.9,
+            "h": 44,
+            "right": 360.2,
+            "bottom": 735.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 14.6,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 2,
+          "smallestPx": 18.2,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 12,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 19.1,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 11,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 1,
+          "smallestPx": 23.7,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "table-showdown (toast up)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "1 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Dismiss\"); document 390x844 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-table-showdown-toast-up-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app.on-table > div.toast.error > button.toast-close",
+          "text": "Dismiss",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 337,
+            "y": 181,
+            "w": 44,
+            "h": 44,
+            "right": 381,
+            "bottom": 225
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 14.6,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 2,
+          "smallestPx": 18.2,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 12,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 2,
+          "smallestPx": 19.1,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 11,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 1,
+          "smallestPx": 23.7,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "table-sidepots",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "14 interactive elements, 0 under the 44 px floor; smallest painted box 38.8 px (\"+ Sit Seat 5\"); document 390x844 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-table-sidepots-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app.on-table > div.alpha-warning-banner.on-table > button.banner-strip",
+          "text": "Open the full player-protection terms",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 0,
+            "y": 3,
+            "w": 390,
+            "h": 54,
+            "right": 390,
+            "bottom": 57
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-left > button.back-btn",
+          "text": "Back to the lobby",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 8,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 52,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-right > button.history-btn",
+          "text": "Hand history",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 242,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 286,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-right > button.verify-btn",
+          "text": "Verify fair",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 290,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 334,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-container > div.wallet-connected > button.wallet-btn.connected",
+          "text": "ShadowDragon71",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 338,
+            "y": 60,
+            "w": 44,
+            "h": 44,
+            "right": 382,
+            "bottom": 104
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner.all-in-moment > div.seat.seat-left > button.join-seat",
+          "text": "+ Sit Seat 5",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 94.1,
+            "y": 148.7,
+            "w": 82.1,
+            "h": 38.8,
+            "right": 176.2,
+            "bottom": 187.5
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner.all-in-moment > div.seat.seat-right > button.join-seat",
+          "text": "+ Sit Seat 6",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 213.9,
+            "y": 148.9,
+            "w": 82.4,
+            "h": 38.8,
+            "right": 296.3,
+            "bottom": 187.7
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner.all-in-moment > div.seat.seat-right > button.join-seat",
+          "text": "+ Sit Seat 7",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 275.9,
+            "y": 272.1,
+            "w": 81.8,
+            "h": 38.8,
+            "right": 357.7,
+            "bottom": 310.9
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner.all-in-moment > div.seat.seat-right > button.join-seat",
+          "text": "+ Sit Seat 8",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 286.2,
+            "y": 412.8,
+            "w": 82.4,
+            "h": 38.8,
+            "right": 368.6,
+            "bottom": 451.6
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.table-inner.all-in-moment > div.seat.seat-right > button.join-seat",
+          "text": "+ Sit Seat 9",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 252.8,
+            "y": 548.9,
+            "w": 82.4,
+            "h": 38.8,
+            "right": 335.2,
+            "bottom": 587.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-dock > div.dock-aux.dock-left > button.log-toggle",
+          "text": "Log",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 8,
+            "y": 711.2,
+            "w": 44,
+            "h": 44,
+            "right": 52,
+            "bottom": 755.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.action-dock > div.dock-aux.dock-left > button.sound-btn",
+          "text": "Unmute sounds",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 60,
+            "y": 711.2,
+            "w": 44,
+            "h": 44,
+            "right": 104,
+            "bottom": 755.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-panel > div.wallet-actions > button.wallet-action-btn.deposit",
+          "text": "Deposit",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 200.2,
+            "y": 691.3,
+            "w": 71.1,
+            "h": 44,
+            "right": 271.3,
+            "bottom": 735.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-panel > div.wallet-actions > button.wallet-action-btn.withdraw",
+          "text": "Withdraw",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 277.3,
+            "y": 691.3,
+            "w": 82.9,
+            "h": 44,
+            "right": 360.2,
+            "bottom": 735.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 4,
+          "smallestPx": 11.9,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 4,
+          "smallestPx": 14.9,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 5,
+          "smallestPx": 11,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 11,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 1,
+          "smallestPx": 17.1,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "table-sidepots (toast up)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "1 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Dismiss\"); document 390x844 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-table-sidepots-toast-up-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app.on-table > div.toast.error > button.toast-close",
+          "text": "Dismiss",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 337,
+            "y": 181,
+            "w": 44,
+            "h": 44,
+            "right": 381,
+            "bottom": 225
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 4,
+          "smallestPx": 11.9,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 4,
+          "smallestPx": 14.9,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 5,
+          "smallestPx": 11,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 11,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 1,
+          "smallestPx": 17.1,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "deposit",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "4 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Close deposit modal\"); document 390x844 in 390x844; type floors met; dialog open, scroll locked",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-deposit-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.modal-content > div.modal-header > button.close-btn",
+          "text": "Close deposit modal",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 338,
+            "y": 8,
+            "w": 44,
+            "h": 44,
+            "right": 382,
+            "bottom": 52
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.modal-body > section.solvency.warning > button.refresh",
+          "text": "Ask this table to re-read the ledger now",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 31,
+            "y": 1067.6,
+            "w": 328,
+            "h": 44,
+            "right": 359,
+            "bottom": 1111.6
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.modal-body > div.wallet-source-toggle > button.active",
+          "text": "Internet Identity Your II wallet",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 22,
+            "y": 172.8,
+            "w": 170,
+            "h": 78,
+            "right": 192,
+            "bottom": 250.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.modal-body > div.wallet-source-toggle > button",
+          "text": "OISY Wallet Top up directly",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 200,
+            "y": 172.8,
+            "w": 168,
+            "h": 78,
+            "right": 368,
+            "bottom": 250.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "deposit (toast up)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "1 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Dismiss\"); document 390x844 in 390x844; type floors met; dialog open, scroll locked",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-deposit-toast-up-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app.on-table > div.toast.error > button.toast-close",
+          "text": "Dismiss",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 337,
+            "y": 713,
+            "w": 44,
+            "h": 44,
+            "right": 381,
+            "bottom": 757
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 15.6,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 19.5,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "lobby",
+      "viewport": "landscape",
+      "ok": true,
+      "notes": "18 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Unmute sounds\"); document 750x2006 in 750x342; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-lobby-landscape.png",
+      "coarsePointer": true,
+      "notices": {
+        "onScreen": 5,
+        "total": 5,
+        "off": []
+      },
+      "items": [
+        {
+          "path": "header > div.header-right > button.sound-toggle-btn",
+          "text": "Unmute sounds",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 427.5,
+            "y": 253,
+            "w": 44,
+            "h": 44,
+            "right": 471.5,
+            "bottom": 297
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.login-buttons > div.dev-login-container > button.wallet-btn.dev",
+          "text": "Developer login options",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 487.5,
+            "y": 253,
+            "w": 86,
+            "h": 44,
+            "right": 573.6,
+            "bottom": 297
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-container > div.login-buttons > button.wallet-btn.connect",
+          "text": "Connect Wallet",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 581.6,
+            "y": 253,
+            "w": 152.4,
+            "h": 44,
+            "right": 734,
+            "bottom": 297
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill.on",
+          "text": "All tables",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 338,
+            "w": 71.6,
+            "h": 44,
+            "right": 83.6,
+            "bottom": 382
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Open seats",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 89.6,
+            "y": 338,
+            "w": 83.6,
+            "h": 44,
+            "right": 173.3,
+            "bottom": 382
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill.on",
+          "text": "Any stake",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 179.3,
+            "y": 338,
+            "w": 75.4,
+            "h": 44,
+            "right": 254.6,
+            "bottom": 382
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Micro",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 260.6,
+            "y": 338,
+            "w": 52.8,
+            "h": 44,
+            "right": 313.4,
+            "bottom": 382
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Low",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 319.4,
+            "y": 338,
+            "w": 44.6,
+            "h": 44,
+            "right": 364,
+            "bottom": 382
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr.selected",
+          "text": "Open 9-Max",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 387,
+            "w": 726,
+            "h": 166.4,
+            "right": 738,
+            "bottom": 553.4
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr",
+          "text": "Open 6-Max",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 559.4,
+            "w": 726,
+            "h": 166.4,
+            "right": 738,
+            "bottom": 725.8
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr",
+          "text": "Open Heads Up",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 731.8,
+            "w": 726,
+            "h": 165.4,
+            "right": 738,
+            "bottom": 897.1
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > p.foot-copy > button.linkish.mono",
+          "text": "4qggx…aaaca-cai",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 330.8,
+            "y": 918.1,
+            "w": 99,
+            "h": 44,
+            "right": 429.8,
+            "bottom": 962.1
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > p.foot-copy > button.link-btn",
+          "text": "How it works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 71.2,
+            "y": 979.7,
+            "w": 73.7,
+            "h": 44,
+            "right": 144.9,
+            "bottom": 1023.7
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > div.pane-actions > button.btn.ghost",
+          "text": "Refresh tables",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 14,
+            "y": 1033.7,
+            "w": 89.4,
+            "h": 44,
+            "right": 103.4,
+            "bottom": 1077.7
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.intro-copy > div.intro-actions > button.btn.primary",
+          "text": "Connect wallet",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 28,
+            "y": 1233.4,
+            "w": 130,
+            "h": 44,
+            "right": 158,
+            "bottom": 1277.4
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.intro-copy > div.intro-actions > button.btn.ghost",
+          "text": "How it works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 166,
+            "y": 1233.4,
+            "w": 117.4,
+            "h": 44,
+            "right": 283.4,
+            "bottom": 1277.4
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-bottom > div.footer-center > button.footer-link",
+          "text": "How It Works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 333.9,
+            "y": 1842.6,
+            "w": 82.2,
+            "h": 44,
+            "right": 416.1,
+            "bottom": 1886.6
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-bottom > div.footer-center > button.footer-link",
+          "text": "Verify Code",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 333.9,
+            "y": 1922.1,
+            "w": 82.2,
+            "h": 44,
+            "right": 416.1,
+            "bottom": 1966.1
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 750,
+        "h": 2006,
+        "viewport": {
+          "w": 750,
+          "h": 342
+        }
+      }
+    },
+    {
+      "scene": "table-preflop",
+      "viewport": "landscape",
+      "ok": true,
+      "notes": "5 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Open the full player-protection terms\"); document 750x342 in 750x342; type floors met; rotate prompt showing",
+      "problems": [],
+      "file": "artifacts/screens/b5da9af/probe/TOUCH-table-preflop-landscape.png",
+      "coarsePointer": true,
+      "notices": {
+        "onScreen": 5,
+        "total": 5,
+        "off": []
+      },
+      "items": [
+        {
+          "path": "div.app.on-table > div.alpha-warning-banner.on-table > button.banner-strip",
+          "text": "Open the full player-protection terms",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 0,
+            "y": 3,
+            "w": 750,
+            "h": 44,
+            "right": 750,
+            "bottom": 47
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-left > button.back-btn",
+          "text": "Back to the lobby",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 8,
+            "y": 50,
+            "w": 44,
+            "h": 44,
+            "right": 52,
+            "bottom": 94
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-right > button.history-btn",
+          "text": "Hand history",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 602,
+            "y": 50,
+            "w": 44,
+            "h": 44,
+            "right": 646,
+            "bottom": 94
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.compact > div.header-right > button.verify-btn",
+          "text": "Verify fair",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 650,
+            "y": 50,
+            "w": 44,
+            "h": 44,
+            "right": 694,
+            "bottom": 94
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-container > div.wallet-connected > button.wallet-btn.connected",
+          "text": "ShadowDragon71",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 698,
+            "y": 50,
+            "w": 44,
+            "h": 44,
+            "right": 742,
+            "bottom": 94
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [],
+      "document": {
+        "w": 750,
+        "h": 342,
+        "viewport": {
+          "w": 750,
+          "h": 342
+        }
+      }
+    }
+  ]
+}
