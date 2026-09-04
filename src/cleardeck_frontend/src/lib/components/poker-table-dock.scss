@@ -51,6 +51,17 @@
 
   .log-toggle.active { background: var(--cd-accent-dim); color: var(--cd-accent); border-color: var(--cd-accent-line); }
 
+  /* The turn indicator with the time-bank pill UNDER it (TimeBankPill), one
+     column in the row of dock-left controls. */
+  .turn-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--cd-space-1);
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
   .turn-indicator {
     display: flex;
     flex-direction: column;

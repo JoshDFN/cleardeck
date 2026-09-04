@@ -27,6 +27,27 @@ describe('turnAlertDecision', () => {
     const nextHand = turnAlertDecision({ isMyTurn: true, pendingOpen: false, enabled: true, key: turnKey(8, 'PreFlop'), lastKey: turnKey(7, 'River') });
     expect(nextHand.fire).toBe(true);
   });
+  it('hero calls, villain raises, same street -> fire', () => {
+    // The hero's turn facing a bet of 0.20 (the villain's raise was the last action).
+    const facingRaise = turnKey(7, 'PreFlop', 'Raise:20000000', 20000000);
+    const first = turnAlertDecision({ isMyTurn: true, pendingOpen: false, enabled: true, key: facingRaise, lastKey: null });
+    expect(first.fire).toBe(true);
+    // The hero calls (the echo holds the turn false, then the chain moves on).
+    const echo = turnAlertDecision({ isMyTurn: false, pendingOpen: true, enabled: true, key: facingRaise, lastKey: first.lastKey });
+    expect(echo.fire).toBe(false);
+    // A third player re-raises on the SAME street: new last action, new bet, new turn.
+    const facingReraise = turnKey(7, 'PreFlop', 'Raise:60000000', 60000000);
+    const again = turnAlertDecision({ isMyTurn: true, pendingOpen: false, enabled: true, key: facingReraise, lastKey: echo.lastKey });
+    expect(again.fire).toBe(true);
+    expect(again.lastKey).toBe(facingReraise);
+    // The same turn polled again does not chime twice.
+    expect(turnAlertDecision({ isMyTurn: true, pendingOpen: false, enabled: true, key: facingReraise, lastKey: again.lastKey }).fire).toBe(false);
+  });
+  it('keys the turn on the last action and the bet, not the street alone', () => {
+    expect(turnKey(7, 'Flop', 'Bet:10', 10)).not.toBe(turnKey(7, 'Flop', 'Raise:30', 30));
+    expect(turnKey(7, 'Flop', 'Bet:10', 10)).toBe(turnKey(7, 'Flop', 'Bet:10', 10));
+    expect(turnKey(7, 'Flop')).toBe('7:Flop::0');
+  });
   it('never fires while an echo is open, or when it is not my turn', () => {
     expect(turnAlertDecision({ isMyTurn: true, pendingOpen: true, enabled: true, key, lastKey: null }).fire).toBe(false);
     expect(turnAlertDecision({ isMyTurn: false, pendingOpen: false, enabled: true, key, lastKey: null }).fire).toBe(false);

@@ -25,8 +25,8 @@
    * by the harness and compared with the canister's get_pot().
    */
   import {
-    PRESETS, formatAmountInput, parseAmountInput, presetAt, presetTargets, raiseCap, raiseFloor,
-    sliderStep, stepByBlind,
+    PRESETS, displayUnitLabel, formatAmountInput, parseAmountInput, presetAt, presetTargets, raiseCap,
+    raiseFloor, sliderStep, stepByBlind, typedPrecisionDropped,
   } from '$lib/bet-sizing.js';
 
   const {
@@ -59,6 +59,11 @@
   $effect(() => {
     if (!typing) text = formatAmountInput(value, { isBTC, decimals });
   });
+  // A typed third decimal is dropped on the grid (what is shown is what is
+  // sent); the field says so instead of looking as if it ate a digit.
+  const precisionCue = $derived(
+    typing && typedPrecisionDropped(text, { isBTC, decimals }) ? `sizes in ${displayUnitLabel({ isBTC, decimals })}` : null
+  );
 
   function pick(id) {
     onChange(targets[id]);
@@ -142,6 +147,8 @@
   </div>
   {#if problem}
     <div class="sizer-problem" role="status">{problem}</div>
+  {:else if precisionCue}
+    <div class="sizer-note" role="status">{precisionCue}</div>
   {/if}
 </div>
 
@@ -267,6 +274,12 @@
     text-align: center;
   }
 
+  .sizer-note {
+    font-size: var(--cd-text-xs);
+    color: var(--cd-ink-2);
+    text-align: center;
+  }
+
   /* THE PHONE: a sheet standing on the action row's top edge, the dock's
      full width, OVER the pot-odds line and the wallet row rather than between
      them. Absolute inside `.dock-actions` (position: relative, in
@@ -283,7 +296,11 @@
     padding: var(--cd-space-2);
     border-radius: var(--cd-radius-card);
     border: 1px solid var(--cd-line-strong);
-    background: var(--cd-panel);
+    /* OPAQUE, alpha 1: the sheet stands over the pot-odds line and the
+       wallet's money figures, and at --cd-panel's 0.96 they ghosted through
+       it under a money field (measured, probe round 2). --cd-sheet is the
+       one surface token with no alpha; the probe reads it back. */
+    background: var(--cd-sheet);
     box-shadow: var(--cd-shadow-lift);
   }
   .raise-slider-panel.compact .preset-buttons button { min-height: var(--cd-touch-min); font-size: var(--cd-text-md); }

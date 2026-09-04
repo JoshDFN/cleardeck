@@ -26,16 +26,15 @@
   import BoardStrip from './BoardStrip.svelte';
   import ActionBar from './ActionBar.svelte';
   import BetSizer from './BetSizer.svelte';
+  import TimeBankPill from './TimeBankPill.svelte';
   import { generatedName, shortName } from '$lib/table-visuals.js';
   import {
     clampRaise, displayQuantum, presetTarget, presetsForPhase, quantise, raiseCap, raiseFloor, raiseKind,
     raiseProblem, stepByBlind
   } from '$lib/bet-sizing.js';
-  import {
-    canVibrate, readTurnAlertPref, titleFor, turnAlertDecision, turnKey, TURN_VIBRATION,
-  } from '$lib/turn-alert.js';
+  import { useTurnAlert } from '$lib/use-turn-alert.svelte.js';
   import { armPreAction, armedTag, availablePreActions, keepPreAction, resolvePreAction } from '$lib/pre-actions.js';
-  import { echoFor, echoedPlayer, sentLabel } from '$lib/optimistic.js';
+  import { echoFor, echoedPlayer, lastActionIdentity, sentLabel } from '$lib/optimistic.js';
   import {
     clockFraction as clockFractionOf, clockUrgent as clockUrgentOf, displayedSeconds, offerTimeBank, resyncClock
   } from '$lib/action-clock.js';
@@ -855,6 +854,9 @@
   const clockFraction = $derived(clockFractionOf(timeRemaining, actionTimeout));
   const clockUrgent = $derived(clockUrgentOf(timeRemaining));
   const offerBank = $derived(offerTimeBank({ secs: timeRemaining, bankSecs: timeBankRemaining, usingBank: usingTimeBank }));
+  // Offered only on the hero's own live turn: not while an echo is open (the
+  // clock is frozen and the action is sent), never for a spectator.
+  const bankOffered = $derived(offerBank && isMyTurn && gameInProgress && !actionPending && !pendingAction);
 
   $effect(() => {
     if (timeRemaining === null || !isMyTurn || timeRemaining > 10 || timeRemaining <= 0) {
@@ -1155,37 +1157,22 @@
   const sentText = $derived(pendingAction ? sentLabel(pendingAction, fmt) : null);
 
   // ---------------------------------------------------------------------------
-  // 7c. The your-turn alert ($lib/turn-alert.js)
+  // 7c. The your-turn alert ($lib/use-turn-alert.svelte.js)
   // ---------------------------------------------------------------------------
   //
-  // Once per certified my-turn edge (hand + street): the two-note chime, a
-  // short vibration on touch, and the tab title marked until the turn passes
-  // or an action is sent. Off when the player switched it off (the wallet
-  // menu / sound settings); the preference is re-read on every edge so a
-  // change takes effect on the next turn.
-  let turnAlertedKey = $state(null);
-  const storage = typeof localStorage !== 'undefined' ? localStorage : null;
-  $effect(() => {
-    const decision = turnAlertDecision({
-      isMyTurn: isMyTurn && gameInProgress,
-      pendingOpen: !!pendingAction,
-      enabled: readTurnAlertPref(storage),
-      key: turnKey(handNumber, phaseKey),
-      lastKey: untrack(() => turnAlertedKey),
-    });
-    if (decision.lastKey !== untrack(() => turnAlertedKey)) turnAlertedKey = decision.lastKey;
-    if (!decision.fire) return;
-    playSound('yourTurn');
-    if (typeof navigator !== 'undefined' && canVibrate(navigator)) {
-      try { navigator.vibrate(TURN_VIBRATION); } catch { /* a browser that refuses is fine */ }
-    }
-  });
-  $effect(() => {
-    if (typeof document === 'undefined') return undefined;
-    const mark = isMyTurn && gameInProgress && !pendingAction;
-    document.title = titleFor(document.title, mark);
-    return () => { document.title = titleFor(document.title, false); };
-  });
+  // Once per certified turn IDENTITY (hand, street, the chain's last action
+  // and the bet in front, so a same-street re-raise chimes): the two-note
+  // chime, a short vibration on touch, and the tab title marked until the
+  // turn passes or an action is sent. Off when the player switched it off in
+  // the wallet menu.
+  useTurnAlert(() => ({
+    isMyTurn: isMyTurn && gameInProgress,
+    pendingOpen: !!pendingAction,
+    handNumber,
+    phaseKey,
+    actionIdentity: lastActionIdentity(tableState),
+    currentBet,
+  }));
 
   function potOdds() {
     if (callAmount <= 0 || totalPot <= 0) return null;
@@ -1568,6 +1555,8 @@
               {timeRemaining}
               {clockFraction}
               {clockUrgent}
+              bankOffer={isHero && portrait && bankOffered ? timeBankRemaining : null}
+              onUseBank={() => onAction('useTimeBank')}
               {equityText}
               equityModelled={equityMode === 'hero'}
               equityNote={equityTooltip}
@@ -1647,19 +1636,28 @@
           Log
         </button>
         {#if gameInProgress && mySeat !== null}
+          <div class="turn-cell">
           <div class="turn-indicator" class:my-turn={isMyTurn} class:waiting={!isMyTurn} class:time-bank={usingTimeBank}>
             <span class="turn-title">{pendingAction ? 'Sent' : isMyTurn ? 'Your turn' : 'Waiting'}</span>
             <span class="turn-hint">
               {#if pendingAction}
                 {sentText}
               {:else if isMyTurn}
-                {#if canCheck}Check or bet{:else}Call {fmt(callAmount)} or raise{/if}
+                {#if canCheck && currentBet > 0}Check or raise{:else if canCheck}Check or bet{:else}Call {fmt(callAmount)} or raise{/if}
               {:else if preArmedTag}
                 {preArmedTag} armed
               {:else}
                 {getShortName(players[actionOn], actionOn)} to act
               {/if}
             </span>
+          </div>
+          <!-- THE TIME BANK, under the turn indicator and never in the action
+               row (the audit's fix): offered in the last fifteen seconds of
+               the hero's own turn. On the phone this cell is hidden and the
+               pill rides the hero's pod clock instead (SeatPod bankOffer). -->
+          {#if bankOffered && !portrait}
+            <TimeBankPill secs={timeBankRemaining} onUse={() => onAction('useTimeBank')} />
+          {/if}
           </div>
         {:else}
           <div class="turn-indicator waiting">
@@ -1736,8 +1734,6 @@
           {fmt}
           {clockFraction}
           {clockUrgent}
-          {offerBank}
-          bankSecs={timeBankRemaining}
           {actionError}
           {preOptions}
           preArmedId={preArmed?.id ?? null}

@@ -3,10 +3,14 @@
  * action is on them BEFORE the last ten seconds.
  *
  * The decision is pure so it can be tested: it fires once per certified
- * my-turn edge (keyed by hand and street, so a re-render of the same turn
- * cannot chime twice and the next street can), never while an echo is open
- * (the turn the echo holds false is not a new turn), and never when the
- * player has switched it off. The effects (a two-note chime, a short
+ * my-turn edge, keyed by the TURN'S IDENTITY (the hand, the street, the last
+ * action the chain recorded and the bet in front), so a re-render of the
+ * same turn cannot chime twice, the next street can, and so can a re-raise
+ * on the SAME street: after the hero calls and an opponent raises, the last
+ * action and the bet have both changed, and that is the turn a tabbed-out
+ * player most needs to hear (keyed by street alone it was silent). Never
+ * while an echo is open (the turn the echo holds false is not a new turn),
+ * and never when the player has switched it off. The effects (a two-note chime, a short
  * vibration on touch, the tab title) are the caller's; this file only says
  * when, and what the title should read.
  *
@@ -22,9 +26,16 @@ export const TURN_TITLE_MARK = '● Your turn';
 /** The vibration pattern on touch devices (ms on, off, on, off, on). */
 export const TURN_VIBRATION = Object.freeze([40, 40, 40]);
 
-/** One key per turn: the hand and the street. */
-export function turnKey(handNumber, phaseKey) {
-  return `${Number(handNumber ?? 0)}:${String(phaseKey ?? '')}`;
+/**
+ * One key per turn: the hand, the street, the identity of the chain's last
+ * action and the bet in front. Two certified views of the same turn share a
+ * key; a view after anyone else has acted does not. `actionIdentity` is
+ * whatever the caller derives from `last_action` (lib/optimistic.js
+ * lastActionIdentity is BigInt-safe); `currentBet` is the table's
+ * current_bet in the smallest unit.
+ */
+export function turnKey(handNumber, phaseKey, actionIdentity = '', currentBet = 0) {
+  return `${Number(handNumber ?? 0)}:${String(phaseKey ?? '')}:${String(actionIdentity ?? '')}:${String(currentBet ?? 0)}`;
 }
 
 /**

@@ -8,6 +8,8 @@
    *   my turn      Fold / Check or Call X / Raise to X (one click commits the
    *                sizer's figure) / All in, with the clock line on top, the
    *                hotkey letters underlined, an inline error strip above.
+   *                Never a fifth cell: the time bank is TimeBankPill, under
+   *                the turn indicator (desktop) or on the pod clock (phone).
    *   sent         the SAME row, the pressed button marked and reading
    *                "Calling 0.10", the rest dimmed, the clock line held.
    *                No spinner: the felt already shows the echo.
@@ -44,8 +46,6 @@
     fmt = (v) => String(v),
     clockFraction = 0,
     clockUrgent = false,
-    offerBank = false,
-    bankSecs = 0,
     actionError = null,
     preOptions = [],         // [] when the hero cannot pre-act
     preArmedId = null,
@@ -210,11 +210,6 @@
       >
         {#if allInArmed}Press A again{:else}<u>A</u>ll in{/if}
       </button>
-      {#if offerBank}
-        <button type="button" class="action-btn ghost time-bank" onclick={() => onAction('useTimeBank')} title="Add time from your time bank">
-          +{bankSecs}s
-        </button>
-      {/if}
     {/if}
   </div>
 
@@ -371,16 +366,6 @@
 
   .action-btn.danger.armed { animation: urgent-pulse 0.4s ease-in-out infinite; }
 
-  .action-btn.ghost {
-    background: transparent;
-    border-color: var(--cd-line-strong);
-    color: var(--cd-ink-2);
-    min-width: 0;
-    padding: 0 var(--cd-space-3);
-  }
-
-  .action-btn.ghost.time-bank { border-color: var(--cd-warn-line); color: var(--cd-warn); }
-
   .raise-word, .raise-amt { white-space: nowrap; }
   /* Two lines on the phone: the word over the money. */
   .action-btn.stacked {
@@ -445,11 +430,10 @@
        All in 85, every cell at or above the touch floor. */
     .action-btn.secondary { flex: 0.8 1 0; }
     .raise-group { flex: 1.4 1 0; }
-    /* The raise label keeps the touch floor even when the time-bank pill
-       joins the row under 15 s (measured: six cells squeezed it to 43 px). */
+    /* The row is ALWAYS these four cells: the time bank lives on the pod
+       clock (TimeBankPill), never here, so nothing squeezes the raise label. */
     .action-btn.stacked { padding: 0 var(--cd-space-2); min-width: var(--cd-touch-min); }
     .action-btn.caret { flex: 0 0 var(--cd-touch-min); min-width: var(--cd-touch-min); width: var(--cd-touch-min); }
-    .action-btn.ghost { flex: 0 0 auto; min-width: var(--cd-touch-min); padding: 0 var(--cd-space-1); }
     .no-game-message, .not-your-turn { min-height: calc(var(--cd-touch-min) + var(--cd-space-1)); font-size: var(--cd-text-md); }
     .key-hints { display: none; }
   }

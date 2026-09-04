@@ -66,6 +66,17 @@ export const ALLOWLIST = [
             + 'preset is clicked; the label itself is a factor',
     },
     {
+        id: 'sizer-precision-cue',
+        selector: '.raise-slider-panel .sizer-note',
+        tokens: '^0\\.0*1$',
+        moneyShaped: true,
+        context: '^sizes in 0\\.0*1$',
+        why: 'the typed field\'s cue "sizes in 0.01" (BetSizer.svelte) when a third '
+            + 'decimal was dropped: the DISPLAY UNIT the table sizes in (10^-decimals), '
+            + 'never an amount. Decimal-shaped by nature, so marked; it appears only '
+            + 'while the player is typing past the grid, never in a resting still',
+    },
+    {
         id: 'keyboard-hint-digits',
         selector: '.key-hints',
         tokens: '^[1-6]$',
@@ -76,12 +87,13 @@ export const ALLOWLIST = [
     },
     {
         id: 'time-bank-button',
-        selector: '.actions .action-btn',
+        selector: '.time-bank-pill',
         tokens: '^\\d{1,3}$',
-        context: '^\\+\\s*\\d+\\s*s$',
-        why: 'the "+30s" time-bank button: seconds added to the clock, never chips. The '
-            + 'context pattern means this rule cannot excuse the Call amount on the '
-            + 'button beside it, which is asserted against call_amount',
+        context: '^(?:Time bank\\s*)?\\+\\s*\\d+\\s*s$',
+        why: 'the "+30s" time-bank pill (TimeBankPill.svelte): seconds added to the '
+            + 'clock, never chips. It stands under the turn indicator on desktop and on '
+            + 'the hero pod clock on the phone, never in the action row; the context '
+            + 'pattern means this rule excuses nothing but "[Time bank] +NNs"',
     },
     {
         id: 'wall-clock-timestamp',

@@ -200,6 +200,27 @@ export function parseAmountInput(text, { isBTC = false, decimals = 2 } = {}) {
   return quantise(Math.round(n * E8S_PER_ICP), displayQuantum({ isBTC, decimals }));
 }
 
+/**
+ * Whether what the player typed carried more precision than the display grid
+ * keeps: "0.075" on a two-decimal table parses to 0.07, and the field should
+ * say so ("sizes in 0.01") rather than look as if it ate a digit. False for
+ * anything unparseable (the field has other words for that) and for BTC
+ * (sats are integral; a fraction of a sat is the same case, and is reported).
+ */
+export function typedPrecisionDropped(text, { isBTC = false, decimals = 2 } = {}) {
+  const parsed = parseAmountInput(text, { isBTC, decimals });
+  if (parsed === null) return false;
+  const cleaned = String(text ?? '').replace(/[,\s]/g, '');
+  const n = Number(cleaned);
+  if (isBTC) return !Number.isInteger(n);
+  return Math.round(n * E8S_PER_ICP) !== parsed;
+}
+
+/** The display unit as the field would write it: "0.01" at two decimals, "1" for sats. */
+export function displayUnitLabel({ isBTC = false, decimals = 2 } = {}) {
+  return formatAmountInput(displayQuantum({ isBTC, decimals }), { isBTC, decimals });
+}
+
 /** Format a smallest-unit amount for the amount field (no thousands separators). */
 export function formatAmountInput(value, { isBTC = false, decimals = 2 } = {}) {
   const n = toInt(value);

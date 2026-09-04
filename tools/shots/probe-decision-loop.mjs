@@ -86,6 +86,22 @@ function measureLayout(page) {
         const el = document.querySelector('.raise-slider-panel');
         return el && !el.hidden ? box(el) : null;
       })(),
+      // THE SHEET MUST BE OPAQUE: it stands over the pot-odds line and the
+      // wallet's money figures. Read back the painted background's alpha and
+      // the effective opacity up the tree, so "opaque" is a number.
+      sizerPaint: (() => {
+        const el = document.querySelector('.raise-slider-panel');
+        if (!el || el.hidden) return null;
+        const cs = getComputedStyle(el);
+        const m = /rgba?\(([^)]+)\)/.exec(cs.backgroundColor);
+        const parts = m ? m[1].split(',').map((v) => Number(v.trim())) : [];
+        const alpha = parts.length === 4 ? parts[3] : (parts.length === 3 ? 1 : 0);
+        let opacity = 1;
+        for (let node = el; node && node !== document.body; node = node.parentElement) {
+          opacity *= Number(getComputedStyle(node).opacity || 1);
+        }
+        return { backgroundColor: cs.backgroundColor, alpha, effectiveOpacity: +opacity.toFixed(3) };
+      })(),
       actionRow: (() => { const el = document.querySelector('.actions'); return el ? box(el) : null; })(),
     };
   });
@@ -106,7 +122,21 @@ function readEchoState(page) {
       return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : null;
     };
     const tag = document.querySelector('.player-nameplate.highlight-me .plate-tag');
+    const timer = document.querySelector('.player-nameplate.highlight-me .turn-timer');
+    const rect = (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: +r.x.toFixed(1), y: +r.y.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1) };
+    };
+    const intersects = (a, b) => a && b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    const tagBox = tag ? rect(tag) : null;
+    const timerBox = timer && timer.getClientRects().length ? rect(timer) : null;
     return {
+      // THE TAG MUST NOT STAND ON THE CLOCK DIGITS (measured round 2: "35s"
+      // half hidden on the phone for the length of the commit). Null timer
+      // means the digits left while the echo is open, which also passes.
+      tagBox,
+      timerBox,
+      tagOverClock: !!intersects(tagBox, timerBox),
       plateTag: tag ? (tag.textContent || '').trim() : null,
       // Svelte scopes a hash class onto the element; only the tone words matter.
       plateTagTone: tag ? [...tag.classList].filter((c) => c === 'sent' || c === 'armed').join(' ') : null,
@@ -151,6 +181,8 @@ async function probeViewport(vp, ctx, browser, outDir) {
         file: path.relative(REPO_ROOT, file),
         feltBefore: before.felt, feltAfter: after.felt,
         podsMoved: !unmoved,
+        sheetPaint: after.sizerPaint,
+        sheetOpaque: !!(after.sizerPaint && after.sizerPaint.alpha >= 1 && after.sizerPaint.effectiveOpacity >= 1),
         sizerBox: after.sizer, actionRow: after.actionRow,
         sizerAboveActionRow: !!(after.sizer && after.actionRow && after.sizer.y + after.sizer.h <= after.actionRow.y + 0.5),
         sizerInsideViewport: !!(after.sizer && after.sizer.y >= 0 && after.sizer.x >= 0
@@ -158,6 +190,8 @@ async function probeViewport(vp, ctx, browser, outDir) {
       };
       log(`  sizer open: felt ${JSON.stringify(before.felt)} -> ${JSON.stringify(after.felt)}; `
         + `pods moved: ${!unmoved}; sizer ${JSON.stringify(after.sizer)} above row at y ${after.actionRow?.y}`);
+      log(`  sheet paint: ${after.sizerPaint?.backgroundColor} alpha ${after.sizerPaint?.alpha} `
+        + `effective opacity ${after.sizerPaint?.effectiveOpacity} -> ${results.sizerOpen.sheetOpaque ? 'OPAQUE' : 'NOT OPAQUE (money can ghost through)'}`);
       // Close it again so the echo probe starts from rest.
       await page.locator('.actions .action-btn.caret').first().click();
       await page.waitForSelector('.raise-slider-panel[hidden]', { timeout: 5000 }).catch(() => {});
@@ -187,6 +221,8 @@ async function probeViewport(vp, ctx, browser, outDir) {
     const midAt = Date.now() - t0;
     log(`  echo at +${midAt} ms: tag "${mid.plateTag}" (${mid.plateTagTone}, sent ${mid.plateTagSentE8s} e8s), `
       + `row sent ${mid.rowSent}, pressed "${mid.pressedButton}", spinner ${mid.spinner}, stack ${mid.heroStack}, clock ${mid.clock}`);
+    log(`  tag box ${JSON.stringify(mid.tagBox)} vs clock digits ${JSON.stringify(mid.timerBox)} -> `
+      + `${mid.tagOverClock ? 'THE TAG COVERS THE DIGITS' : 'clear'}`);
 
     // Let the held call land and the felt settle on the certified view.
     await page.waitForSelector('.actions.sent', { state: 'detached', timeout: HOLD_UPDATE_MS + 15_000 });
@@ -206,6 +242,7 @@ async function probeViewport(vp, ctx, browser, outDir) {
       settledFile: path.relative(REPO_ROOT, afterFile),
       echoPainted: mid.plateTagTone === 'sent' && mid.rowSent && !mid.spinner,
       echoReconciled: !after.rowSent && after.plateTagTone !== 'sent',
+      tagClearOfClock: !mid.tagOverClock,
     };
   } finally {
     await page.close();
@@ -248,9 +285,10 @@ async function main() {
   const bigintSafe = (_k, v) => (typeof v === 'bigint' ? v.toString() : v);
   fs.writeFileSync(report, JSON.stringify({ heroPlayer: HERO_PLAYER, holdMs: HOLD_UPDATE_MS, results: out }, bigintSafe, 2));
   log(`\nprobe report: ${path.relative(REPO_ROOT, report)}`);
-  const bad = out.filter((r) => (r.sizerOpen && r.sizerOpen.podsMoved) || (r.echo && !(r.echo.echoPainted && r.echo.echoReconciled)));
+  const bad = out.filter((r) => (r.sizerOpen && (r.sizerOpen.podsMoved || r.sizerOpen.sheetOpaque === false))
+    || (r.echo && !(r.echo.echoPainted && r.echo.echoReconciled && r.echo.tagClearOfClock)));
   if (bad.length) { log(`PROBE FOUND PROBLEMS in: ${bad.map((b) => b.viewport).join(', ')}`); return 1; }
-  log('probe: the sizer opens without moving the felt; the echo paints and reconciles');
+  log('probe: the sizer opens without moving the felt on an opaque sheet; the echo paints, clears the clock digits, and reconciles');
   return 0;
 }
 

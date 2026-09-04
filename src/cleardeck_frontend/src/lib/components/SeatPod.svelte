@@ -26,6 +26,7 @@
   import WinnerAward from './WinnerAward.svelte';
   import EquityBadge from './EquityBadge.svelte';
   import EmptySeat from './EmptySeat.svelte';
+  import TimeBankPill from './TimeBankPill.svelte';
   import { avatarFor, clockArcDegrees } from '$lib/table-visuals.js';
 
   const {
@@ -52,6 +53,8 @@
     timeRemaining = null,
     clockFraction = 0,
     clockUrgent = false,
+    bankOffer = null,      // seconds the time bank would add (phone hero, last 15 s), or null
+    onUseBank = () => {},
     equityText = null,
     equityModelled = false,
     equityNote = '',
@@ -104,10 +107,25 @@
         {#if folded}<span class="fold-word">Fold</span>{/if}
       </span>
     </div>
-    {#if acting && timeRemaining !== null}
+    {#if acting && timeRemaining !== null && plateTag?.tone !== 'sent'}
+      <!-- THE CLOCK DIGITS leave while the sent tag is up: the clock is
+           frozen at the click anyway, and on the phone the tag stood on the
+           digits (measured: "35s" half hidden for the length of the commit).
+           The ring on the avatar stays, held. -->
       <div class="pod-slot">
         <span class="turn-timer" class:urgent={clockUrgent}>{timeRemaining}s</span>
       </div>
+    {/if}
+    {#if acting && bankOffer !== null}
+      <!-- THE TIME BANK on the phone: a tap target standing past the plate's
+           right end beside the clock digits (the plate tag's spot; the two
+           never meet: the tag exists only while waiting or mid-send, the
+           pill only on the hero's live turn). Inside the plate's row it
+           wrapped the hero plate to four rows and pushed the name under the
+           cards (measured, probe-time-bank round 3). -->
+      <span class="pod-bank">
+        <TimeBankPill secs={bankOffer} compact onUse={onUseBank} />
+      </span>
     {/if}
     {#if plateTag}
       <!-- THE ECHO / THE ARMED CHOICE: the sent action (or the pre-selected
@@ -376,6 +394,15 @@
     flex: 0 0 auto;
     display: flex;
     align-items: center;
+  }
+
+  .pod-bank {
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    transform: translate(-12%, -50%);
+    z-index: 2;
+    pointer-events: auto;
   }
 
   .turn-timer {

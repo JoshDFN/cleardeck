@@ -78,7 +78,10 @@
     {@render equityMethodLine()}
   </div>
 {:else}
-  <div class="pot-display" class:waiting={totalPot <= 0}>
+  <!-- `tall-column`: three or more pots stack three pill rows under the
+       module; in portrait that column reached the lower flank seat's dealer
+       puck, so the module tightens (see the portrait block). -->
+  <div class="pot-display" class:waiting={totalPot <= 0} class:tall-column={sidePots.length >= 3}>
     <div class="main-pot" class:has-chips={totalPot > 0} class:at-risk={allInMoment} title={breakdown}>
       <span class="pot-meta">
         <span class="pot-label" title={allInMoment ? `All in · ${allInCount} at risk` : undefined}>
@@ -317,6 +320,26 @@
     .side-pot-label { font-size: var(--cd-felt-label); }
     .side-pot-amount { font-size: var(--cd-felt-small); }
     .side-pots { flex-wrap: wrap; justify-content: center; }
+
+    /* THREE OR MORE POTS on the phone: the column of pills (main, side 1,
+       side 2) stood 103 px tall under the module and its last pill painted
+       over the lower flank seat's dealer puck, which sits level with that
+       plate's bottom edge past its inner end (table-geometry puckSpot; the
+       hero's lifted pair is right under it, so the puck cannot drop). The
+       column cannot widen either: the band between the two lower flank
+       plates is one pill wide (measured: the meta on one line widened the
+       module onto the left flank's bet pill, 10.8% of "0.20" covered). So
+       the column gets SHORTER at the same width: the figure a step smaller,
+       the module's padding and the pills' pitch tighter, the module closer
+       to the board. Measured: the last pill clear of the puck. */
+    .pot-display.tall-column { top: calc(100% + var(--fw) * 0.008); gap: calc(var(--fw) * 0.002); }
+    .pot-display.tall-column .main-pot { padding: 0.1em 0.7em 0.1em 0.6em; gap: 0.45em; }
+    .pot-display.tall-column .pot-meta { gap: 0; line-height: 1; }
+    .pot-display.tall-column .pot-amount { font-size: 1.15em; }
+    /* One pill per row, always: at the tighter pitch two pills fitted the
+       0.58 fw width and the pair reached the left flank's bet pill. */
+    .pot-display.tall-column .side-pots { flex-direction: column; align-items: center; gap: calc(var(--fw) * 0.002); margin-top: 0; }
+    .pot-display.tall-column .side-pot { padding: 0.02em 0.5em; }
 
     /* Two short rows by design: the figure, then the hand and the street. A
        long single row wrapped unpredictably and reached a flank plate. */

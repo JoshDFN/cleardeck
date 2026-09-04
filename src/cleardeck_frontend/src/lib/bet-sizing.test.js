@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   POSTFLOP_PRESETS, PREFLOP_PRESETS, PRESETS, clampRaise, displayQuantum, formatAmountInput,
   parseAmountInput, presetAt, presetTarget, presetTargets, presetsForPhase, quantise, raiseCap,
-  raiseFloor, raiseKind, raiseProblem, sliderStep, stepByBlind,
+  raiseFloor, raiseKind, raiseProblem, sliderStep, stepByBlind, typedPrecisionDropped, displayUnitLabel,
 } from './bet-sizing.js';
 
 // 0.05/0.10 blinds in e8s; the hero (BB, 0.10 in) faces a raise to 0.30 with 11.90 behind.
@@ -199,5 +199,27 @@ describe('amount field parse and format', () => {
     expect(formatAmountInput(e8(0.30), { decimals: 2 })).toBe('0.30');
     expect(formatAmountInput(12_345, { decimals: 4 })).toBe('0.0001');
     expect(formatAmountInput(1500, { isBTC: true })).toBe('1500');
+  });
+});
+
+describe('typedPrecisionDropped / displayUnitLabel', () => {
+  it('reports a third decimal dropped on a two-decimal table, and nothing else', () => {
+    expect(typedPrecisionDropped('0.075')).toBe(true);
+    expect(typedPrecisionDropped('0.07')).toBe(false);
+    expect(typedPrecisionDropped('0.070')).toBe(false);
+    expect(typedPrecisionDropped('1,000.5')).toBe(false);
+    expect(typedPrecisionDropped('abc')).toBe(false);
+    expect(typedPrecisionDropped('')).toBe(false);
+  });
+  it('follows the table decimals and treats a fraction of a sat the same way', () => {
+    expect(typedPrecisionDropped('0.0755', { decimals: 3 })).toBe(true);
+    expect(typedPrecisionDropped('0.075', { decimals: 3 })).toBe(false);
+    expect(typedPrecisionDropped('12.5', { isBTC: true, decimals: 0 })).toBe(true);
+    expect(typedPrecisionDropped('12', { isBTC: true, decimals: 0 })).toBe(false);
+  });
+  it('names the display unit the way the field writes it', () => {
+    expect(displayUnitLabel()).toBe('0.01');
+    expect(displayUnitLabel({ decimals: 4 })).toBe('0.0001');
+    expect(displayUnitLabel({ isBTC: true, decimals: 0 })).toBe('1');
   });
 });

@@ -78,6 +78,7 @@
   --cd-plate-lo: #101115;      /* bottom of a seat plate */
   --cd-capsule: rgba(9, 11, 15, 0.86); /* label capsules on the felt */
   --cd-panel: rgba(13, 15, 21, 0.96);  /* popovers, sheets, toasts */
+  --cd-sheet: #0d0f15;                  /* a sheet that paints OVER money: opaque, alpha 1 (BetSizer's phone sheet) */
 
   --cd-line: rgba(255, 255, 255, 0.1);        /* default 1px stroke */
   --cd-line-soft: rgba(255, 255, 255, 0.06);  /* inside a panel */
