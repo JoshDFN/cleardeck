@@ -319,8 +319,11 @@
     .side-pot-amount { font-size: var(--cd-felt-small); }
     .side-pots { flex-wrap: wrap; justify-content: center; }
 
-    .winner-line { padding: 0.26em 0.7em; column-gap: 0.5em; }
-    .winner-text { font-size: 0.86em; }
+    /* One row, so the block stays inside the 0.175 fw above the flank plates:
+       at 0.86em "You won 24.00 ICP · STRAIGHT · COMPLETE" wrapped and the
+       method footnote landed on the flank plate's name row. */
+    .winner-line { padding: 0.2em 0.6em; column-gap: 0.45em; }
+    .winner-text { font-size: 0.78em; }
     .winner-hand-rank, .split-info { font-size: var(--cd-felt-label); }
     .winner-display .phase-indicator { font-size: var(--cd-felt-label); }
     /* In flow under the winner line rather than hung off it: the flank seats'

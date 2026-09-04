@@ -1148,6 +1148,7 @@
             {tableState}
             {myCards}
             {actionPending}
+            maxPlayers={Number(currentTableInfo?.config?.max_players ?? 0) || null}
             onAction={handleTableAction}
             tableBalance={myBalance}
             currency={tableCurrency}
