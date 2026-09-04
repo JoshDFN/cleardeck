@@ -323,7 +323,19 @@
     .winner-text { font-size: 0.86em; }
     .winner-hand-rank, .split-info { font-size: var(--cd-felt-label); }
     .winner-display .phase-indicator { font-size: var(--cd-felt-label); }
-    .winner-display .equity-method { bottom: auto; top: calc(100% + 0.25em); }
+    /* In flow under the winner line rather than hung off it: the flank seats'
+       badges sit right below, and a hung line landed on one. */
+    .winner-display .equity-method { position: static; transform: none; }
+
+    /* Nine seats on a phone: the two mid-height flank plates sit 0.26 fw from
+       the centre line, so everything in the middle column wraps inside 0.5 fw
+       rather than running under them. */
+    :global(.ring-crowded) .pot-display,
+    :global(.ring-crowded) .winner-display { max-width: calc(var(--fw) * 0.5); }
+    :global(.ring-crowded) .pot-breakdown,
+    :global(.ring-crowded) .equity-method,
+    :global(.ring-crowded) .pot-label { white-space: normal; text-align: center; }
+    :global(.ring-crowded) .main-pot { white-space: normal; }
   }
 
   @media (prefers-reduced-motion: reduce) {

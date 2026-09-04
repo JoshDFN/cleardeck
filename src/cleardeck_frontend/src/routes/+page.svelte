@@ -2401,9 +2401,9 @@
     /* The trust bar on a phone: the same words at 11 px, three lines. */
     .alpha-warning-banner.on-table .banner-strip {
       display: block;
-      padding: 6px 9px 7px;
+      padding: 5px 9px 5px;
       font-size: 11px;
-      line-height: 1.3;
+      line-height: 1.25;
     }
 
     .alpha-warning-banner.on-table .banner-strip .warning-icon { font-size: 11px; }

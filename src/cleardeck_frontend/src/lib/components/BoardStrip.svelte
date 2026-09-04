@@ -26,7 +26,7 @@
   const toCome = $derived(Math.max(0, 5 - cards.length));
 </script>
 
-<div class="board-frame" class:framed class:showdown>
+<div class="board-frame" class:framed class:showdown class:bare={cards.length === 0}>
   <div class="community-cards">
     {#each Array(5) as _, i}
       <Card card={cards[i] ?? null} index={i} />
@@ -71,6 +71,10 @@
       inset 0 0 0 1px var(--cd-line),
       inset 0 calc(var(--fw) * 0.004) calc(var(--fw) * 0.02) var(--cd-felt-shade);
   }
+
+  /* No card dealt yet (an all-in before the flop): the caption stands alone
+     on the felt; a tray around five invisible slots is a dark rectangle. */
+  .board-frame.framed.bare { background: transparent; box-shadow: none; }
 
   .board-frame.framed.showdown {
     box-shadow:

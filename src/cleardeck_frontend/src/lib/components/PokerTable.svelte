@@ -2463,7 +2463,7 @@
     .action-dock {
       grid-template-columns: 1fr auto;
       grid-template-rows: auto auto;
-      gap: 4px 8px;
+      gap: 3px 8px;
       min-height: var(--dock-h);
       padding: 0 var(--cd-space-2);
     }
@@ -2496,14 +2496,21 @@
 
     .turn-indicator { display: none; }
 
-    .wallet-panel { padding: 4px 8px; gap: 5px; flex-wrap: nowrap; }
+    /* THE COMMITTED BLOCK IS ONE ROW UNDER THE BALANCE on a phone. Measured
+       in the old shape (a column squeezed to 77 px beside the buttons) the
+       note wrapped to five lines and the wallet row was 122 px; as a full-width
+       row of the panel it is 26 px, and every word is still there. */
+    .wallet-panel { padding: 4px 8px; gap: 4px 5px; }
     .balance-label { display: none; }
     /* THE TABLE BALANCE MUST NEVER BE SQUEEZED (a money figure lying only in
        pixels); the committed block pays instead, on one line. */
     .wallet-balance { flex: 0 0 auto; }
     .committed-note { line-height: 1.2; }
-    .wallet-committed { flex: 0 1 auto; margin-top: 0; padding: 3px 6px; gap: 1px; flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
-    .wallet-action-btn { padding: 0 9px; }
+    .wallet-committed { order: 1; margin-top: 0; padding: 2px 6px; column-gap: 5px; row-gap: 0; }
+    .committed-label { font-size: 10px; letter-spacing: 0.08em; }
+    .committed-value { font-size: 12px; }
+    .committed-note { font-size: 10px; }
+    .wallet-action-btn, .panel-toggle { min-height: 28px; padding: 0 9px; }
     .sit-controls { display: none; }
 
     .feed-container.left { width: min(230px, 62cqw); max-height: 60cqh; }

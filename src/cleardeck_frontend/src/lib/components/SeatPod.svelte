@@ -414,7 +414,9 @@
     left: 0;
     top: 0;
     z-index: 9;
-    --badge-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + 1.55em));
+    /* Past the plate's end; and past the avatar too when the badge takes the
+       left end, which is the edge the avatar breaks. */
+    --badge-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + 1.55em) - max(0px, -1 * var(--rdx, 0) * var(--avatar) * 0.6));
     --badge-dy: calc(var(--rdy, 0) * (var(--pod-h) * 0.5 + 0.8em));
     transform: translate(-50%, -50%) translate(var(--badge-dx), var(--badge-dy));
     display: inline-flex;
@@ -760,16 +762,21 @@
     /* PORTRAIT HAS NO ROOM ON THE CHIP VECTOR (T-23), so the award rides the
        readout spoke with the badge: one step further out on a horizontal spoke,
        the other END of the same edge on a vertical one. */
-    /* Flank seat (horizontal spoke): the badge keeps the spoke at mid-plate;
-       the award hangs off the plate's inner corner on the side AWAY from the
-       board (the pot readout and the winner line own the middle in portrait
-       and paint above the seats), beside the revealed pair rather than on it. */
+    /* Flank seat (horizontal spoke): the badge keeps the spoke; the award
+       goes past the plate's inner end and one step toward the rail's far half
+       (the same side the revealed pair takes, but inward of it: measured, the
+       pair reaches 0.10 fw past the plate's inner end and the award starts at
+       0.12). The middle belongs to the pot readout, which paints above seats
+       in portrait; the award stays out of it. */
     .winner-award.on-spoke {
       flex-direction: column;
       gap: 0.1em;
-      --award-dx: calc(var(--rdx, 0) * var(--pod-w) * 0.55);
-      --award-dy: calc(sign(var(--sn, 1)) * (var(--pod-h) * 0.5 + 1.1em));
+      --award-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + 2.2em));
+      --award-dy: calc(sign(var(--sn, 1)) * (var(--pod-h) * 0.5 + 1.4em));
     }
+    /* ...and the flank seat's badge sits a hair below mid-plate, under the
+       winner line's method footnote. */
+    :global(.seat:not(.spoke-y)) .equity-badge { --badge-dy: 0.5em; }
     /* Top/bottom seat (vertical spoke): the badge at one end of the far edge,
        the award at the other; both were measured touching at the old 0.24. */
     .winner-award.on-spoke.spoke-y {
@@ -779,7 +786,7 @@
       --award-dy: calc(var(--rdy, 0) * (var(--pod-h) * 0.5 + var(--fw) * 0.05));
     }
 
-    .stack-delta { font-size: 0.7em; padding: 0.08em 0.4em; }
+    .stack-delta { font-size: 0.66em; padding: 0.08em 0.4em; }
     .hand-tag { font-size: var(--cd-felt-label); padding: 0.06em 0.35em; }
 
     .chip-stack { --chip: calc(var(--fw) * 0.05); }
