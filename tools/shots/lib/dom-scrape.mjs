@@ -184,6 +184,17 @@ export function scrapeTable(page) {
             })(),
             presetButtons: [...document.querySelectorAll('.raise-slider-panel .preset-buttons button')]
                 .map((b) => (b.textContent || '').replace(/\s+/g, ' ').trim()),
+            // THE HERO PLATE TAG (SeatPod.svelte `.plate-tag`): "Call 0.10" while
+            // that pre-action is armed, "Raise to 0.30" while a send is open. A
+            // money figure painted ON THE FELT, so it is read here and asserted
+            // (chain-agreement.mjs): the armed figure against call_amount, the
+            // sent one against the e8s the echo recorded (data-sent-e8s).
+            heroPlateTag: one(document, '.player-nameplate.highlight-me .plate-tag'),
+            heroPlateTagSentE8s: (() => {
+                const el = document.querySelector('.player-nameplate.highlight-me .plate-tag.sent');
+                const raw = el ? el.getAttribute('data-sent-e8s') : null;
+                return raw === null || raw === '' ? null : Number(raw);
+            })(),
             // The pre-action row (PreActions.svelte), shown while it is NOT the
             // hero's turn. A "Call X" toggle carries the call amount.
             preActionButtons: [...document.querySelectorAll('.pre-actions .pre-btn')]

@@ -5,8 +5,13 @@
    * It never paints over the felt or the hero's cards (the old popover did
    * both). On desktop it is a row above the action buttons whenever the hero
    * can raise; on the phone it stays in the DOM but hidden until the caret
-   * beside Raise opens it, and it opens IN FLOW (the dock grows for a moment)
-   * rather than as a sheet over the hero's pod.
+   * beside Raise opens it, and it opens as a SHEET ANCHORED TO THE ACTION
+   * ROW'S TOP (absolute, inside PokerTable's `.dock-actions`), never in flow:
+   * measured in flow it grew the dock 130 px and pushed the felt under the
+   * 45% floor at the one moment every phone raise passes through.
+   *
+   * The row is street-aware (`presets`): pre-flop the multiples, post-flop
+   * the pot fractions; every figure is on the display grid (`quantum`).
    *
    * The arithmetic is $lib/bet-sizing.js; this file only renders and reports.
    * The parent owns `value` (the raise-to figure in the smallest unit) and is
@@ -20,13 +25,14 @@
    * by the harness and compared with the canister's get_pot().
    */
   import {
-    PRESETS, formatAmountInput, parseAmountInput, presetAt, presetTarget, raiseCap, raiseFloor,
+    PRESETS, formatAmountInput, parseAmountInput, presetAt, presetTargets, raiseCap, raiseFloor,
     sliderStep, stepByBlind,
   } from '$lib/bet-sizing.js';
 
   const {
     value = 0,
-    ctx,                     // SizingContext (see bet-sizing.js)
+    ctx,                     // SizingContext (see bet-sizing.js), carries quantum
+    presets = PRESETS,       // the row for this street (presetsForPhase)
     bigBlind = 0,
     isBTC = false,
     decimals = 2,
@@ -42,9 +48,10 @@
 
   const floor = $derived(raiseFloor(ctx));
   const cap = $derived(raiseCap(ctx));
-  const step = $derived(sliderStep(ctx.minRaise));
-  const onPreset = $derived(presetAt(value, ctx));
-  const targets = $derived(Object.fromEntries(PRESETS.map((p) => [p.id, presetTarget(p.id, ctx)])));
+  const quantum = $derived(Math.max(1, Number(ctx.quantum ?? 1)));
+  const step = $derived(sliderStep(ctx.minRaise, quantum));
+  const targets = $derived(presetTargets(ctx, presets));
+  const onPreset = $derived(presetAt(value, ctx, presets));
 
   // The typed field: mirrors `value` unless the player is typing in it.
   let text = $state('');
@@ -62,7 +69,7 @@
   }
 
   function nudge(direction) {
-    onChange(stepByBlind(value, bigBlind, direction, floor, cap));
+    onChange(stepByBlind(value, bigBlind, direction, floor, cap, quantum));
   }
 
   function onType(event) {
@@ -90,12 +97,12 @@
 
 <div class="raise-slider-panel" class:compact class:muted hidden={compact && !open} role="group" aria-label="Bet size" aria-disabled={muted}>
   <div class="preset-buttons">
-    {#each PRESETS as p (p.id)}
+    {#each presets as p (p.id)}
       <button
         type="button"
         class:on={onPreset === p.id}
         aria-pressed={onPreset === p.id}
-        title="{p.label} (key {p.key})"
+        title="{p.hint} (key {p.key})"
         onclick={() => pick(p.id)}
       >{p.label}</button>
     {/each}
@@ -260,9 +267,25 @@
     text-align: center;
   }
 
-  /* THE PHONE: the sizer opens in flow above the action row. Two rows, the
-     presets at the touch floor, the slider the width of the dock. */
-  .raise-slider-panel.compact { gap: var(--cd-space-2); }
+  /* THE PHONE: a sheet standing on the action row's top edge, the dock's
+     full width, OVER the pot-odds line and the wallet row rather than between
+     them. Absolute inside `.dock-actions` (position: relative, in
+     poker-table-dock.scss), so opening it moves nothing: the felt box and
+     every pod stay where the resting still has them. Two rows, the presets
+     at the touch floor, the slider the width of the dock. */
+  .raise-slider-panel.compact {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(100% + var(--cd-space-1));
+    z-index: var(--cd-z-dock-sheet);
+    gap: var(--cd-space-2);
+    padding: var(--cd-space-2);
+    border-radius: var(--cd-radius-card);
+    border: 1px solid var(--cd-line-strong);
+    background: var(--cd-panel);
+    box-shadow: var(--cd-shadow-lift);
+  }
   .raise-slider-panel.compact .preset-buttons button { min-height: var(--cd-touch-min); font-size: var(--cd-text-md); }
   .raise-slider-panel.compact .step { width: var(--cd-touch-min); min-height: var(--cd-touch-min); }
   .raise-slider-panel.compact .amount-field { min-height: var(--cd-touch-min); }

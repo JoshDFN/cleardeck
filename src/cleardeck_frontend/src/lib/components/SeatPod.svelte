@@ -113,7 +113,7 @@
       <!-- THE ECHO / THE ARMED CHOICE: the sent action (or the pre-selected
            one) on the plate's top corner, so the player sees the client
            carrying their intent before the chain confirms it. -->
-      <span class="plate-tag {plateTag.tone}">{plateTag.text}</span>
+      <span class="plate-tag {plateTag.tone}" data-sent-e8s={plateTag.e8s ?? null}>{plateTag.text}</span>
     {/if}
     {#if isHero && heroHandName && !folded}
       <!-- GGPoker's named hand-strength readout, IN the plate: a function of

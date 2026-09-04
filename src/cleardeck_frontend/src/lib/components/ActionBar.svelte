@@ -16,8 +16,12 @@
    *   no game      "Waiting for players" / "Hand complete".
    *
    * Keyboard (desktop): F fold, C check or call, R raise at the sizer's
-   * figure, A twice for all in, 1-5 presets, + and - a big blind; never Enter or Space, which belong to whatever has focus,
-   * confirms, Esc cancels. Inactive while any field has focus.
+   * figure, A twice for all in, 1-5 (1-6 pre-flop) presets, + and - a big
+   * blind, Esc cancels; never Enter or Space, which belong to whatever has
+   * focus. Inactive while any field has focus ($lib/hotkeys.js).
+   *
+   * Every size in the style block is a token: the row's rhythm is the design
+   * system's, not this file's.
    */
   import { PRESETS } from '$lib/bet-sizing.js';
   import { dialogIsOpen, focusKindOf, resolveHotkey } from '$lib/hotkeys.js';
@@ -45,6 +49,7 @@
     actionError = null,
     preOptions = [],         // [] when the hero cannot pre-act
     preArmedId = null,
+    presets = PRESETS,       // the street's preset row (for the number keys and the legend)
     compact = false,         // phone: the sizer caret is shown
     sizerOpen = false,
     keyHints = false,
@@ -85,7 +90,7 @@
       focusKind: focusKindOf(document.activeElement, dockEl),
       dialogOpen: dialogIsOpen(document),
       canCheck, canRaise, raiseDisabled, allInArmed, compact, sizerOpen,
-      presets: PRESETS,
+      presets,
     });
     if (!decision) return;
     switch (decision.type) {
@@ -164,15 +169,21 @@
       {/if}
       {#if canRaise}
         <span class="raise-group">
+          <!-- THE PHONE'S RAISE CELL is two lines (the word, then the money at
+               the small size) so a wide figure ("Raise 12.50") never runs
+               into the caret: measured at one line the amount ended flush
+               against the caret's border, and one run clipped it entirely. -->
           <button
             type="button"
             class="action-btn raise"
             class:has-caret={compact}
+            class:stacked={compact}
             disabled={raiseDisabled}
             onclick={onCommitRaise}
             title="{raiseLabel} {fmt(raiseAmount)} (R)"
           >
-            <u>{raiseLabel.charAt(0)}</u>{compact ? raiseLabel.slice(1).replace(/ to$/, '') : raiseLabel.slice(1)} {fmt(raiseAmount)}
+            <span class="raise-word"><u>{raiseLabel.charAt(0)}</u>{compact ? raiseLabel.slice(1).replace(/ to$/, '') : raiseLabel.slice(1)}</span>
+            <span class="raise-amt">{fmt(raiseAmount)}</span>
           </button>
           {#if compact}
             <button
@@ -183,7 +194,7 @@
               aria-expanded={sizerOpen}
               aria-label={sizerOpen ? 'Close bet size' : 'Choose bet size'}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <svg class="caret-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
                 <path d="M6 15l6-6 6 6"/>
               </svg>
             </button>
@@ -211,7 +222,7 @@
     <div class="key-hints" aria-hidden="true">
       <span><kbd>F</kbd> fold</span>
       <span><kbd>C</kbd> {canCheck ? 'check' : 'call'}</span>
-      {#if canRaise}<span><kbd>R</kbd> raise</span><span><kbd>1</kbd>-<kbd>5</kbd> sizes</span><span><kbd>+</kbd><kbd>-</kbd> blind</span>{/if}
+      {#if canRaise}<span><kbd>R</kbd> raise</span><span><kbd>1</kbd>-<kbd>{presets.length}</kbd> sizes</span><span><kbd>+</kbd><kbd>-</kbd> blind</span>{/if}
       <span><kbd>A</kbd><kbd>A</kbd> all in</span>
     </div>
   {/if}
@@ -232,7 +243,7 @@
     align-items: center;
     gap: var(--cd-space-2);
     max-width: 100%;
-    padding: 4px var(--cd-space-2) 4px var(--cd-space-3);
+    padding: var(--cd-space-1) var(--cd-space-2) var(--cd-space-1) var(--cd-space-3);
     border-radius: var(--cd-radius-chip);
     border: 1px solid var(--cd-danger-line);
     background: var(--cd-danger-dim);
@@ -243,8 +254,8 @@
 
   .action-error .dismiss {
     flex: 0 0 auto;
-    width: 20px;
-    height: 20px;
+    width: var(--cd-space-5);
+    height: var(--cd-space-5);
     border-radius: var(--cd-radius-chip);
     border: 0;
     background: transparent;
@@ -262,7 +273,7 @@
     gap: var(--cd-space-2);
     min-width: 0;
     flex-wrap: nowrap;
-    padding-top: 3px;
+    padding-top: var(--cd-space-1);
   }
 
   .actions.disabled { opacity: 0.45; pointer-events: none; }
@@ -273,15 +284,16 @@
   .actions.sent .action-btn:not(.pressed) { opacity: 0.35; }
   .actions.sent .action-btn.pressed { opacity: 1; filter: saturate(0.6) brightness(0.92); }
 
-  /* THE CLOCK LINE: 2 px across the top of the row, the same fraction as the
-     pod ring, red in the last ten seconds. Held while a send is open. */
+  /* THE CLOCK LINE: half a space unit (2 px) across the top of the row, the
+     same fraction as the pod ring, red in the last ten seconds. Held while a
+     send is open. */
   .actions-clock {
     position: absolute;
     left: 0;
     top: 0;
-    height: 2px;
+    height: calc(var(--cd-space-1) / 2);
     width: calc(var(--clock, 0) * 100%);
-    border-radius: 1px;
+    border-radius: var(--cd-radius-pill);
     background: var(--cd-accent);
     transition: width 1s linear;
   }
@@ -292,7 +304,7 @@
 
   @keyframes urgent-pulse {
     0%, 100% { box-shadow: 0 0 0 0 var(--cd-danger-line); }
-    50% { box-shadow: 0 0 0 3px var(--cd-danger-dim); }
+    50% { box-shadow: 0 0 0 var(--cd-space-1) var(--cd-danger-dim); }
   }
 
   .no-game-message, .not-your-turn {
@@ -300,7 +312,7 @@
     align-items: center;
     gap: var(--cd-space-2);
     min-height: var(--cd-touch-min);
-    padding: 0 18px;
+    padding: 0 var(--cd-space-4);
     border-radius: var(--cd-radius-chip);
     background: var(--cd-surface-1);
     border: 1px solid var(--cd-line-soft);
@@ -313,7 +325,7 @@
      role, a real pressed state and a focus ring. */
   .action-btn {
     flex: 0 1 auto;
-    min-width: 78px;
+    min-width: calc(var(--cd-touch-min) + var(--cd-space-6));
     min-height: var(--cd-touch-min);
     padding: 0 var(--cd-space-4);
     border-radius: var(--cd-radius-card);
@@ -329,7 +341,7 @@
                 opacity var(--cd-base) var(--cd-ease);
   }
 
-  .action-btn u { text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+  .action-btn u { text-decoration: underline; text-decoration-thickness: from-font; text-underline-offset: calc(var(--cd-space-1) * 0.75); }
   .action-btn:hover { transform: translateY(-1px); filter: brightness(1.1); }
   .action-btn:active { transform: scale(0.97); filter: brightness(0.9); }
   .action-btn:focus-visible { outline: 2px solid var(--cd-accent-hi); outline-offset: 2px; }
@@ -369,17 +381,31 @@
 
   .action-btn.ghost.time-bank { border-color: var(--cd-warn-line); color: var(--cd-warn); }
 
-  .raise-group { display: inline-flex; gap: 2px; min-width: 0; }
-  .action-btn.has-caret { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }
+  .raise-word, .raise-amt { white-space: nowrap; }
+  /* Two lines on the phone: the word over the money. */
+  .action-btn.stacked {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    line-height: 1.15;
+    padding: 0 var(--cd-space-2);
+  }
+  .action-btn.stacked .raise-amt { font-size: var(--cd-text-sm); }
+
+  .raise-group { display: inline-flex; gap: calc(var(--cd-space-1) / 2); min-width: 0; }
+  .action-btn.has-caret { border-top-right-radius: calc(var(--cd-radius-chip) / 2); border-bottom-right-radius: calc(var(--cd-radius-chip) / 2); }
   .action-btn.caret {
-    min-width: 0;
+    flex: 0 0 var(--cd-touch-min);
+    min-width: var(--cd-touch-min);
     width: var(--cd-touch-min);
     padding: 0;
-    border-top-left-radius: 4px;
-    border-bottom-left-radius: 4px;
+    border-top-left-radius: calc(var(--cd-radius-chip) / 2);
+    border-bottom-left-radius: calc(var(--cd-radius-chip) / 2);
   }
-  .action-btn.caret svg { transition: transform var(--cd-base) var(--cd-ease); }
-  .action-btn.caret.open svg { transform: rotate(180deg); }
+  .caret-glyph { width: var(--cd-text-md); height: var(--cd-text-md); transition: transform var(--cd-base) var(--cd-ease); }
+  .action-btn.caret.open .caret-glyph { transform: rotate(180deg); }
 
   /* Pointer devices only: the hotkey legend under the row. */
   .key-hints {
@@ -393,8 +419,8 @@
   kbd {
     display: inline-block;
     min-width: 1.2em;
-    padding: 0 3px;
-    border-radius: 3px;
+    padding: 0 var(--cd-space-1);
+    border-radius: calc(var(--cd-radius-chip) / 2);
     border: 1px solid var(--cd-line-strong);
     background: var(--cd-surface-2);
     color: var(--cd-ink-1);
@@ -405,25 +431,31 @@
   }
 
   @media (max-aspect-ratio: 1/1) {
-    .actions { flex-wrap: nowrap; gap: 6px; width: 100%; }
+    .actions { flex-wrap: nowrap; gap: calc(var(--cd-space-1) * 1.5); width: 100%; }
     .action-btn {
       flex: 1 1 0;
       min-width: 0;
-      min-height: 48px;
-      padding: 0 4px;
+      min-height: calc(var(--cd-touch-min) + var(--cd-space-1));
+      padding: 0 var(--cd-space-1);
       font-size: var(--cd-text-md);
     }
     .action-btn u { text-decoration: none; }
-    /* "Raise 0.30" plus its caret: the widest cell in the row. */
-    .raise-group { flex: 1.7 1 0; }
-    .action-btn.caret { flex: 0 0 40px; width: 40px; }
-    .action-btn.ghost { flex: 0 0 auto; padding: 0 9px; }
-    .no-game-message, .not-your-turn { min-height: 48px; font-size: var(--cd-text-md); }
+    /* Fold needs the least room; the raise cell (two lines plus the 44 px
+       caret) the most. Measured at 390 px: Fold 68, Call 85, Raise 73 + 44,
+       All in 85, every cell at or above the touch floor. */
+    .action-btn.secondary { flex: 0.8 1 0; }
+    .raise-group { flex: 1.4 1 0; }
+    /* The raise label keeps the touch floor even when the time-bank pill
+       joins the row under 15 s (measured: six cells squeezed it to 43 px). */
+    .action-btn.stacked { padding: 0 var(--cd-space-2); min-width: var(--cd-touch-min); }
+    .action-btn.caret { flex: 0 0 var(--cd-touch-min); min-width: var(--cd-touch-min); width: var(--cd-touch-min); }
+    .action-btn.ghost { flex: 0 0 auto; min-width: var(--cd-touch-min); padding: 0 var(--cd-space-1); }
+    .no-game-message, .not-your-turn { min-height: calc(var(--cd-touch-min) + var(--cd-space-1)); font-size: var(--cd-text-md); }
     .key-hints { display: none; }
   }
 
   @media (min-aspect-ratio: 1/1) and (max-height: 560px) {
-    .action-btn { padding: 0 12px; font-size: var(--cd-text-sm); min-width: 66px; }
+    .action-btn { padding: 0 var(--cd-space-3); font-size: var(--cd-text-sm); min-width: calc(var(--cd-touch-min) + var(--cd-space-5)); }
     .key-hints { display: none; }
   }
 

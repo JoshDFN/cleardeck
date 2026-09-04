@@ -44,7 +44,7 @@ import { lobbyActor, optional, variantKey } from './agent.mjs';
 import { archiveActor } from './archive-wire.mjs';
 import { handRecordActor } from './hand-record-wire.mjs';
 import {
-  checkFigure, checkPlainNumber, foldFigures, parseDisplayedAmount,
+  checkFigure, checkPlainNumber, displayQuantumFor, foldFigures, parseDisplayedAmount, quantiseDown,
   RANK_BY_GLYPH, SUIT_BY_SYMBOL, cardToText, fmt,
 } from './money.mjs';
 import {
@@ -703,6 +703,25 @@ function compare(truth, dom, opts) {
         if (!/^call\s+\d/i.test(label)) continue;
         figures.push(checkFigure('pre-action "Call X" vs call_amount', truth.callAmount, label.replace(/^call/i, ''), { currency }));
     }
+    // THE HERO PLATE TAG (SeatPod.svelte): "Call 0.10" while that pre-action
+    // is armed, or the sent echo ("Raise to 0.30", "Call 0.10") while a send
+    // is open. Money painted on the felt, so: the armed figure against
+    // call_amount; the sent figure against the e8s the echo recorded and will
+    // send (data-sent-e8s). A digit in the tag that neither rule can name is
+    // structural: a money figure nothing asserts.
+    if (dom.heroPlateTag && /\d/.test(dom.heroPlateTag)) {
+        const tag = dom.heroPlateTag;
+        if (dom.heroPlateTagSentE8s !== null && dom.heroPlateTagSentE8s !== undefined) {
+            figures.push(checkFigure(
+                'hero plate tag (sent echo) vs the e8s the echo recorded',
+                dom.heroPlateTagSentE8s, tag.replace(/^[^\d-]*/, ''), { currency },
+            ));
+        } else if (/^call\s+\d/i.test(tag)) {
+            figures.push(checkFigure('hero plate tag "Call X" vs call_amount', truth.callAmount, tag.replace(/^call/i, ''), { currency }));
+        } else {
+            structural.push(`hero plate tag "${tag}" carries a figure that no rule asserts`);
+        }
+    }
 
     // ---- the sizer at rest -----------------------------------------------
     // The dock sizer (BetSizer.svelte) proposes the LEGAL FLOOR on every
@@ -900,14 +919,12 @@ export async function assertChainAgreement(ctx, page, opts) {
 /**
  * THE BET-SIZING PRESETS: what the client would WAGER, not what it displays.
  *
- * `½ Pot` and `Pot` write an amount into the raise field that the next click
- * sends to the canister. If the client's idea of "the pot" is wrong, this is not
- * a cosmetic defect: the player commits real chips at a size they did not
- * intend. So the presets are read off the live UI and compared with the
- * canister's own `get_pot()`, using the poker definition the labels promise:
- *
- *   Pot   = raise TO (pot + amount_to_call)   — the pot after you call
- *   ½ Pot = raise TO (pot/2), floored at the legal minimum raise
+ * A preset writes an amount into the raise field that the next click sends
+ * to the canister. If the client's idea of "the pot" (or of the big blind) is
+ * wrong, this is not a cosmetic defect: the player commits real chips at a
+ * size they did not intend. So the presets are read off the live UI and
+ * compared with the canister's own `get_pot()` and config, using the poker
+ * definition the labels promise.
  *
  * WHAT "POT-SIZED" MEANS, WRITTEN DOWN ONCE.
  *
@@ -917,25 +934,42 @@ export async function assertChainAgreement(ctx, page, opts) {
  * `m` = my `current_bet`, `P` = `get_pot()` and `c = B - m = call_amount`:
  *
  *     Pot    raise TO  B + P + c        ( = P + 2B - m )
- *     ½ Pot  raise TO  B + floor(P/2 + c/2)
+ *     ½ Pot  raise TO  B + (P + c) / 2
+ *     ⅔ Pot  raise TO  B + 2 (P + c) / 3
+ *
+ * and pre-flop the row is multiples of the bet in front (or the big blind when
+ * only the blinds are in): 2.5x, 3x, 4x of max(B, big_blind).
  *
  * `P` already contains every live bet, which is exactly the fact T-08 got wrong.
+ *
+ * QUANTISED TO THE DISPLAY UNIT. Every formula's figure is rounded DOWN onto
+ * the grid the screen shows (`displayQuantumFor`, 0.01 ICP at two decimals)
+ * before the floor and the cap are applied, because that is what the client
+ * does ($lib/bet-sizing.js): a proposal off the grid is a figure the button
+ * cannot show, and before this the two-thirds preset read 0.47 on the button
+ * while 46,666,666 e8s would have been sent. This check reads the two-thirds
+ * preset precisely because that was the one that failed.
  *
  * Getting this arithmetic wrong in the HARNESS is as bad as getting it wrong in
  * the client, and the first draft of this check did: it used `P + c` as a
  * ceiling, which is a chips-added quantity compared against a raise-to figure,
  * and it convicted a correct client. So the observed value is also inverted back
- * into an IMPLIED POT, `implied = observed - B - c`, and reported next to
- * `get_pot()`. That number is definition-free: if the client is sizing off twice
- * the pot, `impliedPot / get_pot()` reads 2.0 and says so, whatever formula
- * either side prefers.
+ * into an IMPLIED POT (for the pot fractions) or an IMPLIED BASE (for the
+ * multiples) and reported next to the canister's figure. That number is
+ * definition-free: if the client is sizing off twice the pot,
+ * `impliedPot / get_pot()` reads 2.0 and says so, whatever formula either side
+ * prefers.
  *
- * Both presets are floored at the legal minimum (`current_bet + min_raise`, or
+ * Every preset is floored at the legal minimum (`current_bet + min_raise`, or
  * `min_bet` when there is no bet) and capped at the player's stack, so a preset
  * that lands on the floor or the cap is reported as UNCONSTRAINING rather than as
  * a pass — a preset pinned to the floor proves nothing about the pot behind it.
  *
- * Nothing is committed: the popover is opened, read and closed again.
+ * Which row is read follows the STREET the scene photographs: the multiples
+ * pre-flop, the fractions after. A label that is not on screen is an advisory,
+ * never a pass.
+ *
+ * Nothing is committed: the sizer is opened, read and put back to Min.
  *
  * @param {object} ctx
  * @param {import('playwright').Page} page
@@ -963,39 +997,72 @@ export async function assertBetPresetsAgree(ctx, page, opts) {
     const cap = raw.myChips + raw.myCurrentBet;
     const B = raw.currentBet;
     const c = truth.callAmount;
-    const expectedRaiseTo = {
-        Pot: Math.min(cap, Math.max(floor, B + truth.pot + c)),
-        '½ Pot': Math.min(cap, Math.max(floor, B + Math.floor((truth.pot + c) / 2))),
-    };
-    /** The pot the client must have been sizing from, given what it proposed. */
-    const impliedPotFrom = (raiseTo, label) =>
-        (label === 'Pot' ? raiseTo - B - c : (raiseTo - B) * 2 - c);
+    const P = truth.pot;
+    const bb = truth.bigBlind;
+    const quantum = displayQuantumFor(truth.currency, bb);
+    const legal = (v) => Math.min(cap, Math.max(floor, quantiseDown(Math.floor(v), quantum)));
 
-    for (const label of ['½ Pot', 'Pot']) {
+    /**
+     * The rules per label: the expected raise-to, and the inversion that turns
+     * an observed raise-to back into the figure the client must have used.
+     */
+    const RULES = {
+        'Pot': { expected: () => legal(B + P + c), implied: (to) => to - B - c, base: 'pot', discriminates: P > 0 },
+        '½ Pot': { expected: () => legal(B + (P + c) / 2), implied: (to) => (to - B) * 2 - c, base: 'pot', discriminates: P > 0 },
+        '⅔ Pot': { expected: () => legal(B + (2 * (P + c)) / 3), implied: (to) => ((to - B) * 3) / 2 - c, base: 'pot', discriminates: P > 0 },
+        '2.5x': { expected: () => legal(2.5 * Math.max(B, bb)), implied: (to) => to / 2.5, base: 'bet', discriminates: true },
+        '3x': { expected: () => legal(3 * Math.max(B, bb)), implied: (to) => to / 3, base: 'bet', discriminates: true },
+        '4x': { expected: () => legal(4 * Math.max(B, bb)), implied: (to) => to / 4, base: 'bet', discriminates: true },
+    };
+    const preflop = truth.phase === 'PreFlop';
+    const labels = preflop ? ['2.5x', '3x', '4x', 'Pot'] : ['½ Pot', '⅔ Pot', 'Pot'];
+    const baseFigure = (rule) => (rule.base === 'pot' ? P : Math.max(B, bb));
+    const baseName = (rule) => (rule.base === 'pot' ? 'get_pot()' : 'max(current_bet, big_blind)');
+
+    for (const label of labels) {
+        const rule = RULES[label];
         const read = await readBetPreset(page, label);
         const sliderValue = read.sliderValue === null || read.sliderValue === undefined
             ? null : Number(read.sliderValue);
-        const impliedPot = sliderValue === null ? null : impliedPotFrom(sliderValue, label);
+        const implied = sliderValue === null ? null : rule.implied(sliderValue);
+        const base = baseFigure(rule);
         const entry = {
             label,
+            street: truth.phase,
             ...read,
             sliderValueE8s: sliderValue,
-            expectedRaiseToE8s: expectedRaiseTo[label],
-            impliedPotE8s: impliedPot,
-            impliedPotMultiple: impliedPot === null || truth.pot === 0
-                ? null : Math.round((impliedPot / truth.pot) * 1000) / 1000,
+            expectedRaiseToE8s: rule.expected(),
+            impliedBaseE8s: implied,
+            impliedBaseMultiple: implied === null || base === 0
+                ? null : Math.round((implied / base) * 1000) / 1000,
+            quantumE8s: quantum,
         };
         results.push(entry);
         if (!read.available) {
-            advisory.push(`preset "${label}" is not reachable on this screen`);
+            advisory.push(`preset "${label}" is not reachable on this screen (street ${truth.phase})`);
             continue;
         }
         if (sliderValue === null) {
             advisory.push(`preset "${label}": no slider value to read`);
             continue;
         }
+        // THE FIGURE MUST BE ON THE DISPLAY GRID: a proposal the button cannot
+        // show exactly is a figure that would be sent while a different one is
+        // read. Checked before anything about the pot.
+        if (sliderValue % quantum !== 0 && sliderValue !== floor && sliderValue !== cap) {
+            figures.push({
+                label: `bet preset "${label}" is on the display grid`,
+                chain: quantum,
+                domText: String(sliderValue),
+                agrees: false,
+                discriminates2x: false,
+                ok: false,
+                detail: `WOULD WAGER ${sliderValue} e8s, which is not a multiple of the display unit `
+                    + `${quantum} e8s: the button shows a rounded figure and the canister gets another`,
+            });
+        }
         // The two places the client SHOWS the amount must agree with the amount
-        // it would SEND. A popover that displays one number and posts another is
+        // it would SEND. A sizer that displays one number and posts another is
         // its own defect, so this is checked before anything about the pot.
         for (const [what, text] of [['slider readout', read.amountText], ['confirm button', read.confirmText]]) {
             if (!text) continue;
@@ -1010,29 +1077,30 @@ export async function assertBetPresetsAgree(ctx, page, opts) {
         if (pinned) {
             advisory.push(
                 `preset "${label}" landed on ${pinned} (${sliderValue} e8s), so this sample `
-                + 'cannot discriminate a wrong pot behind it',
+                + 'cannot discriminate a wrong figure behind it',
             );
             continue;
         }
-        const want = expectedRaiseTo[label];
+        const want = rule.expected();
         const ok = sliderValue === want;
         figures.push({
-            label: `bet preset "${label}" is sized from get_pot()`,
+            label: `bet preset "${label}" is sized from ${baseName(rule)}`,
             chain: want,
             domText: String(sliderValue),
             agrees: ok,
-            // Would a doubled pot have produced a different number here? It moves
-            // the target by exactly get_pot(), so yes whenever the pot is non-zero
-            // and the result is not pinned by the floor or the cap.
-            discriminates2x: truth.pot > 0,
+            // Would a doubled pot (or big blind) have produced a different number
+            // here? Yes whenever the base is non-zero and the result is not
+            // pinned by the floor or the cap.
+            discriminates2x: rule.discriminates,
             ok,
             detail: ok
-                ? `raise-to ${sliderValue} e8s == current_bet ${B} + get_pot() ${truth.pot} `
-                  + `${label === 'Pot' ? '+' : '/2 +'} call ${c} (implied pot ${impliedPot} e8s, `
-                  + `${entry.impliedPotMultiple}x get_pot())`
+                ? `raise-to ${sliderValue} e8s == ${label} of ${baseName(rule)} ${base} e8s `
+                  + `(current_bet ${B}, call ${c}, quantised to ${quantum} e8s; implied base `
+                  + `${entry.impliedBaseE8s} e8s, ${entry.impliedBaseMultiple}x)`
                 : `WOULD WAGER a raise-to of ${sliderValue} e8s where a ${label} raise is ${want} e8s. `
-                  + `The client is sizing from a pot of ${impliedPot} e8s — ${entry.impliedPotMultiple}x `
-                  + `get_pot() (${truth.pot}). This number is SENT to the canister, not merely displayed.`,
+                  + `The client is sizing from a base of ${entry.impliedBaseE8s} e8s, `
+                  + `${entry.impliedBaseMultiple}x ${baseName(rule)} (${base}). This number is SENT to `
+                  + 'the canister, not merely displayed.',
         });
     }
     await closeBetPresets(page);
@@ -1046,15 +1114,15 @@ export async function assertBetPresetsAgree(ctx, page, opts) {
             moneyMismatches: folded.mismatches,
             advisory,
             onChain: {
-                getPot: truth.pot, callAmount: truth.callAmount,
-                currentBet: raw.currentBet, minRaise: raw.minRaise, minBet: raw.minBet,
-                legalFloor: floor, cap,
+                street: truth.phase, getPot: P, callAmount: c, bigBlind: bb,
+                currentBet: B, minRaise: raw.minRaise, minBet: raw.minBet,
+                legalFloor: floor, cap, displayQuantum: quantum,
             },
             onScreen: results,
             figures: folded.figures.map((f) => ({ label: f.label, chain: f.chain, screen: f.domText, ok: f.ok, detail: f.detail })),
         },
         notes: folded.ok
-            ? `bet presets: ${folded.checked} sizing figure(s) match get_pot()`
+            ? `bet presets (${truth.phase}): ${folded.checked} sizing figure(s) match the canister`
             : `BET SIZING DISAGREEMENT: ${folded.mismatches.slice(0, 3).join(' | ')}`,
     };
 }

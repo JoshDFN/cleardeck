@@ -1,9 +1,18 @@
 <script>
   import { soundManager } from '$lib/sounds';
-  
+  import { readTurnAlertPref, writeTurnAlertPref } from '$lib/turn-alert.js';
+
+  const storage = typeof localStorage !== 'undefined' ? localStorage : null;
   let enabled = $state(soundManager.enabled);
   let volume = $state(soundManager.volume);
   let showSettings = $state(false);
+  let turnAlert = $state(readTurnAlertPref(storage));
+
+  function toggleTurnAlert() {
+    turnAlert = !turnAlert;
+    writeTurnAlertPref(storage, turnAlert);
+    if (turnAlert) soundManager.play('yourTurn');
+  }
   
   function toggleSounds() {
     enabled = !enabled;
@@ -49,6 +58,12 @@
           <input type="range" min="0" max="1" step="0.1" bind:value={volume} oninput={(e) => setVolume(e.target.value)} />
         </div>
       {/if}
+      <div class="setting-item">
+        <label>
+          <input type="checkbox" checked={turnAlert} onchange={toggleTurnAlert} />
+          <span>Your-turn alert (chime, vibration, tab title)</span>
+        </label>
+      </div>
     </div>
   {/if}
 </div>

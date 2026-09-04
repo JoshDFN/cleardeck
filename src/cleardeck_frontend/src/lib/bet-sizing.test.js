@@ -1,29 +1,55 @@
 import { describe, it, expect } from 'vitest';
 import {
-  PRESETS, clampRaise, formatAmountInput, parseAmountInput, presetAt, presetTarget,
-  presetTargets, raiseCap, raiseFloor, raiseKind, raiseProblem, sliderStep, stepByBlind,
+  POSTFLOP_PRESETS, PREFLOP_PRESETS, PRESETS, clampRaise, displayQuantum, formatAmountInput,
+  parseAmountInput, presetAt, presetTarget, presetTargets, presetsForPhase, quantise, raiseCap,
+  raiseFloor, raiseKind, raiseProblem, sliderStep, stepByBlind,
 } from './bet-sizing.js';
 
 // 0.05/0.10 blinds in e8s; the hero (BB, 0.10 in) faces a raise to 0.30 with 11.90 behind.
 const ICP = 100_000_000;
+const CENT = 1_000_000; // the display unit at two decimals
+/** ICP as an exact integer of e8s (0.07 * 1e8 is not an integer in floating point). */
+const e8 = (icp) => Math.round(icp * ICP);
 const facing = {
-  currentBet: 0.30 * ICP, minRaise: 0.20 * ICP, minBet: 0.10 * ICP,
-  myChips: 11.90 * ICP, myCurrentBet: 0.10 * ICP, pot: 0.45 * ICP, callAmount: 0.20 * ICP,
+  currentBet: e8(0.30), minRaise: e8(0.20), minBet: e8(0.10),
+  myChips: e8(11.90), myCurrentBet: e8(0.10), pot: e8(0.45), callAmount: e8(0.20),
+  bigBlind: e8(0.10), quantum: CENT,
 };
 const open = {
-  currentBet: 0, minRaise: 0.10 * ICP, minBet: 0.10 * ICP,
-  myChips: 11.80 * ICP, myCurrentBet: 0, pot: 0.60 * ICP, callAmount: 0,
+  currentBet: 0, minRaise: e8(0.10), minBet: e8(0.10),
+  myChips: e8(11.80), myCurrentBet: 0, pot: e8(0.60), callAmount: 0,
+  bigBlind: e8(0.10), quantum: CENT,
 };
+// The harness's own facing-bet scene: pot 0.30, call 0.10, current bet 0.20.
+const harnessFacing = {
+  currentBet: e8(0.20), minRaise: e8(0.10), minBet: e8(0.10),
+  myChips: e8(11.90), myCurrentBet: e8(0.10), pot: e8(0.30), callAmount: e8(0.10),
+  bigBlind: e8(0.10), quantum: CENT,
+};
+
+describe('displayQuantum / quantise', () => {
+  it('is 10^(8 - decimals) e8s for ICP and one sat for BTC', () => {
+    expect(displayQuantum({ decimals: 2 })).toBe(CENT);
+    expect(displayQuantum({ decimals: 4 })).toBe(10_000);
+    expect(displayQuantum({ isBTC: true, decimals: 0 })).toBe(1);
+  });
+  it('rounds DOWN onto the grid and leaves grid values alone', () => {
+    expect(quantise(46_666_666, CENT)).toBe(46_000_000);
+    expect(quantise(7_500_000, CENT)).toBe(7_000_000);
+    expect(quantise(30_000_000, CENT)).toBe(30_000_000);
+    expect(quantise(123, 1)).toBe(123);
+  });
+});
 
 describe('raiseFloor / raiseCap', () => {
   it('is current_bet + min_raise when facing a bet', () => {
-    expect(raiseFloor(facing)).toBe(0.50 * ICP);
+    expect(raiseFloor(facing)).toBe(e8(0.50));
   });
   it('is min_bet when nothing is in front', () => {
-    expect(raiseFloor(open)).toBe(0.10 * ICP);
+    expect(raiseFloor(open)).toBe(e8(0.10));
   });
   it('caps at chips plus what is already in', () => {
-    expect(raiseCap(facing)).toBe(12 * ICP);
+    expect(raiseCap(facing)).toBe(e8(12));
   });
 });
 
@@ -31,34 +57,82 @@ describe('presets (the harness formulas)', () => {
   it('pot = B + P + c', () => {
     expect(presetTarget('pot', facing)).toBe((0.30 + 0.45 + 0.20) * ICP);
   });
-  it('half pot = B + floor((P + c) / 2), floored at the legal minimum', () => {
-    // (0.45 + 0.20) / 2 = 0.325 -> 0.30 + 0.325 = 0.625
-    expect(presetTarget('half', facing)).toBe(Math.round(0.625 * ICP));
+  it('half pot = B + (P + c) / 2, floored at the legal minimum', () => {
+    // (0.45 + 0.20) / 2 = 0.325 -> quantised 0.32 -> 0.30 + 0.32 = 0.62
+    expect(presetTarget('half', facing)).toBe(e8(0.62));
     // with a tiny pot the half falls below the floor and is lifted to it
-    expect(presetTarget('half', { ...facing, pot: 0.10 * ICP, callAmount: 0.20 * ICP })).toBe(0.50 * ICP);
+    expect(presetTarget('half', { ...facing, pot: e8(0.10), callAmount: e8(0.20) })).toBe(e8(0.50));
   });
-  it('two thirds = B + floor(2(P + c) / 3)', () => {
-    expect(presetTarget('twoThirds', open)).toBe(Math.floor((2 * 0.60 * ICP) / 3));
+  it('half of a 0.15 pot is 0.07, not 0.075 shown as 0.08 (the reviewer case)', () => {
+    const ctx = { ...open, pot: e8(0.15), minBet: e8(0.05) };
+    expect(presetTarget('half', ctx)).toBe(e8(0.07));
+  });
+  it('two thirds = B + 2(P + c) / 3, on the display grid', () => {
+    // open: 2 * 0.60 / 3 = 0.40 exactly
+    expect(presetTarget('twoThirds', open)).toBe(e8(0.40));
+    // the harness scene: 2 * (0.30 + 0.10) / 3 = 0.2666.. -> 0.26 -> raise to 0.46
+    expect(presetTarget('twoThirds', harnessFacing)).toBe(e8(0.46));
+    // unquantised, the same figure would be 46,666,666 e8s
+    expect(presetTarget('twoThirds', { ...harnessFacing, quantum: 1 })).toBe(46_666_666);
   });
   it('all in is the cap and min is the floor', () => {
-    expect(presetTarget('allin', facing)).toBe(12 * ICP);
-    expect(presetTarget('min', facing)).toBe(0.50 * ICP);
+    expect(presetTarget('allin', facing)).toBe(e8(12));
+    expect(presetTarget('min', facing)).toBe(e8(0.50));
   });
   it('with no bet in front the same formula is a plain bet of the pot fraction', () => {
-    expect(presetTarget('pot', open)).toBe(0.60 * ICP);
-    expect(presetTarget('half', open)).toBe(0.30 * ICP);
+    expect(presetTarget('pot', open)).toBe(e8(0.60));
+    expect(presetTarget('half', open)).toBe(e8(0.30));
   });
   it('never exceeds the stack', () => {
-    const short = { ...facing, myChips: 0.25 * ICP };
-    expect(presetTarget('pot', short)).toBe(0.35 * ICP);
-    expect(presetTargets(short).allin).toBe(0.35 * ICP);
+    const short = { ...facing, myChips: e8(0.25) };
+    expect(presetTarget('pot', short)).toBe(e8(0.35));
+    expect(presetTargets(short).allin).toBe(e8(0.35));
+  });
+  it('never rounds the canister\'s own floor or cap, only proposals', () => {
+    const odd = { ...facing, currentBet: e8(0.303), minRaise: e8(0.2) };
+    expect(presetTarget('min', odd)).toBe(raiseFloor(odd));
+    expect(presetTarget('allin', odd)).toBe(raiseCap(odd));
   });
   it('names the preset a value sits on', () => {
     expect(presetAt(presetTarget('pot', facing), facing)).toBe('pot');
-    expect(presetAt(0.51 * ICP, facing)).toBe(null);
+    expect(presetAt(e8(0.51), facing)).toBe(null);
   });
-  it('lists five presets in order with number keys', () => {
+  it('lists five post-flop presets in order with number keys', () => {
+    expect(PRESETS).toBe(POSTFLOP_PRESETS);
     expect(PRESETS.map((p) => p.key)).toEqual(['1', '2', '3', '4', '5']);
+    expect(PRESETS.map((p) => p.label)).toEqual(['Min', '½ Pot', '⅔ Pot', 'Pot', 'All in']);
+  });
+});
+
+describe('pre-flop presets (multiples)', () => {
+  it('is the six-button row only on PreFlop', () => {
+    expect(presetsForPhase('PreFlop')).toBe(PREFLOP_PRESETS);
+    expect(presetsForPhase('Flop')).toBe(POSTFLOP_PRESETS);
+    expect(presetsForPhase(undefined)).toBe(POSTFLOP_PRESETS);
+    expect(PREFLOP_PRESETS.map((p) => p.label)).toEqual(['Min', '2.5x', '3x', '4x', 'Pot', 'All in']);
+    expect(PREFLOP_PRESETS.map((p) => p.key)).toEqual(['1', '2', '3', '4', '5', '6']);
+  });
+  it('multiplies the bet in front when facing a raise', () => {
+    // the harness scene: current bet 0.20
+    expect(presetTarget('x2_5', harnessFacing)).toBe(e8(0.50));
+    expect(presetTarget('x3', harnessFacing)).toBe(e8(0.60));
+    expect(presetTarget('x4', harnessFacing)).toBe(e8(0.80));
+  });
+  it('multiplies the big blind when only the blinds are in', () => {
+    const blindsOnly = { ...harnessFacing, currentBet: e8(0.10), callAmount: e8(0.05), pot: e8(0.15), myCurrentBet: e8(0.05) };
+    expect(presetTarget('x2_5', blindsOnly)).toBe(e8(0.25));
+    expect(presetTarget('x3', blindsOnly)).toBe(e8(0.30));
+    expect(presetTarget('x4', blindsOnly)).toBe(e8(0.40));
+  });
+  it('is lifted to the floor when the multiple is below the legal minimum', () => {
+    // facing 0.30 with min raise 0.20: 2.5x = 0.75 is legal, but a 0.05 blind table with a 3-bet is not
+    const big = { ...facing, currentBet: e8(2), minRaise: e8(5) };
+    expect(presetTarget('x2_5', big)).toBe(e8(7));
+  });
+  it('presetTargets and presetAt take the row', () => {
+    const t = presetTargets(harnessFacing, PREFLOP_PRESETS);
+    expect(Object.keys(t)).toEqual(['min', 'x2_5', 'x3', 'x4', 'pot', 'allin']);
+    expect(presetAt(e8(0.80), harnessFacing, PREFLOP_PRESETS)).toBe('x4');
   });
 });
 
@@ -69,15 +143,26 @@ describe('clampRaise / stepByBlind / sliderStep', () => {
     expect(clampRaise(30, 50, 40)).toBe(40);
   });
   it('steps one big blind and walks the blind grid', () => {
-    const bb = 0.10 * ICP;
-    expect(stepByBlind(0.50 * ICP, bb, +1, 0.50 * ICP, 12 * ICP)).toBe(0.60 * ICP);
-    expect(stepByBlind(0.55 * ICP, bb, +1, 0.50 * ICP, 12 * ICP)).toBe(0.60 * ICP);
-    expect(stepByBlind(0.55 * ICP, bb, -1, 0.50 * ICP, 12 * ICP)).toBe(0.50 * ICP);
-    expect(stepByBlind(0.50 * ICP, bb, -1, 0.50 * ICP, 12 * ICP)).toBe(0.50 * ICP);
+    const bb = e8(0.10);
+    expect(stepByBlind(e8(0.50), bb, +1, e8(0.50), e8(12))).toBe(e8(0.60));
+    expect(stepByBlind(e8(0.55), bb, +1, e8(0.50), e8(12))).toBe(e8(0.60));
+    expect(stepByBlind(e8(0.55), bb, -1, e8(0.50), e8(12))).toBe(e8(0.50));
+    expect(stepByBlind(e8(0.50), bb, -1, e8(0.50), e8(12))).toBe(e8(0.50));
   });
-  it('slider step is a quarter of the min raise, at least one unit', () => {
-    expect(sliderStep(0.20 * ICP)).toBe(0.05 * ICP);
+  it('steps land on the display grid even from an off-grid blind', () => {
+    const bb = e8(0.003); // a blind finer than the display
+    expect(stepByBlind(0, bb, +1, 0, e8(12), CENT) % CENT).toBe(0);
+  });
+  it('slider step is one display unit, so the range can hold every quantised proposal', () => {
+    expect(sliderStep(e8(0.20), CENT)).toBe(CENT);
+    expect(sliderStep(e8(0.10), CENT)).toBe(CENT);
     expect(sliderStep(0)).toBe(1);
+    expect(sliderStep(e8(0.10), 1)).toBe(1);
+    // every preset is min + k * step from a grid-aligned floor
+    const floor = raiseFloor(harnessFacing);
+    for (const id of ['x2_5', 'x3', 'x4', 'pot']) {
+      expect((presetTarget(id, harnessFacing) - floor) % sliderStep(harnessFacing.minRaise, CENT)).toBe(0);
+    }
   });
 });
 
@@ -88,25 +173,30 @@ describe('raiseKind / raiseProblem', () => {
     expect(raiseKind(1)).toBe('raise');
   });
   it('explains an illegal size in the words the canister would use', () => {
-    expect(raiseProblem(0.40 * ICP, facing, fmt)).toBe('Minimum raise is 0.50');
-    expect(raiseProblem(13 * ICP, facing, fmt)).toBe('You have 12.00 behind');
-    expect(raiseProblem(0.50 * ICP, facing, fmt)).toBe(null);
+    expect(raiseProblem(e8(0.40), facing, fmt)).toBe('Minimum raise is 0.50');
+    expect(raiseProblem(e8(13), facing, fmt)).toBe('You have 12.00 behind');
+    expect(raiseProblem(e8(0.50), facing, fmt)).toBe(null);
   });
 });
 
 describe('amount field parse and format', () => {
   it('parses ICP text into e8s and rejects junk', () => {
-    expect(parseAmountInput('0.30')).toBe(0.30 * ICP);
-    expect(parseAmountInput('1,000.5')).toBe(1000.5 * ICP);
+    expect(parseAmountInput('0.30')).toBe(e8(0.30));
+    expect(parseAmountInput('1,000.5')).toBe(e8(1000.5));
     expect(parseAmountInput('abc')).toBe(null);
     expect(parseAmountInput('')).toBe(null);
     expect(parseAmountInput('-1')).toBe(null);
+  });
+  it('drops a decimal the table does not display, so what is shown is what is sent', () => {
+    expect(parseAmountInput('0.123')).toBe(e8(0.12));
+    expect(parseAmountInput('0.1234', { decimals: 4 })).toBe(12_340_000);
+    expect(parseAmountInput('0.12345', { decimals: 4 })).toBe(12_340_000);
   });
   it('parses sats as whole numbers', () => {
     expect(parseAmountInput('1500', { isBTC: true })).toBe(1500);
   });
   it('formats with the table precision', () => {
-    expect(formatAmountInput(0.30 * ICP, { decimals: 2 })).toBe('0.30');
+    expect(formatAmountInput(e8(0.30), { decimals: 2 })).toBe('0.30');
     expect(formatAmountInput(12_345, { decimals: 4 })).toBe('0.0001');
     expect(formatAmountInput(1500, { isBTC: true })).toBe('1500');
   });

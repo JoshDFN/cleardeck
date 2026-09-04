@@ -224,6 +224,11 @@
   --cd-control-md: 40px;
   --cd-touch-min: 44px;
 
+  /* Layers. The stage's own objects stop at 32 (PokerTable.svelte); a sheet
+     the dock raises over the pot-odds line and the wallet row sits above
+     them, under the page's toasts and modals. */
+  --cd-z-dock-sheet: 40;
+
   /* --- Shadows -----------------------------------------------------------
      One key light, above centre, so every shadow falls DOWN. */
   --cd-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 14px rgba(0, 0, 0, 0.4);

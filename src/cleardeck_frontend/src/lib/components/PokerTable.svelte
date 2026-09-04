@@ -28,8 +28,12 @@
   import BetSizer from './BetSizer.svelte';
   import { generatedName, shortName } from '$lib/table-visuals.js';
   import {
-    clampRaise, presetTarget, raiseCap, raiseFloor, raiseKind, raiseProblem, stepByBlind
+    clampRaise, displayQuantum, presetTarget, presetsForPhase, quantise, raiseCap, raiseFloor, raiseKind,
+    raiseProblem, stepByBlind
   } from '$lib/bet-sizing.js';
+  import {
+    canVibrate, readTurnAlertPref, titleFor, turnAlertDecision, turnKey, TURN_VIBRATION,
+  } from '$lib/turn-alert.js';
   import { armPreAction, armedTag, availablePreActions, keepPreAction, resolvePreAction } from '$lib/pre-actions.js';
   import { echoFor, echoedPlayer, sentLabel } from '$lib/optimistic.js';
   import {
@@ -1039,11 +1043,16 @@
   // The arithmetic is $lib/bet-sizing.js (tested); this is the wiring. One
   // number, `raiseAmount`, is read by the sizer, the primary button and the
   // keyboard. It is set to the legal floor on every my-turn edge.
+  // `quantum` is the display unit (bet-sizing.js): every proposal is on the
+  // grid the screen shows, so the figure on the button is the figure sent.
+  const quantum = $derived(displayQuantum({ isBTC, decimals }));
   const sizing = $derived({
     currentBet, minRaise, minBet, myChips,
     myCurrentBet: Number(myPlayer?.current_bet ?? 0),
-    pot: totalPot, callAmount
+    pot: totalPot, callAmount, bigBlind: bigBlindRaw, quantum
   });
+  // Street-aware row: multiples pre-flop, pot fractions after.
+  const presets = $derived(presetsForPhase(phaseKey));
   let raiseAmount = $state(0);
   let sizerOpen = $state(false);
   let initializedForTurn = $state(false);
@@ -1068,7 +1077,7 @@
   const raiseLabel = $derived(raiseKind(currentBet) === 'bet' ? 'Bet' : 'Raise to');
 
   function setRaise(value) {
-    raiseAmount = Number(value);
+    raiseAmount = quantise(value, quantum);
   }
 
   function applyPreset(id) {
@@ -1076,7 +1085,7 @@
   }
 
   function stepRaise(direction) {
-    raiseAmount = stepByBlind(raiseAmount, bigBlindRaw, direction, raiseFloor(sizing), raiseCap(sizing));
+    raiseAmount = stepByBlind(raiseAmount, bigBlindRaw, direction, raiseFloor(sizing), raiseCap(sizing), quantum);
   }
 
   function commitRaise() {
@@ -1136,12 +1145,47 @@
     if (pendingAction) {
       const echo = echoFor(pendingAction);
       const text = echo.amountShown !== null ? `${echo.tag} ${fmt(echo.amountShown)}` : echo.tag;
-      return { text, tone: 'sent' };
+      // `e8s` rides the tag as data-sent-e8s so the harness can assert the
+      // painted figure against the value the echo recorded.
+      return { text, tone: 'sent', e8s: echo.amountShown };
     }
     if (preArmedTag) return { text: preArmedTag, tone: 'armed' };
     return null;
   });
   const sentText = $derived(pendingAction ? sentLabel(pendingAction, fmt) : null);
+
+  // ---------------------------------------------------------------------------
+  // 7c. The your-turn alert ($lib/turn-alert.js)
+  // ---------------------------------------------------------------------------
+  //
+  // Once per certified my-turn edge (hand + street): the two-note chime, a
+  // short vibration on touch, and the tab title marked until the turn passes
+  // or an action is sent. Off when the player switched it off (the wallet
+  // menu / sound settings); the preference is re-read on every edge so a
+  // change takes effect on the next turn.
+  let turnAlertedKey = $state(null);
+  const storage = typeof localStorage !== 'undefined' ? localStorage : null;
+  $effect(() => {
+    const decision = turnAlertDecision({
+      isMyTurn: isMyTurn && gameInProgress,
+      pendingOpen: !!pendingAction,
+      enabled: readTurnAlertPref(storage),
+      key: turnKey(handNumber, phaseKey),
+      lastKey: untrack(() => turnAlertedKey),
+    });
+    if (decision.lastKey !== untrack(() => turnAlertedKey)) turnAlertedKey = decision.lastKey;
+    if (!decision.fire) return;
+    playSound('yourTurn');
+    if (typeof navigator !== 'undefined' && canVibrate(navigator)) {
+      try { navigator.vibrate(TURN_VIBRATION); } catch { /* a browser that refuses is fine */ }
+    }
+  });
+  $effect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const mark = isMyTurn && gameInProgress && !pendingAction;
+    document.title = titleFor(document.title, mark);
+    return () => { document.title = titleFor(document.title, false); };
+  });
 
   function potOdds() {
     if (callAmount <= 0 || totalPot <= 0) return null;
@@ -1653,6 +1697,7 @@
         <!-- THE SIZER LIVES IN THE DOCK, never over the felt or the hero's
              cards. Desktop: a row above the buttons whenever the hero can
              raise. Phone: in the DOM but hidden until the caret opens it. -->
+        <div class="dock-actions">
         {#if (isMyTurn || pendingAction) && gameInProgress && canRaise}
           <!-- Stays mounted, muted, while a send is open: unmounting it at
                the click made the desktop dock jump a row at the one moment
@@ -1660,6 +1705,7 @@
           <BetSizer
             value={raiseAmount}
             ctx={sizing}
+            {presets}
             bigBlind={bigBlindRaw}
             {isBTC}
             {decimals}
@@ -1695,6 +1741,7 @@
           {actionError}
           {preOptions}
           preArmedId={preArmed?.id ?? null}
+          {presets}
           compact={portrait}
           {sizerOpen}
           keyHints={!portrait}
@@ -1706,6 +1753,7 @@
           onToggleSizer={() => { sizerOpen = !sizerOpen; }}
           onDismissError={() => onDismissError?.()}
         />
+        </div>
       </div>
 
       <div class="dock-aux dock-right" class:collapsed={walletCollapsed}>

@@ -6,6 +6,8 @@
   import { Actor, HttpAgent } from '@dfinity/agent';
   import { isMainnet, IC_HOST } from '../ic-config.js';
   import logger from '$lib/logger.js';
+  import { readTurnAlertPref, writeTurnAlertPref } from '$lib/turn-alert.js';
+  import { playSound } from '$lib/sounds.js';
 
   // Props
   const { onProfileChange = null } = $props();
@@ -525,6 +527,16 @@
     isLoading = false;
   }
 
+  // The your-turn alert preference ($lib/turn-alert.js); read on every turn
+  // edge by PokerTable, so a change here takes effect on the next turn.
+  const prefStorage = typeof localStorage !== 'undefined' ? localStorage : null;
+  let turnAlert = $state(readTurnAlertPref(prefStorage));
+  function toggleTurnAlert() {
+    turnAlert = !turnAlert;
+    writeTurnAlertPref(prefStorage, turnAlert);
+    if (turnAlert) playSound('yourTurn');
+  }
+
   async function handleLogout() {
     await auth.logout();
     showDropdown = false;
@@ -649,6 +661,15 @@
                 </div>
               {/if}
             </div>
+          </div>
+
+          <!-- Table alerts -->
+          <div class="dropdown-section">
+            <span class="section-title">Table alerts</span>
+            <label class="pref-row">
+              <input type="checkbox" checked={turnAlert} onchange={toggleTurnAlert} />
+              <span>Your-turn alert: a chime, a vibration on touch, and the tab title</span>
+            </label>
           </div>
 
           <!-- Principal ID Section -->
@@ -1189,6 +1210,18 @@
     margin-top: 4px;
     font-style: italic;
   }
+
+  .pref-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--cd-space-2);
+    color: var(--cd-ink-1);
+    font-size: var(--cd-text-sm);
+    line-height: 1.35;
+    cursor: pointer;
+  }
+
+  .pref-row input { margin-top: 2px; cursor: pointer; }
 
   .dropdown-btn {
     width: 100%;

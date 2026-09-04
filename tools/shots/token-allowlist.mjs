@@ -57,12 +57,22 @@ export const ALLOWLIST = [
             + 'stabilises it so stills are deterministic',
     },
     {
+        id: 'bet-preset-multiples',
+        selector: '.raise-slider-panel .preset-buttons button',
+        tokens: '^(2\\.5|3|4)$',
+        why: 'the pre-flop preset labels "2.5x", "3x", "4x" (BetSizer.svelte): the '
+            + 'MULTIPLE of the bet in front a preset proposes, never a money figure. The '
+            + 'figure each one produces is asserted by assertBetPresetsAgree when the '
+            + 'preset is clicked; the label itself is a factor',
+    },
+    {
         id: 'keyboard-hint-digits',
         selector: '.key-hints',
-        tokens: '^[1-5]$',
+        tokens: '^[1-6]$',
         why: 'the hotkey legend under the action row on pointer devices '
-            + '(ActionBar.svelte): "1-5 sizes" names the number keys that pick a bet '
-            + 'preset. Key caps, never chips; a single digit 1 to 5 and nothing else',
+            + '(ActionBar.svelte): "1-5 sizes" (post-flop) or "1-6 sizes" (the pre-flop '
+            + 'row has six presets) names the number keys that pick a bet preset. Key '
+            + 'caps, never chips; a single digit 1 to 6 and nothing else',
     },
     {
         id: 'time-bank-button',

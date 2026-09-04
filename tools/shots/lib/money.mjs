@@ -226,6 +226,28 @@ export function checkPlainNumber(label, expected, domText, { unit = '' } = {}) {
     };
 }
 
+/**
+ * The DISPLAY UNIT the client quantises its bet-sizing proposals to, in the
+ * smallest unit. Mirrors PokerTable.svelte's precision rule (`decimals`: 0 on
+ * a BTC table, 4 when the big blind is under 0.01 ICP, else 2) and
+ * $lib/bet-sizing.js `displayQuantum`: 10^(8 - decimals) e8s for ICP, one
+ * sat for BTC. A preset is expected to be the formula's figure rounded DOWN
+ * onto this grid, so the figure on the button is the figure sent; before the
+ * client quantised, the two-thirds preset showed 0.47 and sent 0.46666666.
+ */
+export function displayQuantumFor(currency, bigBlindSmallest) {
+    if (currency === 'BTC') return 1;
+    const bb = Number(bigBlindSmallest);
+    const decimals = bb > 0 && bb < 1_000_000 ? 4 : 2;
+    return 10 ** (8 - decimals);
+}
+
+/** Round a smallest-unit figure DOWN onto the display grid. */
+export function quantiseDown(value, quantum) {
+    const q = Math.max(1, Math.trunc(Number(quantum) || 1));
+    return Math.floor(Number(value) / q) * q;
+}
+
 /** Compact rendering of a smallest-unit amount for verdict strings. */
 export function fmt(smallest) {
     if (!Number.isFinite(smallest)) return String(smallest);

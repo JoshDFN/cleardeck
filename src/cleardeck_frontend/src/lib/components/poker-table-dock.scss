@@ -96,6 +96,20 @@
     min-width: 0;
   }
 
+  /* THE SIZER'S ANCHOR. The sizer and the action bar share this box so the
+     phone's sizer sheet (BetSizer.svelte, position: absolute) can stand on
+     the action row's top edge at the dock's full width. In landscape the
+     sizer is simply the first row of the box. */
+  .dock-actions {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--cd-space-1);
+    min-width: 0;
+    width: 100%;
+  }
+
   .pot-odds-display {
     display: flex;
     align-items: baseline;

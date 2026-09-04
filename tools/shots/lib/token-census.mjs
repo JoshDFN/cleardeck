@@ -72,6 +72,14 @@ export const CHAIN_SITES = [
         why: 'each side pot, in order, against side_pots[i].amount',
     },
     {
+        id: 'hero-plate-tag',
+        selector: '.player-nameplate.highlight-me .plate-tag',
+        label: /^hero plate tag /,
+        why: "the tag on the hero's plate: an armed \"Call X\" pre-action against "
+            + 'call_amount, or the sent echo ("Raise to X") against the e8s the echo '
+            + 'recorded and will send (data-sent-e8s)',
+    },
+    {
         id: 'seat-stack',
         selector: '.seat .chips, .chips',
         label: /^seat \d+ stack$/,

@@ -109,6 +109,12 @@ class SoundManager {
             case 'timer':
                 this.generateBeep(800, 30, 'sine');
                 break;
+            case 'yourTurn':
+                // Two rising notes: distinct from every action beep, short
+                // enough to sit under a tabbed-out player's other audio.
+                this.generateBeep(660, 90, 'sine');
+                setTimeout(() => this.generateBeep(880, 140, 'sine'), 110);
+                break;
             case 'error':
                 this.generateBeep(200, 200, 'sawtooth');
                 break;
