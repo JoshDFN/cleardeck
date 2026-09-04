@@ -11,7 +11,8 @@
     "verify:bundle": "node build/verify-bundle.mjs",
     "verify:deployed": "node build/verify-deployed.mjs",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "format": "prettier --write \"src/**/*.{json,js,jsx,ts,tsx,css,scss}\""
+    "format": "prettier --write \"src/**/*.{json,js,jsx,ts,tsx,css,scss}\"",
+    "test": "vitest run"
   },
   "dependencies": {
     "@dfinity/agent": "^3.0.0",
@@ -34,6 +35,7 @@
     "svelte-check": "^4.3.2",
     "typescript": "^5.6.2",
     "vite": "^5.4.3",
-    "vite-plugin-environment": "^1.1.3"
+    "vite-plugin-environment": "^1.1.3",
+    "vitest": "^3.2.7"
   }
 }

@@ -39,10 +39,13 @@ export const ALLOWLIST = [
     // ---- cards -------------------------------------------------------------
     {
         id: 'card-rank-glyph',
-        selector: '.card .rank, .card .corner-rank, .mini-card .mc-rank, .board-cell, .mini-board',
+        selector: '.card .rank, .card .rank-mirror, .card .corner-rank, .mini-card .mc-rank, '
+            + '.board-cell, .mini-board',
         tokens: '^(?:2|3|4|5|6|7|8|9|10)$',
         why: 'a playing-card rank glyph, not an amount. The felt board is asserted '
-            + 'card-by-card against get_community_cards() as rank+suit',
+            + 'card-by-card against get_community_cards() as rank+suit. `.rank-mirror` is '
+            + 'the same glyph repeated in the card\'s rotated bottom-right index '
+            + '(Card.svelte, aria-hidden); `.rank` is the one the scraper reads',
     },
 
     // ---- clocks ------------------------------------------------------------

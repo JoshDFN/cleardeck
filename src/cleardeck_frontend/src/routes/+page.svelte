@@ -892,13 +892,11 @@
 <!-- `--notice-safe-top` is the measured height of the protected-notice banner.
      Everything that floats over the page reads it so that nothing can be
      positioned on top of the notices (docs/DEFECTS.md E-52). -->
-<div class="app" style="--notice-safe-top: {noticeBannerHeight}px">
-  <!-- Ambient background effects -->
-  <div class="bg-effects">
-    <div class="glow glow-1"></div>
-    <div class="glow glow-2"></div>
-    <div class="glow glow-3"></div>
-  </div>
+<div class="app" class:on-table={view === 'table'} style="--notice-safe-top: {noticeBannerHeight}px">
+  <!-- Ambient background: ONE static gradient (the audit retired the three
+       animated blur orbs), and none at all behind the table, where the stage
+       paints its own single pool of light. -->
+  <div class="bg-effects"></div>
 
   <!--
     THE FOUR NOTICES RENDER ONCE PER PAGE, NOT TWICE.
@@ -1044,7 +1042,7 @@
              with the canisters this bundle is actually wired to by construction:
              the same constant decides both. -->
         <span class="tagline">
-          Provably Fair Poker
+          <span class="tagline-text">Provably Fair Poker</span>
           <span class="net-chip" class:mainnet={IS_MAINNET_BUILD} data-network={NETWORK}>
             {IS_MAINNET_BUILD ? 'IC mainnet · real funds' : `${NETWORK} build · test funds`}
           </span>
@@ -1450,22 +1448,28 @@
   :global(body) {
     margin: 0;
     padding: 0;
-    background: #0a0a0f;
+    background: var(--cd-bg);
     min-height: 100vh;
-    color: #e0e0e0;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: var(--cd-ink-1);
+    font-family: var(--cd-font-ui);
     overflow-x: hidden;
   }
 
   /* Disclaimer Banner */
+  /* THE TRUST BAR. The words are protected (docs/DESIGN-BAR.md section 7,
+     tools/shots/lib/protected-notices.mjs); the carrier is not. It used to be
+     a full-bleed red gradient, the most saturated element on every screen. It
+     is now a neutral panel with a single amber rule and glyph: the same
+     sentences, read as a notice rather than an alarm, and red is kept for the
+     two things on a poker table that are red. */
   .alpha-warning-banner {
-    background: linear-gradient(180deg, rgba(185, 28, 28, 0.95), rgba(140, 20, 20, 0.95));
-    color: rgba(255, 255, 255, 0.95);
-    padding: 16px 24px;
+    background: var(--cd-plate);
+    color: var(--cd-ink-1);
+    padding: 12px 24px;
     position: relative;
     z-index: 100;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.3);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    border-top: 3px solid var(--cd-warn);
+    border-bottom: 1px solid var(--cd-line);
   }
 
   .banner-content {
@@ -1508,12 +1512,12 @@
   }
 
   p.banner-warning {
-    color: rgba(255, 255, 255, 0.95);
+    color: var(--cd-ink);
     text-align: left;
   }
 
   p.banner-warning strong {
-    color: #fef08a;
+    color: var(--cd-warn);
     letter-spacing: 0.5px;
   }
 
@@ -1522,16 +1526,18 @@
   }
 
   p.banner-info {
-    color: rgba(255, 255, 255, 0.75);
+    color: var(--cd-ink-1);
     text-align: left;
     padding-left: 20px;
   }
 
+  p.banner-info strong { color: var(--cd-ink); }
+
   p.banner-ai {
-    color: #c4b5fd;
+    color: var(--cd-ink-2);
     text-align: left;
     padding-left: 20px;
-    font-weight: 500;
+    font-weight: var(--cd-weight-medium);
   }
 
   .app {
@@ -1541,59 +1547,21 @@
     position: relative;
   }
 
-  /* Ambient background */
+  /* Ambient background: one static gradient. The three 400-600 px blur(100px)
+     orbs that animated for 20-25 s behind every page are gone (they were two
+     contradictory light sources behind a felt that has its own), and on the
+     table view the stage paints the room, so this is hidden outright. */
   .bg-effects {
     position: fixed;
     inset: 0;
     pointer-events: none;
-    overflow: hidden;
     z-index: 0;
+    background:
+      radial-gradient(ellipse 60% 50% at 20% 0%, var(--cd-accent-dim), transparent 70%),
+      radial-gradient(ellipse 50% 40% at 100% 100%, var(--cd-surface-2), transparent 70%);
   }
 
-  .glow {
-    position: absolute;
-    border-radius: 50%;
-    filter: blur(100px);
-    opacity: 0.15;
-  }
-
-  .glow-1 {
-    width: 600px;
-    height: 600px;
-    background: #00d4aa;
-    top: -200px;
-    left: -100px;
-    animation: float 20s ease-in-out infinite;
-  }
-
-  .glow-2 {
-    width: 500px;
-    height: 500px;
-    background: #6366f1;
-    bottom: -150px;
-    right: -100px;
-    animation: float 25s ease-in-out infinite reverse;
-  }
-
-  .glow-3 {
-    width: 400px;
-    height: 400px;
-    background: #f59e0b;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    animation: pulse 15s ease-in-out infinite;
-  }
-
-  @keyframes float {
-    0%, 100% { transform: translate(0, 0); }
-    50% { transform: translate(50px, 30px); }
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 0.1; transform: translate(-50%, -50%) scale(1); }
-    50% { opacity: 0.2; transform: translate(-50%, -50%) scale(1.1); }
-  }
+  .app.on-table .bg-effects { display: none; }
 
   /* Header */
   header {
@@ -1602,11 +1570,27 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 32px;
-    background: rgba(10, 10, 15, 0.8);
-    backdrop-filter: blur(20px);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 12px 24px;
+    background: var(--cd-bg);
+    border-bottom: 1px solid var(--cd-line-soft);
   }
+
+  /* THE TABLE VIEW'S HEADER IS ONE SLIM BAR. Every pixel above the felt is a
+     pixel of felt (docs/DEFECTS.md T-19): 52 px, brand mark and name only, the
+     network chip beside the name, controls at one height and one radius. */
+  header.compact {
+    min-height: 52px;
+    padding: 6px 16px;
+  }
+
+  header.compact .logo { gap: 10px; }
+  header.compact .logo-mark { width: 30px; height: 30px; border-radius: var(--cd-radius-chip); }
+  header.compact .suit { font-size: 13px; }
+  header.compact .suit-1 { top: 4px; left: 6px; }
+  header.compact .suit-2 { bottom: 4px; right: 6px; }
+  header.compact .brand { font-size: 17px; }
+  header.compact .logo-text { flex-direction: row; align-items: center; gap: 8px; }
+  header.compact .tagline-text { display: none; }
 
   .header-left, .header-right {
     display: flex;
@@ -1620,12 +1604,15 @@
   }
 
   .current-table-name {
-    color: #00d4aa;
-    font-weight: 600;
-    font-size: 14px;
+    color: var(--cd-accent);
+    font-weight: var(--cd-weight-strong);
+    font-size: var(--cd-text-sm);
+    font-variant-numeric: tabular-nums;
     padding: 6px 12px;
-    background: rgba(0, 212, 170, 0.1);
-    border-radius: 8px;
+    background: var(--cd-accent-dim);
+    border: 1px solid var(--cd-accent-line);
+    border-radius: var(--cd-radius-chip);
+    white-space: nowrap;
   }
 
   .logo {
@@ -1638,19 +1625,18 @@
     position: relative;
     width: 44px;
     height: 44px;
-    background: linear-gradient(135deg, #00d4aa 0%, #00b894 100%);
-    border-radius: 12px;
+    background: var(--cd-accent);
+    border-radius: var(--cd-radius-card);
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 4px 20px rgba(0, 212, 170, 0.3);
+    box-shadow: 0 4px 20px var(--cd-accent-glow);
   }
 
   .suit {
     position: absolute;
     font-size: 18px;
-    color: white;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    color: var(--cd-ink);
   }
 
   .suit-1 {
@@ -1661,7 +1647,7 @@
   .suit-2 {
     bottom: 6px;
     right: 8px;
-    color: #0a0a0f;
+    color: var(--cd-accent-ink);
   }
 
   .logo-text {
@@ -1671,87 +1657,67 @@
 
   .brand {
     font-size: 22px;
-    font-weight: 700;
-    color: white;
+    font-weight: var(--cd-weight-figure);
+    color: var(--cd-ink);
     letter-spacing: -0.5px;
   }
 
   .tagline {
-    font-size: 11px;
-    color: #00d4aa;
+    font-size: var(--cd-text-xs);
+    color: var(--cd-accent);
     text-transform: uppercase;
     letter-spacing: 1.5px;
-    font-weight: 500;
+    font-weight: var(--cd-weight-medium);
   }
 
-  .back-btn {
-    display: flex;
+  /* ONE control primitive for the header (the audit counted three heights,
+     two radii and two accent families on this row): 40 px, one radius, quiet
+     for navigation and the sound toggle, outline teal for the two tools.
+     History and Verify Fair are the same button; indigo is gone. */
+  .back-btn,
+  .verify-btn,
+  .history-btn,
+  .sound-toggle-btn {
+    display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 8px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #a0a0a0;
-    padding: 10px 16px;
-    border-radius: 10px;
+    min-height: var(--cd-control-md);
+    padding: 0 14px;
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-1);
+    font-family: inherit;
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-strong);
+    line-height: 1;
     cursor: pointer;
-    font-size: 14px;
-    transition: all 0.2s;
+    transition: background-color var(--cd-fast) var(--cd-ease),
+                border-color var(--cd-fast) var(--cd-ease),
+                color var(--cd-fast) var(--cd-ease);
   }
 
-  .back-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: white;
+  .back-btn:hover,
+  .sound-toggle-btn:hover {
+    background: var(--cd-surface-3);
+    color: var(--cd-ink);
   }
 
   .verify-btn, .history-btn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: rgba(0, 212, 170, 0.1);
-    border: 1px solid rgba(0, 212, 170, 0.3);
-    color: #00d4aa;
-    padding: 10px 16px;
-    border-radius: 10px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    transition: all 0.2s;
+    background: var(--cd-accent-dim);
+    border-color: var(--cd-accent-line);
+    color: var(--cd-accent);
   }
 
-  .history-btn {
-    background: rgba(99, 102, 241, 0.1);
-    border: 1px solid rgba(99, 102, 241, 0.3);
-    color: #6366f1;
+  .verify-btn:hover, .history-btn:hover {
+    border-color: var(--cd-accent-line-strong);
   }
 
-  .verify-btn:hover {
-    background: rgba(0, 212, 170, 0.2);
-    box-shadow: 0 0 20px rgba(0, 212, 170, 0.2);
-  }
-
-  .history-btn:hover {
-    background: rgba(99, 102, 241, 0.2);
-    box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
-  }
-
-  /* Sound toggle button */
   .sound-toggle-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 10px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-    color: rgba(255, 255, 255, 0.6);
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .sound-toggle-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: white;
-    border-color: rgba(255, 255, 255, 0.2);
+    width: var(--cd-control-md);
+    padding: 0;
+    color: var(--cd-ink-2);
   }
 
   /* --------------------------------------------------------------------------
@@ -1804,9 +1770,8 @@
     align-items: center;
     gap: 12px;
     padding: 14px 20px;
-    border-radius: 12px;
-    backdrop-filter: blur(20px);
-    animation: slideDown 0.3s ease-out;
+    border-radius: var(--cd-radius-card);
+    animation: slideDown var(--cd-base) var(--cd-ease);
     box-sizing: border-box;
     width: max-content;
     max-width: min(560px, calc(100vw - 24px));
@@ -1822,10 +1787,14 @@
     overflow-wrap: anywhere;
   }
 
+  /* Opaque, so it passes 4.5:1 over anything, with a 3 px rule in the one
+     colour that means danger. */
   .toast.error {
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    color: #ef4444;
+    background: var(--cd-panel);
+    border: 1px solid var(--cd-danger-line);
+    border-left: 3px solid var(--cd-danger);
+    color: var(--cd-ink);
+    box-shadow: var(--cd-shadow-lift);
   }
 
   .toast.success {
@@ -1898,6 +1867,12 @@
     flex-direction: column;
     overflow-y: auto;
   }
+
+  /* The stage fills the frame: 8 px above, nothing below that the wrapper
+     does not already cancel (measureViewport reads the parent's bottom padding
+     as --cd-slack). */
+  main[data-view='table'] .game-layout { min-height: 0; padding-bottom: 0; }
+  main[data-view='table'] .table-area { padding: 8px 16px 8px; }
 
   /* Balance bar */
   .balance-bar {
@@ -2312,14 +2287,118 @@
      after this one puts the compact header on ONE row there, because in a 390 px
      -tall window a header row costs more than a header column.
      ========================================================================= */
+  /* ------------------------------------------------------------------------
+     THE TRUST BAR ON THE TABLE VIEW, AT EVERY VIEWPORT.
+     ------------------------------------------------------------------------
+     Wave 5 shipped this strip in portrait only. The UI/UX wave makes it the
+     table view's carrier everywhere: one neutral bar, every one of the five
+     protected phrases verbatim (`.strip-text`), FULL TERMS opening the complete
+     text as an opaque overlay. On a desktop this returns ~130 px of chrome to
+     the stage; the felt grows toward its width cap. The lobby and every other
+     view keep the full in-flow block above.
+
+     THE STANDING RULE (index.scss): the strip is a SUBSET of the full text,
+     and the full text is a SUPERSET of the strip. Both are asserted on the
+     rendered pixels by tools/shots/lib/protected-notices.mjs. */
+  .alpha-warning-banner.on-table {
+    padding: 0;
+  }
+
+  .alpha-warning-banner.on-table .banner-strip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 16px 9px 14px;
+    font-size: var(--cd-text-sm);
+    line-height: 1.35;
+  }
+
+  .alpha-warning-banner.on-table .banner-strip .warning-icon {
+    flex: 0 0 auto;
+    font-size: 14px;
+  }
+
+  .alpha-warning-banner.on-table .strip-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--cd-ink);
+    font-weight: var(--cd-weight-medium);
+  }
+
+  /* The affordance: a real 28 px target inside a strip the whole width of
+     which is the button. */
+  .alpha-warning-banner.on-table .strip-more {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--cd-warn-line);
+    border-radius: var(--cd-radius-pill);
+    background: var(--cd-warn-dim);
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-figure);
+    letter-spacing: 0.06em;
+    color: var(--cd-warn);
+    white-space: nowrap;
+  }
+
+  /* Collapsed: the FULL text is one tap away. The words a player must not be
+     able to miss are in `.strip-text` above, on screen, unshortened. */
+  .alpha-warning-banner.on-table:not(.expanded) .banner-content {
+    display: none;
+  }
+
+  /* Expanded: an OVERLAY, not an in-flow expansion, so the felt never resizes
+     under a player's thumb mid-hand. `.alpha-warning-banner` is a stacking
+     context, so the z-index goes on the banner ITSELF while expanded. Fully
+     opaque: a translucent scrim let the felt read through the terms. */
+  .alpha-warning-banner.on-table.expanded {
+    z-index: 2000;
+  }
+
+  .alpha-warning-banner.on-table.expanded .banner-content {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    max-width: none;
+    margin: 0;
+    padding: 28px 24px 96px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--cd-bg);
+  }
+
+  .alpha-warning-banner.on-table.expanded .banner-content p {
+    max-width: 720px;
+    margin: 0 auto 14px;
+    font-size: var(--cd-text-md);
+    line-height: 1.6;
+  }
+
+  .alpha-warning-banner.on-table.expanded .banner-close {
+    display: block;
+    position: fixed;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2001;
+    min-height: var(--cd-touch-min);
+    padding: 0 30px;
+    border-radius: var(--cd-radius-pill);
+    border: 1px solid var(--cd-line-strong);
+    background: var(--cd-surface-3);
+    color: var(--cd-ink);
+    font-family: inherit;
+    font-size: var(--cd-text-md);
+    font-weight: var(--cd-weight-strong);
+    cursor: pointer;
+  }
+
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {
 
-    /* ---------------- the notice strip, collapsed ------------------------ */
-
-    .alpha-warning-banner.on-table {
-      padding: 0;
-    }
-
+    /* The trust bar on a phone: the same words at 11 px, three lines. */
     .alpha-warning-banner.on-table .banner-strip {
       display: block;
       padding: 6px 9px 7px;
@@ -2327,90 +2406,18 @@
       line-height: 1.3;
     }
 
-    .alpha-warning-banner.on-table .banner-strip .warning-icon {
-      font-size: 11px;
-    }
+    .alpha-warning-banner.on-table .banner-strip .warning-icon { font-size: 11px; }
 
-    .alpha-warning-banner.on-table .strip-text {
-      color: #fff;
-      font-weight: 500;
-    }
-
-    /* The affordance. It sits INSIDE the text flow so it costs no row of its
-       own, and it is a real 24 px-tall target inside a strip the whole width of
-       which is the button. */
     .alpha-warning-banner.on-table .strip-more {
       display: inline-block;
+      min-height: 0;
       margin-left: 5px;
       padding: 1px 6px;
-      border: 1px solid rgba(255, 255, 255, 0.6);
-      border-radius: 999px;
       font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      color: #fef08a;
-      white-space: nowrap;
     }
 
-    /* Collapsed: the FULL text is one tap away. The words a player must not be
-       able to miss are in `.strip-text` above, on screen, unshortened. */
-    .alpha-warning-banner.on-table:not(.expanded) .banner-content {
-      display: none;
-    }
-
-    /* ---------------- the notice strip, expanded ------------------------- */
-    /* An OVERLAY, not an in-flow expansion: the table is sized from the flow
-       above it, so growing this block in place would resize the felt under the
-       player's thumb mid-hand.
-       `.alpha-warning-banner` is `position: relative; z-index: 100`, which makes
-       it a STACKING CONTEXT -- a child at z-index 2000 is still painted at the
-       100 level, under every dialog scrim in this app. So the z-index goes on the
-       banner ITSELF while it is expanded, and the children order within it. */
-
-    .alpha-warning-banner.on-table.expanded {
-      z-index: 2000;
-    }
-
-    .alpha-warning-banner.on-table.expanded .banner-content {
-      display: block;
-      position: fixed;
-      inset: 0;
-      z-index: 2000;
-      max-width: none;
-      margin: 0;
-      padding: 20px 18px 84px;
-      overflow-y: auto;
-      overscroll-behavior: contain;
-      /* Fully opaque. A translucent scrim let the felt read through the bottom
-         half of the terms, which is the opposite of prominence. */
-      background: linear-gradient(180deg, #9a1616, #580c0c);
-    }
-
-    /* Bigger than the in-flow copy, not smaller: this is the reading view. */
-    .alpha-warning-banner.on-table.expanded .banner-content p {
-      font-size: 13.5px;
-      line-height: 1.6;
-      margin-bottom: 14px;
-    }
-
-    .alpha-warning-banner.on-table.expanded .banner-close {
-      display: block;
-      position: fixed;
-      bottom: 18px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 2001;
-      min-height: 44px;
-      padding: 0 30px;
-      border-radius: 999px;
-      border: 1px solid rgba(255, 255, 255, 0.55);
-      background: rgba(0, 0, 0, 0.5);
-      color: #fff;
-      font-family: inherit;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-    }
+    .alpha-warning-banner.on-table.expanded .banner-content { padding: 20px 18px 84px; }
+    .alpha-warning-banner.on-table.expanded .banner-content p { font-size: 13.5px; }
 
     /* ---------------- the compact table-view header ---------------------- */
 
@@ -2859,11 +2866,11 @@
     display: inline;
     margin-left: 6px;
     padding: 1px 6px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.7);
+    border-radius: var(--cd-radius-pill);
+    background: var(--cd-surface-3);
+    color: var(--cd-ink-2);
     font-size: 9px;
-    font-weight: 700;
+    font-weight: var(--cd-weight-figure);
     letter-spacing: 0.08em;
     white-space: nowrap;
   }
@@ -2871,8 +2878,8 @@
   /* Louder on mainnet, and only on mainnet: this is the state in which a
      mistake costs the reader money. */
   .net-chip.mainnet {
-    background: rgba(185, 28, 28, 0.75);
-    color: #fecaca;
+    background: var(--cd-danger);
+    color: var(--cd-ink);
   }
 
   .net-footer {

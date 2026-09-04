@@ -19,8 +19,12 @@
    * bottom-left, top-left, top-centre, top-right, bottom-right) and 9-max on
    * the WPT Global pattern, without either being hand-placed.
    */
-  import Card from './Card.svelte';
+  import { untrack } from 'svelte';
   import ActionFeed from './ActionFeed.svelte';
+  import SeatPod from './SeatPod.svelte';
+  import PotModule from './PotModule.svelte';
+  import BoardStrip from './BoardStrip.svelte';
+  import { generatedName, shortName } from '$lib/table-visuals.js';
   import { playSound } from '$lib/sounds.js';
   import { computeEquity, describeHand, formatEquity, cardCodes } from '$lib/equity.js';
   // Importing this module installs the app-wide BigInt/JSON guard (see the
@@ -37,6 +41,12 @@
     onShowDeposit = null,
     onShowWithdraw = null,
     currency = 'ICP',
+    // The lobby's known seat count, used for the ring until the canister's
+    // config arrives so a spectator never sees nine chairs on a 6-max table
+    // (docs/DEFECTS.md T-32).
+    maxPlayers = null,
+    // Retained for the profile menu's contract; the table now draws its own
+    // local avatar tiles (lib/table-visuals.js) and fetches nothing.
     avatarStyle = 'bottts',
     customName = null,
     shuffleProof = null,
@@ -325,8 +335,8 @@
   // 3. The seat ring -- equal ARC LENGTH on the ellipse
   // ---------------------------------------------------------------------------
 
-  const maxPlayers = $derived(Number(tableState?.config?.max_players ?? 9));
-  const seatCount = $derived(Math.max(2, Math.min(maxPlayers, players.length || maxPlayers)));
+  const seatCapacity = $derived(Number(tableState?.config?.max_players ?? maxPlayers ?? 9));
+  const seatCount = $derived(Math.max(2, Math.min(seatCapacity, players.length || seatCapacity)));
 
   /**
    * @param {number} n seat count
@@ -963,33 +973,11 @@
     return `Seat ${Number(i) + 1}`;
   }
 
-  function getAvatarUrl(player, seatIndex = null) {
-    if (!player?.principal) return null;
-    const principalStr = player.principal.toString();
-    const style = (seatIndex === mySeat) ? avatarStyle : 'bottts';
-    return `https://api.dicebear.com/7.x/${style}/svg?seed=${encodeURIComponent(principalStr)}&size=68&scale=110&radius=50`;
-  }
-
-  const ADJECTIVES = ['Lucky', 'Wild', 'Cool', 'Sly', 'Bold', 'Swift', 'Clever', 'Daring', 'Epic', 'Mystic', 'Royal', 'Shadow', 'Golden', 'Silver', 'Cosmic'];
-  const NOUNS = ['Ace', 'King', 'Queen', 'Jack', 'Joker', 'Shark', 'Whale', 'Fox', 'Wolf', 'Tiger', 'Eagle', 'Hawk', 'Viper', 'Dragon', 'Phoenix'];
-
-  function getPlayerName(player) {
-    if (!player?.principal) return 'Unknown';
-    const s = player.principal.toString();
-    let hash = 0;
-    for (let i = 0; i < s.length; i += 1) {
-      hash = ((hash << 5) - hash) + s.charCodeAt(i);
-      hash &= hash;
-    }
-    hash = Math.abs(hash);
-    return `${ADJECTIVES[hash % ADJECTIVES.length]}${NOUNS[(hash >> 8) % NOUNS.length]}${(hash % 100).toString().padStart(2, '0')}`;
-  }
-
   function getShortName(player, seatIndex) {
     if (seatIndex === mySeat) return customName || 'You';
     if (!player?.principal) return seatLabel(seatIndex);
-    const name = player.display_name || getPlayerName(player);
-    return name.length > 11 ? name.slice(0, 11) : name;
+    const name = player.display_name || generatedName(player.principal.toString());
+    return shortName(name, 11);
   }
 
   function winInfoFor(seat) {
@@ -1177,13 +1165,42 @@
     potTimer = setTimeout(() => { potFlight = []; }, POT_FLIGHT_DELAY_MS + FLIGHT_MS + 600);
     return undefined;
   });
+
+  // ---------------------------------------------------------------------------
+  // 11. The dealer puck travels (bar 11: 500 ms, seat to seat)
+  // ---------------------------------------------------------------------------
+  //
+  // The puck is rendered INSIDE the dealer's `.seat` (the harness reads
+  // `.position-badge.dealer` per seat), so it cannot be one element that moves.
+  // Instead the new dealer's puck plays a 500 ms keyframe FROM the previous
+  // dealer's ring point, expressed in ring units the CSS resolves with --rx/--ry.
+  let puckFrom = $state(null);
+  let prevDealer = null;
+  $effect(() => {
+    const d = dealerSeat;
+    if (d === undefined || d === null) return;
+    const dn = Number(d);
+    if (!Number.isFinite(dn)) return;
+    const ring = untrack(() => seatPoints);
+    const from = prevDealer;
+    prevDealer = dn;
+    if (from === null || from === dn || !ring[from] || !ring[dn] || untrack(() => reducedMotion)) {
+      puckFrom = null;
+      return;
+    }
+    puckFrom = {
+      seat: dn,
+      dx: Number((ring[from].cs - ring[dn].cs).toFixed(5)),
+      dy: Number((ring[from].sn - ring[dn].sn).toFixed(5))
+    };
+  });
+
 </script>
 
 <!-- `ring-<n>` is a breakpoint on SEAT COUNT, not on viewport width, so it does
      not violate bar 19: the table is still one rigid object scaled from one
      input, but nine plates share the same rail as two and cannot be the same
-     size. Nine seats put ~0.27 felt widths of arc between neighbours, and a
-     0.235-wide plate plus a pair of hole cards does not fit in it. -->
+     size. -->
 <div
   class="poker-table-wrapper"
   class:portrait
@@ -1194,152 +1211,55 @@
   style:--cd-slack="{parentSlack}px"
 >
   <div class="poker-table">
-    <!-- ===================== the stage ===================== -->
+    <!-- ===================== the stage: a lit room ===================== -->
     <div class="stage">
       <div
         class="table-inner"
         class:all-in-moment={allInMoment}
         class:showdown={isShowdown}
       >
-        <!-- felt: the LAYOUT BOX is the visible green surface. The rail is
-             drawn outside it with box-shadow rings so it costs no layout
-             height, which is what lets the surface stay wide in a short
-             viewport. -->
+        <!-- THE RAIL: black padded leather with a lit crown, drawn as its own
+             element BEHIND the felt so the felt's layout box stays the green
+             surface a pixel measurer calls "the felt". It is thicker at the
+             bottom than the top (the table is seen from a raised chair, not
+             from the ceiling) and it never changes colour with game state. -->
+        <div class="rail" aria-hidden="true"></div>
+
+        <!-- felt: the LAYOUT BOX is the visible green surface. -->
         <div class="felt">
           <div class="felt-marks" aria-hidden="true">
-            <span class="mark-1">TEXAS HOLD'EM</span>
-            <span class="mark-2">100% ON-CHAIN &middot; NO RAKE</span>
+            <span class="mark-1">&#9824;</span>
+            <span class="mark-2">ClearDeck &middot; no rake</span>
           </div>
         </div>
 
-        <!-- board + pot cluster -->
-        <!-- THE METHOD TRAVELS WITH THE FIGURE (docs/DEFECTS.md T-27).
-             `.equity-method` used to be rendered inside `.pot-display` only, and
-             the pot display is REPLACED by the winner banner the moment the pot
-             hits zero -- which is exactly the frame where the equity becomes a
-             verdict. Measured at the showdown on both viewports: two solid
-             `100.00% / 0.00%` badges on screen and `.equity-method` null, with the
-             method surviving only in a `title` attribute a phone cannot open. An
-             equity figure whose method is not stated is a number a player acts on
-             without knowing what it means.
-
-             One snippet, rendered in whichever readout is on screen, so the two
-             cannot drift and the line cannot be dropped by a branch again. -->
-        {#snippet equityMethodLine()}
-          {#if equityMethodLabel}
-            <!-- Bar 15 says show the equity; honesty says show HOW. The method and
-                 the trial count are on the felt, not buried, and the full statement
-                 of the model is the tooltip. -->
-            <div class="equity-method" title={equity?.note ?? ''}>{equityMethodLabel}</div>
-          {/if}
-        {/snippet}
+        <!-- board + pot cluster, dead centre -->
         <div class="board-cluster">
-          {#if isHandComplete && lastWinners.length > 0}
-            <div class="winner-display" class:you-won={myWinInfo}>
-              {#if myWinInfo}
-                <span class="winner-text">You won {fmt(Number(myWinInfo.amount))} {currencySymbol}</span>
-                {#if handRankWords(myWinInfo.hand_rank)}
-                  <span class="winner-hand-rank">{handRankWords(myWinInfo.hand_rank)}</span>
-                {/if}
-              {:else}
-                <span class="winner-text">
-                  {seatLabel(lastWinners[0].seat)} wins {fmt(Number(lastWinners[0].amount))} {currencySymbol}
-                </span>
-                {#if handRankWords(lastWinners[0].hand_rank)}
-                  <span class="winner-hand-rank">{handRankWords(lastWinners[0].hand_rank)}</span>
-                {/if}
-              {/if}
-              {#if lastWinners.length > 1}
-                <span class="split-info">Split pot &middot; {lastWinners.length} winners</span>
-              {/if}
-              <span class="phase-indicator">{streetLabel}</span>
-              {@render equityMethodLine()}
-            </div>
-          {:else}
-            <div class="pot-display">
-              <div class="main-pot" class:has-chips={totalPot > 0} class:at-risk={allInMoment}>
-                <span class="pot-meta">
-                  <span class="pot-label">
-                    {#if allInMoment}
-                      All in &middot; {allInSeats.length} at risk
-                    {:else}
-                      Total pot
-                    {/if}
-                  </span>
-                  <span class="phase-indicator">{streetLabel}</span>
-                </span>
-                <span class="pot-amount">{totalPot > 0 ? fmt(totalPot) : '--'}</span>
-              </div>
-              <!-- The decomposition, shown only when it says something the
-                   headline does not. Both legs are chain figures and they sum
-                   back to get_pot(); the harness asserts exactly that. -->
-              {#if liveBets > 0}
-                <div class="pot-breakdown">
-                  {fmt(collectedPot)} collected + {fmt(liveBets)} betting
-                </div>
-              {/if}
-              {#if sidePots.length > 0}
-                <div class="side-pots">
-                  <!-- `build_side_pots_from_contributions` returns the MAIN pot
-                       at index 0 and the side pots after it, so labelling index
-                       0 "Side 1" names the main pot with the wrong poker word,
-                       and on a hand with a single layer it printed "SIDE 1
-                       0.40" directly under "TOTAL POT 0.40". Same numbers, right
-                       word. docs/DEFECTS.md T-12. -->
-                  {#each sidePots as sidePot, i}
-                    <div class="side-pot">
-                      <span class="side-pot-label">{i === 0 ? 'Main' : `Side ${i}`}</span>
-                      <span class="side-pot-amount">{fmt(sidePot.amount)}</span>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-              {@render equityMethodLine()}
-            </div>
-          {/if}
-
-          <!-- An undealt board slot renders EMPTY, never face-down. A face-down
-               board card says "the flop is dealt and hidden from you", which on
-               a provably-fair table is a claim about chain state; the canister
-               has dealt exactly `communityCards.length` cards and the felt says
-               so. The five slots stay in the layout so the board keeps its
-               footprint and the pot does not jump when the flop lands.
-
-               THE TRAY IS THE FIX FOR THE SEVEN-CARD ROW. At showdown the felt
-               used to show `J 4  K 9 2 2 10` in one horizontal band -- an
-               opponent's revealed pair butted against the community board -- and
-               the hero's own pair 14 px under the board's bottom edge. Nothing
-               said which five cards were the board. It is now drawn as ONE
-               OBJECT on its own tray, with its own caption, and the caption row
-               physically occupies the gap between the board and the hero's pair.
-               `.community-cards` is still the direct parent of exactly the five
-               board cards, which is the contract tools/shots/lib/dom-scrape.mjs
-               reads the board by. -->
+          <PotModule
+            {totalPot}
+            {liveBets}
+            {collectedPot}
+            {sidePots}
+            {allInMoment}
+            allInCount={allInSeats.length}
+            {streetLabel}
+            {equityMethodLabel}
+            equityNote={equity?.note ?? ''}
+            winners={lastWinners}
+            {myWinInfo}
+            {isHandComplete}
+            {currencySymbol}
+            {fmt}
+            {seatLabel}
+            {handRankWords}
+          />
           {#if gameInProgress || isShowdown || communityCards.length > 0}
-            {@const framed = allInMoment || isShowdown}
-            <div class="board-frame" class:framed>
-              <div class="community-cards">
-                {#each Array(5) as _, i}
-                  <Card card={communityCards[i] ?? null} />
-                {/each}
-              </div>
-              {#if framed}
-                <div class="board-caption">
-                  <span class="caption-tag">
-                    Board
-                    {#if communityCards.length < 5}
-                      &middot; {5 - communityCards.length} to come
-                    {/if}
-                  </span>
-                  {#if heroHandName}
-                    <!-- GGPoker's named hand-strength readout. Yours only: it is
-                         a function of the two cards in your own hand and a board
-                         everyone can see, so it reveals nothing. -->
-                    <span class="caption-hand">Your hand &middot; {heroHandName}</span>
-                  {/if}
-                </div>
-              {/if}
-            </div>
+            <BoardStrip
+              cards={communityCards}
+              framed={allInMoment || isShowdown}
+              showdown={isShowdown}
+              {heroHandName}
+            />
           {/if}
         </div>
 
@@ -1375,155 +1295,45 @@
             style:--rdy={point.rdy}
             style:--cy={point.cy}
           >
-            {#if player}
-              <!-- Hole cards. A FACE-DOWN pair only has to say "this player has
-                   cards", so it tucks behind the plate. A revealed pair has to
-                   be READ, so it clears the plate entirely -- at showdown the
-                   winner's hand was legible only down to the suit pips. -->
-              <div
-                class="player-cards"
-                class:hero={isHero}
-                class:shown={!isHero && !!revealedHole(player)}
-              >
-                {#if isHero && myCards && (gameInProgress || isShowdown)}
-                  <Card card={myCards[0]} />
-                  <Card card={myCards[1]} />
-                {:else if revealedHole(player)}
-                  {@const hole = revealedHole(player)}
-                  <Card card={hole[0]} />
-                  <Card card={hole[1]} />
-                {:else if (gameInProgress || isShowdown) && live}
-                  <!-- `live`, not `!has_folded`: `start_hand` deals only to
-                       Active players, so a seated-but-sitting-out player was
-                       never dealt in and must not be drawn holding cards. The
-                       equity model counts opponents with the SAME predicate, so
-                       the number of hands drawn and the number of hands modelled
-                       are the same number by construction. -->
-                  <Card faceDown={true} />
-                  <Card faceDown={true} />
-                {/if}
-              </div>
-
-              <!-- committed chips, between the pod and the pot -->
-              {#if Number(player.current_bet ?? 0) > 0}
-                <div class="bet-chip" class:all-in={player.is_all_in}>
-                  <span class="chip-stack" aria-hidden="true"></span>
-                  <span class="bet-amount">{fmt(player.current_bet)}</span>
-                </div>
-              {/if}
-
-              <!-- the pod -->
-              <div
-                class="player-nameplate"
-                class:highlight-me={isHero}
-                class:action-on={acting}
-                class:is-winner={!!win}
-              >
-                <div class="avatar-container" class:is-me={isHero}>
-                  <img src={getAvatarUrl(player, i)} alt="" class="player-avatar" />
-                  {#if player.has_folded}
-                    <!-- PokerNow's treatment, measured: a folded seat is a grey
-                         cross plus the WORD, and the whole pod desaturates. Ours
-                         dimmed the seat to 46% opacity and nothing else, which
-                         at a glance is indistinguishable from an empty chair. -->
-                    <div class="avatar-overlay folded"><span class="fold-x" aria-hidden="true">&#10005;</span></div>
-                  {:else if player.is_all_in}
-                    <div class="avatar-overlay allin">All In</div>
-                  {/if}
-                </div>
-                <div class="pod-text">
-                  <span class="player-name" class:is-me={isHero}>{getShortName(player, i)}</span>
-                  <span class="stack-row">
-                    <span class="chips">{fmt(player.chips)}</span>
-                    {#if player.has_folded}<span class="fold-word">Fold</span>{/if}
-                  </span>
-                </div>
-                <div class="pod-slot">
-                  {#if acting && timeRemaining !== null}
-                    <span class="turn-timer" class:urgent={clockUrgent}>{timeRemaining}s</span>
-                  {/if}
-                  <span class="position-badges">
-                    {#if i === dealerSeat}<span class="position-badge dealer">D</span>{/if}
-                    {#if i === smallBlindSeat}<span class="position-badge sb">SB</span>{/if}
-                    {#if i === bigBlindSeat}<span class="position-badge bb">BB</span>{/if}
-                  </span>
-                </div>
-                {#if acting}
-                  <span
-                    class="pod-clock"
-                    class:urgent={clockUrgent}
-                    style:--clock={clockFraction}
-                  ></span>
-                {/if}
-              </div>
-
-              {#if equityText}
-                <!-- THE EQUITY BADGE IS A SEAT-LEVEL OBJECT (docs/DEFECTS.md T-22).
-                     Bar 15 puts it beside the player, as PokerStars and GGPoker do,
-                     and it is ADDITIVE: the action clock keeps its slot in the
-                     plate, because a player deciding whether to call needs both.
-
-                     It used to be rendered INSIDE `.player-nameplate`, which sets
-                     `z-index: 6` and therefore opens a stacking context, while the
-                     hero's own cards and every revealed pair paint at `z-index: 7`
-                     as siblings of that plate. From in there no z-index could win:
-                     on a phone the winner's `100.00%` was measured 58.4% covered by
-                     the hero's own card and read as `0%`. It is now a child of the
-                     SEAT, above the cards, and placed on the one axis no card of
-                     this seat ever uses -- see `.equity-badge` in the stylesheet. -->
-                <span
-                  class="equity-badge"
-                  class:modelled={equityMode === 'hero'}
-                  title={equity?.note ?? ''}
-                >{equityText}</span>
-              {/if}
-
-              <!-- Showdown only: the winning hand named in words (bar 16). It
-                   lands on the chip spot, which is free at showdown because the
-                   street's bets have already been swept into the pot -- and
-                   which is the one place on the felt already proven clear of
-                   this seat's cards and of the board.
-
-                   There is deliberately no "All In" tag here any more. It was
-                   placed on the far side of the plate, which for the bottom
-                   seats is OFF the felt: the hero's read at y=818 on a surface
-                   ending at y=753, floating over the action bar. The state is
-                   already said twice by chain data that cannot drift -- the
-                   avatar overlay on the player, and "All in - N at risk" on the
-                   pot. -->
-              {#if win}
-                <!-- THE DELTA CHIP. PokerNow puts `+450` directly under the
-                     winner's stack, so the player reads WHAT CHANGED at the pod
-                     that received it. Ours put the amount in a banner in the
-                     middle of the felt, ~300 px away, and the pod showed only
-                     the post-hand stack -- the one number from which the change
-                     cannot be recovered.
-                     It lands on the chip spot (`bx`/`by`), which touches the
-                     pod's inner edge and is the one place on the felt already
-                     proven clear of this seat's cards AND of the board, at every
-                     seat on the ring. The named hand rides with it, so the award
-                     is one object rather than two competing tags. -->
-                <div class="winner-award">
-                  <span class="stack-delta">+{fmt(Number(win.amount))}</span>
-                  {#if handRankWords(win.hand_rank)}
-                    <span class="hand-tag">{handRankWords(win.hand_rank)}</span>
-                  {/if}
-                </div>
-              {/if}
-            {:else}
-              <button class="join-seat" onclick={() => onAction('join', i)}>
-                <span class="sit-word">Sit</span>
-                <span class="sit-seat">{seatLabel(i)}</span>
-              </button>
-            {/if}
+            <SeatPod
+              {player}
+              seatIndex={i}
+              seatLabel={seatLabel(i)}
+              name={getShortName(player, i)}
+              {isHero}
+              {acting}
+              {live}
+              lit={live && (allInMoment || isShowdown)}
+              folded={!!player?.has_folded}
+              winner={!!win}
+              dealer={!!player && i === Number(dealerSeat)}
+              puckFrom={puckFrom && puckFrom.seat === i ? puckFrom : null}
+              showCards={gameInProgress || isShowdown}
+              heroCards={myCards}
+              revealed={isHero ? null : revealedHole(player)}
+              betAmount={Number(player?.current_bet ?? 0)}
+              betAllIn={!!player?.is_all_in}
+              bigBlind={bigBlindRaw}
+              {timeRemaining}
+              {clockFraction}
+              {clockUrgent}
+              {equityText}
+              equityModelled={equityMode === 'hero'}
+              equityNote={equity?.note ?? ''}
+              awardAmount={win ? `+${fmt(Number(win.amount))}` : null}
+              handTag={win ? handRankWords(win.hand_rank) : ''}
+              awardOnSpoke={point.awardOnSpoke}
+              spokeY={point.rdy !== 0}
+              {fmt}
+              onJoin={(seat) => onAction('join', seat)}
+            />
           </div>
         {/each}
 
         <!-- ============ the two flights (bar 11: 500 ms, transform only) ====
-             GHOSTS, not the real elements. `.bet-chip` is removed from the DOM
-             the moment the canister zeroes `current_bet`; what travels is a copy
-             carrying the last amount the chain reported, so no figure on the
-             felt is ever showing a stale number in order to animate. -->
+             GHOSTS, not the real elements: a copy carrying the last amount the
+             chain reported, so no figure on the felt ever shows a stale number
+             in order to animate. -->
         {#each sweepingChips as ghost (ghost.seat)}
           {@const point = seatPoints[ghost.seat]}
           {#if point}
@@ -1557,14 +1367,14 @@
           </div>
         {/if}
 
-        <!-- bet-sizing popover, anchored above the dock -->
+        <!-- bet-sizing popover, anchored above the dock (behaviour: phase 2) -->
         {#if showRaiseSlider && isMyTurn && gameInProgress}
           <div class="raise-slider-panel">
             <div class="slider-header">
               <span>{currentBet === 0 ? 'Bet' : 'Raise to'}</span>
               <button class="close-slider" onclick={() => showRaiseSlider = false} aria-label="Close">&times;</button>
             </div>
-            <div class="slider-amount">{fmt(raiseAmount)}</div>
+            <div class="slider-amount cd-money">{fmt(raiseAmount)}</div>
             <input
               type="range"
               class="raise-slider"
@@ -1636,9 +1446,8 @@
           <div class="pot-odds-display">
             <span class="pot-odds-label">Pot odds</span>
             <span class="pot-odds-value">{potOdds()}</span>
-            <!-- Spelled out in money, not just as a ratio, so the strip and the
-                 headline pot can be checked against the same get_pot() -- the
-                 disagreement between the two was half of docs/DEFECTS.md T-08. -->
+            <!-- Spelled out in money, so the strip and the headline pot can be
+                 checked against the same get_pot() (docs/DEFECTS.md T-08). -->
             <span class="pot-odds-explanation">
               Call {fmt(callAmount)} to win {fmt(totalPot)}
             </span>
@@ -1697,7 +1506,7 @@
               <span class="balance-value">{formatWithUnit(tableBalance)}</span>
             </div>
             <!-- IN FLOW, directly under the balance it corrects. Never an overlay:
-                 nothing in this app may cover the four notices (HARD RULE 2). -->
+                 nothing in this app may cover the notices (HARD RULE 2). -->
             {#if myCommittedInPot > 0}
               <div class="wallet-committed" class:stuck={handIsUnmovable}>
                 <span class="committed-label">
@@ -1720,12 +1529,8 @@
                 <button class="wallet-action-btn deposit" onclick={onShowDeposit}>Deposit</button>
               {/if}
               {#if onShowWithdraw}
-                <!-- ALSO OPEN WHEN THE BALANCE IS ZERO AND A STAKE IS OUTSTANDING.
-                     `disabled={tableBalance <= 0}` alone locked the one player who
-                     most needed this screen out of it: the auditor, whose escrow
-                     read 0 precisely because their 2.98 ICP was in a pot. The
-                     withdraw dialog is where the stake and its recovery button
-                     live. docs/SECURITY-FINDINGS.md FINDING 18. -->
+                <!-- ALSO OPEN WHEN THE BALANCE IS ZERO AND A STAKE IS OUTSTANDING
+                     (docs/SECURITY-FINDINGS.md FINDING 18). -->
                 <button
                   class="wallet-action-btn withdraw"
                   onclick={onShowWithdraw}
@@ -1754,48 +1559,46 @@
   /* =========================================================================
      TOKENS
      Every geometric value on the table is a ratio of --fw, the felt width.
-     --fw itself is resolved once, from the stage's own box:
-        width-capped at 72% of the stage, otherwise height-fitted.
-     The height divisor 0.5735 is the stage height the ring needs, expressed
-     in felt widths:  felt (1/2.05) + pod overhang top and bottom.
+     --fw itself is resolved once, from the stage's own box: width-capped,
+     otherwise height-fitted. Colours, shadows and motion come from index.scss.
      ========================================================================= */
 
   .poker-table-wrapper {
-    /* Felt aspect. Declared 2.10 rather than the measured target 2.05 because
-       the innermost rail ring is drawn OUTSIDE the layout box and a pixel
-       measurer counts it: it adds ~2 x 0.009 fw to both axes, which pulls the
-       MEASURED aspect down toward 1. 2.10 declared lands ~2.06 measured, inside
+    /* Felt aspect. Declared 2.10 so the measured surface lands ~2.06, inside
        bar 2's 1.9-2.3 and next to the reference median of 2.13. */
     --ar: 2.10;
 
     /* ring -- pods straddle the rail, as PokerStars, GGPoker and WPT Global all
-       do. The ring is deliberately a little LARGER than the felt (kx/ky > 1) so
-       the pods sit on the rail rather than biting into the playing surface, and
-       so the ring's circumference grows enough to seat nine pods without them
-       touching. */
+       do; the ring is a little larger than the felt so the pods sit on the rail
+       rather than biting into the playing surface. */
     --ring-kx: 1.02;
     --ring-ky: 1.00;
     --pod-w-r: 0.235;
     --pod-h-r: 0.086;
-    --avatar-r: 0.062;
+    --avatar-r: 0.066;
 
     /* cards -- board 11.2% of surface width, opponents 68% of a board card
-       (PokerNow's exact ratio), hero 82%. The hole-card offsets are small on
-       purpose: hole cards belong AT the pod (PokerNow draws them inside it), not
-       out on the felt, because the felt between pod and board is where the
-       committed chips have to go. */
+       (PokerNow's exact ratio), hero 82%. */
     --card-board-r: 0.112;
     --card-hero-r: 0.092;
     --card-opp-r: 0.076;
     --board-gap-r: 0.009;
     --card-nudge-r: 0.035;
     --off-opp-r: 0.058;
-    --off-shown-r: 0.090;   /* revealed: clears the plate, half plate + half card */
+    --off-shown-r: 0.090;
     --off-hero-r: 0.085;
     --cluster-dy-r: 0.012;
 
-    /* type */
-    --ui-r: 0.0165;
+    /* type -- the audit's floor: at the measured desktop felt this is ~21 px,
+       so a 0.58em label is 12 px and a stack figure is the largest text on the
+       table after the pot. */
+    --ui-r: 0.021;
+
+    /* rail -- thickness in felt widths; the near (bottom) edge is thicker than
+       the far one because the table is seen from a chair, not the ceiling. */
+    --rail-side-r: 0.042;
+    --rail-top-r: 0.034;
+    --rail-bottom-r: 0.066;
 
     --dock-h: 78px;
 
@@ -1807,61 +1610,61 @@
     min-width: 0;
   }
 
-  /* 8- and 9-max: the same rail has to carry four more plates, so the plates,
-     their avatars, their cards and their type all come down together. Every
-     ratio below is scaled by the same ~0.86, so the seat stays one object. */
+  /* 8- and 9-max: the same rail has to carry four more plates, so everything
+     comes down together by ~0.86. */
   .poker-table-wrapper.ring-crowded {
     --pod-w-r: 0.202;
     --pod-h-r: 0.074;
-    --avatar-r: 0.053;
+    --avatar-r: 0.056;
     --card-opp-r: 0.065;
     --off-opp-r: 0.049;
     --off-shown-r: 0.077;
-    --ui-r: 0.0143;
+    --ui-r: 0.018;
   }
 
-  /* Heads-up and 3-handed: two plates on a rail built for nine. Bigger cards
-     and bigger type, because there is nothing to collide with. */
+  /* Heads-up and 3-handed: bigger cards and bigger type. */
   .poker-table-wrapper.ring-sparse {
     --pod-w-r: 0.262;
     --pod-h-r: 0.094;
-    --avatar-r: 0.068;
+    --avatar-r: 0.072;
     --card-opp-r: 0.084;
     --off-opp-r: 0.064;
     --off-shown-r: 0.099;
-    --ui-r: 0.0178;
+    --ui-r: 0.0225;
   }
 
   .poker-table {
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--cd-space-2);
     width: 100%;
     min-width: 0;
     min-height: 0;
   }
 
+  /* THE ROOM. One overhead pool of light centred on the felt, falling to black
+     within a table-width. The page's ambient orbs are hidden on the table view
+     (+page.svelte) so there is exactly one light source in the scene. */
   .stage {
     position: relative;
     flex: 1 1 auto;
     min-height: 0;
     container-type: size;
+    border-radius: var(--cd-radius-panel);
+    background:
+      radial-gradient(ellipse 70% 80% at 50% 50%, var(--cd-stage-hi) 0%, var(--cd-stage) 55%, var(--cd-stage-lo) 100%);
   }
 
   .table-inner {
     position: absolute;
     inset: 0;
-    /* THE single scale input, and the only place a viewport number appears.
-       Both caps are the stage box divided by what the RING needs, not by what
-       the felt needs -- the pods hang off the felt on every side, so sizing to
-       the felt is how the action bar ends up below the fold.
-         width  needs  ring-kx + pod-w-r          = 1.02 + 0.235 = 1.255 -> 79cqw
-         height needs  ring-ky / ar + pod-h-r     = 0.476 + 0.086 = 0.562 -> 177cqh
-       Both are rounded IN so the outermost plate keeps a hair of margin against
-       the stage edge, and both are restated per ring density below, because a
-       ring that shrank its plates has room to grow the felt. */
-    --fw: min(79cqw, 177cqh);
+    /* THE single scale input. Both caps are the stage box divided by what the
+       RING needs (the pods hang off the felt on every side, and the avatar now
+       breaks the plate's outer edge by half its width):
+         width  needs  ring-kx + pod-w-r + avatar-r = 1.02 + 0.235 + 0.066 = 1.32 -> 75cqw
+         height needs  ring-ky / ar + pod-h-r        = 0.476 + 0.086         = 0.562 -> 177cqh */
+    --fw: min(75cqw, 177cqh);
     --fh: calc(var(--fw) / var(--ar));
     --rx: calc(var(--fw) * 0.5 * var(--ring-kx));
     --ry: calc(var(--fh) * 0.5 * var(--ring-ky));
@@ -1872,25 +1675,48 @@
     font-size: var(--ui);
   }
 
-  /* 1.02 + 0.202 = 1.222 -> 81cqw ; 0.476 + 0.074 = 0.550 -> 181cqh */
-  .ring-crowded .table-inner { --fw: min(81cqw, 181cqh); }
-  /* 1.02 + 0.262 = 1.282 -> 78cqw ; 0.476 + 0.094 = 0.570 -> 175cqh */
-  .ring-sparse  .table-inner { --fw: min(78cqw, 175cqh); }
+  /* 1.02 + 0.202 + 0.056 = 1.278 -> 78cqw ; 0.476 + 0.074 = 0.550 -> 181cqh */
+  .ring-crowded .table-inner { --fw: min(78cqw, 181cqh); }
+  /* 1.02 + 0.262 + 0.072 = 1.354 -> 73cqw ; 0.476 + 0.094 = 0.570 -> 175cqh */
+  .ring-sparse  .table-inner { --fw: min(73cqw, 175cqh); }
 
-  /* The all-in vignette: the surround darkens around the surface. Transform and
-     opacity only, so it can never move the geometry. */
+  /* The all-in vignette: the room darkens around the surface. Opacity only. */
   .table-inner::after {
     content: '';
     position: absolute;
     inset: 0;
     pointer-events: none;
     opacity: 0;
-    background: radial-gradient(ellipse 62% 62% at 50% 50%, transparent 45%, rgba(40, 8, 0, 0.5) 100%);
-    transition: opacity 0.5s ease;
+    border-radius: var(--cd-radius-panel);
+    background: radial-gradient(ellipse 62% 62% at 50% 50%, transparent 45%, var(--cd-felt-shade) 100%);
+    transition: opacity var(--cd-move) var(--cd-ease);
     z-index: 3;
   }
 
   .table-inner.all-in-moment::after { opacity: 1; }
+
+  /* ---------- the rail ---------- */
+
+  .rail {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: calc(var(--fw) + 2 * var(--fw) * var(--rail-side-r));
+    height: calc(var(--fh) + var(--fw) * (var(--rail-top-r) + var(--rail-bottom-r)));
+    /* Offset down by half the difference between the near and far rims, so
+       the felt sits high in the rail: the foreshortened view from a chair. */
+    transform: translate(-50%, calc(-50% + var(--fw) * (var(--rail-bottom-r) - var(--rail-top-r)) * 0.5));
+    border-radius: 50%;
+    background:
+      linear-gradient(180deg, var(--cd-rail-hi) 0%, var(--cd-rail) 30%, var(--cd-rail-lo) 100%);
+    box-shadow:
+      /* the lit crown along the top of the padding */
+      inset 0 2px 0 var(--cd-rail-crown),
+      /* the padding's own roundness, darker toward the felt */
+      inset 0 calc(var(--fw) * -0.012) calc(var(--fw) * 0.02) var(--cd-felt-shade),
+      /* the table's contact shadow on the room */
+      var(--cd-shadow-rail);
+  }
 
   /* ---------- felt ---------- */
 
@@ -1902,28 +1728,31 @@
     height: var(--fh);
     transform: translate(-50%, -50%);
     border-radius: 50%;               /* bar 2: an ellipse, not a rectangle */
+    /* Key light above centre; a fibre nap from the noise tile; the edge falls
+       into the rail's shadow. */
     background:
-      radial-gradient(ellipse 62% 78% at 50% 34%, #1f6b45 0%, #175537 42%, #0e3623 100%);
+      var(--cd-noise),
+      radial-gradient(ellipse 62% 78% at 50% 34%, var(--cd-felt-hi) 0%, var(--cd-felt) 42%, var(--cd-felt-lo) 100%);
+    background-blend-mode: soft-light, normal;
     box-shadow:
-      /* The rail, drawn OUTSIDE the layout box so it costs no height. The
-         innermost ring used to be dark GREEN, which meant the painted green
-         surface was ~2 x 0.9% wider and taller than the felt element and every
-         pixel measurement of the felt was measuring the rail as well. The lip is
-         now rail-coloured, so what a measurer calls "the felt" is the felt. */
-      0 0 0 calc(var(--fw) * 0.008) #1a120a,
-      0 0 0 calc(var(--fw) * 0.026) #4a2f18,
-      0 0 0 calc(var(--fw) * 0.029) #6b4726,
-      0 0 0 calc(var(--fw) * 0.033) #2a1a0e,
-      inset 0 0 calc(var(--fw) * 0.09) rgba(0, 0, 0, 0.55),
-      0 calc(var(--fw) * 0.02) calc(var(--fw) * 0.06) rgba(0, 0, 0, 0.55);
-    transition: box-shadow 0.5s ease;
+      /* the dark seam where the felt meets the rail lip */
+      0 0 0 calc(var(--fw) * 0.006) var(--cd-rail-seam),
+      /* vignette: the surface darkens toward the rail */
+      inset 0 0 calc(var(--fw) * 0.09) var(--cd-felt-shade),
+      inset 0 calc(var(--fw) * 0.01) calc(var(--fw) * 0.04) var(--cd-felt-edge);
   }
 
-  /* The felt is never truly empty (PokerNow ships two watermarks on theirs).
-     These sit at dead centre, UNDER the board, and are set wider than the board
-     on purpose so they read past its edges instead of fighting it: at 72% they
-     ran straight through the hero's own hole cards. They live inside `.felt`,
-     so nothing on the table can be behind them. */
+  /* The betting line: a thin ring inset from the edge, as on every casino felt. */
+  .felt::before {
+    content: '';
+    position: absolute;
+    inset: calc(var(--fh) * 0.16) calc(var(--fw) * 0.075);
+    border-radius: 50%;
+    border: 1px solid var(--cd-felt-line);
+    pointer-events: none;
+  }
+
+  /* One centre mark, low contrast, UNDER the board. */
   .felt-marks {
     position: absolute;
     left: 50%;
@@ -1932,40 +1761,27 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.3em;
+    gap: 0;
     white-space: nowrap;
     pointer-events: none;
+    color: var(--cd-felt-mark);
   }
 
-  .mark-1, .mark-2 {
-    font-size: 1.15em;
-    letter-spacing: 0.5em;
-    text-indent: 0.5em;               /* balance the trailing letter-space */
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.09);
-    font-weight: 700;
+  .mark-1 {
+    font-size: calc(var(--fw) * 0.16);
+    line-height: 1;
   }
 
   .mark-2 {
-    font-size: 0.72em;
+    font-size: var(--cd-felt-small);
     letter-spacing: 0.42em;
     text-indent: 0.42em;
-    color: rgba(120, 240, 190, 0.14);
+    text-transform: uppercase;
+    font-weight: var(--cd-weight-figure);
+    margin-top: calc(var(--fw) * -0.01);
   }
 
-  /* the all-in moment: the surface itself reacts (bar 15 -- information, not
-     fireworks; the only motion is a slow rail glow) */
-  .all-in-moment .felt {
-    box-shadow:
-      0 0 0 calc(var(--fw) * 0.008) #1a120a,
-      0 0 0 calc(var(--fw) * 0.026) #5a2a12,
-      0 0 0 calc(var(--fw) * 0.029) #b4531f,
-      0 0 0 calc(var(--fw) * 0.033) #2a1a0e,
-      0 0 calc(var(--fw) * 0.06) calc(var(--fw) * 0.006) rgba(233, 122, 42, 0.38),
-      inset 0 0 calc(var(--fw) * 0.09) rgba(0, 0, 0, 0.6);
-  }
-
-  /* ---------- board + pot ---------- */
+  /* ---------- board + pot cluster ---------- */
 
   .board-cluster {
     position: absolute;
@@ -1979,269 +1795,14 @@
     pointer-events: none;
   }
 
-  .community-cards {
-    display: flex;
-    gap: calc(var(--fw) * var(--board-gap-r));
-    --card-w: calc(var(--fw) * var(--card-board-r));
-  }
-
-  /* ---------- the board frame: what stops a seven-card row ----------
-     Only drawn at the all-in and the showdown, which are the two moments a
-     revealed pair sits next to the community cards. On every other scene the
-     board is unchanged, geometry included -- an unframed `.board-frame` is a
-     zero-cost wrapper with no padding, no background and no caption. */
-
-  .board-frame {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    border-radius: calc(var(--fw) * 0.018);
-  }
-
-  .board-frame.framed {
-    gap: calc(var(--fw) * 0.010);
-    padding: calc(var(--fw) * 0.013) calc(var(--fw) * 0.016) calc(var(--fw) * 0.010);
-    background: rgba(3, 12, 8, 0.42);
-    box-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.10),
-      inset 0 calc(var(--fw) * 0.004) calc(var(--fw) * 0.02) rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(2px);
-  }
-
-  /* The caption row is not decoration: it physically occupies the gap between
-     the last board card and the hero's own pair, which used to be 14 px of bare
-     felt, and it NAMES both sides of that gap. */
-  .board-caption {
-    display: flex;
-    align-items: baseline;
-    justify-content: center;
-    gap: 0.9em;
-    white-space: nowrap;
-  }
-
-  .caption-tag {
-    font-size: 0.62em;
-    font-weight: 800;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.42);
-  }
-
-  .caption-hand {
-    font-size: 0.74em;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    color: #9ef0c8;
-  }
-
-  .showdown .board-frame.framed {
-    background: rgba(3, 12, 8, 0.58);
-    box-shadow:
-      inset 0 0 0 1px rgba(233, 255, 99, 0.20),
-      inset 0 calc(var(--fw) * 0.004) calc(var(--fw) * 0.02) rgba(0, 0, 0, 0.45);
-  }
-
-  .pot-display {
-    position: absolute;
-    bottom: calc(100% + var(--fw) * 0.012);
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: calc(var(--fw) * 0.006);
-  }
-
-  .main-pot {
-    display: flex;
-    align-items: baseline;
-    gap: 0.55em;
-    padding: 0.22em 0.85em;
-    border-radius: 999px;
-    background: rgba(6, 14, 11, 0.78);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    backdrop-filter: blur(6px);
-    white-space: nowrap;
-  }
-
-  .pot-meta {
-    display: flex;
-    flex-direction: column;
-    line-height: 1.1;
-  }
-
-  .pot-label {
-    font-size: 0.62em;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.45);
-  }
-
-  .phase-indicator {
-    font-size: 0.72em;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    color: #7ee2b8;
-    text-transform: uppercase;
-  }
-
-  .pot-amount {
-    font-size: 1.55em;
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    color: #f8d97a;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .main-pot.has-chips {
-    border-color: rgba(248, 217, 122, 0.28);
-    box-shadow: 0 0 calc(var(--fw) * 0.03) rgba(248, 217, 122, 0.16);
-  }
-
-  /* No money in the middle yet. The readout stays on the felt -- the harness
-     reads `.pot-amount` on every non-complete hand and a missing one is a
-     failed scrape, not a clean table -- but it stops competing with the seats. */
-  .main-pot:not(.has-chips) {
-    opacity: 0.62;
-    background: rgba(6, 14, 11, 0.55);
-  }
-
-  /* The all-in moment reads on the pot itself: the figure at risk grows and
-     turns to the all-in accent. Transform only, so nothing reflows. */
-  .main-pot {
-    transition: transform 0.5s cubic-bezier(0.34, 1.3, 0.64, 1),
-                border-color 0.5s ease, box-shadow 0.5s ease;
-  }
-
-  .main-pot.at-risk {
-    transform: scale(1.07);
-    background: rgba(32, 10, 2, 0.86);
-    border-color: rgba(233, 122, 42, 0.6);
-    box-shadow: 0 0 calc(var(--fw) * 0.045) rgba(233, 122, 42, 0.3);
-  }
-
-  .main-pot.at-risk .pot-label { color: #ff9f5a; letter-spacing: 0.1em; }
-  .main-pot.at-risk .phase-indicator { color: rgba(255, 210, 180, 0.85); }
-  .main-pot.at-risk .pot-amount { color: #ffb27a; }
-
-  /* The decomposition of the headline, one type size down and dimmer, so it
-     reads as a footnote to the pot rather than a second pot. */
-  .pot-breakdown {
-    font-size: 0.66em;
-    letter-spacing: 0.04em;
-    color: rgba(255, 255, 255, 0.5);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  /* THE METHOD, ON THE FELT. A percentage with no method behind it is the same
-     class of claim as a pot with no chain behind it. This line says which
-     computation produced the badges and over how many runouts or trials; the
-     `title` carries the full statement, including the modelling assumption in
-     the hero case. */
-  .equity-method {
-    pointer-events: auto;
-    cursor: help;
-    font-size: 0.6em;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.44);
-    white-space: nowrap;
-  }
-
-  .side-pots {
-    display: flex;
-    gap: calc(var(--fw) * 0.008);
-  }
-
-  .side-pot {
-    display: flex;
-    align-items: center;
-    gap: 0.4em;
-    padding: 0.1em 0.55em;
-    border-radius: 999px;
-    background: rgba(6, 14, 11, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    white-space: nowrap;
-  }
-
-  .side-pot-label {
-    font-size: 0.6em;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.45);
-  }
-
-  .side-pot-amount {
-    font-size: 0.82em;
-    font-weight: 700;
-    color: #e9d79f;
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* ---------- winner ---------- */
-
-  .winner-display {
-    position: absolute;
-    bottom: calc(100% + var(--fw) * 0.012);
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.1em;
-    padding: 0.3em 1.1em;
-    border-radius: 999px;
-    background: rgba(8, 18, 12, 0.86);
-    border: 1px solid rgba(233, 255, 99, 0.35);
-    box-shadow: 0 0 calc(var(--fw) * 0.05) rgba(233, 255, 99, 0.22);
-    white-space: nowrap;
-  }
-
-  .winner-text {
-    font-size: 1.1em;
-    font-weight: 800;
-    color: #E9FF63;              /* bar 13: the reference celebration accent */
-  }
-
-  .winner-display:not(.you-won) .winner-text { color: #f3f6df; }
-
-  /* THE METHOD LINE INSIDE THE WINNER BANNER (docs/DEFECTS.md T-27).
-     Under the pot it is one more row of a column, which is where it has always
-     been. The winner banner is a rounded pill whose height is tuned to a 166 px
-     slot in portrait, so the line hangs OFF the pill instead of growing it, on
-     the side that faces away from the board: above the banner in landscape (the
-     banner sits above the board there) and below it in portrait (where the
-     readout is under the board). It is the same element, the same words and the
-     same `title` in both cases -- only the anchor differs. */
-  .winner-display .equity-method {
-    position: absolute;
-    left: 50%;
-    bottom: calc(100% + 0.25em);
-    transform: translateX(-50%);
-  }
-
-  .winner-hand-rank {
-    font-size: 0.72em;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.62);
-  }
-
-  .split-info {
-    font-size: 0.66em;
-    color: rgba(255, 255, 255, 0.5);
-  }
-
   /* =========================================================================
-     SEATS -- each seat is a zero-size point on the ring; pod, cards, chips and
-     tag are positioned off it with the seat's own inward normal (--nx/--ny).
+     SEATS -- each seat is a zero-size point on the ring; SeatPod.svelte draws
+     everything off it with the seat's own vectors.
      ========================================================================= */
 
   .seat {
     /* --sx / --sy MUST be declared here, not on .table-inner: custom properties
-       inherit as COMPUTED values, so a formula written on the parent would be
-       frozen with --cs / --sn unset and every seat would land on the centre. */
+       inherit as COMPUTED values. */
     --sx: calc(var(--rx) * var(--cs, 0));
     --sy: calc(var(--ry) * var(--sn, 0));
     position: absolute;
@@ -2256,490 +1817,11 @@
   .seat.acting { z-index: 22; }
   .seat.winner { z-index: 24; }
 
-  /* A FOLDED SEAT IS OUT, AND HAS TO LOOK OUT.
-     PokerNow greys the whole pod, replaces the avatar with a cross and prints
-     the word FOLD under the name, so that at a glance only the live hands are
-     lit. Ours dropped the seat to 46% opacity and did nothing else -- which on
-     a dark table is not a signal, it is a slightly dimmer identical pod, and
-     the wave-3 critic read it as "ours dims nobody".
-     Opacity is kept low AND the colour is drained, because either one alone is
-     ambiguous with a seat that is merely far from the light. */
+  /* A FOLDED SEAT IS OUT, AND HAS TO LOOK OUT: dimmed here, drained of colour
+     in the plate itself (SeatPod). */
   .seat.folded { opacity: 0.42; }
-  .seat.folded .player-nameplate {
-    filter: grayscale(1) contrast(0.85);
-    border-color: rgba(255, 255, 255, 0.06);
-    box-shadow: none;
-  }
-  .seat.folded .bet-chip { filter: grayscale(1); opacity: 0.6; }
 
-  /* ...and a live hand at the all-in or the showdown is LIT, so the contrast is
-     carried by both ends and not only by the folded one. */
-  .seat.live-hand .player-nameplate {
-    border-color: rgba(255, 255, 255, 0.34);
-    box-shadow:
-      0 0 calc(var(--fw) * 0.022) rgba(255, 255, 255, 0.12),
-      0 calc(var(--fw) * 0.006) calc(var(--fw) * 0.018) rgba(0, 0, 0, 0.55);
-  }
-  .seat.live-hand.is-me .player-nameplate { border-color: rgba(126, 226, 184, 0.85); }
-
-  /* ---- pod ---- */
-
-  .player-nameplate {
-    position: absolute;
-    left: 0;
-    top: 0;
-    /* ABOVE the hole cards. `.player-cards` opens a stacking context at z-index
-       4, so a pod with `z-index: auto` painted UNDERNEATH its own cards: at any
-       seat whose cards leaned back over the plate the name and the stack were
-       simply covered up, which is why seat 1 read "Naka / 11.9" with the rest
-       of the name and the last digits of the stack missing. */
-    z-index: 6;
-    transform: translate(-50%, -50%);
-    width: var(--pod-w);
-    height: var(--pod-h);
-    display: flex;
-    align-items: center;
-    gap: 0.45em;
-    padding: 0 0.5em 0 calc(var(--pod-h) * 0.09);
-    border-radius: 999px;
-    background: linear-gradient(180deg, rgba(38, 40, 48, 0.95), rgba(20, 21, 27, 0.96));
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 calc(var(--fw) * 0.006) calc(var(--fw) * 0.018) rgba(0, 0, 0, 0.55);
-    overflow: hidden;
-    /* bar 12: the acting indicator lands in <=400 ms */
-    transition: border-color 0.4s ease, box-shadow 0.4s ease, background 0.4s ease;
-  }
-
-  /* YOUR plate is a PLATE. It used to be filled with felt green at 0.96 alpha,
-     which meant your own seat dissolved into the table it was sitting on -- and
-     a pixel measurer agreed: the detected "felt" ran 48px past the bottom of the
-     surface, through the hero's nameplate, and reported the table as 1.92:1
-     instead of 2.12:1 on every scene where the hero is not holding cards over
-     the plate. Same charcoal family as every other seat, opaque so the felt
-     cannot bleed through it, and the "this is you" signal carried where it
-     belongs: the edge, the avatar ring and the name. */
-  .player-nameplate.highlight-me {
-    background: linear-gradient(180deg, #262832, #14151b);
-    border-color: rgba(126, 226, 184, 0.75);
-  }
-
-  .player-nameplate.action-on {
-    border-color: rgba(255, 255, 255, 0.85);
-    box-shadow:
-      0 0 calc(var(--fw) * 0.035) rgba(255, 255, 255, 0.42),
-      0 calc(var(--fw) * 0.006) calc(var(--fw) * 0.018) rgba(0, 0, 0, 0.55);
-  }
-
-  .player-nameplate.is-winner {
-    border-color: #E9FF63;
-    animation: winner-glow 4s cubic-bezier(0.4, 0, 0.2, 1) 1 both;
-  }
-
-  /* bar 13: one long beat, three phases, single bright accent */
-  @keyframes winner-glow {
-    0%   { box-shadow: 0 0 0 rgba(233, 255, 99, 0); }
-    25%  { box-shadow: 0 0 calc(var(--fw) * 0.09) rgba(233, 255, 99, 0.95); }
-    50%  { box-shadow: 0 0 calc(var(--fw) * 0.035) rgba(233, 255, 99, 0.55); }
-    75%  { box-shadow: 0 0 calc(var(--fw) * 0.075) rgba(233, 255, 99, 0.8); }
-    100% { box-shadow: 0 0 calc(var(--fw) * 0.03) rgba(233, 255, 99, 0.45); }
-  }
-
-  .avatar-container {
-    position: relative;
-    flex: 0 0 auto;
-    width: var(--avatar);
-    height: var(--avatar);
-    border-radius: 50%;
-    overflow: hidden;
-    background: #2a2d36;
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
-  }
-
-  .avatar-container.is-me { box-shadow: inset 0 0 0 2px rgba(73, 161, 110, 0.85); }
-
-  .player-avatar { width: 100%; height: 100%; display: block; }
-
-  .avatar-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.52em;
-    font-weight: 800;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    text-align: center;
-    line-height: 1;
-  }
-
-  .avatar-overlay.folded { background: rgba(10, 10, 12, 0.88); color: rgba(255, 255, 255, 0.5); }
-
-  .fold-x {
-    font-size: 2.1em;
-    font-weight: 400;
-    line-height: 1;
-    color: rgba(255, 255, 255, 0.42);
-  }
-
-  /* The WORD, on the stack line, exactly where PokerNow puts it. It is a SIBLING
-     of `.chips`, never inside it: `.chips` is a money figure the screenshot gate
-     reads by `textContent` and asserts against the canister, so nothing may be
-     appended to that element. The row keeps the pod at two lines, which is all
-     the height a portrait pod has. */
-  .stack-row {
-    display: flex;
-    align-items: baseline;
-    gap: 0.45em;
-    min-width: 0;
-  }
-
-  .fold-word {
-    font-size: 0.6em;
-    font-weight: 800;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.45);
-    line-height: 1;
-  }
-
-  .avatar-overlay.allin {
-    background: rgba(178, 43, 12, 0.9);
-    color: #fff;
-    box-shadow: inset 0 0 0 2px rgba(255, 159, 90, 0.85);
-  }
-
-  .pod-text {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    min-width: 0;
-    flex: 1 1 auto;
-    line-height: 1.15;
-  }
-
-  .player-name {
-    font-size: 0.82em;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.78);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .player-name.is-me { color: #7ee2b8; }
-
-  .chips {
-    font-size: 0.92em;
-    font-weight: 800;
-    color: #fff;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .pod-slot {
-    flex: 0 0 auto;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0.15em;
-    min-width: 2.3em;
-  }
-
-  /* THE EQUITY BADGE (bar 15). Two visually distinct things, because they are
-     two epistemically distinct things:
-       solid mint   -- computed over hands the ENGINE revealed. A fact.
-       outlined     -- computed against opponents drawn at random because the
-                       canister has not revealed them. A model, and it is dashed
-                       and carries the `vs N random` method line beside the pot
-                       or the winner banner so it can never be mistaken for the
-                       first kind.
-
-     WHERE IT SITS, AND WHY IT IS NOT IN THE PLATE (docs/DEFECTS.md T-22).
-     A badge inside `.player-nameplate` is inside a stacking context (`z-index:
-     6`) that the hole cards (`z-index: 7`) beat from outside, at any z-index the
-     badge picks. So it is a child of `.seat`, painted above the cards -- and to
-     avoid trading one occlusion for another it hangs off the plate on this
-     seat's READOUT SPOKE (`--rdx`/`--rdy`, computed per seat and per orientation
-     in `ringSeats`): the one side of the plate that neither this seat's cards nor
-     its bet disc nor the board nor the pot readout claims.
-
-     The badge no longer costs the pod any width either: `.pod-slot.with-equity`
-     used to reserve 3.5em inside a 116 px phone pod, which is width the STACK
-     figure needed. */
-  .equity-badge {
-    position: absolute;
-    left: 0;
-    top: 0;
-    /* Above `.player-cards.hero` and `.player-cards.shown` (both z-index 7) and
-       above the plate (6). Below `.winner-award` (20), which never lands here. */
-    z-index: 9;
-    --badge-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + 1.55em));
-    --badge-dy: calc(var(--rdy, 0) * (var(--pod-h) * 0.5 + 0.8em));
-    transform:
-      translate(-50%, -50%)
-      translate(var(--badge-dx), var(--badge-dy));
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0.08em 0.34em;
-    border-radius: 0.35em;
-    font-size: 0.68em;
-    font-weight: 800;
-    line-height: 1.25;
-    letter-spacing: -0.01em;
-    font-variant-numeric: tabular-nums;
-    background: #7ee2b8;
-    color: #06231a;
-    white-space: nowrap;
-    cursor: help;
-    /* On the felt now rather than on a charcoal plate, so it carries its own
-       edge. Costs nothing where it overlaps the plate. */
-    box-shadow: 0 0 0 2px rgba(9, 11, 15, 0.85);
-  }
-
-  /* A seat whose spoke is VERTICAL carries both readouts on the same edge of the
-     plate, so they take opposite ENDS of it: the badge on the inner end, the
-     award on the outer. Only portrait produces such a seat (`rdy`, `ringSeats`). */
-  .seat.spoke-y .equity-badge { --badge-dx: calc(var(--pod-w) * -0.24); }
-
-  .equity-badge.modelled {
-    background: transparent;
-    border: 1px dashed rgba(126, 226, 184, 0.7);
-    color: #9ef0c8;
-  }
-
-  .turn-timer {
-    font-size: 0.74em;
-    font-weight: 800;
-    color: #fff;
-    font-variant-numeric: tabular-nums;
-    line-height: 1;
-  }
-
-  .turn-timer.urgent { color: #ff8b6b; }
-
-  .position-badges { display: flex; gap: 0.15em; }
-
-  .position-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 1.35em;
-    height: 1.35em;
-    padding: 0 0.28em;
-    border-radius: 999px;
-    font-size: 0.56em;
-    font-weight: 800;
-    letter-spacing: 0.02em;
-    line-height: 1;
-  }
-
-  .position-badge.dealer { background: #f4f4f5; color: #17181c; }
-  .position-badge.sb { background: #2f6fd0; color: #fff; }
-  .position-badge.bb { background: #d08a2f; color: #fff; }
-
-  /* PokerNow's treatment: a thin progress line along the pod's bottom edge */
-  .pod-clock {
-    position: absolute;
-    left: 0;
-    bottom: 0;
-    height: calc(var(--pod-h) * 0.075);
-    width: 100%;
-    background: rgba(255, 255, 255, 0.12);
-  }
-
-  .pod-clock::after {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: calc(var(--clock, 0) * 100%);
-    background: #49A16E;
-    transition: width 1s linear;
-  }
-
-  .pod-clock.urgent::after { background: #e8543a; }
-
-  /* ---- hole cards, on an inner ring ---- */
-
-  /* An opponent's pair peeks out from behind their plate, perpendicular to the
-     rail (--cy), never along the inward normal -- see `cy` in ringSeats(). */
-  .player-cards {
-    position: absolute;
-    left: 0;
-    top: 0;
-    display: flex;
-    gap: calc(var(--fw) * 0.006);
-    --card-w: calc(var(--fw) * var(--card-opp-r));
-    /* Perpendicular to the rail (--cy) to clear the plate, plus a small push
-       along the inward normal so the pair lands ON the felt: the plates
-       themselves straddle the rail at ring-kx 1.02, and cards that simply rode
-       with them sat half on the woodwork. */
-    transform:
-      translate(-50%, -50%)
-      translate(
-        calc(var(--nx, 0) * var(--fw) * var(--card-nudge-r)),
-        calc(var(--cy, -1) * var(--fw) * var(--off-opp-r))
-      );
-    z-index: 4;                      /* behind the pod, like GGPoker */
-  }
-
-  /* A REVEALED PAIR IS A THIRD OBJECT, not more board.
-     The inward nudge is HALVED here and the pair gets its own plinth. Full
-     nudge put seat 1's revealed `6s 4d` 33 px INSIDE the board tray at
-     showdown, so the felt read `6 4 | 10 4 J 7 9` as one seven-card row -- the
-     exact complaint the tray exists to answer, arriving from the other side.
-     Half the nudge clears the tray; the plinth means that even when a crowded
-     ring brings them close again, the two groups are drawn on different
-     surfaces and cannot merge. */
-  .player-cards.shown {
-    z-index: 7;
-    transform:
-      translate(-50%, -50%)
-      translate(
-        calc(var(--nx, 0) * var(--fw) * var(--card-nudge-r) * 0.5),
-        calc(var(--cy, -1) * var(--fw) * var(--off-shown-r))
-      );
-    filter: drop-shadow(0 calc(var(--fw) * 0.004) calc(var(--fw) * 0.012) rgba(0, 0, 0, 0.55));
-  }
-
-  .player-cards.shown::before {
-    content: '';
-    position: absolute;
-    inset: calc(var(--fw) * -0.008) calc(var(--fw) * -0.010);
-    z-index: -1;
-    border-radius: calc(var(--fw) * 0.014);
-    background: rgba(4, 14, 9, 0.78);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
-  }
-
-  .seat.winner .player-cards.shown::before {
-    background: rgba(20, 26, 4, 0.85);
-    box-shadow: inset 0 0 0 1px rgba(233, 255, 99, 0.45);
-  }
-
-  /* YOUR cards are the one thing on the felt that outranks a pod, so the hero's
-     pair paints ABOVE its own plate. Opponents' stay behind theirs (GGPoker's
-     order): you see that they are holding cards, not what the cards are. */
-  .player-cards.hero {
-    z-index: 7;
-    --card-w: calc(var(--fw) * var(--card-hero-r));
-    transform:
-      translate(-50%, -50%)
-      translate(
-        calc(var(--nx, 0) * var(--fw) * var(--off-hero-r)),
-        calc(var(--ny, 0) * var(--fw) * var(--off-hero-r))
-      );
-    filter: drop-shadow(0 calc(var(--fw) * 0.004) calc(var(--fw) * 0.012) rgba(0, 0, 0, 0.5));
-  }
-
-  /* ---- bet chips ---- */
-
-  .bet-chip {
-    position: absolute;
-    left: 0;
-    top: 0;
-    z-index: 8;
-    display: flex;
-    align-items: center;
-    gap: 0.3em;
-    padding: 0.12em 0.5em 0.12em 0.2em;
-    border-radius: 999px;
-    background: #dfe86a;
-    color: #23260c;
-    font-weight: 800;
-    white-space: nowrap;
-    box-shadow: 0 calc(var(--fw) * 0.003) calc(var(--fw) * 0.01) rgba(0, 0, 0, 0.5);
-    /* bar 11: 500 ms for anything that moves an object */
-    transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-    transform:
-      translate(-50%, -50%)
-      translate(calc(var(--bx, 0) * var(--fw)), calc(var(--by, 0) * var(--fw)));
-  }
-
-  .bet-chip.all-in { background: #ff9f5a; color: #2a1002; }
-
-  .chip-stack {
-    width: 0.9em;
-    height: 0.9em;
-    border-radius: 50%;
-    background:
-      repeating-conic-gradient(#23260c 0 25%, #f6ffa6 0 50%);
-    box-shadow: inset 0 0 0 1.5px rgba(35, 38, 12, 0.6);
-  }
-
-  .bet-amount { font-size: 0.78em; font-variant-numeric: tabular-nums; }
-
-  /* ---- the winner's award, on the felt side of the pod ---- */
-
-  /* Parked on this seat's AWARD SPOT -- `ax`/`ay` in ringSeats(), which is the
-     chip spot given its extra showdown clearance along whichever axis has room
-     rather than along the chip's own vector. See the comment there: scaling the
-     chip vector is what put the `+24.00` chip of a winner at seat 1 or 2 on top
-     of the board and over the suit pip of a board card (docs/DEFECTS.md T-23).
-     The award still touches the pod, which is the whole point: the delta has to
-     be AT the stack it changed. */
-  .winner-award {
-    position: absolute;
-    left: 0;
-    top: 0;
-    z-index: 20;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.18em;
-    white-space: nowrap;
-    /* One offset, named once, so the landing animation below cannot drift from
-       the resting position -- the keyframes used to restate the vector and any
-       change had to be made in three places. */
-    --award-dx: calc(var(--ax, 0) * var(--fw));
-    --award-dy: calc(var(--ay, 0) * var(--fw));
-    transform:
-      translate(-50%, -50%)
-      translate(var(--award-dx), var(--award-dy));
-    /* The award LANDS, and it lands LAST: 760 ms in, which is where the pot
-       ghost finishes its flight to this pod. */
-    animation: award-land 0.42s cubic-bezier(0.2, 1.25, 0.5, 1) 0.76s both;
-  }
-
-  /* PokerNow's `+300`: an olive chip under the winner's stack, the single
-     figure that says what changed. */
-  .stack-delta {
-    padding: 0.1em 0.5em;
-    border-radius: 999px;
-    background: #E9FF63;
-    color: #1d2000;
-    font-size: 0.86em;
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    font-variant-numeric: tabular-nums;
-    box-shadow: 0 0 calc(var(--fw) * 0.03) rgba(233, 255, 99, 0.45);
-  }
-
-  .hand-tag {
-    padding: 0.08em 0.45em;
-    border-radius: 0.35em;
-    background: rgba(8, 18, 12, 0.9);
-    border: 1px solid rgba(233, 255, 99, 0.45);
-    color: #e9ff63;
-    font-size: 0.58em;
-    font-weight: 800;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-  }
-
-  @keyframes award-land {
-    from { opacity: 0; transform:
-      translate(-50%, -50%) translate(var(--award-dx), var(--award-dy)) scale(0.6); }
-    to   { opacity: 1; transform:
-      translate(-50%, -50%) translate(var(--award-dx), var(--award-dy)) scale(1); }
-  }
-
-  /* ---- the two flights ----
-     Ghost copies painted over the felt. Neither is in the layout, so neither can
-     move a measured object; both are pure transform + opacity. */
+  /* ---- the two flights: ghost copies painted over the felt ---- */
 
   .chip-flight,
   .pot-flight {
@@ -2748,21 +1830,23 @@
     top: 50%;
     z-index: 23;
     pointer-events: none;
-    padding: 0.12em 0.55em;
-    border-radius: 999px;
-    font-weight: 800;
-    font-size: 0.8em;
+    padding: 0.14em 0.6em;
+    border-radius: var(--cd-radius-pill);
+    font-weight: var(--cd-weight-display);
+    font-size: var(--cd-felt-body);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+    background: var(--cd-capsule);
+    color: var(--cd-money);
+    border: 1px solid var(--cd-money-line);
+    box-shadow: var(--cd-shadow-chip);
   }
 
   /* seat chip -> middle */
   .chip-flight {
     --fx: calc(var(--rx) * var(--cs, 0) + var(--bx, 0) * var(--fw));
     --fy: calc(var(--ry) * var(--sn, 0) + var(--by, 0) * var(--fw));
-    background: #dfe86a;
-    color: #23260c;
-    animation: chip-to-pot 0.5s cubic-bezier(0.4, 0, 0.2, 1) both;
+    animation: chip-to-pot var(--cd-move) var(--cd-ease-move) both;
   }
 
   @keyframes chip-to-pot {
@@ -2771,15 +1855,13 @@
     to   { transform: translate(-50%, -50%) scale(0.55); opacity: 0; }
   }
 
-  /* middle -> winner's pod */
+  /* middle -> winner's pod. 360 ms behind the chip sweep; must equal
+     POT_FLIGHT_DELAY_MS in the script block. */
   .pot-flight {
-    background: #E9FF63;
-    color: #1d2000;
-    box-shadow: 0 0 calc(var(--fw) * 0.04) rgba(233, 255, 99, 0.5);
-    /* 360 ms behind the chip sweep: the pot leaves once the street's chips have
-       arrived in it. Must equal POT_FLIGHT_DELAY_MS in the script block, which
-       is what keeps the ghost mounted for the whole flight. */
-    animation: pot-to-winner 0.5s cubic-bezier(0.4, 0, 0.2, 1) 0.36s both;
+    background: linear-gradient(180deg, var(--cd-money-hi), var(--cd-money));
+    color: var(--cd-money-ink);
+    box-shadow: 0 0 calc(var(--fw) * 0.04) var(--cd-money-glow);
+    animation: pot-to-winner var(--cd-move) var(--cd-ease-move) 0.36s both;
   }
 
   @keyframes pot-to-winner {
@@ -2792,69 +1874,6 @@
         scale(0.7);
       opacity: 0;
     }
-  }
-
-  /* ---- cards revealing (bar 11: a flip is short) ----
-     Only the pairs the ENGINE just turned up animate. The hero's own pair has
-     been face up all hand and must not re-flip every poll. */
-  .player-cards.shown > :global(.card) {
-    animation: card-reveal 0.34s cubic-bezier(0.2, 0.7, 0.3, 1) both;
-    transform-origin: 50% 50%;
-  }
-
-  .player-cards.shown > :global(.card:nth-child(2)) { animation-delay: 0.1s; }
-
-  @keyframes card-reveal {
-    0%   { transform: perspective(600px) rotateY(88deg); opacity: 0.2; }
-    65%  { transform: perspective(600px) rotateY(-9deg); opacity: 1; }
-    100% { transform: none; opacity: 1; }
-  }
-
-  /* ---- empty seat: a full-size pod with an explicit call to action (bar 4) ---- */
-
-  /* An empty seat is a full-size pod carrying an explicit call to action (bar
-     4) -- but it is not competing with the occupied ones. At 9-max seven of
-     these used to shout as loudly as the two real players. Same footprint, a
-     third of the contrast, and it lights up on hover. */
-  .join-seat {
-    position: absolute;
-    left: 0;
-    top: 0;
-    z-index: 5;
-    transform: translate(-50%, -50%);
-    width: var(--pod-w);
-    height: var(--pod-h);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.05em;
-    border-radius: 999px;
-    background: rgba(9, 11, 15, 0.34);
-    border: 1px dashed rgba(255, 255, 255, 0.17);
-    color: rgba(255, 255, 255, 0.42);
-    cursor: pointer;
-    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-  }
-
-  .join-seat:hover {
-    background: rgba(73, 161, 110, 0.2);
-    border-color: rgba(126, 226, 184, 0.8);
-    color: #d8fff0;
-  }
-
-  .sit-word {
-    font-size: 0.86em;
-    font-weight: 800;
-    letter-spacing: 0.28em;
-    text-transform: uppercase;
-  }
-
-  .sit-seat {
-    font-size: 0.62em;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    opacity: 0.7;
   }
 
   /* =========================================================================
@@ -2871,20 +1890,20 @@
     align-items: center;
     gap: 0.7em;
     padding: 0.4em 0.9em;
-    border-radius: 999px;
-    background: rgba(120, 60, 10, 0.9);
-    border: 1px solid rgba(255, 180, 90, 0.45);
-    color: #ffe6c8;
+    border-radius: var(--cd-radius-pill);
+    background: var(--cd-panel);
+    border: 1px solid var(--cd-warn-line);
+    color: var(--cd-ink-1);
     font-size: 0.85em;
   }
 
   .sit-in-btn {
     padding: 0.25em 0.7em;
-    border-radius: 999px;
+    border-radius: var(--cd-radius-pill);
     border: none;
-    background: #f0a02a;
-    color: #241000;
-    font-weight: 800;
+    background: var(--cd-money);
+    color: var(--cd-money-ink);
+    font-weight: var(--cd-weight-display);
     font-size: 0.9em;
     cursor: pointer;
   }
@@ -2910,11 +1929,11 @@
     flex-direction: column;
     gap: 0.5em;
     padding: 0.8em 0.9em;
-    border-radius: 14px;
-    background: rgba(14, 15, 22, 0.97);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
-    font-size: 14px;
+    border-radius: var(--cd-radius-panel);
+    background: var(--cd-panel);
+    border: 1px solid var(--cd-line-strong);
+    box-shadow: var(--cd-shadow-lift);
+    font-size: var(--cd-text-md);
   }
 
   .slider-header {
@@ -2924,16 +1943,16 @@
     font-size: 0.8em;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--cd-ink-2);
   }
 
   .close-slider {
     width: 22px;
     height: 22px;
-    border-radius: 6px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line-strong);
     background: transparent;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--cd-ink-1);
     cursor: pointer;
     line-height: 1;
   }
@@ -2941,134 +1960,65 @@
   .slider-amount {
     text-align: center;
     font-size: 1.9em;
-    font-weight: 800;
-    color: #f8d97a;
-    font-variant-numeric: tabular-nums;
+    font-weight: var(--cd-weight-display);
+    color: var(--cd-money);
   }
 
   .raise-slider {
     width: 100%;
-    accent-color: #49A16E;
+    accent-color: var(--cd-money);
   }
 
-  .preset-buttons { display: flex; gap: 6px; }
+  .preset-buttons { display: flex; gap: var(--cd-space-2); }
 
   .preset-buttons button {
     flex: 1;
     padding: 7px 0;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    background: rgba(255, 255, 255, 0.05);
-    color: rgba(255, 255, 255, 0.82);
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line-strong);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-1);
     font-size: 0.82em;
-    font-weight: 700;
+    font-weight: var(--cd-weight-figure);
     cursor: pointer;
   }
 
-  .preset-buttons button:hover { background: rgba(73, 161, 110, 0.22); }
+  .preset-buttons button:hover { background: var(--cd-money-dim); }
 
   .confirm-raise {
     padding: 10px 0;
-    border-radius: 10px;
+    border-radius: var(--cd-radius-chip);
     border: none;
-    background: linear-gradient(180deg, #d9a63a, #b9821f);
-    color: #241a02;
-    font-weight: 800;
+    background: linear-gradient(180deg, var(--cd-money-hi), var(--cd-money-lo));
+    color: var(--cd-money-ink);
+    font-weight: var(--cd-weight-display);
     font-size: 0.95em;
     cursor: pointer;
   }
 
   /* =========================================================================
      DOCK
+     THE DOCK IS SIZED BY WHAT IS IN IT, NOT BY A NUMBER (docs/DEFECTS.md
+     E-63): `min-height` keeps its presence stable at --dock-h while letting it
+     take the room its contents need, so a tall wallet panel never spills under
+     the stage. The outer tracks are sized by symmetry (so the action row stays
+     centred) and `overflow: hidden` on them is a known trade recorded in
+     docs/DESIGN-BAR.md section 11.6.
      ========================================================================= */
-
-  /* The three columns used to be `210px | 1fr | 240px`, and the right-hand
-     cluster (wallet toggle + balance + Deposit + Withdraw + Sit out + Leave)
-     needs about 340. Its children were all `flex: 0 0 auto`, so they did not
-     shrink -- they overflowed a 240px box and printed on top of each other:
-     the shipped capture reads "SWithdrawLeave". The side columns are now equal
-     free space around a content-sized centre, and everything inside them is
-     allowed to shrink. */
-  /* THE DOCK IS SIZED BY WHAT IS IN IT, NOT BY A NUMBER (docs/DEFECTS.md E-63).
-     `height: var(--dock-h)` was a FIXED height, and the wallet panel is taller
-     than it whenever a committed stake is on show: three stacked lines plus
-     padding is ~87 px against a 36 px row on a phone. A too-tall, UNPOSITIONED
-     child of a fixed-height box does not clip the page -- it spills out of the
-     box, and the spill lands in `.stage`, which IS positioned and therefore
-     PAINTS OVER IT. The occlusion gate measured the result at 390x844:
-
-       8.7% of "0.20 ICP" (span.committed-value) covered by div.stage
-
-     ...which is the top of a money figure disappearing under the felt. The fix
-     is not a z-index -- raising the dock above the stage would let dock content
-     cover the felt, and "NO RAKE" is printed on the felt (HARD RULE 2). It is to
-     stop the overflow: `min-height` keeps the dock's presence stable at
-     `--dock-h` while letting it take the room its contents actually need, so the
-     panel stays inside its own box and paint order stops mattering.
-
-     WHAT IT COSTS, measured rather than argued. The room comes out of the stage,
-     and the stage has ~14 px of it to give before `--fw`'s height term takes
-     over from its width term and the felt starts shrinking. The committed block
-     needs 37 px, so on a mobile shot with a stake outstanding the felt goes
-     50.7% -> 46.4% of the frame, against `felt-area.mjs`'s 45% floor. That is a
-     real cost, taken deliberately: the alternative is the top of a money figure
-     sliced off under the felt. It only applies while a stake is actually
-     outstanding, which is the state this readout exists for, and
-     `tools/shots/test-dock-overflow.mjs` fails if it ever creeps closer to the
-     floor. */
   .action-dock {
     flex: 0 0 auto;
     min-height: var(--dock-h);
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
-    gap: 12px;
-    padding: 0 4px;
+    gap: var(--cd-space-3);
+    padding: 0 var(--cd-space-1);
   }
 
-  /* `overflow: hidden` HERE MEANS A CONTROL CAN LEAVE THE WINDOW AND LOOK FINE.
-     The dock is a three-column grid whose outer tracks are `minmax(0, 1fr)`, so
-     they are sized by SYMMETRY (to keep the action row centred in the window),
-     never by what is in them. The left track holds a 67.5 px Log button in 503 px
-     of track; the right track holds the panel toggle, the wallet panel, Deposit,
-     Withdraw and the two sit controls — 514 px of content in the same 503 px.
-
-     Measured at 1440x900 on `table-preflop` and `table-facing-bet`:
-     `.sit-controls > button.control-btn.destructive` — LEAVE TABLE, the control
-     a player uses to get their chips back to escrow — rendered at
-     `51.2x28 at x=1396`, i.e. 7 px past the right edge of the window, with
-     `documentElement.scrollWidth == 1440` so it cannot be scrolled to. `<body>`
-     is `overflow-x: hidden`, so the tail of it is simply not on the screen.
-     Nothing in the repo could see it: the felt gate measures the felt, the pixel
-     gate asks what COVERS a figure rather than whether a control is in the
-     frame, and the census reads text. tools/shots/lib/table-in-frame.mjs is what
-     caught it.
-
-     IT IS LEFT AS IT IS, DELIBERATELY, AND HERE IS WHAT WAS TRIED.
-     `flex-wrap: wrap` on this element does fix it — the sweep confirms the
-     button comes inside the frame — and it costs FAR more than it buys, because
-     the wallet panel is ~50 px tall and wrapping puts it on its own row: the
-     dock grows 43 px and the desktop felt falls from 27.8% to 23.2% on
-     `table-preflop` and `table-facing-bet`, and from 30.7% to 24.2% on
-     `table-allin`, against a 28% floor. That is one gate paid for with another,
-     which is the trade this project keeps rediscovering, so it was reverted.
-
-     The cheap alternatives are worse than they look. Narrowing the two sit
-     controls or the gaps buys the 11 px back by tuning to today's content, and
-     the width of this row is CHAIN DATA (the balance figure), so it is one
-     longer number away from being wrong again. Splitting the outer tracks
-     unevenly (`0.95fr / 1.05fr`) works and shifts the action row off the
-     window's centre.
-
-     The structural fix is to stop the right cell carrying five controls and a
-     money panel in a track sized by symmetry: move `.sit-controls` to the left
-     cell, which has ~435 px of unused width. That MOVES A CONTROL on desktop, so
-     it is a deliberate design decision rather than a bug fix, and it is recorded
-     in docs/DESIGN-BAR.md §11.6 rather than taken here. */
   .dock-aux {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--cd-space-2);
     min-width: 0;
     overflow: hidden;
   }
@@ -3081,19 +2031,20 @@
     gap: 5px;
     flex: 0 0 auto;
     white-space: nowrap;
-    padding: 7px 10px;
-    border-radius: 9px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    background: rgba(255, 255, 255, 0.04);
-    color: rgba(255, 255, 255, 0.68);
-    font-size: 11px;
-    font-weight: 700;
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-3);
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-figure);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     cursor: pointer;
   }
 
-  .log-toggle.active { background: rgba(73, 161, 110, 0.22); color: #b9f0d6; }
+  .log-toggle.active { background: var(--cd-accent-dim); color: var(--cd-accent); border-color: var(--cd-accent-line); }
 
   .turn-indicator {
     display: flex;
@@ -3101,32 +2052,32 @@
     flex: 0 1 auto;
     min-width: 0;
     padding: 6px 10px;
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.035);
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    transition: border-color 0.4s ease, background 0.4s ease;
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-surface-1);
+    border: 1px solid var(--cd-line-soft);
+    transition: border-color var(--cd-acting) var(--cd-ease), background-color var(--cd-acting) var(--cd-ease);
   }
 
   .turn-indicator.my-turn {
-    background: rgba(73, 161, 110, 0.16);
-    border-color: rgba(126, 226, 184, 0.5);
+    background: var(--cd-accent-dim);
+    border-color: var(--cd-accent-line-strong);
   }
 
-  .turn-indicator.time-bank { border-color: rgba(240, 160, 42, 0.6); }
+  .turn-indicator.time-bank { border-color: var(--cd-warn-line); }
 
   .turn-title {
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 0.14em;
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-display);
+    letter-spacing: var(--cd-tracking-label);
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--cd-ink-2);
   }
 
-  .turn-indicator.my-turn .turn-title { color: #7ee2b8; }
+  .turn-indicator.my-turn .turn-title { color: var(--cd-accent); }
 
   .turn-hint {
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.78);
+    font-size: var(--cd-text-sm);
+    color: var(--cd-ink-1);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3136,38 +2087,38 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
+    gap: var(--cd-space-1);
     min-width: 0;
   }
 
   .pot-odds-display {
     display: flex;
     align-items: baseline;
-    gap: 8px;
-    font-size: 11px;
+    gap: var(--cd-space-2);
+    font-size: var(--cd-text-xs);
   }
 
   .pot-odds-label {
-    letter-spacing: 0.14em;
+    letter-spacing: var(--cd-tracking-label);
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--cd-ink-2);
   }
 
-  .pot-odds-value { font-size: 13px; font-weight: 800; color: #f8d97a; }
+  .pot-odds-value { font-size: var(--cd-text-sm); font-weight: var(--cd-weight-display); color: var(--cd-money); }
 
   .pot-odds-explanation {
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--cd-ink-1);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 
-  .equity-hint { color: rgba(255, 255, 255, 0.5); }
+  .equity-hint { color: var(--cd-ink-2); }
 
   .actions {
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 8px;
+    gap: var(--cd-space-2);
     min-width: 0;
     flex-wrap: nowrap;
   }
@@ -3177,13 +2128,14 @@
   .no-game-message, .not-your-turn, .action-pending {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 11px 18px;
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.035);
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    color: rgba(255, 255, 255, 0.55);
-    font-size: 13px;
+    gap: var(--cd-space-2);
+    min-height: var(--cd-touch-min);
+    padding: 0 18px;
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-surface-1);
+    border: 1px solid var(--cd-line-soft);
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-sm);
     white-space: nowrap;
   }
 
@@ -3191,56 +2143,61 @@
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.18);
-    border-top-color: #7ee2b8;
+    border: 2px solid var(--cd-line-strong);
+    border-top-color: var(--cd-accent);
     animation: spin 0.8s linear infinite;
   }
 
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* The action buttons: 44 px tall everywhere (the touch floor), one radius,
+     tone by role. Behaviour and sizing logic belong to phase 2. */
   .action-btn {
     flex: 0 1 auto;
     min-width: 78px;
-    padding: 12px 16px;
-    border-radius: 11px;
+    min-height: var(--cd-touch-min);
+    padding: 0 var(--cd-space-4);
+    border-radius: var(--cd-radius-card);
     border: 1px solid transparent;
-    font-size: 14px;
-    font-weight: 700;
+    font-family: inherit;
+    font-size: var(--cd-text-md);
+    font-weight: var(--cd-weight-figure);
+    font-variant-numeric: tabular-nums;
     cursor: pointer;
     white-space: nowrap;
-    transition: transform 0.15s ease, filter 0.15s ease;
+    transition: transform var(--cd-fast) var(--cd-ease), filter var(--cd-fast) var(--cd-ease);
   }
 
   .action-btn:hover { transform: translateY(-1px); filter: brightness(1.1); }
   .action-btn:active { transform: translateY(0); }
 
   .action-btn.secondary {
-    background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(255, 255, 255, 0.12);
-    color: rgba(255, 255, 255, 0.75);
+    background: var(--cd-surface-2);
+    border-color: var(--cd-line-strong);
+    color: var(--cd-ink-1);
   }
 
   .action-btn.primary {
-    background: linear-gradient(180deg, #49A16E, #338054);
-    color: #062015;
+    background: var(--cd-accent);
+    color: var(--cd-accent-ink);
   }
 
   .action-btn.raise {
-    background: linear-gradient(180deg, #d9a63a, #b9821f);
-    color: #241a02;
+    background: linear-gradient(180deg, var(--cd-money-hi), var(--cd-money-lo));
+    color: var(--cd-money-ink);
   }
 
   .action-btn.danger {
-    background: rgba(178, 43, 12, 0.9);
-    color: #fff;
+    background: var(--cd-danger);
+    color: var(--cd-ink);
   }
 
   .action-btn.ghost {
     background: transparent;
-    border-color: rgba(255, 255, 255, 0.16);
-    color: rgba(255, 255, 255, 0.6);
+    border-color: var(--cd-line-strong);
+    color: var(--cd-ink-2);
     min-width: 0;
-    padding: 12px 12px;
+    padding: 0 var(--cd-space-3);
   }
 
   .wallet-panel {
@@ -3249,9 +2206,9 @@
     gap: 10px;
     flex: 0 1 auto;
     padding: 6px 10px;
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.035);
-    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-surface-1);
+    border: 1px solid var(--cd-line-soft);
     min-width: 0;
     overflow: hidden;
   }
@@ -3259,84 +2216,84 @@
   .wallet-balance { display: flex; flex-direction: column; min-width: 0; }
 
   .balance-label {
-    font-size: 9px;
-    letter-spacing: 0.14em;
+    font-size: var(--cd-text-xs);
+    letter-spacing: var(--cd-tracking-label);
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.42);
+    color: var(--cd-ink-2);
     white-space: nowrap;
   }
 
   .balance-value {
-    font-size: 13px;
-    font-weight: 800;
-    color: #7ee2b8;
-    font-variant-numeric: tabular-nums;
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-display);
+    color: var(--cd-accent-hi);
     white-space: nowrap;
   }
 
   /* MONEY OF MINE THAT IS IN THE MIDDLE (docs/SECURITY-FINDINGS.md FINDING 18).
-     Static flow, no z-index, no positioning: it sits inside the wallet panel and
-     cannot cover anything. */
+     Static flow, no z-index, no positioning. */
   .wallet-committed {
     display: flex;
     flex-direction: column;
     gap: 2px;
     margin-top: 6px;
     padding: 6px 8px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 184, 0, 0.5);
-    background: rgba(255, 184, 0, 0.1);
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-money-line);
+    background: var(--cd-money-dim);
     min-width: 0;
   }
 
   .wallet-committed.stuck {
-    border-color: rgba(255, 92, 92, 0.65);
-    background: rgba(255, 92, 92, 0.12);
+    border-color: var(--cd-danger-line);
+    background: var(--cd-danger-dim);
   }
 
   .committed-label {
-    font-size: 9px;
-    letter-spacing: 0.14em;
+    font-size: var(--cd-text-xs);
+    letter-spacing: var(--cd-tracking-label);
     text-transform: uppercase;
-    color: #ffc84d;
+    color: var(--cd-money);
     white-space: nowrap;
   }
 
-  .wallet-committed.stuck .committed-label { color: #ff9a9a; }
+  .wallet-committed.stuck .committed-label { color: var(--cd-danger-hi); }
 
   .committed-value {
-    font-size: 13px;
-    font-weight: 800;
-    color: #fff;
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-display);
+    color: var(--cd-ink);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 
   .committed-note {
-    font-size: 10px;
+    font-size: var(--cd-text-xs);
     line-height: 1.35;
-    color: rgba(255, 255, 255, 0.72);
+    color: var(--cd-ink-1);
   }
 
   .wallet-actions { display: flex; gap: 6px; }
 
   .wallet-action-btn {
-    padding: 7px 10px;
-    border-radius: 8px;
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-3);
+    border-radius: var(--cd-radius-chip);
     border: 1px solid transparent;
-    font-size: 11px;
-    font-weight: 800;
+    font-family: inherit;
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-display);
     letter-spacing: 0.04em;
     cursor: pointer;
     white-space: nowrap;
   }
 
-  .wallet-action-btn.deposit { background: linear-gradient(180deg, #49A16E, #338054); color: #062015; }
+  .wallet-action-btn.deposit { background: var(--cd-accent); color: var(--cd-accent-ink); }
 
   .wallet-action-btn.withdraw {
-    background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(255, 255, 255, 0.12);
-    color: rgba(255, 255, 255, 0.75);
+    background: var(--cd-surface-2);
+    border-color: var(--cd-line-strong);
+    color: var(--cd-ink-1);
   }
 
   .wallet-action-btn.withdraw:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -3346,80 +2303,48 @@
     align-items: center;
     gap: 6px;
     flex: 0 0 auto;
-    padding: 7px 9px;
-    border-radius: 9px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    background: rgba(255, 255, 255, 0.04);
-    color: rgba(255, 255, 255, 0.62);
+    min-height: var(--cd-control-sm);
+    padding: 0 9px;
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-2);
     cursor: pointer;
   }
 
   .collapsed-balance {
-    font-size: 12px;
-    font-weight: 800;
-    color: #7ee2b8;
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-display);
+    color: var(--cd-accent-hi);
     font-variant-numeric: tabular-nums;
   }
 
   .sit-controls { display: flex; gap: 5px; flex: 0 1 auto; min-width: 0; }
 
   .control-btn {
-    padding: 7px 9px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    background: rgba(255, 255, 255, 0.03);
-    color: rgba(255, 255, 255, 0.55);
-    font-size: 11px;
-    font-weight: 700;
+    min-height: var(--cd-control-sm);
+    padding: 0 9px;
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-surface-1);
+    color: var(--cd-ink-2);
+    font-family: inherit;
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-figure);
     cursor: pointer;
     white-space: nowrap;
   }
 
-  .control-btn:hover { color: rgba(255, 255, 255, 0.9); }
-  .control-btn.destructive:hover { color: #ff8b6b; border-color: rgba(255, 139, 107, 0.4); }
+  .control-btn:hover { color: var(--cd-ink); }
+  .control-btn.destructive:hover { color: var(--cd-danger-hi); border-color: var(--cd-danger-line); }
 
   /* =========================================================================
-     PORTRAIT -- switched on ASPECT RATIO, not width (bar 19), and a genuinely
-     different dressing of the same ring (bar 20): shorter surface, compact
-     pods, bigger cards relative to the felt, two-row dock.
+     PORTRAIT -- switched on ASPECT RATIO, not width (bar 19): a 0.555 stadium
+     that takes the whole phone, pods ON the felt in two columns, the pot under
+     the board, a two-row dock. The numbers are docs/DESIGN-BAR.md section 11.
      ========================================================================= */
 
   @media (max-aspect-ratio: 1/1) {
-    /* THE SURFACE TURNS THROUGH NINETY DEGREES, and then it takes the whole
-       phone. Landscape is a 2.1:1 stadium; portrait is 0.555:1 -- taller than it
-       is wide, which is bar 20 ("the ellipse becomes a tall rounded rectangle
-       and pods move to the left and right edges in two columns, pot centred.
-       Table still occupies ~75% of viewport height") and it is also what the one
-       real phone reference does: PokerNow portrait measures 313x548 on a 390x844
-       screen, aspect 0.571, 52.1% of the screen by area.
-
-       WHY 0.555 AND NOT 0.70. Two caps decide the felt width:
-
-         width   the ring plus the two pods straddling it must fit the stage
-                   fw * (ring-k + pod-w-r)  <=  stage width
-         height  the FELT ITSELF must fit the stage -- the old cap only sized
-                 the RING, and at ring-ky 0.98 with pods hanging off the top and
-                 bottom that is nearly the same number. It is not the same number
-                 once the pods move INSIDE the surface.
-                   fw / ar                  <=  stage height
-
-       0.555 is where those two bind at the same felt width on a 390x844 phone,
-       i.e. the largest surface the screen can hold. At 0.70 with the pods
-       outboard the width cap bound alone and left the felt at 217x316 = 20.6% of
-       the screen, 40% of PokerNow's, with 215 px of dead surround under it.
-
-       WHY THE PODS MOVED ONTO THE FELT. `--ring-kx` was 1.00, so each flank pod
-       hung half its width off the surface and the felt could never be wider than
-       stage/1.42 = 70% of a phone. PokerNow's portrait pods sit ON the felt --
-       their surface is 80.3% of the screen width and the pods overlap it, ending
-       ~38 px outside the rail. `--ring-kx: 0.70` does the same thing here and
-       buys 16 points of screen width. Pods no longer hang off the top and bottom
-       at all, which is where the height went.
-
-       `PORTRAIT_AR` in the script block must equal `--ar` here, and `--ring-kx`
-       must equal `--ring-ky`, or the seats sit on an ellipse the felt is not
-       drawing: `ringSeats()` spaces by arc length on the FELT ellipse, and only
-       a uniform scale of it keeps that spacing true on the ring. */
     .poker-table-wrapper {
       --ar: 0.555;
       --ring-kx: 0.70;
@@ -3435,56 +2360,33 @@
       --off-opp-r: 0.068;
       --off-shown-r: 0.112;
       --off-hero-r: 0.132;
-      /* The board sits high and the pot sits under it, PokerNow's portrait
-         order. Centring both put the pot readout in the same 40 px band as the
-         two mid-height flank seats. */
       --cluster-dy-r: -0.066;
-      /* bar 24: money glyphs. 0.044 rendered the stack figure at 8 px on a
-         phone. 0.058 puts it at ~17 px, against PokerNow portrait's ~11 px. */
       --ui-r: 0.058;
+      --rail-side-r: 0.05;
+      --rail-top-r: 0.04;
+      --rail-bottom-r: 0.06;
       --dock-h: 90px;
     }
 
-    /* width  0.70 + 0.46 = 1.160 -> 86cqw
-       height max(0.70/0.555 + 0.140, 1/0.555) = 1.802 (the FELT, not the ring)
-                                              -> 55cqh */
+    /* width 0.70 + 0.46 = 1.160 -> 86cqw ; height: the FELT itself -> 55cqh.
+       In portrait the avatar sits INSIDE the plate (SeatPod), so the flank
+       pods' extent is the plate's, as measured in section 11. */
     .table-inner { --fw: min(86cqw, 55cqh); }
 
-    /* Per-density again, at .poker-table-wrapper.<class> specificity. Media
-       queries add NO specificity, so the landscape `.ring-crowded .table-inner`
-       rule (two classes) outranks a portrait `.table-inner` rule (one class) and
-       would otherwise win here: a 9-max table on a phone was being laid out with
-       the LANDSCAPE felt cap, which is how it ended up 1.43:1 with unreadable
-       pods. Every density override therefore has a portrait twin. */
-
-    /* Nine pods on a phone. The ring has to open out (0.90, not 0.70) or the two
-       plates either side of top centre overlap by 23 px, and the two mid-height
-       flank plates land on the board. Everything else comes down with it. */
+    /* Nine pods on a phone: the ring opens out and everything comes down. */
     .poker-table-wrapper.ring-crowded {
       --ring-kx: 0.90;
-      /* The only place kx and ky part company in portrait. Nine seats need the
-         ring TALLER than a uniform scale of the felt would make it, so the two
-         mid-height plates and the two upper flank plates open a wide enough
-         band for the board tray and the pot to sit between them. It costs a
-         little of the equal-arc spacing (ringSeats() measures arc on the felt
-         ellipse) and nothing at all of the felt: at ky 1.00 the height cap is
-         1.00/0.555 + 0.116 = 1.918 -> 52cqh = 328 px, still looser than the
-         78cqw = 304 px the width cap allows. */
       --ring-ky: 1.00;
       --pod-w-r: 0.38;
       --pod-h-r: 0.112;
-      --avatar-r: 0.056;
-      /* Nine plates means the board and the pot have to clear the two
-         mid-height flank seats, which on a 9-ring sit within 30 px of the
-         vertical centre. The cluster rides higher for them. */
+      --avatar-r: 0.066;
       --cluster-dy-r: -0.180;
       --card-board-r: 0.098;
       --card-opp-r: 0.076;
       --off-opp-r: 0.056;
       --off-shown-r: 0.094;
-      --ui-r: 0.056;
+      --ui-r: 0.050;
     }
-    /* 0.90 + 0.38 = 1.280 -> 78cqw ; ring-bound at ky 1.00 -> 52cqh */
     .ring-crowded .table-inner { --fw: min(78cqw, 52cqh); }
 
     .poker-table-wrapper.ring-sparse {
@@ -3498,13 +2400,9 @@
       --off-shown-r: 0.124;
       --ui-r: 0.062;
     }
-    /* 0.62 + 0.52 = 1.140 -> 87cqw ; felt-bound -> 55cqh */
     .ring-sparse .table-inner { --fw: min(87cqw, 55cqh); }
 
-    /* FULL BLEED. The page reserves 8 px of padding either side of the table
-       area; on a 390 px phone that is 4% of the playing surface spent on a
-       gutter nothing sits in. The wrapper takes the whole viewport width back
-       and the rail keeps the edge margin instead. */
+    /* FULL BLEED: the wrapper takes the whole viewport width back. */
     .poker-table-wrapper {
       width: 100vw;
       max-width: 100vw;
@@ -3512,331 +2410,85 @@
       margin-right: calc(50% - 50vw);
     }
 
-    /* THE MIDDLE OF THE TABLE OUTRANKS AN EMPTY CHAIR. A portrait felt is
-       narrow enough that the pot's collected/betting decomposition and the
-       equity-method line run under the two mid-height plates, and those two
-       lines are chain figures. The cluster therefore paints above every seat in
-       portrait (z-index 26 clears .seat 10, .seat.acting 22 and .seat.winner
-       24); it is `pointer-events: none`, so nothing becomes unclickable. */
+    .stage { border-radius: 0; }
+    .table-inner::after { border-radius: 0; }
+
+    /* THE MIDDLE OF THE TABLE OUTRANKS AN EMPTY CHAIR on a narrow felt. */
     .board-cluster { z-index: 26; }
 
-    /* bar 20: a tall ROUNDED RECTANGLE, not an ellipse. It is not decoration --
-       an ellipse only offers its full width on one scanline, so a flank pod
-       parked at mid-height crops the measured surface; a stadium offers it over
-       most of the height. It is also what the phone reference draws. */
+    /* bar 20: a tall ROUNDED RECTANGLE, not an ellipse. */
     .felt { border-radius: calc(var(--fw) * 0.28); }
+    .felt::before { border-radius: calc(var(--fw) * 0.22); inset: calc(var(--fw) * 0.07); }
+    .rail { border-radius: calc(var(--fw) * 0.33); }
+    .mark-1 { font-size: calc(var(--fw) * 0.3); }
+    .mark-2 { display: none; }
 
-    .mark-1, .mark-2 { display: none; }
-
-    /* The pot reads UNDER the board in portrait (PokerNow's order), so the
-       board can sit high and clear of the flank seats. */
-    .pot-display, .winner-display {
-      bottom: auto;
-      top: calc(100% + var(--fw) * 0.016);
-    }
-
-    /* THE MIDDLE OF A PORTRAIT TABLE IS A 166 px SLOT.
-       On a 0.555 surface the two mid-height flank seats sit at +/-106 px of the
-       centre and their plates are 47 tall, so everything the middle carries --
-       the board, its showdown frame and caption, and the pot or the winner line
-       -- has to live inside the 166 px between them. Measured before this
-       block: the winner line alone was 247 px wide and lay 51x47 into both
-       plates. The board tray, its caption and the winner readout are therefore
-       all one type step tighter in portrait than in landscape. */
-    .caption-hand { font-size: 0.6em; }
-    .caption-tag { font-size: 0.55em; letter-spacing: 0.12em; }
-    .board-frame.framed {
-      gap: calc(var(--fw) * 0.006);
-      padding: calc(var(--fw) * 0.008) calc(var(--fw) * 0.012) calc(var(--fw) * 0.006);
-    }
-    .board-caption { gap: 0.6em; }
-
-    /* NOTHING IN THE POD OUTRANKS THE STACK FIGURE.
-       A 9-max phone pod is ~116 px wide. `min-width: 2.3em` on the clock/blind
-       column reserved 39 of those pixels whether or not anything was in them --
-       and the thing that lost the argument was the money. Portrait lets the
-       column size to its contents. (The equity badge no longer costs the pod any
-       width at ANY viewport: it is a seat-level object outside the plate, see
-       `.equity-badge`.)
-
-       `overflow: visible` is kept because the action clock's progress line now
-       carries the pill's own bottom radius instead of being clipped by it. */
-    .player-nameplate { overflow: visible; }
-    .pod-clock { border-radius: 0 0 999px 999px; }
-
-    .pod-slot { min-width: 0; }
-
-    .position-badge { font-size: 0.52em; min-width: 1.2em; height: 1.2em; }
-    .ring-crowded .position-badge { font-size: 0.44em; min-width: 1.05em; height: 1.05em; }
-    .ring-crowded .player-nameplate { gap: 0.32em; padding: 0 0.4em 0 calc(var(--pod-h) * 0.08); }
-    .ring-crowded .chips { letter-spacing: -0.015em; }
-
-    /* Type only. The PLACEMENT is the same rule at both viewports (the `-cy`
-       axis), because the reason for it -- the cards paint above the plate -- is
-       the same at both. */
-    .equity-badge { font-size: 0.6em; padding: 0.06em 0.3em; }
-
-    /* The winner line spanned 247 of a 390 px screen and lay across both
-       mid-height flank plates (measured: 24x39 px into each). Same words, one
-       type step down, and allowed to WRAP inside a box narrower than the gap
-       between the two flank pods rather than pushing through them. */
-    .winner-text { font-size: 0.82em; }
-    .winner-hand-rank, .split-info { font-size: 0.56em; }
-    /* Every readout that lands in that 166 px slot is set on a 1.15 leading in
-       portrait. The winner block was 94 px of a 127 px gap on its own. */
-    .winner-display, .pot-display { line-height: 1.15; }
-    /* Wide and SHORT, not narrow and tall: a pod is 47 px tall and the gap
-       above it is only 127, so height is the scarce axis here and width is not
-       -- the readout may run the width of the felt as long as it stays out of
-       the two flank plates' rows. */
-    /* ...BUT "the width of the felt" HAS TO BE A CAP, NOT A HOPE.
-       `flex-wrap: nowrap` with `white-space: nowrap` and no `max-width` is an
-       element that grows without bound, and the winner line's content is not
-       fixed: a SPLIT POT adds `.split-info`. Measured at 390x844 on a two-way
-       split, `You won 12.00 ICP · PAIR · Split pot · 2 winners · Complete` came
-       out 401.7 px wide at x=-5.9, hanging off BOTH edges of a 390 px phone —
-       the pot readout, the one figure that says what the hand was worth, partly
-       off screen at the exact moment it matters.
-
-       Nothing in the repo could see it. The felt gate passes (the felt is inside
-       the frame and was at its 61.6% ceiling on that very shot), the pixel gate
-       passes (nothing covers it), and the census and chain-agreement checks read
-       `textContent`, which is correct and complete whether or not it is on the
-       screen. tools/shots/lib/table-in-frame.mjs is what caught it.
-
-       `flex-wrap: wrap` keeps each span unbroken (`white-space: nowrap` is still
-       on the container, so no word splits) and wraps the ROW instead. The line
-       stays wide and short when it fits, and takes a second row rather than the
-       rail when it does not: two rows at the 1.15 portrait leading is ~45 px in
-       the 127 px gap between the flank plates. */
-    .winner-display {
-      flex-direction: row;
-      flex-wrap: wrap;
-      justify-content: center;
-      align-items: baseline;
-      column-gap: 0.5em;
-      row-gap: 0.1em;
-      padding: 0.26em 0.7em;
-      white-space: nowrap;
-      text-align: center;
-      max-width: var(--fw);
-    }
-
-    /* The same cap on the pot readout, for the same reason and before it is
-       needed: `.side-pots` is one row per layer, so a three-way all-in prints
-       `MAIN 0.60  SIDE 1 79.60  SIDE 2 30.00` on one line and grows with the
-       number of layers, which is chain data and not a design constant. */
-    .pot-display { max-width: var(--fw); }
-    .side-pots { flex-wrap: wrap; justify-content: center; }
-    .winner-display .phase-indicator { font-size: 0.56em; }
-
-    /* The pot's footnote rows -- the collected/betting decomposition and the
-       equity method line -- are the other thing that pushed the cluster into
-       the flank plates on a 9-ring. */
-    .main-pot { padding: 0.16em 0.7em; }
-    .pot-label { font-size: 0.55em; }
-    .pot-display .phase-indicator { font-size: 0.62em; }
-    .pot-breakdown { font-size: 0.54em; }
-    .equity-method { font-size: 0.5em; }
-    /* Portrait puts the readout BELOW the board, so the method line hangs below
-       the winner banner rather than above it (T-27). */
-    .winner-display .equity-method { bottom: auto; top: calc(100% + 0.25em); }
-
-    /* THE AWARD IS SIZED FOR THE GAP IT LANDS IN. Its POSITION is computed per
-       seat and per orientation in `ringSeats` (`ax`/`ay`); a portrait board is
-       the same five cards on a felt barely half as wide, so the tray reaches
-       much closer to the rail and the clearance there is smaller. What is left
-       here is type, one step down, the same treatment every other portrait
-       readout gets. */
-    .winner-award { gap: 0.1em; }
-
-    /* PORTRAIT HAS NO ROOM ON THE CHIP VECTOR (T-23), so the award rides the
-       readout spoke with the badge -- see `awardOnSpoke` in ringSeats().
-       Horizontal spoke (flank seats): one step further out than the badge. The
-       badge reaches ~0.15 felt widths past the plate's end at its widest
-       (`100.00%`, measured 59 px on a 332 px felt), and the award's own
-       half-width is ~0.09, so 0.20 was 12 px short of clearing it and the award
-       took 11.8% of the badge's ink. 0.28 leaves a 12 px gap on the same
-       measurement.
-       Vertical spoke (top and bottom seats): the same edge as the badge, at the
-       other END of it, so the two cannot meet however wide either gets. */
-    .seat.award-on-spoke .winner-award {
-      --award-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + var(--fw) * 0.28));
-      --award-dy: 0px;
-    }
-    .seat.award-on-spoke.spoke-y .winner-award {
-      --award-dx: calc(var(--pod-w) * 0.24);
-      --award-dy: calc(var(--rdy, 0) * (var(--pod-h) * 0.5 + var(--fw) * 0.05));
-    }
-    .stack-delta { font-size: 0.7em; padding: 0.08em 0.4em; }
-    .hand-tag { font-size: 0.48em; padding: 0.06em 0.35em; }
-    .side-pot-label { font-size: 0.52em; }
-    .side-pot-amount { font-size: 0.7em; }
-
-    /* Same change as the base rule, for the same reason: on a phone the dock is
-       two rows and the top one is only ~36 px, which is where the committed
-       readout was being squeezed out of the box and under the felt (E-63). */
     .action-dock {
       grid-template-columns: 1fr auto;
       grid-template-rows: auto auto;
       gap: 4px 8px;
       min-height: var(--dock-h);
-      padding: 0 8px;
+      padding: 0 var(--cd-space-2);
     }
 
-    /* EVERY PIXEL BETWEEN THE STAGE AND THE DOCK IS FELT.
-       In portrait `--fw` is `min(86cqw, 55cqh)` at 6-max and `min(78cqw, 52cqh)`
-       at 9-max, and the HEIGHT term binds in every state except the showdown, so
-       the stage's height is the felt's size and this gap is subtracted from it
-       directly. 8 px between two blocks that already have their own padding is
-       separation nobody reads. */
+    /* EVERY PIXEL BETWEEN THE STAGE AND THE DOCK IS FELT. */
     .poker-table { gap: 5px; }
 
-    /* THUMB REACH. The action row is the BOTTOM row on a phone -- it used to be
-       the top one, furthest from the thumb, with the LOG button and the wallet
-       occupying the reachable edge. */
+    /* THUMB REACH: the action row is the BOTTOM row on a phone. */
     .dock-center { grid-column: 1 / -1; grid-row: 2; }
     .dock-left { grid-column: 1; grid-row: 1; }
     .dock-right { grid-column: 2; grid-row: 1; }
 
     .actions { flex-wrap: nowrap; gap: 6px; width: 100%; }
 
-    /* 48 CSS px tall, which is >= the 44 px touch target on this device. */
     .action-btn {
       flex: 1 1 0;
       min-width: 0;
       min-height: 48px;
-      padding: 13px 4px;
+      padding: 0 4px;
       font-size: 15px;
-      border-radius: 12px;
+      border-radius: var(--cd-radius-card);
     }
 
-    .action-btn.ghost { flex: 0 0 auto; padding: 13px 9px; }
+    .action-btn.ghost { flex: 0 0 auto; padding: 0 9px; }
 
     .no-game-message, .not-your-turn, .action-pending {
       min-height: 48px;
-      font-size: 14px;
+      font-size: var(--cd-text-md);
     }
 
-    /* The dock's second row was carrying LOG + a turn indicator + the balance +
-       Deposit + Withdraw across 390px, and the indicator lost: it rendered as
-       "WAIT A...". Row 1 already names whose turn it is in full, so the
-       duplicate goes rather than being truncated. */
     .turn-indicator { display: none; }
 
-    .wallet-panel { padding: 4px 8px; gap: 7px; }
+    .wallet-panel { padding: 4px 8px; gap: 5px; }
     .balance-label { display: none; }
-
-    /* THE TABLE BALANCE WAS PAINTING OVER THE COMMITTED PANEL, AND NO GATE COULD
-       SEE IT.
-       `.wallet-balance` is a flex COLUMN with `min-width: 0` inside a
-       `.wallet-panel` that is over-subscribed at 390 px: balance + committed +
-       Deposit + Withdraw want ~344 px of a ~264 px box. So the column was
-       squeezed to ~74 px while `.balance-value` keeps `white-space: nowrap`, and
-       the glyphs ran outside their own box: measured on
-       `table-facing-bet-mobile.png`, the "ICP" of "11.90 ICP" is painted across
-       the amber `.wallet-committed` border and over the "0" of "0.10 ICP".
-
-       WHY THE PIXEL GATE MISSED IT, which is the part worth keeping. The
-       occlusion gate compares element RECTANGLES, and a flex item that has been
-       squeezed reports the SQUEEZED rect while its text paints outside it. The
-       overflowing glyphs therefore intersect nothing as far as the gate is
-       concerned: `table-facing-bet` at 390x844 reported "21 figures on screen,
-       0 occluded" in the same run that produced that PNG. Text overflow is a
-       blind spot of any gate that reasons about boxes.
-
-       `flex: 0 0 auto` is the fix rather than an ellipsis: truncating would
-       leave `textContent` correct, so the chain-agreement check and the token
-       census would BOTH stay green while a player read a shortened balance --
-       a money figure lying only in pixels, which is the exact failure this
-       repo keeps finding. */
+    /* THE TABLE BALANCE MUST NEVER BE SQUEEZED (a money figure lying only in
+       pixels); the committed block pays instead, on one line. */
     .wallet-balance { flex: 0 0 auto; }
-
-    /* AND THE SQUEEZE HAS TO GO SOMEWHERE, SO SEND IT TO A SECOND LINE RATHER
-       THAN INTO THE FELT. With the balance no longer shrinkable, the pressure
-       moved to `.wallet-committed`, whose sentence then wrapped to a third line
-       and put 8.5 px back on the dock — and the dock's height comes straight off
-       a height-bound felt (preflop 52.1% -> 51.5% when this was left alone).
-
-       Wrapping the panel gives the committed block a full-width line of its own,
-       where the label and the figure sit side by side and the sentence fits on
-       ONE line. Nothing is hidden, shortened or restyled: the same label, the
-       same money figure and the same whole sentence, on a shape that fits 390 px
-       instead of a shape that does not. */
-    /* AND THE SQUEEZE HAS TO GO SOMEWHERE. With the balance no longer
-       shrinkable, the pressure moves to `.wallet-committed`, whose sentence
-       takes one more wrapped line. Two declarations pay for it without hiding a
-       word: a tighter column gap gives the sentence back the width, and a
-       leading of 1.2 (the app's own figure leading) instead of 1.35 costs the
-       10 px note ~1.5 px per line.
-
-       WHAT WAS TRIED AND MEASURED WORSE, so nobody re-tries it: giving
-       `.wallet-committed` `flex-basis: 100%` so it always takes its own line
-       forces a second row even at widths where it fitted beside the balance, and
-       `tools/shots/test-dock-overflow.mjs` measures that as 37.4 px of stage
-       taken becoming 59.7 px — the fixture's felt falling from 46.4% to 43.3%
-       against a 45% floor. The dock's height is the felt's height; a layout that
-       is merely tidier is not free here. */
-    .wallet-panel { gap: 5px; }
     .committed-note { line-height: 1.2; }
-
-    /* THE DOCK'S EXTRA ROOM COMES OUT OF THE STAGE'S SLACK, NOT OUT OF THE FELT
-       (docs/DEFECTS.md E-63). Letting the dock size to its contents fixes the
-       occlusion, and the height it takes comes from the stage. The stage has a
-       fixed amount to give: `--fw` is `min(86cqw, 55cqh)` and the WIDTH term
-       binds at 304 px, so the stage can lose 44 px before the height term takes
-       over and the felt starts shrinking -- and `felt-area.mjs` fails a mobile
-       shot under 45% of the frame, against a recorded 50.7%.
-
-       The committed block wanted 51 px. Measured with the component's own
-       stylesheet by `tools/shots/test-dock-overflow.mjs`, that overshoot cost
-       6.6 points of felt and would have swapped the occlusion red for a felt
-       red -- one gate paid with another, which is the trade this project keeps
-       finding. These three declarations take 14 px back out of padding, gap and
-       a margin that does nothing in a row, bringing it to 37 px. Nothing is
-       hidden: the label, the money figure and the whole sentence all still
-       render, and the felt does not move. */
     .wallet-committed { margin-top: 0; padding: 3px 6px; gap: 1px; }
-    .wallet-action-btn { padding: 7px 9px; font-size: 11px; }
+    .wallet-action-btn { padding: 0 9px; }
     .sit-controls { display: none; }
 
     .feed-container.left { width: min(230px, 62cqw); max-height: 60cqh; }
-    .raise-slider-panel { width: min(320px, 88cqw); font-size: 13px; }
+    .raise-slider-panel { width: min(320px, 88cqw); font-size: var(--cd-text-sm); }
   }
 
   /* Very short landscape (phone held sideways): trim the dock, keep the felt. */
   @media (min-aspect-ratio: 1/1) and (max-height: 560px) {
     .poker-table-wrapper { --dock-h: 62px; }
-    .action-btn { padding: 9px 12px; font-size: 13px; min-width: 66px; }
+    .action-btn { padding: 0 12px; font-size: var(--cd-text-sm); min-width: 66px; }
     .turn-indicator { display: none; }
     .sit-controls { display: none; }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .player-nameplate.is-winner { animation: none; box-shadow: 0 0 0 2px #E9FF63; }
-    .bet-chip, .felt, .player-nameplate, .turn-indicator { transition: none; }
-    .pod-clock::after { transition: none; }
-    .spinner { animation: none; }
-    /* The all-in beat is carried by colour and by the vignette, both of which
-       are still there; only the movement stops. The pot keeps its emphasis
-       without the spring, so the moment still reads. */
-    .main-pot { transition: none; }
-    .main-pot.at-risk { transform: none; }
-    .table-inner::after { transition: none; }
-    .action-btn { transition: none; }
+    .felt, .turn-indicator, .table-inner::after, .action-btn { transition: none; }
     .action-btn:hover { transform: none; }
-
-    /* THE TWO FLIGHTS AND THE REVEAL STOP DEAD, AND NOTHING IS LOST.
-       Everything the motion was carrying is also stated in place: the chips are
-       already counted into `.pot-amount` and its `.pot-breakdown`; the award is
-       a static `+X` chip on the winner's pod; the revealed cards are simply
-       there. So `animation: none` here removes the movement, not the
-       information -- which is the only kind of animation this table is allowed
-       to have in the first place. Both flights are also given `display: none`
-       rather than a zero-length animation, because a ghost that never travels
-       is a duplicate figure sitting on the felt. */
+    .spinner { animation: none; }
+    /* THE TWO FLIGHTS STOP DEAD, AND NOTHING IS LOST: the chips are counted
+       into `.pot-amount`, the award is a static chip on the winner's pod. A
+       ghost that never travels would be a duplicate figure, so they are hidden
+       rather than zero-length. */
     .chip-flight, .pot-flight { display: none; }
-    .winner-award { animation: none; }
-    .player-cards.shown > :global(.card) { animation: none; }
   }
 </style>
