@@ -509,6 +509,29 @@
       // Landscape keeps the chip vector, where it is proven and has room.
       const awardOnSpoke = tall;
 
+      // THE DEALER PUCK'S SPOT, in felt widths from the seat point. On the felt,
+      // in front of the plate, on whichever side of the seat neither the cards
+      // nor the bet chips claim:
+      //   landscape flank seat: inward a little, and along the rail AWAY from
+      //     the cards (the cards ride -cy; the puck rides +cy).
+      //   landscape top/bottom seat: above/below the plate, on the side
+      //     OPPOSITE the chips (which took the tangent `away`).
+      //   portrait top/bottom seat: above/below the plate, outward along the
+      //     tangent, clear of the hero's wide pair.
+      //   portrait flank seat: toward the board (the chips and the cards both
+      //     went the other way), at the plate's outer end.
+      const cyDir = (tall && Math.abs(nx) > Math.abs(ny)) ? (sn >= 0 ? 1 : -1) : (sn >= 0 ? -1 : 1);
+      let puckX = 0;
+      let puckY = 0;
+      if (tall) {
+        if (alongNormal) { puckX = (cs >= 0 ? 1 : -1) * 0.19; puckY = ny * 0.10; }
+        else { const away = sn >= 0 ? 1 : -1; puckX = -nx * 0.08; puckY = -away * 0.105; }
+      } else if (alongNormal) {
+        puckX = nx * 0.10; puckY = -cyDir * 0.07;
+      } else {
+        const away = cs >= 0 ? 1 : -1; puckX = -away * 0.12; puckY = ny * 0.075;
+      }
+
       out.push({
         cs: Number(cs.toFixed(5)),
         sn: Number(sn.toFixed(5)),
@@ -520,6 +543,8 @@
         ay: Number(ay.toFixed(5)),
         rdx,
         rdy,
+        px: Number(puckX.toFixed(5)),
+        py: Number(puckY.toFixed(5)),
         awardOnSpoke,
         // Which way an OPPONENT's hole cards peek out from behind their plate.
         // Never along the inward normal: at a side seat the normal is horizontal
@@ -535,7 +560,7 @@
         // between one flank plate and the next along the rail, so that is where
         // the pair goes. Top and bottom seats are unaffected: their normal IS
         // vertical, and the felt they open onto is the middle of the table.
-        cy: (tall && Math.abs(nx) > Math.abs(ny)) ? (sn >= 0 ? 1 : -1) : (sn >= 0 ? -1 : 1),
+        cy: cyDir,
         side
       });
     }
@@ -1293,6 +1318,8 @@
             style:--ay={point.ay}
             style:--rdx={point.rdx}
             style:--rdy={point.rdy}
+            style:--px={point.px}
+            style:--py={point.py}
             style:--cy={point.cy}
           >
             <SeatPod
@@ -1439,6 +1466,18 @@
             <span class="turn-hint">{streetLabel}</span>
           </div>
         {/if}
+        <!-- Sit out / Leave live in the LEFT cell (docs/DESIGN-BAR.md section
+             11.6): the right cell carries the wallet, and a track sized by
+             symmetry cannot hold five controls and a money panel. Measured:
+             the Leave button rendered 7 px past the window's right edge. -->
+        {#if mySeat !== null}
+          <div class="sit-controls">
+            <button class="control-btn" onclick={() => onAction(isSittingOut ? 'sitIn' : 'sitOut')}>
+              {isSittingOut ? 'Sit in' : 'Sit out'}
+            </button>
+            <button class="control-btn destructive" onclick={() => onAction('leave')}>Leave</button>
+          </div>
+        {/if}
       </div>
 
       <div class="dock-center">
@@ -1542,14 +1581,6 @@
             </div>
           </div>
         {/if}
-        {#if mySeat !== null}
-          <div class="sit-controls">
-            <button class="control-btn" onclick={() => onAction(isSittingOut ? 'sitIn' : 'sitOut')}>
-              {isSittingOut ? 'Sit in' : 'Sit out'}
-            </button>
-            <button class="control-btn destructive" onclick={() => onAction('leave')}>Leave</button>
-          </div>
-        {/if}
       </div>
     </div>
   </div>
@@ -1584,7 +1615,7 @@
     --card-opp-r: 0.076;
     --board-gap-r: 0.009;
     --card-nudge-r: 0.035;
-    --off-opp-r: 0.058;
+    --off-opp-r: 0.050;
     --off-shown-r: 0.090;
     --off-hero-r: 0.085;
     --cluster-dy-r: 0.012;
@@ -1617,7 +1648,7 @@
     --pod-h-r: 0.074;
     --avatar-r: 0.056;
     --card-opp-r: 0.065;
-    --off-opp-r: 0.049;
+    --off-opp-r: 0.043;
     --off-shown-r: 0.077;
     --ui-r: 0.018;
   }
@@ -2202,8 +2233,9 @@
 
   .wallet-panel {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
+    gap: 6px 10px;
     flex: 0 1 auto;
     padding: 6px 10px;
     border-radius: var(--cd-radius-chip);
@@ -2213,7 +2245,9 @@
     overflow: hidden;
   }
 
-  .wallet-balance { display: flex; flex-direction: column; min-width: 0; }
+  /* A money figure is never squeezed: the balance keeps its width and the
+     committed block takes a row of its own beneath it. */
+  .wallet-balance { display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; }
 
   .balance-label {
     font-size: var(--cd-text-xs);
@@ -2233,11 +2267,14 @@
   /* MONEY OF MINE THAT IS IN THE MIDDLE (docs/SECURITY-FINDINGS.md FINDING 18).
      Static flow, no z-index, no positioning. */
   .wallet-committed {
+    flex: 1 1 100%;
     display: flex;
-    flex-direction: column;
-    gap: 2px;
-    margin-top: 6px;
-    padding: 6px 8px;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 2px;
+    margin-top: 0;
+    padding: 4px 8px;
     border-radius: var(--cd-radius-chip);
     border: 1px solid var(--cd-money-line);
     background: var(--cd-money-dim);
@@ -2459,13 +2496,13 @@
 
     .turn-indicator { display: none; }
 
-    .wallet-panel { padding: 4px 8px; gap: 5px; }
+    .wallet-panel { padding: 4px 8px; gap: 5px; flex-wrap: nowrap; }
     .balance-label { display: none; }
     /* THE TABLE BALANCE MUST NEVER BE SQUEEZED (a money figure lying only in
        pixels); the committed block pays instead, on one line. */
     .wallet-balance { flex: 0 0 auto; }
     .committed-note { line-height: 1.2; }
-    .wallet-committed { margin-top: 0; padding: 3px 6px; gap: 1px; }
+    .wallet-committed { flex: 0 1 auto; margin-top: 0; padding: 3px 6px; gap: 1px; flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
     .wallet-action-btn { padding: 0 9px; }
     .sit-controls { display: none; }
 

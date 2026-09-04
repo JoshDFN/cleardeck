@@ -2521,8 +2521,19 @@
       white-space: nowrap;
     }
 
+    /* 30 px controls on the phone header, as wave 5 measured them: the 40 px
+       desktop primitive wraps the wallet chip onto a third row here, and a
+       third row is felt. The 44 px touch target is the mobile phase's job. */
+    header.compact .back-btn,
+    header.compact .history-btn,
+    header.compact .verify-btn,
     header.compact .sound-toggle-btn {
-      padding: 6px;
+      min-height: 30px;
+    }
+
+    header.compact .sound-toggle-btn {
+      width: 30px;
+      padding: 0;
     }
 
     header.compact .sound-toggle-btn svg {

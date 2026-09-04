@@ -147,7 +147,8 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    line-height: 1.1;
+    gap: 0.05em;
+    line-height: 1.05;
   }
 
   .pot-label {
@@ -167,7 +168,7 @@
   }
 
   .pot-amount {
-    font-size: var(--cd-felt-pot);
+    font-size: 1.4em;
     font-weight: var(--cd-weight-display);
     letter-spacing: -0.01em;
     color: var(--cd-money);

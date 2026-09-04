@@ -371,8 +371,10 @@
     top: 0;
     z-index: 8;
     --puck: calc(var(--fw) * 0.028);
-    --puck-dx: calc(var(--nx, 0) * var(--fw) * 0.07 - var(--pod-w) * 0.36);
-    --puck-dy: calc(var(--ny, 0) * var(--fw) * 0.07 + var(--pod-h) * 0.62);
+    /* --px/--py: the puck spot computed per seat and per orientation in
+       ringSeats(), on the felt, clear of the plate, the cards and the chips. */
+    --puck-dx: calc(var(--px, 0) * var(--fw));
+    --puck-dy: calc(var(--py, 0) * var(--fw));
     width: var(--puck);
     height: var(--puck);
     border-radius: 50%;
@@ -432,6 +434,8 @@
     cursor: help;
     box-shadow: var(--cd-shadow-chip);
   }
+
+  :global(.seat.spoke-y) .equity-badge { --badge-dx: calc(var(--pod-w) * -0.24); }
 
   .equity-badge.modelled {
     border-style: dashed;
@@ -694,6 +698,9 @@
     display: flex;
     align-items: baseline;
     gap: 0.35em;
+    margin-top: calc(var(--avatar) * -0.22);
+    position: relative;
+    z-index: 1;
     padding: 0.08em 0.5em;
     border-radius: var(--cd-radius-pill);
     background: var(--cd-capsule);
@@ -744,18 +751,31 @@
     .avatar-container { left: calc(var(--avatar) * 0.56); }
 
     .equity-badge { font-size: var(--cd-felt-label); padding: 0.08em 0.32em; }
+    /* A vertical spoke carries both readouts on the same edge: the badge takes
+       the inner end (see .spoke-y in PokerTable for the seat class). */
+    :global(.seat.spoke-y) .equity-badge { --badge-dx: calc(var(--pod-w) * -0.3); }
 
     .winner-award { gap: 0.1em; }
 
     /* PORTRAIT HAS NO ROOM ON THE CHIP VECTOR (T-23), so the award rides the
        readout spoke with the badge: one step further out on a horizontal spoke,
        the other END of the same edge on a vertical one. */
+    /* Flank seat (horizontal spoke): the badge keeps the spoke at mid-plate;
+       the award hangs off the plate's inner corner on the side AWAY from the
+       board (the pot readout and the winner line own the middle in portrait
+       and paint above the seats), beside the revealed pair rather than on it. */
     .winner-award.on-spoke {
-      --award-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + var(--fw) * 0.28));
-      --award-dy: 0px;
+      flex-direction: column;
+      gap: 0.1em;
+      --award-dx: calc(var(--rdx, 0) * var(--pod-w) * 0.55);
+      --award-dy: calc(sign(var(--sn, 1)) * (var(--pod-h) * 0.5 + 1.1em));
     }
+    /* Top/bottom seat (vertical spoke): the badge at one end of the far edge,
+       the award at the other; both were measured touching at the old 0.24. */
     .winner-award.on-spoke.spoke-y {
-      --award-dx: calc(var(--pod-w) * 0.24);
+      flex-direction: column;
+      gap: 0.1em;
+      --award-dx: calc(var(--pod-w) * 0.34);
       --award-dy: calc(var(--rdy, 0) * (var(--pod-h) * 0.5 + var(--fw) * 0.05));
     }
 
@@ -765,11 +785,7 @@
     .chip-stack { --chip: calc(var(--fw) * 0.05); }
     .bet-amount { font-size: var(--cd-felt-small); }
 
-    .position-badge.dealer {
-      --puck: calc(var(--fw) * 0.052);
-      --puck-dx: calc(var(--nx, 0) * var(--fw) * 0.09 - var(--pod-w) * 0.3);
-      --puck-dy: calc(var(--ny, 0) * var(--fw) * 0.09 + var(--pod-h) * 0.66);
-    }
+    .position-badge.dealer { --puck: calc(var(--fw) * 0.052); }
 
     .sit-text { padding: 0.05em 0.4em; }
   }
