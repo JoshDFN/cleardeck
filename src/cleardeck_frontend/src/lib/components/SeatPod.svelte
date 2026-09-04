@@ -102,16 +102,18 @@
         <span class="chips cd-money">{fmt(player.chips)}</span>
         {#if folded}<span class="fold-word">Fold</span>{/if}
       </span>
-      {#if isHero && heroHandName && !folded}
-        <!-- GGPoker's named hand-strength readout, IN the plate: a function of
-             your own two cards and a board everyone can see. -->
-        <span class="hero-hand caption-hand">{heroHandName}</span>
-      {/if}
     </div>
     {#if acting && timeRemaining !== null}
       <div class="pod-slot">
         <span class="turn-timer" class:urgent={clockUrgent}>{timeRemaining}s</span>
       </div>
+    {/if}
+    {#if isHero && heroHandName && !folded}
+      <!-- GGPoker's named hand-strength readout, IN the plate: a function of
+           your own two cards and a board everyone can see. The row takes the
+           plate's whole width under the name, the stack and the clock digits,
+           so a named hand at the type floor is never ellipsised. -->
+      <span class="hero-hand caption-hand">{heroHandName}</span>
     {/if}
   </div>
 
@@ -166,6 +168,8 @@
     height: auto;
     min-height: var(--pod-h);
     padding-block: 0.25em;
+    flex-wrap: wrap;
+    align-content: center;
   }
 
   .player-nameplate.action-on {
@@ -313,11 +317,16 @@
     line-height: 1;
   }
 
-  /* Your hand, named: the third row of your own plate. */
+  /* Your hand, named: the third row of your own plate, the plate's full
+     width (the clock digits sit beside the first two rows only). */
   .hero-hand {
+    flex: 0 0 100%;
+    min-width: 0;
+    margin-top: -0.12em;
     font-size: var(--cd-felt-small);
     font-weight: var(--cd-weight-figure);
     letter-spacing: 0.02em;
+    line-height: 1.12;
     color: var(--cd-accent-hi);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -358,6 +367,12 @@
        the phone's edge; the avatar therefore sits INSIDE the plate rather than
        breaking its outer edge, so nothing hangs off a 390 px screen. */
     .avatar-container { left: calc(var(--avatar) * 0.56); }
+
+    /* The hero plate's three rows at the 11 px floor: tighter padding and
+       leading so the plate stays clear of the dock under it (the nine-seat
+       phone has ~10 px between the plate's bottom edge and the wallet row). */
+    .player-nameplate.highlight-me { padding-block: 0.15em; }
+    .hero-hand { line-height: 1.05; margin-top: -0.06em; }
 
   }
 

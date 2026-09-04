@@ -1,0 +1,232 @@
+/* ==========================================================================
+   THE TABLE VIEW'S HEADER ON A PHONE (a partial of +page.svelte's style)
+   ==========================================================================
+   Scoped to `header.compact`, i.e. THE TABLE VIEW ONLY, under the same two
+   conditions as the trust bar's phone rules in +page.svelte: portrait, or a
+   window under 560 px tall (the phone held sideways). The felt sizes itself
+   to "the viewport, less everything above me", so every pixel of chrome
+   here is a pixel of felt; the measurements in the comments are from the
+   shipped build at 390x844. */
+
+@mixin header {
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    /* ---------------- the compact table-view header ---------------------- */
+
+    /* THE GAPS ARE CHROME TOO, AND THEY COST A PLAYER NOTHING.
+       Wave 5 recovered the brand row and the third header row. What it left
+       behind was pure EMPTY SPACE, and on a height-bound felt every pixel of it
+       is felt. Measured on the shipped build at 390x844, table view, with all
+       five protected phrases on screen:
+
+         header.compact padding-block   4 + 4 px   nothing is drawn in it
+         header.compact row gap             3 px   between the two header rows
+         .table-area padding-top            8 px   between the header and a table
+                                                   that is already full-bleed
+         ------------------------------------------------------------------
+                                           19 px
+
+       The 8 px of `.table-area` padding is the clearest of the three: in
+       portrait `.poker-table-wrapper` is `width: 100vw` with a negative margin
+       that cancels the horizontal padding outright, so the top 8 px is the only
+       part of it that has any effect at all, and its whole effect is to make the
+       felt smaller. Nothing here shortens, hides, restyles or moves a notice;
+       the strip above is untouched, and the header keeps both rows, both type
+       steps and every label. */
+    header.compact {
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 2px 8px;
+      gap: 2px;
+    }
+
+    /* The brand mark and the tagline, on the one screen where the player is
+       already inside the product. 44 px of row, recovered. */
+    header.compact .logo {
+      display: none;
+    }
+
+    /* The gutter the table already refuses. `.poker-table-wrapper` is
+       `width: 100vw` with `margin-inline: calc(50% - 50vw)` in portrait, so the
+       left and right padding here is cancelled by the table itself and only the
+       TOP has any effect -- and its whole effect is to push a height-bound felt
+       down. The bottom stays: `measureViewport()` reads it as `--cd-slack` and
+       cancels it deliberately, so changing it would move the wrapper's negative
+       margin rather than free anything. */
+    .table-area {
+      padding-top: 0;
+    }
+
+    /* Two deterministic rows: where you are, then what you can do. Left to the
+       flex-wrap default these two would still land on separate rows (239 px +
+       411.8 px will not share 374), but "still" is not "always" -- pinning the
+       basis to 100% means a shorter table name can never silently reflow the
+       header into one row and change the felt height. */
+    header.compact .header-left,
+    header.compact .header-right {
+      flex: 1 0 100%;
+      min-width: 0;
+      gap: 6px;
+    }
+
+    header.compact .header-left {
+      justify-content: flex-start;
+    }
+
+    /* WRAPPING IS THE FAILURE MODE, NOT CLIPPING. At 390 px this row's content
+       is 338 px of the 374 available, so it never wraps; on a 320 px phone it
+       does, and the table gives up ~30 px of height rather than the wallet
+       button losing its right-hand edge to `overflow-x: hidden` on <body>. A
+       clipped control is unusable and invisible to every DOM assertion in the
+       repo; a third header row is merely a smaller felt. */
+    header.compact .header-right {
+      justify-content: flex-start;
+      flex-wrap: wrap;
+      row-gap: 4px;
+    }
+
+    /* The wallet chip keeps the thumb-reachable right edge; the three tool
+       buttons cluster on the left of the same row. */
+    header.compact .header-right > :global(.wallet-container) {
+      margin-left: auto;
+    }
+
+    header.compact .back-btn {
+      padding: 5px 9px;
+      font-size: 11px;
+      gap: 5px;
+    }
+
+    header.compact .back-btn svg {
+      width: 15px;
+      height: 15px;
+    }
+
+    /* `.current-table-name` is the stakes pill. It stays -- the blinds are the
+       one number in this header a player needs -- and it stays FULL TEXT,
+       because `tools/shots/lib/dom-scrape.mjs` asserts it against the table
+       canister's own config and the token census reads it as money. */
+    header.compact .current-table-name {
+      font-size: 11px;
+      padding: 3px 8px;
+      min-width: 0;
+      white-space: nowrap;
+    }
+
+    /* 30 px controls on the phone header, as wave 5 measured them: the 40 px
+       desktop primitive wraps the wallet chip onto a third row here, and a
+       third row is felt (measured: +28 px of header takes the 9-max felt from
+       46% to 42% of the frame, under the 45% floor). The 44 px TOUCH TARGET is
+       met without a taller layout: each control carries an invisible hit area
+       7 px above and below its painted box, the same technique Material uses
+       for dense toolbars. Two 30 px rows plus 2 px gaps means the hit areas of
+       the two rows meet but do not cross. */
+    header.compact .back-btn,
+    header.compact .history-btn,
+    header.compact .verify-btn,
+    header.compact .sound-toggle-btn {
+      min-height: 30px;
+      position: relative;
+    }
+
+    header.compact .back-btn::after,
+    header.compact .history-btn::after,
+    header.compact .verify-btn::after,
+    header.compact .sound-toggle-btn::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc((30px - var(--cd-touch-min)) / 2);
+      bottom: calc((30px - var(--cd-touch-min)) / 2);
+    }
+
+    header.compact .sound-toggle-btn {
+      width: 30px;
+      padding: 0;
+    }
+
+    header.compact .sound-toggle-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Labels stay. "Verify Fair" is the one control that names what this product
+       is for, and an unlabelled shield icon does not say it. */
+    header.compact .history-btn,
+    header.compact .verify-btn {
+      padding: 5px 8px;
+      font-size: 11px;
+      gap: 5px;
+    }
+
+    header.compact .history-btn svg,
+    header.compact .verify-btn svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    /* The wallet chip comes down with everything else. The display name is kept
+       and merely narrowed: `.display-name` is a fault-injection target
+       (`SHOTS_INJECT_DRIFT=censusshape` writes a money-shaped token into it to
+       prove the census refuses one), and the census only gates tokens it can
+       SEE, so hiding this element would quietly disarm that self-test. */
+    header.compact :global(.wallet-container),
+    header.compact :global(.wallet-btn) {
+      min-width: 0;
+    }
+
+    header.compact :global(.wallet-btn) {
+      padding: 3px 8px;
+      gap: 6px;
+      font-size: 11px;
+    }
+
+    header.compact :global(.wallet-btn .avatar-img) {
+      width: 20px;
+      height: 20px;
+    }
+
+    /* 8.5em at 11px = 93 px, against 71 px for the generated names this build
+       produces, so the name renders IN FULL and the clamp only exists so a very
+       long one ellipsises instead of pushing the document past 390 px and
+       re-arming the T-19 zoom-out. Measured: this row's content is 343 px of the
+       374 px available. */
+    header.compact :global(.wallet-btn .display-name) {
+      max-width: 8.5em;
+    }
+
+    /* ---------------- the last 4 px above the felt ----------------------- */
+    /* `.table-area` is the table's parent; its top padding is subtracted from
+       the felt as directly as the header is. The wrapper already goes full-bleed
+       horizontally (PokerTable.svelte), so this is only the vertical inset. */
+    main[data-view='table'] .table-area {
+      padding-top: 4px;
+    }
+  }
+
+
+  /* =========================================================================
+     THE PHONE HELD SIDEWAYS: the same compact header, on ONE row.
+     =========================================================================
+     Height is the scarce axis in a 390 px-tall window and width is not: the two
+     header groups measure 180 + 338 = 518 px of the ~828 available, so they share
+     a row and the table gets the ~34 px back. Portrait keeps two rows, where 374
+     px cannot hold 518.
+     ========================================================================= */
+  @media (min-aspect-ratio: 1/1) and (max-height: 560px) {
+    header.compact .header-left,
+    header.compact .header-right {
+      flex: 0 1 auto;
+    }
+
+    header.compact .header-right {
+      flex-grow: 1;
+      justify-content: flex-end;
+    }
+
+    /* Two lines of strip, not three: the same words on a wider screen. */
+    .alpha-warning-banner.on-table .banner-strip {
+      padding: 5px 10px 6px;
+    }
+  }
+}

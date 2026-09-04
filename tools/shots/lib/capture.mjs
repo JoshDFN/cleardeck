@@ -159,7 +159,7 @@ export function writeIndex(shaDir, latestDir, manifest) {
     `- gateway: ${manifest.gateway}`,
     `- frontend asset canister: ${manifest.frontendCanisterId}`,
     ...(manifest.volatileThirdParty
-      ? [`- fiat figures: **${manifest.volatileThirdParty.mode}** — ${manifest.volatileThirdParty.note}`]
+      ? [`- fiat figures: **${manifest.volatileThirdParty.mode}**: ${manifest.volatileThirdParty.note}`]
       : []),
     '',
     ...(manifest.faultInjection

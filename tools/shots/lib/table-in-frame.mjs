@@ -395,7 +395,7 @@ export function foldTableInFrame(m, { viewport, scene }) {
 
   const notes = `pot ${m.pot.count}, board ${m.board.rendered ? `${m.board.slotCount} slots`
     : `not rendered and ${m.seatCards} hole cards painted (checked, not skipped)`}, `
-    + `${m.seats.count}/${m.seats.seatElements} seat pods, ${m.actions.count} action buttons — `
+    + `${m.seats.count}/${m.seats.seatElements} seat pods, ${m.actions.count} action buttons: `
     + `${problems.length ? `${problems.length} OFF FRAME` : 'all in frame'}; `
     + `chrome ${m.budget.aboveFeltPx}px above the felt + ${m.budget.belowFeltPx}px below; `
     + (m.thumb

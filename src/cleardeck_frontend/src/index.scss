@@ -140,10 +140,12 @@
 
   /* --- The rail ----------------------------------------------------------
      Black padded leather with a lit crown, as on every broadcast table. */
-  --cd-rail-hi: #34363f;
-  --cd-rail: #1f2027;
-  --cd-rail-lo: #0f1014;
-  --cd-rail-crown: rgba(255, 255, 255, 0.2);  /* the specular along the top */
+  --cd-rail-hi: #383a44;
+  --cd-rail: #22232b;
+  --cd-rail-lo: #111217;
+  --cd-rail-face: #0a0b0e;                     /* the near rail's front face */
+  --cd-rail-crown: rgba(255, 255, 255, 0.28); /* the specular along the top */
+  --cd-rail-crown-lo: rgba(255, 255, 255, 0.09); /* the roll's rim on the near edge */
   --cd-rail-seam: rgba(0, 0, 0, 0.8);          /* the dark seam at the felt edge */
 
   /* --- Cards ------------------------------------------------------------- */
@@ -172,12 +174,14 @@
   --cd-chip-ink: #111318;
 
   /* --- Text on the felt: the size scale is em-based (a ratio of the felt
-     width), so the tokens here are the RATIOS every felt label uses. 0.58em is
-     the floor: at the measured desktop --ui of ~19.5 px that is 11.3 px, and
-     nothing on the felt goes under it. */
-  --cd-felt-label: 0.58em;
-  --cd-felt-small: 0.66em;
-  --cd-felt-body: 0.76em;
+     width), so the tokens here are the RATIOS every felt label uses, each
+     floored at 11 px in absolute terms. At the measured desktop --ui of
+     ~19.5 px the ratio wins (0.58em = 11.3 px); on the nine-seat phone (--ui
+     14.5 px) the floor wins, so no label, chip amount or side-pot figure on
+     the felt is ever set under 11 px. */
+  --cd-felt-label: max(0.58em, 11px);
+  --cd-felt-small: max(0.66em, 11px);
+  --cd-felt-body: max(0.76em, 11px);
   --cd-felt-name: 0.8em;
   --cd-felt-stack: 1em;
   --cd-felt-pot: 1.5em;
@@ -244,9 +248,9 @@
   --cd-ease-spring: cubic-bezier(0.2, 1.25, 0.5, 1);
 
   /* --- Felt texture: SVG fractal noise, inline, no fetch -------------------
-     Tiled at 160 px, multiplied over the felt at low alpha so the surface has
-     a nap instead of a flat fill. */
-  --cd-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.32 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+     Tiled at 160 px, overlaid on the felt so the surface has a nap that reads
+     at 1x (0.32 alpha under soft-light was invisible in a screenshot). */
+  --cd-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.5 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
 }
 
 /* Reset and base styles */

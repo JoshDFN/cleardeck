@@ -29,6 +29,7 @@
     sidePots = [],
     allInMoment = false,
     allInCount = 0,
+    compact = false,      // the nine-seat phone: a column module, one-word label
     streetLabel = '',
     equityMethodLabel = null,
     equityNote = '',
@@ -80,8 +81,10 @@
   <div class="pot-display" class:waiting={totalPot <= 0}>
     <div class="main-pot" class:has-chips={totalPot > 0} class:at-risk={allInMoment} title={breakdown}>
       <span class="pot-meta">
-        <span class="pot-label">
-          {#if allInMoment}
+        <span class="pot-label" title={allInMoment ? `All in · ${allInCount} at risk` : undefined}>
+          {#if allInMoment && compact}
+            All in
+          {:else if allInMoment}
             All in &middot; {allInCount} at risk
           {:else}
             Pot
@@ -302,10 +305,11 @@
       line-height: 1.15;
       /* The readout sits in the band between the board and the lower flank
          plates (0.17 fw below the centre on the 6-max ring). A flank winner's
-         award stands above its plate's outer half in that same band, 0.31 fw
-         from the centre line, so the readout stays inside 0.62 fw and wraps
-         to its two rows instead of reaching the award. */
-      max-width: calc(var(--fw) * 0.62);
+         award stands above its plate's outer half in that same band, ending
+         0.31 fw from the centre line (portraitAwardSpot), so the readout
+         stays inside 0.58 fw and wraps to its two rows instead of reaching
+         the award. */
+      max-width: calc(var(--fw) * 0.58);
     }
 
     .main-pot { padding: 0.18em 0.7em 0.18em 0.6em; gap: 0.5em; }
@@ -316,8 +320,8 @@
 
     /* Two short rows by design: the figure, then the hand and the street. A
        long single row wrapped unpredictably and reached a flank plate. */
-    .winner-line { padding: 0.22em 0.7em; column-gap: 0.45em; max-width: 100%; }
-    .winner-text { font-size: 0.8em; flex: 1 0 100%; text-align: center; }
+    .winner-line { padding: 0.22em 0.6em; column-gap: 0.45em; max-width: 100%; }
+    .winner-text { font-size: 0.72em; flex: 1 0 100%; text-align: center; }
     .winner-hand-rank, .split-info { font-size: var(--cd-felt-label); }
     .winner-display .phase-indicator { font-size: var(--cd-felt-label); }
 
@@ -332,9 +336,21 @@
          Turing's plate at 0.58 fw, its shadow touching it at 0.46). */
       max-width: calc(var(--fw) * 0.42);
     }
-    :global(.ring-crowded) .pot-amount { font-size: 1.15em; }
-    :global(.ring-crowded) .pot-label { white-space: normal; text-align: center; }
-    :global(.ring-crowded) .main-pot { white-space: normal; padding: 0.15em 0.5em; gap: 0.35em; }
+    /* Nine seats on a phone: a COLUMN module (label, figure, street), each
+       row one line at the floor. The label is one word ("All in"; the
+       at-risk count is its title) because the row form wrapped the label to
+       three lines and the street to two. Only the side-pot row may wrap. */
+    :global(.ring-crowded) .main-pot {
+      flex-direction: column;
+      align-items: center;
+      gap: 0.05em;
+      padding: 0.2em 0.6em 0.25em;
+      white-space: nowrap;
+    }
+    :global(.ring-crowded) .pot-meta { display: contents; }
+    :global(.ring-crowded) .pot-label { order: 1; white-space: nowrap; letter-spacing: 0.14em; }
+    :global(.ring-crowded) .pot-amount { order: 2; font-size: 1.15em; }
+    :global(.ring-crowded) .phase-indicator { order: 3; white-space: nowrap; letter-spacing: 0.08em; }
     :global(.ring-crowded) .winner-line { padding: 0.2em 0.5em; }
   }
 

@@ -392,16 +392,23 @@ function equityProblems(truth, dom, figures) {
  * two pair "Pair of Aces" fails instead of passing on a substring.
  */
 const RANK_WORDS = '(?:two|three|four|five|six|seven|eight|nine|ten|jack|queen|king|ace)';
+const RANK_PLURALS = '(?:twos|threes|fours|fives|sixes|sevens|eights|nines|tens|jacks|queens|kings|aces)';
+// The plate row prints the COMPACT form of the same name (src/lib/hand-names.js
+// deletes the kicker clause and, where the ranks already say the category,
+// the category prefix: "Aces full of Eights", "Aces and Eights", "Three
+// Sevens"). Each alternate is anchored on the rank words of ITS category, so
+// "aces and eights" still cannot pass as a pair and "three sevens" cannot pass
+// as a straight.
 const HAND_PHRASE = {
     'Royal Flush': /^royal flush$/,
-    'Straight Flush': /^straight flush, .+ high$/,
-    'Four of a Kind': /^four of a kind, /,
-    'Full House': /^full house, .+ full of /,
+    'Straight Flush': /^straight flush(?:, .+ high)?$/,
+    'Four of a Kind': new RegExp(`^(?:four of a kind, |four )${RANK_PLURALS}$`),
+    'Full House': new RegExp(`^(?:full house, )?${RANK_PLURALS} full of ${RANK_PLURALS}$`),
     Flush: /^flush, .+ high$/,
     Straight: /^straight, .+ high$/,
-    'Three of a Kind': /^three of a kind, /,
-    'Two Pair': /^two pair, .+ and /,
-    Pair: /^pair of /,
+    'Three of a Kind': new RegExp(`^(?:three of a kind, |three )${RANK_PLURALS}$`),
+    'Two Pair': new RegExp(`^(?:two pair, )?${RANK_PLURALS} and ${RANK_PLURALS}$`),
+    Pair: new RegExp(`^pair of ${RANK_PLURALS}(?:, ${RANK_WORDS} kicker)?$`),
     'High Card': new RegExp(`^${RANK_WORDS} high$`),
 };
 

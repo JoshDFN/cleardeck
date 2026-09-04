@@ -77,6 +77,36 @@
     box-shadow: inset 0 0 0 1px var(--cd-money-line), 0 0 calc(var(--fw) * 0.02) var(--cd-money-dim);
   }
 
+  /* A LANDSCAPE FLANK SEAT'S REVEALED PAIR clears the board strip along x:
+     --shx is the seat's own shift in felt widths ($lib/table-geometry.js
+     revealedCellShift), outward where the plate sits close to the board.
+     Measured: the 6-max lower flank cell ran under the first board card. */
+  @media (min-aspect-ratio: 1/1) {
+    :global(.seat.seat-left) .player-cards.shown,
+    :global(.seat.seat-right) .player-cards.shown {
+      transform:
+        translate(-50%, -50%)
+        translate(
+          calc(var(--shx, 0) * var(--fw)),
+          calc(var(--cy, -1) * var(--fw) * var(--off-shown-r))
+        );
+    }
+  }
+
+  /* THE 6-MAX PHONE'S UPPER FLANK SEAT reveals its pair above the plate over
+     the OUTER half: the inner half of that edge is the seat's winner award
+     (WinnerAward, portraitAwardSpot). */
+  @media (max-aspect-ratio: 1/1) {
+    :global(.poker-table-wrapper:not(.ring-crowded) .seat.flank.upper) .player-cards.shown {
+      transform:
+        translate(-50%, -50%)
+        translate(
+          calc(-1 * var(--rdx, 0) * var(--pod-w) * 0.24),
+          calc(var(--cy, -1) * var(--fw) * var(--off-shown-r))
+        );
+    }
+  }
+
   /* YOUR cards outrank a pod: the hero's pair paints ABOVE its own plate. */
   .player-cards.hero {
     z-index: 7;

@@ -25,7 +25,10 @@
   import PotModule from './PotModule.svelte';
   import BoardStrip from './BoardStrip.svelte';
   import { generatedName, shortName } from '$lib/table-visuals.js';
-  import { isFlankSeat, isBottomSeat, puckSpot, readoutSpoke } from '$lib/table-geometry.js';
+  import {
+    isFlankSeat, isBottomSeat, puckSpot, readoutSpoke, revealedCellShift, freeSpokeEnd, portraitAwardSpot
+  } from '$lib/table-geometry.js';
+  import { compactHandName } from '$lib/hand-names.js';
   import { playSound } from '$lib/sounds.js';
   import { computeEquity, describeHand, formatEquity, cardCodes } from '$lib/equity.js';
   // Importing this module installs the app-wide BigInt/JSON guard (see the
@@ -338,7 +341,9 @@
     if (!myCards || myCards.length !== 2) return null;
     const codes = cardCodes([...myCards, ...communityCards.slice(0, 5)]);
     if (!codes) return null;
-    return describeHand(codes)?.name ?? null;
+    // Compacted for a plate row ($lib/hand-names.js): the kicker clause and
+    // the category prefix the ranks already state are dropped, nothing else.
+    return compactHandName(describeHand(codes)?.name ?? null);
   });
 
   // ---------------------------------------------------------------------------
@@ -549,7 +554,24 @@
       // landscape flank seat's puck on the rail, the portrait flank puck on
       // its own plate's top edge.
       const cyDir = (tall && flank) ? (sn >= 0 ? 1 : -1) : (sn >= 0 ? -1 : 1);
-      const puck = puckSpot({ tall, flank, cs, sn, ny });
+      const puck = puckSpot({ tall, flank, cs, sn, ny, crowded });
+
+      // A LANDSCAPE FLANK SEAT'S REVEALED PAIR clears the board strip along x
+      // ($lib/table-geometry.js revealedCellShift, unit-tested). The ratios
+      // mirror the landscape tokens in poker-table-tokens.scss: --card-opp-r
+      // per ring density, the revealed cell's plinth (0.010) and gap (0.006),
+      // and the board (5 x --card-board-r 0.112 + 4 x --board-gap-r 0.009).
+      const cardOppR = crowded ? 0.065 : sparse ? 0.084 : 0.076;
+      const cellShift = revealedCellShift({
+        tall, flank, cs, ringKx: LANDSCAPE_RING_KX,
+        cellHalfW: cardOppR + 0.003 + 0.010, boardHalfW: 0.298, nudge: 0.0175
+      });
+      // signed for the screen: inward is +x for a left seat, -x for a right one
+      const shx = cellShift === null ? null : Number((cellShift * (cs < 0 ? 1 : -1)).toFixed(5));
+
+      // A PORTRAIT FLANK SEAT'S AWARD spot, in plate widths and the plate
+      // edge it stands past ($lib/table-geometry.js portraitAwardSpot).
+      const award = portraitAwardSpot({ tall, flank, cs, sn, crowded });
 
       out.push({
         cs: Number(cs.toFixed(5)),
@@ -567,6 +589,10 @@
         py: puck.py,
         pkx: puck.pkx,
         pky: puck.pky,
+        flank,
+        shx,
+        akx: award?.akx ?? 0,
+        aky: award?.aky ?? -1,
         awardOnSpoke,
         // Which way an OPPONENT's hole cards peek out from behind their plate.
         // Never along the inward normal: at a side seat the normal is horizontal
@@ -604,6 +630,8 @@
   // actually hold. It is also within 3% of PokerNow's measured 0.571.
   const LANDSCAPE_AR = 2.10;
   const PORTRAIT_AR = 0.555;
+  /** Mirrors --ring-kx in poker-table-tokens.scss (landscape). */
+  const LANDSCAPE_RING_KX = 1.02;
 
   let portrait = $state(false);
   const ring = $derived(ringSeats(seatCount, portrait ? PORTRAIT_AR : LANDSCAPE_AR));
@@ -628,6 +656,37 @@
     if (n === 0) return [];
     const anchor = (mySeat !== null && mySeat >= 0 && mySeat < n) ? mySeat : 0;
     return Array.from({ length: n }, (_, i) => ring[(i - anchor + n) % n]);
+  });
+
+  /**
+   * WHICH END OF A LANDSCAPE TOP/BOTTOM PLATE THE EQUITY BADGE TAKES.
+   *
+   * The badge only exists at the all-in and the showdown, and its two
+   * candidate spots are the plate's two ends at mid-height. Which one is free
+   * depends on who is SEATED next door, so it is decided here, per seat, from
+   * the occupied neighbours' plate rectangles ($lib/table-geometry.js
+   * freeSpokeEnd, unit-tested). Measured on the nine-seat desktop ring: the
+   * hero's badge at the left end sat on the corner of the next plate. The
+   * ratios mirror the landscape tokens in poker-table-tokens.scss.
+   */
+  const LANDSCAPE_PLATE = {
+    default: { podW: 0.235, podH: 0.086, avatarW: 0.066, ui: 0.021 },
+    crowded: { podW: 0.202, podH: 0.074, avatarW: 0.056, ui: 0.018 },
+    sparse: { podW: 0.262, podH: 0.094, avatarW: 0.072, ui: 0.0225 }
+  };
+  const spokeEndBySeat = $derived.by(() => {
+    if (portrait) return seatPoints.map((p) => p.rdx);
+    const d = seatCount >= 8 ? LANDSCAPE_PLATE.crowded : seatCount <= 3 ? LANDSCAPE_PLATE.sparse : LANDSCAPE_PLATE.default;
+    const dims = {
+      podW: d.podW, podH: d.podH, avatarW: d.avatarW,
+      badgeW: 2.8 * d.ui, badgeH: 1.1 * d.ui, badgeGap: 2.1 * d.ui
+    };
+    const at = (p) => ({ x: p.cs * LANDSCAPE_RING_KX * 0.5, y: p.sn * 0.5 / LANDSCAPE_AR });
+    return seatPoints.map((p, i) => {
+      if (p.side !== 'center') return p.rdx;
+      const neighbours = seatPoints.filter((_, j) => j !== i && players[j]).map(at);
+      return freeSpokeEnd(at(p), dims, neighbours);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -1303,6 +1362,7 @@
             {sidePots}
             {allInMoment}
             allInCount={allInSeats.length}
+            compact={portrait && seatCount >= 8}
             {streetLabel}
             {equityMethodLabel}
             equityNote={equityTooltip}
@@ -1329,18 +1389,16 @@
           {@const win = isHandComplete ? winInfoFor(i) : null}
           {@const equityText = (allInMoment || isShowdown) ? equityFor(i) : null}
           {@const live = isInHand(player)}
-          <!-- THE READOUT SPOKE FLIPS WHEN THE CHIPS ARE GONE. A landscape top or
-               bottom seat's spoke takes the end opposite its bet chips; once the
-               street's bets are swept (the showdown, the flop of an all-in) that
-               end is free and the other one is where the avatar, the dealer puck
-               and the neighbouring plate's award live. Measured: the hero's
-               equity badge under the winner's award (6.8%) and under the
-               next plate on a nine-seat ring (10.9%). -->
-          {@const rdx = (!portrait && point.side === 'center' && point.rdx !== 0
-            && Number(player?.current_bet ?? 0) === 0) ? 1 : point.rdx}
+          <!-- THE READOUT SPOKE of a landscape top or bottom seat takes the
+               plate end that is clear of the seated neighbours (spokeEndBySeat);
+               every other seat keeps the ring's own spoke. -->
+          {@const rdx = spokeEndBySeat[i] ?? point.rdx}
           <div
             class="seat seat-{point.side}"
             class:occupied={!!player}
+            class:flank={point.flank}
+            class:lower={point.sn > 0.2}
+            class:upper={point.sn < -0.2}
             class:award-on-spoke={point.awardOnSpoke}
             class:spoke-y={point.rdy !== 0}
             class:spoke-ends={point.spokeEnds}
@@ -1364,6 +1422,9 @@
             style:--pkx={point.pkx}
             style:--pky={point.pky}
             style:--cy={point.cy}
+            style:--shx={point.shx ?? 0}
+            style:--akx={point.akx}
+            style:--aky={point.aky}
           >
             <SeatPod
               {player}
@@ -1631,83 +1692,14 @@
   </div>
 </div>
 
-<style>
-  /* =========================================================================
-     TOKENS
-     Every geometric value on the table is a ratio of --fw, the felt width.
-     --fw itself is resolved once, from the stage's own box: width-capped,
-     otherwise height-fitted. Colours, shadows and motion come from index.scss.
-     ========================================================================= */
+<style lang="scss">
+  /* The table's geometry tokens and the dock live in two partials next to
+     this file, included below at the places their rules used to sit (the
+     cascade is order-sensitive) and scoped by Svelte like everything else. */
+  @use './poker-table-tokens' as tokens;
+  @use './poker-table-dock' as dock;
 
-  .poker-table-wrapper {
-    /* Felt aspect. Declared 2.10 so the measured surface lands ~2.06, inside
-       bar 2's 1.9-2.3 and next to the reference median of 2.13. */
-    --ar: 2.10;
-
-    /* ring -- pods straddle the rail, as PokerStars, GGPoker and WPT Global all
-       do; the ring is a little larger than the felt so the pods sit on the rail
-       rather than biting into the playing surface. */
-    --ring-kx: 1.02;
-    --ring-ky: 1.00;
-    --pod-w-r: 0.235;
-    --pod-h-r: 0.086;
-    --avatar-r: 0.066;
-
-    /* cards -- board 11.2% of surface width, opponents 68% of a board card
-       (PokerNow's exact ratio), hero 82%. */
-    --card-board-r: 0.112;
-    --card-hero-r: 0.092;
-    --card-opp-r: 0.076;
-    --board-gap-r: 0.009;
-    --card-nudge-r: 0.035;
-    --off-opp-r: 0.050;
-    --off-shown-r: 0.090;
-    --off-hero-r: 0.085;
-    --cluster-dy-r: 0.012;
-
-    /* type -- the audit's floor: at the measured desktop felt this is ~21 px,
-       so a 0.58em label is 12 px and a stack figure is the largest text on the
-       table after the pot. */
-    --ui-r: 0.021;
-
-    /* rail -- thickness in felt widths; the near (bottom) edge is thicker than
-       the far one because the table is seen from a chair, not the ceiling. */
-    --rail-side-r: 0.042;
-    --rail-top-r: 0.034;
-    --rail-bottom-r: 0.066;
-
-    --dock-h: 78px;
-
-    display: flex;
-    justify-content: center;
-    width: 100%;
-    height: var(--cd-avail, 620px);
-    margin-bottom: calc(-1 * var(--cd-slack, 0px));
-    min-width: 0;
-  }
-
-  /* 8- and 9-max: the same rail has to carry four more plates, so everything
-     comes down together by ~0.86. */
-  .poker-table-wrapper.ring-crowded {
-    --pod-w-r: 0.202;
-    --pod-h-r: 0.074;
-    --avatar-r: 0.056;
-    --card-opp-r: 0.065;
-    --off-opp-r: 0.043;
-    --off-shown-r: 0.077;
-    --ui-r: 0.018;
-  }
-
-  /* Heads-up and 3-handed: bigger cards and bigger type. */
-  .poker-table-wrapper.ring-sparse {
-    --pod-w-r: 0.262;
-    --pod-h-r: 0.094;
-    --avatar-r: 0.072;
-    --card-opp-r: 0.084;
-    --off-opp-r: 0.064;
-    --off-shown-r: 0.099;
-    --ui-r: 0.0225;
-  }
+  @include tokens.tokens;
 
   .poker-table {
     position: relative;
@@ -1783,11 +1775,18 @@
        the felt sits high in the rail: the foreshortened view from a chair. */
     transform: translate(-50%, calc(-50% + var(--fw) * (var(--rail-bottom-r) - var(--rail-top-r)) * 0.5));
     border-radius: 50%;
+    /* A padded roll seen from a raised chair: the far rail is a thin lit
+       crown; the near rail is a broad top surface (lit, --cd-rail) that
+       rounds over into a dark front face (--cd-rail-face) at the very edge. */
     background:
-      linear-gradient(180deg, var(--cd-rail-hi) 0%, var(--cd-rail) 30%, var(--cd-rail-lo) 100%);
+      linear-gradient(180deg,
+        var(--cd-rail-hi) 0%, var(--cd-rail) 16%, var(--cd-rail-lo) 46%,
+        var(--cd-rail) 78%, var(--cd-rail-hi) 92%, var(--cd-rail-face) 100%);
     box-shadow:
-      /* the lit crown along the top of the padding */
-      inset 0 2px 0 var(--cd-rail-crown),
+      /* the specular along the top of the padding */
+      inset 0 3px 2px var(--cd-rail-crown),
+      /* the roll's rim on the near edge */
+      inset 0 -2px 1px var(--cd-rail-crown-lo),
       /* the padding's own roundness, darker toward the felt */
       inset 0 calc(var(--fw) * -0.012) calc(var(--fw) * 0.02) var(--cd-felt-shade),
       /* the table's contact shadow on the room */
@@ -1808,14 +1807,15 @@
        into the rail's shadow. */
     background:
       var(--cd-noise),
-      radial-gradient(ellipse 62% 78% at 50% 34%, var(--cd-felt-hi) 0%, var(--cd-felt) 42%, var(--cd-felt-lo) 100%);
-    background-blend-mode: soft-light, normal;
+      radial-gradient(ellipse 58% 72% at 50% 32%, var(--cd-felt-hi) 0%, var(--cd-felt) 46%, var(--cd-felt-lo) 100%);
+    background-blend-mode: overlay, normal;
     box-shadow:
       /* the dark seam where the felt meets the rail lip */
       0 0 0 calc(var(--fw) * 0.006) var(--cd-rail-seam),
-      /* vignette: the surface darkens toward the rail */
-      inset 0 0 calc(var(--fw) * 0.09) var(--cd-felt-shade),
-      inset 0 calc(var(--fw) * 0.01) calc(var(--fw) * 0.04) var(--cd-felt-edge);
+      /* vignette: the surface darkens toward the rail, in two falloffs */
+      inset 0 0 calc(var(--fw) * 0.13) var(--cd-felt-shade),
+      inset 0 0 calc(var(--fw) * 0.03) var(--cd-felt-edge),
+      inset 0 calc(var(--fw) * 0.012) calc(var(--fw) * 0.05) var(--cd-felt-edge);
   }
 
   /* The betting line: a thin ring inset from the edge, as on every casino felt. */
@@ -2076,353 +2076,7 @@
     cursor: pointer;
   }
 
-  /* =========================================================================
-     DOCK
-     THE DOCK IS SIZED BY WHAT IS IN IT, NOT BY A NUMBER (docs/DEFECTS.md
-     E-63): `min-height` keeps its presence stable at --dock-h while letting it
-     take the room its contents need, so a tall wallet panel never spills under
-     the stage. The outer tracks are sized by symmetry (so the action row stays
-     centred) and `overflow: hidden` on them is a known trade recorded in
-     docs/DESIGN-BAR.md section 11.6.
-     ========================================================================= */
-  .action-dock {
-    flex: 0 0 auto;
-    min-height: var(--dock-h);
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-    align-items: center;
-    gap: var(--cd-space-3);
-    padding: 0 var(--cd-space-1);
-  }
-
-  .dock-aux {
-    display: flex;
-    align-items: center;
-    gap: var(--cd-space-2);
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  .dock-right { justify-content: flex-end; }
-
-  .log-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    flex: 0 0 auto;
-    white-space: nowrap;
-    min-height: var(--cd-control-sm);
-    padding: 0 var(--cd-space-3);
-    border-radius: var(--cd-radius-chip);
-    border: 1px solid var(--cd-line);
-    background: var(--cd-surface-2);
-    color: var(--cd-ink-2);
-    font-size: var(--cd-text-xs);
-    font-weight: var(--cd-weight-figure);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    cursor: pointer;
-  }
-
-  .log-toggle.active { background: var(--cd-accent-dim); color: var(--cd-accent); border-color: var(--cd-accent-line); }
-
-  .turn-indicator {
-    display: flex;
-    flex-direction: column;
-    flex: 0 1 auto;
-    min-width: 0;
-    padding: 6px 10px;
-    border-radius: var(--cd-radius-chip);
-    background: var(--cd-surface-1);
-    border: 1px solid var(--cd-line-soft);
-    transition: border-color var(--cd-acting) var(--cd-ease), background-color var(--cd-acting) var(--cd-ease);
-  }
-
-  .turn-indicator.my-turn {
-    background: var(--cd-accent-dim);
-    border-color: var(--cd-accent-line-strong);
-  }
-
-  .turn-indicator.time-bank { border-color: var(--cd-warn-line); }
-
-  .turn-title {
-    font-size: var(--cd-text-xs);
-    font-weight: var(--cd-weight-display);
-    letter-spacing: var(--cd-tracking-label);
-    text-transform: uppercase;
-    color: var(--cd-ink-2);
-  }
-
-  .turn-indicator.my-turn .turn-title { color: var(--cd-accent); }
-
-  .turn-hint {
-    font-size: var(--cd-text-sm);
-    color: var(--cd-ink-1);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .dock-center {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--cd-space-1);
-    min-width: 0;
-  }
-
-  .pot-odds-display {
-    display: flex;
-    align-items: baseline;
-    gap: var(--cd-space-2);
-    font-size: var(--cd-text-xs);
-  }
-
-  .pot-odds-label {
-    letter-spacing: var(--cd-tracking-label);
-    text-transform: uppercase;
-    color: var(--cd-ink-2);
-  }
-
-  .pot-odds-value { font-size: var(--cd-text-sm); font-weight: var(--cd-weight-display); color: var(--cd-money); }
-
-  .pot-odds-explanation {
-    color: var(--cd-ink-1);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .equity-hint { color: var(--cd-ink-2); }
-
-  .actions {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: var(--cd-space-2);
-    min-width: 0;
-    flex-wrap: nowrap;
-  }
-
-  .actions.disabled { opacity: 0.45; pointer-events: none; }
-
-  .no-game-message, .not-your-turn, .action-pending {
-    display: flex;
-    align-items: center;
-    gap: var(--cd-space-2);
-    min-height: var(--cd-touch-min);
-    padding: 0 18px;
-    border-radius: var(--cd-radius-chip);
-    background: var(--cd-surface-1);
-    border: 1px solid var(--cd-line-soft);
-    color: var(--cd-ink-2);
-    font-size: var(--cd-text-sm);
-    white-space: nowrap;
-  }
-
-  .spinner {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    border: 2px solid var(--cd-line-strong);
-    border-top-color: var(--cd-accent);
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  /* The action buttons: 44 px tall everywhere (the touch floor), one radius,
-     tone by role. Behaviour and sizing logic belong to phase 2. */
-  .action-btn {
-    flex: 0 1 auto;
-    min-width: 78px;
-    min-height: var(--cd-touch-min);
-    padding: 0 var(--cd-space-4);
-    border-radius: var(--cd-radius-card);
-    border: 1px solid transparent;
-    font-family: inherit;
-    font-size: var(--cd-text-md);
-    font-weight: var(--cd-weight-figure);
-    font-variant-numeric: tabular-nums;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: transform var(--cd-fast) var(--cd-ease), filter var(--cd-fast) var(--cd-ease);
-  }
-
-  .action-btn:hover { transform: translateY(-1px); filter: brightness(1.1); }
-  .action-btn:active { transform: translateY(0); }
-
-  .action-btn.secondary {
-    background: var(--cd-surface-2);
-    border-color: var(--cd-line-strong);
-    color: var(--cd-ink-1);
-  }
-
-  .action-btn.primary {
-    background: var(--cd-accent);
-    color: var(--cd-accent-ink);
-  }
-
-  .action-btn.raise {
-    background: linear-gradient(180deg, var(--cd-money-hi), var(--cd-money-lo));
-    color: var(--cd-money-ink);
-  }
-
-  .action-btn.danger {
-    background: var(--cd-danger);
-    color: var(--cd-ink);
-  }
-
-  .action-btn.ghost {
-    background: transparent;
-    border-color: var(--cd-line-strong);
-    color: var(--cd-ink-2);
-    min-width: 0;
-    padding: 0 var(--cd-space-3);
-  }
-
-  .wallet-panel {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 10px;
-    flex: 0 1 auto;
-    padding: 6px 10px;
-    border-radius: var(--cd-radius-chip);
-    background: var(--cd-surface-1);
-    border: 1px solid var(--cd-line-soft);
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  /* A money figure is never squeezed: the balance keeps its width and the
-     committed block takes a row of its own beneath it. */
-  .wallet-balance { display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; }
-
-  .balance-label {
-    font-size: var(--cd-text-xs);
-    letter-spacing: var(--cd-tracking-label);
-    text-transform: uppercase;
-    color: var(--cd-ink-2);
-    white-space: nowrap;
-  }
-
-  .balance-value {
-    font-size: var(--cd-text-sm);
-    font-weight: var(--cd-weight-display);
-    color: var(--cd-accent-hi);
-    white-space: nowrap;
-  }
-
-  /* MONEY OF MINE THAT IS IN THE MIDDLE (docs/SECURITY-FINDINGS.md FINDING 18).
-     Static flow, no z-index, no positioning. */
-  .wallet-committed {
-    flex: 1 1 100%;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    column-gap: 8px;
-    row-gap: 2px;
-    margin-top: 0;
-    padding: 4px 8px;
-    border-radius: var(--cd-radius-chip);
-    border: 1px solid var(--cd-money-line);
-    background: var(--cd-money-dim);
-    min-width: 0;
-  }
-
-  .wallet-committed.stuck {
-    border-color: var(--cd-danger-line);
-    background: var(--cd-danger-dim);
-  }
-
-  .committed-label {
-    font-size: var(--cd-text-xs);
-    letter-spacing: var(--cd-tracking-label);
-    text-transform: uppercase;
-    color: var(--cd-money);
-    white-space: nowrap;
-  }
-
-  .wallet-committed.stuck .committed-label { color: var(--cd-danger-hi); }
-
-  .committed-value {
-    font-size: var(--cd-text-sm);
-    font-weight: var(--cd-weight-display);
-    color: var(--cd-ink);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .committed-note {
-    font-size: var(--cd-text-xs);
-    line-height: 1.35;
-    color: var(--cd-ink-1);
-  }
-
-  .wallet-actions { display: flex; gap: 6px; }
-
-  .wallet-action-btn {
-    min-height: var(--cd-control-sm);
-    padding: 0 var(--cd-space-3);
-    border-radius: var(--cd-radius-chip);
-    border: 1px solid transparent;
-    font-family: inherit;
-    font-size: var(--cd-text-xs);
-    font-weight: var(--cd-weight-display);
-    letter-spacing: 0.04em;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .wallet-action-btn.deposit { background: var(--cd-accent); color: var(--cd-accent-ink); }
-
-  .wallet-action-btn.withdraw {
-    background: var(--cd-surface-2);
-    border-color: var(--cd-line-strong);
-    color: var(--cd-ink-1);
-  }
-
-  .wallet-action-btn.withdraw:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  .panel-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    flex: 0 0 auto;
-    min-height: var(--cd-control-sm);
-    padding: 0 9px;
-    border-radius: var(--cd-radius-chip);
-    border: 1px solid var(--cd-line);
-    background: var(--cd-surface-2);
-    color: var(--cd-ink-2);
-    cursor: pointer;
-  }
-
-  .collapsed-balance {
-    font-size: var(--cd-text-sm);
-    font-weight: var(--cd-weight-display);
-    color: var(--cd-accent-hi);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .sit-controls { display: flex; gap: 5px; flex: 0 1 auto; min-width: 0; }
-
-  .control-btn {
-    min-height: var(--cd-control-sm);
-    padding: 0 9px;
-    border-radius: var(--cd-radius-chip);
-    border: 1px solid var(--cd-line);
-    background: var(--cd-surface-1);
-    color: var(--cd-ink-2);
-    font-family: inherit;
-    font-size: var(--cd-text-xs);
-    font-weight: var(--cd-weight-figure);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .control-btn:hover { color: var(--cd-ink); }
-  .control-btn.destructive:hover { color: var(--cd-danger-hi); border-color: var(--cd-danger-line); }
+  @include dock.dock;
 
   /* =========================================================================
      PORTRAIT -- switched on ASPECT RATIO, not width (bar 19): a 0.555 stadium
@@ -2431,85 +2085,6 @@
      ========================================================================= */
 
   @media (max-aspect-ratio: 1/1) {
-    .poker-table-wrapper {
-      --ar: 0.555;
-      --ring-kx: 0.70;
-      --ring-ky: 0.70;
-      --pod-w-r: 0.46;
-      --pod-h-r: 0.140;
-      --avatar-r: 0.098;
-      --card-board-r: 0.112;
-      --card-opp-r: 0.092;
-      --board-gap-r: 0.010;
-      --card-nudge-r: 0.050;
-      --off-opp-r: 0.068;
-      --off-shown-r: 0.112;
-      /* The hero's pair stands fully clear of the hero plate's top edge:
-         half the hero plate + half a card + a hair. */
-      --off-hero-r: 0.16;
-      --card-hero-r: 0.14;
-      /* The hero plate on a phone: wider (the bottom of the felt is free) and
-         tall enough for three rows (name, stack, your hand). */
-      --pod-w-hero-r: 0.58;
-      --pod-h-hero-r: 0.165;
-      --cluster-dy-r: -0.066;
-      --ui-r: 0.058;
-      --rail-side-r: 0.05;
-      --rail-top-r: 0.04;
-      --rail-bottom-r: 0.06;
-      --dock-h: 90px;
-    }
-
-    /* width 0.70 + 0.46 = 1.160 -> 86cqw ; height: the FELT itself -> 55cqh.
-       In portrait the avatar sits INSIDE the plate (SeatPod), so the flank
-       pods' extent is the plate's, as measured in section 11. */
-    .table-inner { --fw: min(86cqw, 55cqh); }
-
-    /* Nine pods on a phone: the ring opens out and everything comes down. */
-    .poker-table-wrapper.ring-crowded {
-      --ring-kx: 0.90;
-      --ring-ky: 1.00;
-      --pod-w-r: 0.38;
-      --pod-h-r: 0.112;
-      /* Big enough for the ALL IN disc's two words at the type floor. */
-      --avatar-r: 0.078;
-      --pod-w-hero-r: 0.46;
-      --pod-h-hero-r: 0.135;
-      --card-hero-r: 0.13;
-      --off-hero-r: 0.153;
-      --cluster-dy-r: -0.180;
-      --card-board-r: 0.098;
-      --card-opp-r: 0.076;
-      --off-opp-r: 0.056;
-      --off-shown-r: 0.094;
-      --ui-r: 0.050;
-    }
-    .ring-crowded .table-inner { --fw: min(78cqw, 52cqh); }
-
-    .poker-table-wrapper.ring-sparse {
-      --ring-kx: 0.62;
-      --ring-ky: 0.62;
-      --pod-w-r: 0.52;
-      --pod-h-r: 0.155;
-      --avatar-r: 0.112;
-      --card-opp-r: 0.104;
-      --off-opp-r: 0.074;
-      --off-shown-r: 0.124;
-      --pod-w-hero-r: 0.62;
-      --pod-h-hero-r: 0.18;
-      --off-hero-r: 0.19;
-      --card-hero-r: 0.15;
-      --ui-r: 0.062;
-    }
-    .ring-sparse .table-inner { --fw: min(87cqw, 55cqh); }
-
-    /* THE HERO SEAT'S OWN PLATE SIZE. Everything that hangs off the seat
-       (plate, badge, award, puck) reads --pod-w/--pod-h, so it all follows. */
-    .seat.is-me {
-      --pod-w: calc(var(--fw) * var(--pod-w-hero-r));
-      --pod-h: calc(var(--fw) * var(--pod-h-hero-r));
-    }
-
     /* FULL BLEED: the wrapper takes the whole viewport width back. */
     .poker-table-wrapper {
       width: 100vw;
@@ -2531,71 +2106,6 @@
     .mark-1 { font-size: calc(var(--fw) * 0.3); }
     .mark-2 { display: none; }
 
-    .action-dock {
-      grid-template-columns: 1fr auto;
-      grid-template-rows: auto auto;
-      gap: 3px 8px;
-      min-height: var(--dock-h);
-      padding: 0 var(--cd-space-2);
-    }
-
-    /* EVERY PIXEL BETWEEN THE STAGE AND THE DOCK IS FELT. */
-    .poker-table { gap: 4px; }
-    .pot-odds-display { font-size: var(--cd-text-xs); line-height: 1.1; gap: 6px; }
-    .pot-odds-value { font-size: 12px; }
-
-    /* THUMB REACH: the action row is the BOTTOM row on a phone. */
-    .dock-center { grid-column: 1 / -1; grid-row: 2; }
-    .dock-left { grid-column: 1; grid-row: 1; }
-    .dock-right { grid-column: 2; grid-row: 1; }
-
-    .actions { flex-wrap: nowrap; gap: 6px; width: 100%; }
-
-    .action-btn {
-      flex: 1 1 0;
-      min-width: 0;
-      min-height: 48px;
-      padding: 0 4px;
-      font-size: 15px;
-      border-radius: var(--cd-radius-card);
-    }
-
-    .action-btn.ghost { flex: 0 0 auto; padding: 0 9px; }
-
-    .no-game-message, .not-your-turn, .action-pending {
-      min-height: 48px;
-      font-size: var(--cd-text-md);
-    }
-
-    .turn-indicator { display: none; }
-
-    /* THE COMMITTED BLOCK IS ONE ROW UNDER THE BALANCE on a phone. Measured
-       in the old shape (a column squeezed to 77 px beside the buttons) the
-       note wrapped to five lines and the wallet row was 122 px; as a full-width
-       row of the panel it is 26 px, and every word is still there. */
-    .wallet-panel { padding: 4px 8px; gap: 4px 5px; }
-    .balance-label { display: none; }
-    /* THE TABLE BALANCE MUST NEVER BE SQUEEZED (a money figure lying only in
-       pixels); the committed block pays instead, on one line. */
-    .wallet-balance { flex: 0 0 auto; }
-    .committed-note { line-height: 1.2; }
-    .wallet-committed { order: 1; margin-top: 0; padding: 2px 6px; column-gap: 5px; row-gap: 0; }
-    .committed-label { font-size: var(--cd-text-xs); letter-spacing: 0.08em; }
-    .committed-value { font-size: 12px; }
-    .committed-note { font-size: var(--cd-text-xs); }
-    .wallet-action-btn, .panel-toggle { min-height: 28px; padding: 0 9px; }
-    .sit-controls { display: none; }
-
-    .feed-container.left { width: min(230px, 62cqw); max-height: 60cqh; }
-    .raise-slider-panel { width: min(320px, 88cqw); font-size: var(--cd-text-sm); }
-  }
-
-  /* Very short landscape (phone held sideways): trim the dock, keep the felt. */
-  @media (min-aspect-ratio: 1/1) and (max-height: 560px) {
-    .poker-table-wrapper { --dock-h: 62px; }
-    .action-btn { padding: 0 12px; font-size: var(--cd-text-sm); min-width: 66px; }
-    .turn-indicator { display: none; }
-    .sit-controls { display: none; }
   }
 
   @media (prefers-reduced-motion: reduce) {

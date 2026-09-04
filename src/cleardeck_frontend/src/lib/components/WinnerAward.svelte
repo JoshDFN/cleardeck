@@ -75,14 +75,16 @@
   @media (max-aspect-ratio: 1/1) {
     .winner-award { gap: 0.1em; }
 
-    /* Flank seat (horizontal spoke): the award sits on the plate's OUTER half,
-       on the side facing the board. Measured on the 6-max portrait ring every
-       other spot is taken: past the inner end is the hero's pair or the winner
-       line; past the outer end is the screen edge; along the rail away from
-       the board is the seat's own revealed pair; on the plate is the name. */
+    /* Flank seat (horizontal spoke): the seat's own award spot, in plate
+       widths (--akx, signed) past the plate edge --aky names (-1 above, +1
+       below), from $lib/table-geometry.js portraitAwardSpot: over the outer
+       half above a 6-max lower plate (no further out than the felt's edge),
+       over the inner half above a 6-max upper plate (its revealed pair takes
+       the outer half), toward the board a tenth of a plate in on the
+       nine-seat ring. */
     .winner-award.on-spoke {
-      --award-dx: calc(-1 * var(--rdx, 0) * var(--pod-w) * 0.26);
-      --award-dy: calc(-1 * sign(var(--sn, 1)) * (var(--pod-h) * 0.5 + 1.4em));
+      --award-dx: calc(var(--akx, 0) * var(--pod-w));
+      --award-dy: calc(var(--aky, -1) * (var(--pod-h) * 0.5 + 1.2em));
     }
 
     /* Top seat (vertical spoke): the badge at one end of the far edge, the
@@ -101,6 +103,13 @@
 
     .stack-delta { font-size: 0.66em; padding: 0.08em 0.4em; }
     .hand-tag { font-size: var(--cd-felt-label); padding: 0.06em 0.35em; }
+
+    /* A flank or bottom seat's award on a phone is the delta chip alone: the
+       winner line names the hand a few pixels away, and a long name here
+       ("THREE OF A KIND", 110 px at the floor) ran under the winner line and
+       off the felt's edge (measured on the 6-max showdown). The top run's
+       vertical spoke keeps its tag; there is room there. */
+    .winner-award.on-spoke:not(.spoke-y) .hand-tag { display: none; }
   }
 
   @media (prefers-reduced-motion: reduce) {

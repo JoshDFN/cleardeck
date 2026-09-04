@@ -85,7 +85,18 @@
        same height would meet at the centre line, so a left seat's badge sits
        0.45em lower than a right seat's (the --rdx term). */
     :global(.seat:not(.spoke-y):not(.spoke-ends)) .equity-badge {
+      /* no avatar clearance here: in portrait the avatar sits INSIDE the plate */
+      --badge-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + 2.1em));
       --badge-dy: calc(-1 * sign(var(--sn, 1)) * (var(--pod-h) * 0.5 + 0.7em) + var(--rdx, 0) * 0.45em);
+    }
+
+    /* THE 6-MAX PHONE'S LOWER FLANK SEAT: the inner end at MID-HEIGHT. Above
+       the plate is the winner line (the badge sat between it and the dealer
+       puck, touching both); the puck now stands at the plate's bottom edge
+       ($lib/table-geometry.js puckSpot) and the hero's lifted pair starts a
+       card below that. */
+    :global(.poker-table-wrapper:not(.ring-crowded) .seat.flank.lower) .equity-badge {
+      --badge-dy: 0px;
     }
 
     /* The bottom seat: the plate's LEFT end at mid-height. Below the plate is
