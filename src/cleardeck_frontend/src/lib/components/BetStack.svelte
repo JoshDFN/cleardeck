@@ -39,11 +39,14 @@
     align-items: center;
     gap: 0.35em;
     white-space: nowrap;
-    /* bar 11: 500 ms for anything that moves an object */
+    /* bar 11: 500 ms for anything that moves an object. A NEW bet slides out
+       of the seat (the plate's centre) to its chip spot on mount: the hero's
+       echo at the click, an opponent's when the poll reports it. */
     transition: transform var(--cd-move) var(--cd-ease-move);
     transform:
       translate(-50%, -50%)
       translate(calc(var(--bx, 0) * var(--fw)), calc(var(--by, 0) * var(--fw)));
+    animation: bet-arrive var(--cd-move) var(--cd-ease-move) both;
     --chip-face: var(--cd-chip-white);
     --chip-ink: var(--cd-chip-ink);
   }
@@ -110,7 +113,20 @@
     .bet-amount { font-size: var(--cd-felt-small); }
   }
 
+  @keyframes bet-arrive {
+    from {
+      opacity: 0.4;
+      transform: translate(-50%, -50%) translate(0, 0);
+    }
+    to {
+      opacity: 1;
+      transform:
+        translate(-50%, -50%)
+        translate(calc(var(--bx, 0) * var(--fw)), calc(var(--by, 0) * var(--fw)));
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    .bet-chip { transition: none; }
+    .bet-chip { transition: none; animation: none; }
   }
 </style>

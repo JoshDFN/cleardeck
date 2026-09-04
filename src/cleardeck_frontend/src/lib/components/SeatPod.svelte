@@ -44,6 +44,7 @@
     showCards = false,     // gameInProgress || isShowdown
     heroCards = null,      // the hero's own two cards
     heroHandName = null,   // your hand, named in words (hero only)
+    plateTag = null,       // {text, tone: 'sent'|'armed'}: the echoed or armed action (hero only)
     revealed = null,       // an opponent's engine-revealed pair, or null
     betAmount = 0,
     betAllIn = false,
@@ -107,6 +108,12 @@
       <div class="pod-slot">
         <span class="turn-timer" class:urgent={clockUrgent}>{timeRemaining}s</span>
       </div>
+    {/if}
+    {#if plateTag}
+      <!-- THE ECHO / THE ARMED CHOICE: the sent action (or the pre-selected
+           one) on the plate's top corner, so the player sees the client
+           carrying their intent before the chain confirms it. -->
+      <span class="plate-tag {plateTag.tone}">{plateTag.text}</span>
     {/if}
     {#if isHero && heroHandName && !folded}
       <!-- GGPoker's named hand-strength readout, IN the plate: a function of
@@ -333,6 +340,38 @@
     white-space: nowrap;
   }
 
+  /* THE PLATE TAG: a capsule standing past the plate's RIGHT END at
+     mid-height. Not the top corner: the hero's cards overlap the plate's top
+     edge in landscape and hid it there (measured, table-waiting desktop).
+     The ends carry the badge and the award only at the all-in and the
+     showdown, and this tag exists only mid-hand, so they never meet. Sent =
+     the money colour (chips are moving), armed = the hero's teal (a promise). */
+  .plate-tag {
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    transform: translate(-35%, -50%);
+    z-index: 2;
+    padding: 0.12em 0.5em;
+    border-radius: var(--cd-radius-pill);
+    font-size: var(--cd-felt-label);
+    font-weight: var(--cd-weight-display);
+    letter-spacing: var(--cd-tracking-label);
+    text-transform: uppercase;
+    white-space: nowrap;
+    border: 1px solid var(--cd-line-strong);
+    box-shadow: var(--cd-shadow-chip);
+    animation: tag-in var(--cd-base) var(--cd-ease-spring) both;
+  }
+
+  .plate-tag.sent { background: var(--cd-money); color: var(--cd-money-ink); border-color: var(--cd-money-line); }
+  .plate-tag.armed { background: var(--cd-capsule); color: var(--cd-accent-hi); border-color: var(--cd-accent-line-strong); }
+
+  @keyframes tag-in {
+    from { opacity: 0; transform: translate(-35%, -50%) scale(0.85); }
+    to { opacity: 1; transform: translate(-35%, -50%) scale(1); }
+  }
+
   .pod-slot {
     flex: 0 0 auto;
     display: flex;
@@ -379,5 +418,6 @@
   @media (prefers-reduced-motion: reduce) {
     .player-nameplate.is-winner { animation: none; box-shadow: 0 0 0 2px var(--cd-money); }
     .player-nameplate, .pod-clock { transition: none; }
+    .plate-tag { animation: none; }
   }
 </style>

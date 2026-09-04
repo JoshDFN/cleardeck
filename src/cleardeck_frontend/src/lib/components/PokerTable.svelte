@@ -24,7 +24,17 @@
   import SeatPod from './SeatPod.svelte';
   import PotModule from './PotModule.svelte';
   import BoardStrip from './BoardStrip.svelte';
+  import ActionBar from './ActionBar.svelte';
+  import BetSizer from './BetSizer.svelte';
   import { generatedName, shortName } from '$lib/table-visuals.js';
+  import {
+    clampRaise, presetTarget, raiseCap, raiseFloor, raiseKind, raiseProblem, stepByBlind
+  } from '$lib/bet-sizing.js';
+  import { armPreAction, armedTag, availablePreActions, keepPreAction, resolvePreAction } from '$lib/pre-actions.js';
+  import { echoFor, echoedPlayer, sentLabel } from '$lib/optimistic.js';
+  import {
+    clockFraction as clockFractionOf, clockUrgent as clockUrgentOf, displayedSeconds, offerTimeBank, resyncClock
+  } from '$lib/action-clock.js';
   import {
     isFlankSeat, isBottomSeat, puckSpot, readoutSpoke, revealedCellShift, freeSpokeEnd, portraitAwardSpot
   } from '$lib/table-geometry.js';
@@ -41,6 +51,12 @@
     myCards,
     onAction,
     actionPending = false,
+    // The optimistic echo (lib/optimistic.js): the hero's own action, rendered
+    // as fact from the click until a certified view has absorbed it.
+    pendingAction = null,
+    // A canister refusal of the last action, shown beside the buttons.
+    actionError = null,
+    onDismissError = null,
     tableBalance = 0,
     onShowDeposit = null,
     onShowWithdraw = null,
@@ -149,7 +165,6 @@
   const canCheck = $derived(tableState?.can_check ?? (myPlayer !== null && callAmount === 0));
   const canRaise = $derived(tableState?.can_raise ?? (Number(myPlayer?.chips ?? 0) > callAmount));
   const myChips = $derived(Number(myPlayer?.chips ?? 0));
-  const maxBetAmount = $derived(myChips + Number(myPlayer?.current_bet ?? 0));
 
   const dealerSeat = $derived(tableState?.dealer_seat);
   const smallBlindSeat = $derived(tableState?.small_blind_seat);
@@ -799,37 +814,29 @@
   // 5. Action clock
   // ---------------------------------------------------------------------------
 
-  let serverTimeRemaining = $state(null);
-  let lastServerUpdate = $state(0);
-  let displayedTimeRemaining = $state(null);
+  // The rules are $lib/action-clock.js: the local sample is resynced only
+  // when the chain disagrees with the local interpolation by more than 2 s
+  // (or the figure went up); otherwise the browser ticks it. While a send is
+  // open the digits are held at the click: the clock is no longer the hero's.
+  let clockSample = $state(null);
+  let clockNow = $state(Date.now());
 
   $effect(() => {
     const serverTime = tableState?.time_remaining_secs?.length > 0
       ? Number(tableState.time_remaining_secs[0])
       : null;
-    if (serverTime !== null) {
-      const diff = Math.abs((serverTimeRemaining ?? 0) - serverTime);
-      if (serverTimeRemaining === null || diff > 2 || serverTime > serverTimeRemaining) {
-        serverTimeRemaining = serverTime;
-        lastServerUpdate = Date.now();
-        displayedTimeRemaining = serverTime;
-      }
-    } else {
-      serverTimeRemaining = null;
-      displayedTimeRemaining = null;
-    }
+    const next = resyncClock(untrack(() => clockSample), serverTime, Date.now());
+    if (next !== untrack(() => clockSample)) clockSample = next;
+    clockNow = Date.now();
   });
 
   $effect(() => {
-    if (displayedTimeRemaining === null || displayedTimeRemaining <= 0) return undefined;
-    const id = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - lastServerUpdate) / 1000);
-      displayedTimeRemaining = Math.max(0, (serverTimeRemaining ?? 0) - elapsed);
-    }, 1000);
+    if (!clockSample) return undefined;
+    const id = setInterval(() => { clockNow = Date.now(); }, 1000);
     return () => clearInterval(id);
   });
 
-  const timeRemaining = $derived(displayedTimeRemaining);
+  const timeRemaining = $derived(displayedSeconds(clockSample, clockNow, pendingAction?.sentAt ?? null));
   const usingTimeBank = $derived(tableState?.using_time_bank || false);
   const timeBankRemaining = $derived(
     tableState?.time_bank_remaining_secs?.length > 0
@@ -841,12 +848,9 @@
       ? Number(tableState?.config?.time_bank_secs ?? 30)
       : Number(tableState?.config?.action_timeout_secs ?? 60)
   );
-  const clockFraction = $derived(
-    timeRemaining === null || !actionTimeout
-      ? 0
-      : Math.max(0, Math.min(1, timeRemaining / actionTimeout))
-  );
-  const clockUrgent = $derived(timeRemaining !== null && timeRemaining <= 10);
+  const clockFraction = $derived(clockFractionOf(timeRemaining, actionTimeout));
+  const clockUrgent = $derived(clockUrgentOf(timeRemaining));
+  const offerBank = $derived(offerTimeBank({ secs: timeRemaining, bankSecs: timeBankRemaining, usingBank: usingTimeBank }));
 
   $effect(() => {
     if (timeRemaining === null || !isMyTurn || timeRemaining > 10 || timeRemaining <= 0) {
@@ -854,7 +858,8 @@
     }
     playSound('timer', { frequency: 800, duration: 30 });
     const id = setInterval(() => {
-      if (displayedTimeRemaining > 0 && displayedTimeRemaining <= 10) {
+      const secs = untrack(() => timeRemaining);
+      if (secs > 0 && secs <= 10) {
         playSound('timer', { frequency: 800, duration: 30 });
       }
     }, 1000);
@@ -1031,47 +1036,110 @@
   // 7. Bet sizing
   // ---------------------------------------------------------------------------
 
+  // The arithmetic is $lib/bet-sizing.js (tested); this is the wiring. One
+  // number, `raiseAmount`, is read by the sizer, the primary button and the
+  // keyboard. It is set to the legal floor on every my-turn edge.
+  const sizing = $derived({
+    currentBet, minRaise, minBet, myChips,
+    myCurrentBet: Number(myPlayer?.current_bet ?? 0),
+    pot: totalPot, callAmount
+  });
   let raiseAmount = $state(0);
-  let showRaiseSlider = $state(false);
+  let sizerOpen = $state(false);
   let initializedForTurn = $state(false);
 
   $effect(() => {
     if (!isMyTurn) {
       initializedForTurn = false;
-      showRaiseSlider = false;
+      sizerOpen = false;
     }
   });
 
   $effect(() => {
     if (isMyTurn && gameInProgress && !initializedForTurn) {
       initializedForTurn = true;
-      raiseAmount = canCheck ? minBet : currentBet + minRaise;
+      raiseAmount = raiseFloor(untrack(() => sizing));
     }
   });
 
-  const raiseFloor = $derived(currentBet === 0 ? minBet : currentBet + minRaise);
+  const raiseIllegal = $derived(
+    isMyTurn && gameInProgress ? raiseProblem(raiseAmount, sizing, fmt) : null
+  );
+  const raiseLabel = $derived(raiseKind(currentBet) === 'bet' ? 'Bet' : 'Raise to');
 
-  /**
-   * Pot-fraction presets. A "pot-sized raise" is not "raise TO the pot": it is
-   * call, then raise by the pot as it stands AFTER that call. Writing it as one
-   * formula makes the no-bet case fall out for free, because callAmount and
-   * currentBet are both 0 there and it reduces to "bet half / all of the pot".
-   */
-  function setBetPreset(kind) {
-    const floor = raiseFloor;
-    const potAfterCall = totalPot + callAmount;
-    let target = floor;
-    if (kind === 'half') target = currentBet + Math.floor(potAfterCall / 2);
-    else if (kind === 'pot') target = currentBet + potAfterCall;
-    else if (kind === 'allin') target = maxBetAmount;
-    raiseAmount = Math.min(Math.max(target, floor), maxBetAmount);
+  function setRaise(value) {
+    raiseAmount = Number(value);
+  }
+
+  function applyPreset(id) {
+    raiseAmount = presetTarget(id, sizing);
+  }
+
+  function stepRaise(direction) {
+    raiseAmount = stepByBlind(raiseAmount, bigBlindRaw, direction, raiseFloor(sizing), raiseCap(sizing));
   }
 
   function commitRaise() {
-    if (raiseAmount <= 0) return;
-    onAction(currentBet === 0 ? 'bet' : 'raise', raiseAmount);
-    showRaiseSlider = false;
+    if (!isMyTurn || !gameInProgress || actionPending || pendingAction) return;
+    const amount = clampRaise(raiseAmount, raiseFloor(sizing), raiseCap(sizing));
+    if (amount <= 0) return;
+    raiseAmount = amount;
+    onAction(raiseKind(currentBet), amount);
+    sizerOpen = false;
   }
+
+  // ---------------------------------------------------------------------------
+  // 7b. Pre-actions (lib/pre-actions.js)
+  // ---------------------------------------------------------------------------
+  //
+  // Armed while it is NOT the hero's turn; fired only on a CERTIFIED my-turn
+  // edge (the poll, never the echo: `pendingAction` holds is_my_turn false)
+  // and only if the choice is still legal; dropped when the amount to call
+  // changes underneath it or the hand moves on.
+
+  let preArmed = $state(null);
+  const heroCanPreAct = $derived(
+    gameInProgress && !isMyTurn && !pendingAction && myPlayer !== null
+      && isInHand(myPlayer) && !myPlayer.is_all_in
+  );
+  const preOptions = $derived(heroCanPreAct ? availablePreActions({ callAmount, fmt }) : []);
+  const preArmedTag = $derived(armedTag(preArmed, fmt));
+
+  function armPre(id) {
+    preArmed = id ? armPreAction(id, { callAmount, handNumber }) : null;
+  }
+
+  // Keep or drop the armed choice as the certified state moves under it.
+  $effect(() => {
+    const facts = { callAmount, canCheck, handNumber };
+    const armed = untrack(() => preArmed);
+    if (!armed) return;
+    if (!gameInProgress || myPlayer === null || myPlayer.has_folded) { preArmed = null; return; }
+    const kept = keepPreAction(armed, facts);
+    if (kept !== armed) preArmed = kept;
+  });
+
+  // The edge: a certified view says it is my turn and nothing is in flight.
+  $effect(() => {
+    const armed = untrack(() => preArmed);
+    if (!armed || !isMyTurn || !gameInProgress || actionPending || pendingAction) return;
+    const { fire } = resolvePreAction(armed, { isMyTurn, callAmount, canCheck, handNumber });
+    preArmed = null;
+    if (fire) onAction(fire);
+  });
+
+  // The hero's plate tag: the armed choice while waiting, the sent action
+  // while the echo is open.
+  const heroPlateTag = $derived.by(() => {
+    if (pendingAction) {
+      const echo = echoFor(pendingAction);
+      const text = echo.amountShown !== null ? `${echo.tag} ${fmt(echo.amountShown)}` : echo.tag;
+      return { text, tone: 'sent' };
+    }
+    if (preArmedTag) return { text: preArmedTag, tone: 'armed' };
+    return null;
+  });
+  const sentText = $derived(pendingAction ? sentLabel(pendingAction, fmt) : null);
 
   function potOdds() {
     if (callAmount <= 0 || totalPot <= 0) return null;
@@ -1383,9 +1451,13 @@
              Walked in CANISTER seat order (see `seatPoints`): the nth .seat in
              the DOM is seat n, whatever the rotation does on screen. -->
         {#each seatPoints as point, i}
-          {@const player = players[i] ?? null}
-          {@const acting = gameInProgress && i === actionOn}
+          {@const certified = players[i] ?? null}
           {@const isHero = i === mySeat}
+          <!-- THE ECHO: the hero's own record carries the sent action's stack
+               and bet from the click until the chain absorbs it; every other
+               seat is the certified view, always. -->
+          {@const player = isHero && pendingAction ? echoedPlayer(certified, pendingAction) : certified}
+          {@const acting = gameInProgress && i === actionOn}
           {@const win = isHandComplete ? winInfoFor(i) : null}
           {@const equityText = (allInMoment || isShowdown) ? equityFor(i) : null}
           {@const live = isInHand(player)}
@@ -1442,6 +1514,7 @@
               showCards={gameInProgress || isShowdown}
               heroCards={myCards}
               heroHandName={isHero && (gameInProgress || isShowdown) ? heroHandName : null}
+              plateTag={isHero ? heroPlateTag : null}
               revealed={isHero ? null : revealedHole(player)}
               betAmount={Number(player?.current_bet ?? 0)}
               betAllIn={!!player?.is_all_in}
@@ -1500,34 +1573,6 @@
           </div>
         {/if}
 
-        <!-- bet-sizing popover, anchored above the dock (behaviour: phase 2) -->
-        {#if showRaiseSlider && isMyTurn && gameInProgress}
-          <div class="raise-slider-panel">
-            <div class="slider-header">
-              <span>{currentBet === 0 ? 'Bet' : 'Raise to'}</span>
-              <button class="close-slider" onclick={() => showRaiseSlider = false} aria-label="Close">&times;</button>
-            </div>
-            <div class="slider-amount cd-money">{fmt(raiseAmount)}</div>
-            <input
-              type="range"
-              class="raise-slider"
-              min={raiseFloor}
-              max={maxBetAmount}
-              step={Math.max(1, Math.round(minRaise / 4) || 1)}
-              bind:value={raiseAmount}
-              aria-label="Bet amount"
-            />
-            <div class="preset-buttons">
-              <button onclick={() => setBetPreset('half')}>&frac12; Pot</button>
-              <button onclick={() => setBetPreset('pot')}>Pot</button>
-              <button onclick={() => setBetPreset('allin')}>All In</button>
-            </div>
-            <button class="confirm-raise" onclick={commitRaise}>
-              {currentBet === 0 ? 'Bet' : 'Raise to'} {fmt(raiseAmount)}
-            </button>
-          </div>
-        {/if}
-
         <!-- action log: a drawer over the surround (PokerNow LOG / WPT HANDS) -->
         {#if logOpen}
           <div class="feed-container left">
@@ -1557,10 +1602,14 @@
         </button>
         {#if gameInProgress && mySeat !== null}
           <div class="turn-indicator" class:my-turn={isMyTurn} class:waiting={!isMyTurn} class:time-bank={usingTimeBank}>
-            <span class="turn-title">{isMyTurn ? 'Your turn' : 'Waiting'}</span>
+            <span class="turn-title">{pendingAction ? 'Sent' : isMyTurn ? 'Your turn' : 'Waiting'}</span>
             <span class="turn-hint">
-              {#if isMyTurn}
+              {#if pendingAction}
+                {sentText}
+              {:else if isMyTurn}
                 {#if canCheck}Check or bet{:else}Call {fmt(callAmount)} or raise{/if}
+              {:else if preArmedTag}
+                {preArmedTag} armed
               {:else}
                 {getShortName(players[actionOn], actionOn)} to act
               {/if}
@@ -1599,37 +1648,58 @@
             <span class="equity-hint">need {equityNeeded()}%</span>
           </div>
         {/if}
-        <div class="actions" class:disabled={!isMyTurn || !gameInProgress || actionPending}>
-          {#if actionPending}
-            <div class="action-pending"><span class="spinner"></span><span>Processing</span></div>
-          {:else if !gameInProgress}
-            <div class="no-game-message">
-              {phaseKey === 'HandComplete' ? 'Hand complete' : 'Waiting for players'}
-            </div>
-          {:else if !isMyTurn}
-            <div class="not-your-turn">Waiting for {getShortName(players[actionOn], actionOn)}</div>
-          {:else}
-            <button class="action-btn secondary" onclick={() => onAction('fold')}>Fold</button>
-            {#if canCheck}
-              <button class="action-btn primary" onclick={() => onAction('check')}>Check</button>
-            {:else}
-              <button class="action-btn primary" onclick={() => onAction('call')}>
-                Call {fmt(callAmount)}
-              </button>
-            {/if}
-            {#if canRaise}
-              <button class="action-btn raise" onclick={() => showRaiseSlider = !showRaiseSlider}>
-                {currentBet === 0 ? 'Bet' : 'Raise'}
-              </button>
-            {/if}
-            <button class="action-btn danger" onclick={() => onAction('allin')}>All In</button>
-            {#if timeBankRemaining > 0 && !usingTimeBank}
-              <button class="action-btn ghost" onclick={() => onAction('useTimeBank')}>
-                +{timeBankRemaining}s
-              </button>
-            {/if}
-          {/if}
-        </div>
+        <!-- THE SIZER LIVES IN THE DOCK, never over the felt or the hero's
+             cards. Desktop: a row above the buttons whenever the hero can
+             raise. Phone: in the DOM but hidden until the caret opens it. -->
+        {#if isMyTurn && gameInProgress && canRaise && !pendingAction}
+          <BetSizer
+            value={raiseAmount}
+            ctx={sizing}
+            bigBlind={bigBlindRaw}
+            {isBTC}
+            {decimals}
+            unit={currencySymbol}
+            open={!portrait || sizerOpen}
+            compact={portrait}
+            problem={raiseIllegal}
+            onChange={setRaise}
+            onCommit={commitRaise}
+            onClose={() => { sizerOpen = false; }}
+          />
+        {/if}
+        <ActionBar
+          {isMyTurn}
+          {gameInProgress}
+          {actionPending}
+          {sentText}
+          sentKind={pendingAction?.kind ?? null}
+          noGameText={phaseKey === 'HandComplete' ? 'Hand complete' : 'Waiting for players'}
+          waitingFor={getShortName(players[actionOn], actionOn)}
+          {canCheck}
+          {canRaise}
+          {callAmount}
+          {raiseLabel}
+          {raiseAmount}
+          raiseProblem={raiseIllegal}
+          {fmt}
+          {clockFraction}
+          {clockUrgent}
+          {offerBank}
+          bankSecs={timeBankRemaining}
+          {actionError}
+          {preOptions}
+          preArmedId={preArmed?.id ?? null}
+          compact={portrait}
+          {sizerOpen}
+          keyHints={!portrait}
+          {onAction}
+          onCommitRaise={commitRaise}
+          onPreset={applyPreset}
+          onStep={stepRaise}
+          onArmPre={armPre}
+          onToggleSizer={() => { sizerOpen = !sizerOpen; }}
+          onDismissError={() => onDismissError?.()}
+        />
       </div>
 
       <div class="dock-aux dock-right" class:collapsed={walletCollapsed}>
@@ -1730,6 +1800,10 @@
     position: absolute;
     inset: 0;
     font-size: var(--ui);
+    /* Landscape: the padded table (felt + asymmetric rail) is centred, not
+       the felt; --stage-lift is set in poker-table-tokens.scss and is 0 in
+       portrait. Transform only: nothing about the layout box changes. */
+    transform: translateY(calc(-1 * var(--stage-lift, 0px)));
   }
 
   /* The all-in vignette: the room darkens around the surface. Opacity only. */
@@ -1980,84 +2054,6 @@
     width: min(240px, 24cqw);
     max-height: 74cqh;
     display: flex;
-  }
-
-  .raise-slider-panel {
-    position: absolute;
-    left: 50%;
-    bottom: calc(var(--fw) * 0.01);
-    transform: translateX(-50%);
-    z-index: 34;
-    width: min(340px, 34cqw);
-    display: flex;
-    flex-direction: column;
-    gap: 0.5em;
-    padding: 0.8em 0.9em;
-    border-radius: var(--cd-radius-panel);
-    background: var(--cd-panel);
-    border: 1px solid var(--cd-line-strong);
-    box-shadow: var(--cd-shadow-lift);
-    font-size: var(--cd-text-md);
-  }
-
-  .slider-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 0.8em;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--cd-ink-2);
-  }
-
-  .close-slider {
-    width: 22px;
-    height: 22px;
-    border-radius: var(--cd-radius-chip);
-    border: 1px solid var(--cd-line-strong);
-    background: transparent;
-    color: var(--cd-ink-1);
-    cursor: pointer;
-    line-height: 1;
-  }
-
-  .slider-amount {
-    text-align: center;
-    font-size: 1.9em;
-    font-weight: var(--cd-weight-display);
-    color: var(--cd-money);
-  }
-
-  .raise-slider {
-    width: 100%;
-    accent-color: var(--cd-money);
-  }
-
-  .preset-buttons { display: flex; gap: var(--cd-space-2); }
-
-  .preset-buttons button {
-    flex: 1;
-    padding: 7px 0;
-    border-radius: var(--cd-radius-chip);
-    border: 1px solid var(--cd-line-strong);
-    background: var(--cd-surface-2);
-    color: var(--cd-ink-1);
-    font-size: 0.82em;
-    font-weight: var(--cd-weight-figure);
-    cursor: pointer;
-  }
-
-  .preset-buttons button:hover { background: var(--cd-money-dim); }
-
-  .confirm-raise {
-    padding: 10px 0;
-    border-radius: var(--cd-radius-chip);
-    border: none;
-    background: linear-gradient(180deg, var(--cd-money-hi), var(--cd-money-lo));
-    color: var(--cd-money-ink);
-    font-weight: var(--cd-weight-display);
-    font-size: 0.95em;
-    cursor: pointer;
   }
 
   @include dock.dock;

@@ -133,6 +133,10 @@ export async function readTableTruth(tableId, playerNum) {
         balance: Number(balance),
         mySeat: optional(view.my_seat) === null ? null : Number(optional(view.my_seat)),
         callAmount: Number(view.call_amount),
+        // The raise-legality fields the sizer's resting figure is checked by.
+        currentBet: Number(view.current_bet),
+        minRaise: Number(view.min_raise ?? view.config.big_blind),
+        minBet: Number(view.min_bet ?? view.config.big_blind),
         isMyTurn: view.is_my_turn,
         dealerSeat: Number(view.dealer_seat),
         smallBlindSeat: Number(view.small_blind_seat),
@@ -692,6 +696,49 @@ function compare(truth, dom, opts) {
     }
     if (dom.turnHint && /call/i.test(dom.turnHint) && /\d/.test(dom.turnHint)) {
         figures.push(checkFigure('turn hint "Call X" vs call_amount', truth.callAmount, dom.turnHint.replace(/^[^\d-]*/, ''), { currency }));
+    }
+    // The pre-action row's "Call X" toggle (PreActions.svelte) is the same
+    // call_amount, promised in advance; "Call any" carries no figure.
+    for (const label of dom.preActionButtons || []) {
+        if (!/^call\s+\d/i.test(label)) continue;
+        figures.push(checkFigure('pre-action "Call X" vs call_amount', truth.callAmount, label.replace(/^call/i, ''), { currency }));
+    }
+
+    // ---- the sizer at rest -----------------------------------------------
+    // The dock sizer (BetSizer.svelte) proposes the LEGAL FLOOR on every
+    // my-turn edge: current_bet + min_raise, or min_bet with nothing in front.
+    // Three places show that figure (the typed field, the range's value and
+    // the primary "Raise to X" / "Bet X" button), and every one of them is
+    // money the next click SENDS, so all three are asserted against the
+    // canister's own fields. assertBetPresetsAgree moves the sizer to the
+    // pot-fraction presets and puts it back to Min before this runs.
+    if (dom.raiseSliderRange && truth.isMyTurn) {
+        const floor = truth.currentBet === 0 ? truth.minBet : truth.currentBet + truth.minRaise;
+        const cap = truth.mySeat === null ? 0
+            : (truth.seats[truth.mySeat]?.chips ?? 0) + (truth.seats[truth.mySeat]?.currentBet ?? 0);
+        const expected = Math.min(cap, Math.max(floor, 0));
+        const sliderValue = Number(dom.raiseSliderRange.value);
+        figures.push({
+            label: 'bet sizer at rest vs the legal floor (current_bet + min_raise, or min_bet)',
+            chain: expected,
+            domText: String(sliderValue),
+            agrees: sliderValue === expected,
+            discriminates2x: false,
+            ok: sliderValue === expected,
+            detail: sliderValue === expected
+                ? `the range holds ${sliderValue} e8s, the legal floor`
+                : `the range holds ${sliderValue} e8s where the legal floor is ${expected} e8s `
+                  + `(current_bet ${truth.currentBet}, min_raise ${truth.minRaise}, min_bet ${truth.minBet}, cap ${cap})`,
+        });
+        if (dom.raiseInputValue) {
+            figures.push(checkFigure('bet preset "at rest" typed field vs the value that would be SENT', sliderValue, dom.raiseInputValue, { currency }));
+        }
+        if (dom.raiseButtonText && /\d/.test(dom.raiseButtonText)) {
+            figures.push(checkFigure(
+                'action button "Raise to X" vs the value that would be SENT',
+                sliderValue, dom.raiseButtonText.replace(/^[^\d-]*/, ''), { currency },
+            ));
+        }
     }
 
     // ---- winner banner ---------------------------------------------------

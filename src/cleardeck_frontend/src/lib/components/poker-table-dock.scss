@@ -119,91 +119,8 @@
 
   .equity-hint { color: var(--cd-ink-2); }
 
-  .actions {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: var(--cd-space-2);
-    min-width: 0;
-    flex-wrap: nowrap;
-  }
-
-  .actions.disabled { opacity: 0.45; pointer-events: none; }
-
-  .no-game-message, .not-your-turn, .action-pending {
-    display: flex;
-    align-items: center;
-    gap: var(--cd-space-2);
-    min-height: var(--cd-touch-min);
-    padding: 0 18px;
-    border-radius: var(--cd-radius-chip);
-    background: var(--cd-surface-1);
-    border: 1px solid var(--cd-line-soft);
-    color: var(--cd-ink-2);
-    font-size: var(--cd-text-sm);
-    white-space: nowrap;
-  }
-
-  .spinner {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    border: 2px solid var(--cd-line-strong);
-    border-top-color: var(--cd-accent);
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  /* The action buttons: 44 px tall everywhere (the touch floor), one radius,
-     tone by role. Behaviour and sizing logic belong to phase 2. */
-  .action-btn {
-    flex: 0 1 auto;
-    min-width: 78px;
-    min-height: var(--cd-touch-min);
-    padding: 0 var(--cd-space-4);
-    border-radius: var(--cd-radius-card);
-    border: 1px solid transparent;
-    font-family: inherit;
-    font-size: var(--cd-text-md);
-    font-weight: var(--cd-weight-figure);
-    font-variant-numeric: tabular-nums;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: transform var(--cd-fast) var(--cd-ease), filter var(--cd-fast) var(--cd-ease);
-  }
-
-  .action-btn:hover { transform: translateY(-1px); filter: brightness(1.1); }
-  .action-btn:active { transform: translateY(0); }
-
-  .action-btn.secondary {
-    background: var(--cd-surface-2);
-    border-color: var(--cd-line-strong);
-    color: var(--cd-ink-1);
-  }
-
-  .action-btn.primary {
-    background: var(--cd-accent);
-    color: var(--cd-accent-ink);
-  }
-
-  .action-btn.raise {
-    background: linear-gradient(180deg, var(--cd-money-hi), var(--cd-money-lo));
-    color: var(--cd-money-ink);
-  }
-
-  .action-btn.danger {
-    background: var(--cd-danger);
-    color: var(--cd-ink);
-  }
-
-  .action-btn.ghost {
-    background: transparent;
-    border-color: var(--cd-line-strong);
-    color: var(--cd-ink-2);
-    min-width: 0;
-    padding: 0 var(--cd-space-3);
-  }
+  /* The action row, the sizer and the pre-action toggles are ActionBar.svelte,
+     BetSizer.svelte and PreActions.svelte, each with its own scoped styles. */
 
   .wallet-panel {
     display: flex;
@@ -371,24 +288,6 @@
     .dock-left { grid-column: 1; grid-row: 1; }
     .dock-right { grid-column: 2; grid-row: 1; }
 
-    .actions { flex-wrap: nowrap; gap: 6px; width: 100%; }
-
-    .action-btn {
-      flex: 1 1 0;
-      min-width: 0;
-      min-height: 48px;
-      padding: 0 4px;
-      font-size: 15px;
-      border-radius: var(--cd-radius-card);
-    }
-
-    .action-btn.ghost { flex: 0 0 auto; padding: 0 9px; }
-
-    .no-game-message, .not-your-turn, .action-pending {
-      min-height: 48px;
-      font-size: var(--cd-text-md);
-    }
-
     .turn-indicator { display: none; }
 
     /* THE COMMITTED BLOCK IS ONE ROW UNDER THE BALANCE on a phone. Measured
@@ -409,13 +308,11 @@
     .sit-controls { display: none; }
 
     .feed-container.left { width: min(230px, 62cqw); max-height: 60cqh; }
-    .raise-slider-panel { width: min(320px, 88cqw); font-size: var(--cd-text-sm); }
   }
 
   /* Very short landscape (phone held sideways): trim the dock, keep the felt. */
   @media (min-aspect-ratio: 1/1) and (max-height: 560px) {
     .poker-table-wrapper { --dock-h: 62px; }
-    .action-btn { padding: 0 12px; font-size: var(--cd-text-sm); min-width: 66px; }
     .turn-indicator { display: none; }
     .sit-controls { display: none; }
   }

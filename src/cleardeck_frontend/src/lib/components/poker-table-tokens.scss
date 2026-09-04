@@ -89,7 +89,15 @@
      same selector, and the later declaration wins (measured: with this rule
      after the portrait one, the 6-max phone felt fell from 54% to 47%). */
   .table-inner {
-    --fw: min(75cqw, 177cqh);
+    /* The near rail (0.075) is 2.5x the far one (0.03), so the padded table
+       is 0.581 fw tall (0.476 felt + 0.105 rail) and its centre sits 0.0225 fw
+       BELOW the felt's. The whole scene is lifted by that much so the padded
+       object, not the felt, is centred in the stage; measured without it the
+       near rail painted 22 px into the dock, over the pot-odds line, as soon
+       as the dock carried the sizer. The height cap is the padded object:
+       0.581 -> 172cqh (was 177, the ring's need, which the rail now exceeds). */
+    --stage-lift: calc(var(--fw) * (var(--rail-bottom-r) - var(--rail-top-r)) * 0.5);
+    --fw: min(75cqw, 172cqh);
     --fh: calc(var(--fw) / var(--ar));
     --rx: calc(var(--fw) * 0.5 * var(--ring-kx));
     --ry: calc(var(--fh) * 0.5 * var(--ring-ky));
@@ -99,10 +107,10 @@
     --ui: calc(var(--fw) * var(--ui-r));
   }
 
-  /* 1.02 + 0.202 + 0.056 = 1.278 -> 78cqw ; 0.476 + 0.074 = 0.550 -> 181cqh */
-  .ring-crowded .table-inner { --fw: min(78cqw, 181cqh); }
-  /* 1.02 + 0.262 + 0.072 = 1.354 -> 73cqw ; 0.476 + 0.094 = 0.570 -> 175cqh */
-  .ring-sparse  .table-inner { --fw: min(73cqw, 175cqh); }
+  /* 1.02 + 0.202 + 0.056 = 1.278 -> 78cqw ; the padded table 0.581 -> 172cqh */
+  .ring-crowded .table-inner { --fw: min(78cqw, 172cqh); }
+  /* 1.02 + 0.262 + 0.072 = 1.354 -> 73cqw ; the padded table 0.581 -> 172cqh */
+  .ring-sparse  .table-inner { --fw: min(73cqw, 172cqh); }
 
   /* ==========================================================================
      PORTRAIT: switched on ASPECT RATIO, not width (bar 19): a 0.555 stadium
@@ -146,7 +154,9 @@
     /* width 0.70 + 0.46 = 1.160 -> 86cqw ; height: the FELT itself -> 55cqh.
        In portrait the avatar sits INSIDE the plate (SeatPod), so the flank
        pods' extent is the plate's, as measured in section 11. */
-    .table-inner { --fw: min(86cqw, 55cqh); }
+    /* No lift in portrait: the phone stage is height-bound and the far rail
+       already sits under the header. */
+    .table-inner { --fw: min(86cqw, 55cqh); --stage-lift: 0px; }
 
     /* Nine pods on a phone: the ring opens out and everything comes down. */
     .poker-table-wrapper.ring-crowded {

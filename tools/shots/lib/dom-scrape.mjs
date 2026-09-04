@@ -164,18 +164,31 @@ export function scrapeTable(page) {
             actionButtons: [...document.querySelectorAll('.actions .action-btn')]
                 .map((b) => (b.textContent || '').replace(/\s+/g, ' ').trim())
                 .filter(Boolean),
-            // The bet-sizing popover. `.slider-amount` and the confirm button are
-            // the two places the client shows what it is ABOUT TO WAGER, so they
-            // are money figures even though the amount is client-side state.
+            // The bet sizer (BetSizer.svelte, in the dock since the decision-loop
+            // wave). The typed field `.raise-input`, the primary "Raise to X"
+            // button and the range's value are the places the client shows what
+            // it is ABOUT TO WAGER, so they are money figures even though the
+            // amount is client-side state. `.slider-amount` / `.confirm-raise`
+            // are the old popover's names, kept so an older build still scrapes.
             raiseSliderPresent: !!document.querySelector('.raise-slider-panel'),
             raiseSliderAmountText: one(document, '.raise-slider-panel .slider-amount'),
             raiseConfirmText: one(document, '.raise-slider-panel .confirm-raise'),
+            raiseInputValue: (() => {
+                const el = document.querySelector('.raise-slider-panel .raise-input');
+                return el ? String(el.value || '').trim() : null;
+            })(),
+            raiseButtonText: one(document, '.actions .action-btn.raise:not(.caret)'),
             raiseSliderRange: (() => {
                 const el = document.querySelector('.raise-slider-panel .raise-slider');
                 return el ? { min: el.min, max: el.max, value: el.value } : null;
             })(),
             presetButtons: [...document.querySelectorAll('.raise-slider-panel .preset-buttons button')]
                 .map((b) => (b.textContent || '').replace(/\s+/g, ' ').trim()),
+            // The pre-action row (PreActions.svelte), shown while it is NOT the
+            // hero's turn. A "Call X" toggle carries the call amount.
+            preActionButtons: [...document.querySelectorAll('.pre-actions .pre-btn')]
+                .map((b) => (b.textContent || '').replace(/\s+/g, ' ').trim())
+                .filter(Boolean),
         };
     });
 }
@@ -224,23 +237,42 @@ export async function readBetPreset(page, label) {
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
     return page.evaluate(() => {
+        // The readout is the typed field in the dock sizer (BetSizer.svelte);
+        // `.slider-amount` was the old popover's readout and is read if present.
         const amt = document.querySelector('.raise-slider-panel .slider-amount');
+        const field = document.querySelector('.raise-slider-panel .raise-input');
         const slider = document.querySelector('.raise-slider-panel .raise-slider');
-        const confirm = document.querySelector('.raise-slider-panel .confirm-raise');
+        // The commit is the primary "Raise to X" button in the action row now;
+        // `.confirm-raise` was the popover's own button.
+        const confirm = document.querySelector('.raise-slider-panel .confirm-raise')
+            || document.querySelector('.actions .action-btn.raise:not(.caret)');
         return {
             available: true,
-            amountText: amt ? (amt.textContent || '').replace(/\s+/g, ' ').trim() : null,
+            amountText: amt
+                ? (amt.textContent || '').replace(/\s+/g, ' ').trim()
+                : field ? String(field.value || '').trim() : null,
             confirmText: confirm ? (confirm.textContent || '').replace(/\s+/g, ' ').trim() : null,
             sliderValue: slider ? slider.value : null,
         };
     });
 }
 
-/** Closes the bet-sizing popover so the scene photographs its normal state. */
+/**
+ * Puts the sizer back to its resting state so the scene photographs what a
+ * player sees on arrival: the LEGAL FLOOR (current_bet + min_raise, or min_bet),
+ * which is what the client proposes on every my-turn edge and what
+ * assertChainAgreement checks the resting readout against. The old popover was
+ * closed here; the dock sizer stays where it is and is reset with "Min".
+ */
 export async function closeBetPresets(page) {
     await page.evaluate(() => {
+        const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const min = [...document.querySelectorAll('.raise-slider-panel .preset-buttons button')]
+            .find((b) => norm(b.textContent) === 'min');
+        if (min) min.click();
         document.querySelector('.raise-slider-panel .close-slider')?.click();
     });
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 }
 
 /**

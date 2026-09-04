@@ -39,6 +39,7 @@
   import { ClockNudgePolicy, CLOCK_NUDGE } from "$lib/clockNudge.js";
   import { HttpAgent } from '@dfinity/agent';
   import { Principal } from '@dfinity/principal';
+  import { beginPending, humaneActionError, pendingExpired, pendingStatus, projectPending } from '$lib/optimistic.js';
 
   let view = $state('lobby'); // 'lobby' | 'table'
   let tables = $state([]);
@@ -403,11 +404,15 @@
   //
   // The `loadingTableState` re-entrancy guard is kept: a query is cheap for the
   // canister but not free for the browser, and overlapping polls still race.
+  // A load asked for while one is in flight (the action-return re-read) runs
+  // as soon as the in-flight one settles, rather than being dropped.
+  let reloadWanted = false;
+
   async function loadTableState() {
     if (!tableActor) return;
 
-    // Prevent concurrent loadTableState calls - skip if already loading
-    if (loadingTableState) return;
+    // Prevent concurrent loadTableState calls - queue one if already loading
+    if (loadingTableState) { reloadWanted = true; return; }
     loadingTableState = true;
 
     // Track this request to discard stale responses
@@ -427,14 +432,29 @@
       let currentTableView = null;
       if (viewResult && viewResult.length > 0) {
         currentTableView = viewResult[0];
+        // RECONCILE THE ECHO. A certified view that has absorbed the sent
+        // action closes it; one that still shows the pre-click state (a
+        // replica that has not seen the update) keeps it open and is
+        // rendered with is_my_turn held false, so the dock cannot flip back
+        // to "your turn" between the click and the commit (the flicker the
+        // audit measured at one poll after every action).
+        if (pendingAction) {
+          if (pendingStatus(pendingAction, currentTableView) === 'absorbed') {
+            pendingAction = null;
+          } else if (pendingExpired(pendingAction, Date.now())) {
+            pendingAction = null;
+            showActionError('The table has not confirmed your action yet. It will show on the next update.');
+          }
+        }
+        const nextView = projectPending(currentTableView, pendingAction);
         // Only update state if game data changed (timer ticks client-side)
-        if (gameStateChanged(tableState, currentTableView)) {
-          tableState = currentTableView;
+        if (gameStateChanged(tableState, nextView)) {
+          tableState = nextView;
         } else {
           // Still update time_remaining_secs for the client-side timer sync
           // This is a shallow merge - only update the timer field
-          if (tableState && currentTableView.time_remaining_secs) {
-            tableState = { ...tableState, time_remaining_secs: currentTableView.time_remaining_secs };
+          if (tableState && nextView.time_remaining_secs) {
+            tableState = { ...tableState, time_remaining_secs: nextView.time_remaining_secs };
           }
         }
 
@@ -492,14 +512,40 @@
     } finally {
       // Always reset loading flag to allow next poll
       loadingTableState = false;
+      if (reloadWanted) {
+        reloadWanted = false;
+        loadTableState();
+      }
     }
   }
 
-  // Fast polling - 500ms for responsive gameplay. QUERIES ONLY (E-92).
-  const POLL_INTERVAL = 500;
+  // Fast polling - 250 ms for responsive gameplay. QUERIES ONLY (E-92): a
+  // query costs the canister nothing, and the in-flight guard in
+  // loadTableState keeps overlapping polls from racing.
+  const POLL_INTERVAL = 250;
   const HEARTBEAT_INTERVAL = 10000; // Send heartbeat every 10 seconds
   const BALANCE_REFRESH_INTERVAL = 5000; // Refresh balance every 5 seconds
   let actionPending = $state(false);
+  // THE OPTIMISTIC ECHO ($lib/optimistic.js). Set before the update call is
+  // awaited, rendered as fact by PokerTable, cleared when a certified view has
+  // absorbed the action (or on Err, or after PENDING_TTL_MS as a lost send).
+  let pendingAction = $state(null);
+  // A canister refusal of the last action. Shown beside the buttons, not in
+  // the page toast, and cleared after a few seconds.
+  let actionError = $state(null);
+  let actionErrorTimer = null;
+  const ACTION_ERROR_MS = 6000;
+
+  function showActionError(err) {
+    actionError = humaneActionError(err);
+    if (actionErrorTimer) clearTimeout(actionErrorTimer);
+    actionErrorTimer = setTimeout(() => { actionError = null; actionErrorTimer = null; }, ACTION_ERROR_MS);
+  }
+
+  function dismissActionError() {
+    actionError = null;
+    if (actionErrorTimer) { clearTimeout(actionErrorTimer); actionErrorTimer = null; }
+  }
   let heartbeatInterval = null;
   let balanceRefreshInterval = null;
   let clockNudgeInterval = null;
@@ -686,6 +732,43 @@
     }
   });
 
+  const PLAYER_ACTION_VARIANTS = {
+    fold: () => ({ Fold: null }),
+    check: () => ({ Check: null }),
+    call: () => ({ Call: null }),
+    raise: (amount) => ({ Raise: BigInt(amount) }),
+    bet: (amount) => ({ Bet: BigInt(amount) }),
+    allin: () => ({ AllIn: null }),
+  };
+
+  // THE DECISION LOOP'S UPDATE. The echo is set BEFORE the await so the felt
+  // shows the action at the click; the certified view is never written to in
+  // place (the old code mutated tableState.is_my_turn, which the next poll
+  // undid). On Err the echo is dropped, the certified figures are back on the
+  // next paint, and the reason lands beside the buttons.
+  async function sendPlayerAction(kind, amount) {
+    const variant = PLAYER_ACTION_VARIANTS[kind];
+    if (!variant) return null;
+    if ((kind === 'raise' || kind === 'bet') && !(Number(amount) > 0)) return null;
+    dismissActionError();
+    pendingAction = beginPending(kind, kind === 'raise' || kind === 'bet' ? amount : null, tableState, Date.now());
+    if (pendingAction && tableState) tableState = projectPending(tableState, pendingAction);
+    playSound(kind);
+    let result;
+    try {
+      result = await tableActor.player_action(variant(amount));
+    } catch (e) {
+      pendingAction = null;
+      throw e;
+    }
+    if ('Err' in result) {
+      pendingAction = null;
+      showActionError(result.Err);
+      playSound('error');
+    }
+    return result;
+  }
+
   async function handleTableAction(action, data) {
     if (actionPending || !tableActor) return;
     actionPending = true;
@@ -704,55 +787,12 @@
           break;
 
         case 'fold':
-          if (tableState) tableState.is_my_turn = false;
-          playSound('fold');
-          result = await tableActor.player_action({ Fold: null });
-          if ('Err' in result) {
-            error = result.Err;
-            playSound('error');
-          }
-          break;
-
         case 'check':
-          if (tableState) tableState.is_my_turn = false;
-          playSound('check');
-          result = await tableActor.player_action({ Check: null });
-          if ('Err' in result) {
-            error = result.Err;
-            playSound('error');
-          }
-          break;
-
         case 'call':
-          if (tableState) tableState.is_my_turn = false;
-          playSound('call');
-          result = await tableActor.player_action({ Call: null });
-          if ('Err' in result) {
-            error = result.Err;
-            playSound('error');
-          }
-          break;
-
         case 'raise':
-          if (data) {
-            if (tableState) tableState.is_my_turn = false;
-            playSound('raise');
-            result = await tableActor.player_action({ Raise: BigInt(data) });
-            if ('Err' in result) {
-              error = result.Err;
-              playSound('error');
-            }
-          }
-          break;
-
+        case 'bet':
         case 'allin':
-          if (tableState) tableState.is_my_turn = false;
-          playSound('allin');
-          result = await tableActor.player_action({ AllIn: null });
-          if ('Err' in result) {
-            error = result.Err;
-            playSound('error');
-          }
+          result = await sendPlayerAction(action, data);
           break;
 
         case 'start':
@@ -768,18 +808,6 @@
               playSound('error');
             }
             // The UI already shows "Need 2+ players to start" hint
-          }
-          break;
-
-        case 'bet':
-          if (data) {
-            if (tableState) tableState.is_my_turn = false;
-            playSound('bet');
-            result = await tableActor.player_action({ Bet: BigInt(data) });
-            if ('Err' in result) {
-              error = result.Err;
-              playSound('error');
-            }
           }
           break;
 
@@ -833,14 +861,20 @@
           break;
       }
 
+      // The action-return re-read: the felt settles when the call returns,
+      // not up to a poll later (docs/RESPONSIVENESS.md section 5).
       await loadTableState();
     } catch (e) {
       logger.error(`Action ${action} failed:`, e);
+      pendingAction = null;
       // Check if this is a signature verification error (expired II delegation)
       if (isSignatureError(e)) {
         error = 'Session expired. Please log in again.';
         stopPolling();
         await auth.logout();
+      } else if (PLAYER_ACTION_VARIANTS[action]) {
+        showActionError(e);
+        playSound('error');
       } else {
         error = e.message || 'Action failed';
       }
@@ -852,6 +886,8 @@
   function backToLobby() {
     stopPolling();
     view = 'lobby';
+    pendingAction = null;
+    dismissActionError();
     tableState = null;
     myCards = null;
     shuffleProof = null;
@@ -1148,6 +1184,9 @@
             {tableState}
             {myCards}
             {actionPending}
+            {pendingAction}
+            {actionError}
+            onDismissError={dismissActionError}
             maxPlayers={Number(currentTableInfo?.config?.max_players ?? 0) || null}
             onAction={handleTableAction}
             tableBalance={myBalance}

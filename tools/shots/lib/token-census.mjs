@@ -126,6 +126,27 @@ export const CHAIN_SITES = [
         why: 'the blinds quoted in the table header pill (docs/DEFECTS.md T-11)',
     },
     {
+        id: 'raise-button',
+        selector: '.actions .action-btn.raise',
+        label: /^action button "Raise to X" vs the value that would be SENT$/,
+        why: 'the figure on the primary "Raise to X" / "Bet X" button: the sizer\'s '
+            + 'value, which the click SENDS, and which is itself asserted against the '
+            + "canister's legal floor at rest and against get_pot() at the presets",
+    },
+    {
+        id: 'raise-sizer-field',
+        selector: '.raise-slider-panel .raise-input',
+        label: /^bet preset .* vs the value that would be SENT$/,
+        why: 'the typed amount field of the dock sizer (BetSizer.svelte): the same '
+            + 'figure the range holds, asserted at rest and at the presets',
+    },
+    {
+        id: 'pre-action-call',
+        selector: '.pre-actions .pre-btn',
+        label: /^pre-action "Call X" vs call_amount$/,
+        why: 'the "Call X" pre-action toggle: the call amount promised in advance',
+    },
+    {
         id: 'call-button',
         selector: '.actions .action-btn',
         label: /^action button "Call X" vs call_amount$/,

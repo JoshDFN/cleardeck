@@ -57,6 +57,14 @@ export const ALLOWLIST = [
             + 'stabilises it so stills are deterministic',
     },
     {
+        id: 'keyboard-hint-digits',
+        selector: '.key-hints',
+        tokens: '^[1-5]$',
+        why: 'the hotkey legend under the action row on pointer devices '
+            + '(ActionBar.svelte): "1-5 sizes" names the number keys that pick a bet '
+            + 'preset. Key caps, never chips; a single digit 1 to 5 and nothing else',
+    },
+    {
         id: 'time-bank-button',
         selector: '.actions .action-btn',
         tokens: '^\\d{1,3}$',
