@@ -445,7 +445,7 @@
         // badges share. These mirror the CSS ratios --card-hero-r and
         // --off-hero-r for each ring density (PokerTable's portrait block).
         bx = crowded ? 0.25 : 0.27;
-        by = -(crowded ? 0.133 : sparse ? 0.17 : 0.14);
+        by = -(crowded ? 0.14 : sparse ? 0.17 : 0.14);
       } else if (!alongNormal) {
         // Tangent, taken away from the axis the board sits on so the disc never
         // drifts under it. Dead centre is broken to the right (landscape) or
@@ -456,7 +456,13 @@
           // between its plate and the pot module is free; below it is the
           // hero), away from the board from an upper one (the board's first
           // card sits right under its plate).
-          bx = nx * CHIP_SIDE_IN;
+          // On the 6-max ring (ring-kx 0.70, the plate well inside the felt)
+          // a LOWER flank seat's chips also lean a little outward: measured,
+          // the inward lean put the amount capsule under the pot module's
+          // edge. On the nine-seat ring (ring-kx 0.90) the plate already
+          // hangs off the felt, so its chips keep the inward lean.
+          const lean = (sn > 0 && !crowded) ? -0.5 : 1;
+          bx = nx * CHIP_SIDE_IN * lean;
           by = -CHIP_SIDE;
         } else {
           const away = cs >= 0 ? 1 : -1;

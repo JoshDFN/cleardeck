@@ -301,9 +301,11 @@
       top: calc(100% + var(--fw) * 0.02);
       line-height: 1.15;
       /* The readout sits in the band between the board and the lower flank
-         plates (0.17 fw below the centre on the 6-max ring), not beside them,
-         so its width is the felt's; its HEIGHT is what must stay short. */
-      max-width: calc(var(--fw) * 0.9);
+         plates (0.17 fw below the centre on the 6-max ring). A flank winner's
+         award stands above its plate's outer half in that same band, 0.31 fw
+         from the centre line, so the readout stays inside 0.62 fw and wraps
+         to its two rows instead of reaching the award. */
+      max-width: calc(var(--fw) * 0.62);
     }
 
     .main-pot { padding: 0.18em 0.7em 0.18em 0.6em; gap: 0.5em; }
@@ -327,9 +329,10 @@
       bottom: calc(100% + var(--fw) * 0.02);
       /* The upper flank plates' inner ends are 0.26 fw either side of the
          centre line at the readout's height (measured: the module over
-         Turing's plate at 0.58 fw). */
-      max-width: calc(var(--fw) * 0.46);
+         Turing's plate at 0.58 fw, its shadow touching it at 0.46). */
+      max-width: calc(var(--fw) * 0.42);
     }
+    :global(.ring-crowded) .pot-amount { font-size: 1.15em; }
     :global(.ring-crowded) .pot-label { white-space: normal; text-align: center; }
     :global(.ring-crowded) .main-pot { white-space: normal; padding: 0.15em 0.5em; gap: 0.35em; }
     :global(.ring-crowded) .winner-line { padding: 0.2em 0.5em; }
