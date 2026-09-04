@@ -18,6 +18,7 @@
   } from '$lib/depositAddress.js';
   import { isTrustedTableId, untrustedTableMessage } from '$lib/trustedTables.js';
   import { scrollLock } from '$lib/scroll-lock.js';
+  import QuickAmounts from './QuickAmounts.svelte';
 
   const {
     tableActor, tableCanisterId, onClose, onDepositSuccess, currency = 'ICP',
@@ -25,7 +26,25 @@
     // null. A Sit tap on a seat the player cannot yet afford hands the
     // shortfall here (lib/join-gate.js) so the cashier is one tap from the seat.
     initialAmount = null,
+    // The TABLE canister's own minimum buy-in (config.min_buy_in, the smallest
+    // unit), for the quick chips; null hides them. Never the lobby record's
+    // figure (docs/DEFECTS.md T-11).
+    minBuyIn = null,
   } = $props();
+
+  // THE QUICK CHIPS (QuickAmounts.svelte): the table's minimum buy-in and
+  // twice it, as the field would be typed in its current unit.
+  const quickAmounts = $derived.by(() => {
+    if (minBuyIn === null || minBuyIn === undefined) return [];
+    let min;
+    try { min = BigInt(minBuyIn); } catch { return []; }
+    if (min <= 0n) return [];
+    const text = (v) => (isBTC && inputUnit === 'sats' ? v.toString() : formatPlain(v));
+    return [
+      { id: 'min', label: 'Min buy-in', text: text(min), hint: 'The table\'s minimum buy-in' },
+      { id: 'double', label: '2x', text: text(min * 2n), hint: 'Twice the table\'s minimum buy-in' },
+    ];
+  });
 
   // ==========================================================================
   // IS THIS CANISTER ID ONE THIS BUILD HAS EVER HEARD OF?
@@ -1274,6 +1293,16 @@
               MAX
             </button>
           </div>
+          <!-- One tap to the table's buy-in (QuickAmounts.svelte). The figures
+               come from the table canister's config (minBuyIn); MAX above is
+               the wallet's. -->
+          <QuickAmounts
+            chips={quickAmounts}
+            selected={depositAmount}
+            btc={isBTC}
+            disabled={processing}
+            onPick={(text) => { depositAmount = text; }}
+          />
           {#if depositAmount && Number(depositAmount) > 0}
             <div class="conversion-preview">
               <div class="conversion-row">
@@ -1319,7 +1348,7 @@
               <span class="min-why">Send less and it is not swept and it is not lost: above
               the {feeDisplay} network fee you can ask for it back to your own wallet at any
               time, less that one fee. <strong>At or below {feeDisplay} nothing can move
-              it</strong> -- a transfer costs more than the amount, so it cannot be swept,
+              it</strong>: a transfer costs more than the amount, so it cannot be swept,
               refunded or withdrawn by anyone. Top the same address up to the minimum and
               the whole balance comes out together.</span>
               (network fee {feeDisplay}, charged twice by the ledger, so you need
@@ -1618,7 +1647,11 @@
   </div>
 </div>
 
-<style>
+<style lang="scss">
+  /* The phone sheet's rules, shared with WithdrawModal (a mixin, included in
+     the phone block at the end of this style). */
+  @use './money-sheet-phone' as sheet;
+
   .modal-backdrop {
     position: fixed;
     inset: 0;
@@ -1873,6 +1906,7 @@
     gap: 8px;
     align-items: center;
   }
+
 
   .input-suffix {
     font-size: 14px;
@@ -2770,71 +2804,39 @@
   }
 
   /* =========================================================================
-     THE PHONE: A FULL-HEIGHT SHEET, NOT A FLOATING BOX.
-     Header fixed at the top, the body the one scroller (its overscroll
-     contained so the table behind never moves), the close control and every
-     button at the 44 px touch floor, the actions row sticky at the bottom of
-     the scroller once the form is in view, 16 px inputs so iOS does not zoom
-     the page on focus. The notices, the custody disclosure and the solvency
-     block keep their order and every word; only their spacing is tighter.
+     THE PHONE: A FULL-HEIGHT SHEET (money-sheet-phone.scss), AND THE FIRST
+     SCREEN IS THE AMOUNT.
+     The DOM order is unchanged (the desktop dialog and every harness scrape
+     read it as before); on the phone the body's flex order puts the five
+     protected phrases first as a compact strip, then the amount field with
+     its quick chips and preview, then the wallet balance and its source.
+     The custody, network, solvency and runway disclosures keep their place
+     BETWEEN the amount and the Deposit button: docs/SECURITY-FINDINGS.md
+     FINDING 23 / 35 / 42 put each of them "before every control that can
+     move money", and the amount field moves nothing. A player types the
+     figure on the first screen and reads what custody means on the way to
+     the button. Measured before: the field landed around y 900 on an 844 px
+     screen, under four paragraphs.
      ========================================================================= */
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {
-    .modal-content {
-      top: 0;
-      left: 0;
-      transform: none;
-      width: 100%;
-      max-width: none;
-      height: 100dvh;
-      max-height: 100dvh;
-      border-radius: 0;
-      border: 0;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      padding-top: var(--cd-safe-top);
+    @include sheet.sheet;
+
+    .player-notice { order: -3; }
+    .form-section { order: -2; }
+    .balance-section,
+    .wallet-source-toggle,
+    .deposit-method-toggle,
+    .oisy-connect-section { order: -1; }
+
+    .custody-notice, .network-line {
+      font-size: var(--cd-text-sm);
+      line-height: 1.45;
+      padding: var(--cd-space-2) var(--cd-space-3);
     }
-
-    .modal-header {
-      flex: 0 0 auto;
-      padding: 8px 8px 8px 16px;
-    }
-
-    .modal-header h2 { font-size: var(--cd-text-lg); }
-
-    .close-btn {
-      width: var(--cd-touch-min);
-      height: var(--cd-touch-min);
-      min-width: var(--cd-touch-min);
-      font-size: 30px;
-    }
-
-    .modal-body {
-      flex: 1 1 auto;
-      min-height: 0;
-      overflow-y: auto;
-      overscroll-behavior: contain;
-      -webkit-overflow-scrolling: touch;
-      padding: 14px 16px calc(24px + var(--cd-safe-bottom));
-      gap: 14px;
-    }
-
-    .player-notice, .custody-notice, .network-line { font-size: 12px; line-height: 1.45; padding: 10px 12px; }
 
     .deposit-method-toggle button,
     .wallet-source-toggle button { min-height: var(--cd-touch-min); }
 
-    input[type='number'] { font-size: 16px; min-height: var(--cd-touch-min); }
-    .max-btn { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
-    .unit-toggle button { min-height: 36px; min-width: var(--cd-touch-min); }
-
-    .btn-primary, .btn-secondary { min-height: 48px; font-size: 15px; }
-
-    /* NOT sticky. A row pinned to the bottom of the scroller stood over the
-       solvency advice's figures at rest (the occlusion gate measured 37.5% of
-       "I DO NOT KNOW whether this canister can pay everyone it owes" under
-       it); nothing in this app may paint over a money figure. The row is in
-       flow at 48 px, one short scroll under the amount field. */
-    .actions { padding-top: var(--cd-space-1); }
+    .unit-toggle button { min-height: var(--cd-control-md); min-width: var(--cd-touch-min); }
   }
 </style>

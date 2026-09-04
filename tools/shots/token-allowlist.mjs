@@ -57,6 +57,15 @@ export const ALLOWLIST = [
             + 'stabilises it so stills are deterministic',
     },
     {
+        id: 'deposit-quick-multiple',
+        selector: '.quick-amounts .quick-amount',
+        tokens: '^2$',
+        why: 'the cashier\'s "2x" quick chip (DepositModal.svelte): the FACTOR of the '
+            + 'table\'s minimum buy-in it fills the field with, never a money figure. The '
+            + 'figure it produces lands in the amount field, which is read like any typed '
+            + 'amount; the label is a factor',
+    },
+    {
         id: 'bet-preset-multiples',
         selector: '.raise-slider-panel .preset-buttons button',
         tokens: '^(2\\.5|3|4)$',

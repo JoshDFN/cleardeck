@@ -32,6 +32,7 @@ import { lobbyActor, optional } from './lib/agent.mjs';
 import { gitShortSha, runDirs } from './lib/capture.mjs';
 import { launchBrowser, newContext, setAppOrigin, settle, watchPage } from './lib/browser.mjs';
 import { probeProtectedNotices } from './lib/protected-notices.mjs';
+import { raiseToast, removeToast, TOAST_MESSAGES } from './lib/toast-notices.mjs';
 import { scenesByName } from './scenarios/index.mjs';
 import { foldTouchTargets, measureTouchTargets, TOUCH_MIN_PX } from './lib/touch-targets.mjs';
 
@@ -157,6 +158,10 @@ async function runScene(scene, vp, ctx, browser, outDir, results) {
       // The rotate prompt shows on a coarse-pointer phone held sideways on the
       // TABLE view only; the lobby never shows it.
       expectRotatePrompt: sideways ? isTable : false,
+      // The table view is one screen on a phone (routes/app-phone.scss): the
+      // document may be no taller than the viewport. The lobby scrolls by
+      // design (its rows are below the fold).
+      expectNoPageScroll: isTable,
     };
     const verdicts = [];
     const first = await measureState(page, { scene: scene.name, viewportName, label: '', expect });
@@ -180,6 +185,30 @@ async function runScene(scene, vp, ctx, browser, outDir, results) {
         log(`    ⚠ notices off screen: ${off.join(' | ')}`);
       } else {
         log(`  ▪ ${notices.length}/${notices.length} protected notices on screen with the prompt up`);
+      }
+    }
+
+    // THE TOAST'S CLOSE CONTROL, measured. No resting scene raises a toast, so
+    // the app's own error toast is raised the way lib/toast-notices.mjs raises
+    // it for the notice gate (the app's own rule paints it, the real
+    // `.toast-close` button included) and its control is measured at the
+    // touch floor, then it is removed.
+    if (!sideways) {
+      const raised = await raiseToast(page, TOAST_MESSAGES[0].text).catch(() => null);
+      if (raised && raised.toastRulesMatched.length) {
+        try {
+          const v = await measureState(page, { scene: scene.name, viewportName, label: 'toast up', expect, scope: '.toast' });
+          log(`  ${v.ok ? '✓' : '✗'} toast up: ${v.notes}`);
+          for (const p of v.problems) log(`    ⚠ ${p}`);
+          const f = path.join(outDir, `TOUCH-${scene.name}-toast-up-${viewportName}.png`);
+          await photograph(page, v, f);
+          v.file = path.relative(REPO_ROOT, f);
+          verdicts.push(v);
+        } finally {
+          await removeToast(page);
+        }
+      } else {
+        log('    (could not raise the app\'s toast; its close control was not measured)');
       }
     }
 

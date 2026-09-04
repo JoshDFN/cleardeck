@@ -133,10 +133,24 @@
          0.068 it showed a third and read as a glitch). */
       --off-opp-r: 0.095;
       --off-shown-r: 0.112;
-      /* The hero's pair stands fully clear of the hero plate's top edge:
-         half the hero plate + half a card + a hair. */
-      --off-hero-r: 0.16;
-      --card-hero-r: 0.14;
+      /* THE HERO'S PAIR: 0.19 fw (60 px on the 6-max phone; 0.14 was 44)
+         with a 6 degree fan (HoleCards.svelte). At that size a pair standing
+         clear of the plate reached the lower flank plates' band, so the HERO
+         SEAT moves DOWN by --hero-dy-r (the felt has 0.27 fw below the plate
+         on this ring and the nine-seat ring has none, see ring-crowded) and
+         the pair's top edge lands where the 0.14 pair's was (measured 0.246
+         fw above the old seat point; now 0.242). The puck rule
+         (table-geometry puckSpot) and the hero's chip spot (PokerTable
+         ringSeats) are relative to the seat and move with it. The offset is
+         derived: half the plate, the card's visible half (aspect 0.81), the
+         gap; a ring may TUCK the pair behind the plate's top edge by
+         --hero-tuck of its height instead (the occlusion gate allows a card
+         face 20% covered, tools/shots/lib/occlusion.mjs). */
+      --hero-dy-r: 0.08;
+      --hero-tuck: 0;
+      --hero-gap-r: 0.006;
+      --card-hero-r: 0.19;
+      --off-hero-r: calc(var(--pod-h-hero-r) / 2 + (0.5 - var(--hero-tuck)) * var(--card-hero-r) / 0.81 + var(--hero-gap-r));
       /* The hero plate on a phone: wider (the bottom of the felt is free) and
          tall enough for three rows (name, stack, your hand). */
       --pod-w-hero-r: 0.58;
@@ -174,8 +188,18 @@
       /* The hero plate: wide enough for a named hand at the floor on one row. */
       --pod-w-hero-r: 0.50;
       --pod-h-hero-r: 0.135;
-      --card-hero-r: 0.13;
-      --off-hero-r: 0.16;
+      /* 0.14 fw = 42 px on the nine-seat phone (was 0.13 = 39). This ring
+         has no room below the hero plate (its lower half reached the dock's
+         balance at ring-ky 1.0), so the seat stays where it is, and a tuck
+         is out too: an 8% tuck measured 20.9% of the card's ink covered (the
+         plate's shadow spills onto the card, tools/shots/lib/occlusion.mjs
+         allows 20%). So the pair stands clear with a hair of gap and grows
+         only as far as the band allows: its top edge lands at 0.244 fw above
+         the seat against the old 0.240. */
+      --card-hero-r: 0.14;
+      --hero-dy-r: 0;
+      --hero-tuck: 0;
+      --hero-gap-r: 0.004;
       --cluster-dy-r: -0.180;
       /* 0.116 fw = 34.5 px on the nine-seat phone: the corner index (0.32 of
          the card) reaches the 11 px on-felt floor. At 0.098 it was 9.3 px,
@@ -199,17 +223,19 @@
       --off-shown-r: 0.124;
       --pod-w-hero-r: 0.62;
       --pod-h-hero-r: 0.18;
-      --off-hero-r: 0.19;
-      --card-hero-r: 0.15;
+      --card-hero-r: 0.20;
       --ui-r: 0.062;
     }
     .ring-sparse .table-inner { --fw: min(87cqw, 55cqh); }
 
     /* THE HERO SEAT'S OWN PLATE SIZE. Everything that hangs off the seat
-       (plate, badge, award, puck) reads --pod-w/--pod-h, so it all follows. */
+       (plate, badge, award, puck) reads --pod-w/--pod-h, so it all follows.
+       And its own PLACE: --hero-dy-r felt widths below the ring point, so
+       the bigger pair above it stays out of the flank plates' band. */
     .seat.is-me {
       --pod-w: calc(var(--fw) * var(--pod-w-hero-r));
       --pod-h: calc(var(--fw) * var(--pod-h-hero-r));
+      --sy: calc(var(--ry) * var(--sn, 0) + var(--fw) * var(--hero-dy-r, 0));
     }
   }
 }

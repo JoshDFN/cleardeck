@@ -596,7 +596,9 @@
     </div>
   {:else}
     <div class="wallet-connected">
-      <button class="wallet-btn connected" onclick={() => showDropdown = !showDropdown}>
+      <!-- The name is also the accessible name: the phone's table header
+           shows this chip as the avatar alone (table-header-phone.scss). -->
+      <button class="wallet-btn connected" onclick={() => showDropdown = !showDropdown} aria-label={displayName} title={displayName}>
         {#if avatarUrl}
           <img class="avatar-img" src={avatarUrl} alt="Avatar" />
         {:else}
@@ -1591,20 +1593,22 @@
      ========================================================================= */
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {
     .wallet-btn { min-height: var(--cd-touch-min); }
-    .dev-menu button { min-height: var(--cd-touch-min); font-size: 14px; }
+    .dev-menu button { min-height: var(--cd-touch-min); font-size: var(--cd-text-md); }
     .dropdown {
       position: fixed;
       top: auto;
-      right: 8px;
-      left: 8px;
-      max-height: calc(100dvh - 120px);
+      right: var(--cd-space-2);
+      left: var(--cd-space-2);
+      /* Three control heights of room above the sheet: the trust bar and the
+         header it opens under. */
+      max-height: calc(100dvh - 3 * var(--cd-control-md));
       overflow-y: auto;
       overscroll-behavior: contain;
       min-width: 0;
     }
-    .dropdown-btn { min-height: var(--cd-touch-min); font-size: 14px; }
+    .dropdown-btn { min-height: var(--cd-touch-min); font-size: var(--cd-text-md); }
     .copy-btn, .copy-btn.small { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
     .pref-row { min-height: var(--cd-touch-min); align-items: center; }
-    .pref-row input { width: 22px; height: 22px; margin: 0 4px 0 0; }
+    .pref-row input { width: var(--cd-icon-lg); height: var(--cd-icon-lg); margin: 0 var(--cd-space-1) 0 0; }
   }
 </style>

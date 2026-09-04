@@ -66,11 +66,15 @@ export const DRIFT_TARGETS = {
     // is never excused. If this run comes back green the allowlist has become
     // able to swallow money, which is the one way the inversion can be defeated.
     censusshape: {
-        selector: '.display-name',
+        // The first VISIBLE match wins (injectDrift): the phone's table header
+        // shows the wallet chip as the avatar alone, so there the seat's name
+        // (excused by the same `display-name-digits` rule) is the target.
+        selector: '.display-name, .player-name',
         how: 'write "0.30" into an element the allowlist excuses (the wallet display name, '
-            + 'whose digits are excused as part of a generated label), to prove that a '
-            + 'MONEY-SHAPED token is refused there rather than swallowed. Nothing asserts '
-            + 'this element, so only the census\'s shape invariant can catch it',
+            + 'or a seat name where the phone header hides it, whose digits are excused as '
+            + 'part of a generated label), to prove that a MONEY-SHAPED token is refused '
+            + 'there rather than swallowed. Nothing asserts this element, so only the '
+            + 'census\'s shape invariant can catch it',
         writeText: '0.30',
     },
 };
@@ -129,11 +133,23 @@ export async function injectDrift(page, targets) {
             return i === -1 ? 'A' : order[(i + 1) % order.length];
         };
 
+        // The census only gates tokens it can SEE, so a fault written into a
+        // hidden element proves nothing: the first PAINTED match of the
+        // selector is the target, and only if none is painted the first match.
+        const painted = (el) => {
+            const r = el.getBoundingClientRect();
+            if (r.width < 1 || r.height < 1) return false;
+            const s = getComputedStyle(el);
+            return s.display !== 'none' && s.visibility !== 'hidden';
+        };
+        const pick = (selector) => [...document.querySelectorAll(selector)].find(painted)
+            || document.querySelector(selector);
+
         const applied = [];
         const plan = [];
         for (const name of names) {
             const selector = table[name].selector;
-            const el = document.querySelector(selector);
+            const el = pick(selector);
             if (!el) {
                 applied.push({ target: name, selector, before: null, after: null, note: 'selector not present on this page' });
                 continue;
@@ -153,7 +169,7 @@ export async function injectDrift(page, targets) {
         // is not good enough for a fault-injection proof, so it is re-applied.
         const reapply = () => {
             for (const p of plan) {
-                const el = document.querySelector(p.selector);
+                const el = pick(p.selector);
                 if (el && el.textContent !== p.after) el.textContent = p.after;
             }
         };

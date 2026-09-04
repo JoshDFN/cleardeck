@@ -541,9 +541,39 @@ more, because an empty lobby makes the whole screenshot harness unrunnable and n
 notices. See the recovery in up_wire (docs/DEFECTS.md E-74)."
   fi
   ok "lobby lists $count table record(s)"
+  # THE RECORDS SAY WHAT THE CONTRACTS CHARGE. docs/DEFECTS.md T-11.
+  # `init_microstakes_tables` writes table_1's blinds and buy-ins into all three
+  # records, while table_2 and table_3 enforce 5x and 10x those figures. The
+  # lobby has a read-only repair for exactly that: `refresh_all_table_configs`
+  # copies each registered table's config FROM the table canister itself, so
+  # the registry cannot be told a figure the contract does not charge. Without
+  # it the lobby scene fails chain agreement on a freshly provisioned stack
+  # (every local-up since E-74), which is the harness working, not the client.
+  lobby_sync_records
   # btc_table_1 has no lobby registration call in any deploy path. State it rather
   # than let it look intentional. docs/DEFECTS.md T-05.
   warn "btc_table_1 is NOT registered in the lobby by any known call (docs/DEFECTS.md T-05)"
+}
+
+# Copies every registered table's config from the table contract into the lobby
+# record (admin only; $CONTROLLER is the admin local-up sets). Read back and
+# fatal, like the count above: an `Err` reply exits 0 from `icp canister call`.
+lobby_sync_records() {
+  local reply
+  reply="$(icp_local canister call lobby refresh_all_table_configs '()' --identity "$CONTROLLER" 2>&1 || true)"
+  if ! printf '%s' "$reply" | grep -q 'Ok'; then
+    printf '%s\n' "$reply" | sed 's/^/      /' >&2
+    die "lobby refresh_all_table_configs did not reply Ok; the lobby records still carry \
+init_microstakes_tables' figures (docs/DEFECTS.md T-11) and the lobby scene will fail chain agreement"
+  fi
+  ok "lobby records refreshed from the table contracts: $(printf '%s' "$reply" | tr -d '\n' | sed 's/  */ /g')"
+}
+
+cmd_local_lobby_sync() {
+  gateway_is_up || die "the local gateway is not answering at ${GATEWAY_ORIGIN}; run '$0 local-up'"
+  lobby_sync_records
+  icp_local canister call lobby get_tables '()' --query 2>/dev/null \
+    | grep -E 'name|small_blind|big_blind|min_buy_in|max_buy_in' | sed 's/^/      /'
 }
 
 up_fund() {
@@ -1778,6 +1808,8 @@ ${B}ClearDeck dev entry point${R}   (make <target> works for all of these)
                                    'verify-build.sh --local' runs the same check
                                    a stranger runs against mainnet
   ${B}local-status${R}    alias for doctor
+  ${B}local-lobby-sync${R} copy every table contract's config into its lobby record
+                    (T-11; local-up runs it, this re-runs it on a live stack)
   ${B}wasm${R}            build table_canister.wasm and print its sha256
 
   ${B}test${R}            THE PRIMARY GATE, nine steps, every one time-bounded
@@ -1876,6 +1908,7 @@ main() {
     doctor)         cmd_doctor ;;
     local-up)       cmd_local_up "$@" ;;
     local-status)   cmd_local_status ;;
+    local-lobby-sync) cmd_local_lobby_sync ;;
     wasm)           cmd_wasm ;;
     test)           cmd_test ;;
     custody)        cmd_custody ;;

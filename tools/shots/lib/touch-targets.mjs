@@ -177,6 +177,25 @@ export function measureTouchTargets(page, opts = {}) {
       };
     });
 
+    // THE POT MODULE NEVER STANDS ON A PLATE. The side-pot pills sit in the
+    // band between the board and the lower flank plates; a pill that reaches
+    // a plate covers no money figure (the occlusion gate is silent) but reads
+    // as a collision to a player. Every painted `.side-pot` box against every
+    // painted `.player-nameplate` box.
+    const intersects = (p, q) => p.x < q.right && q.x < p.right && p.y < q.bottom && q.y < p.bottom;
+    const plates = [...document.querySelectorAll('.player-nameplate')].filter(painted).map((el) => ({ el, box: box(el) }));
+    const collisions = [];
+    for (const pill of [...document.querySelectorAll('.side-pot')].filter(painted)) {
+      const pb = box(pill);
+      for (const plate of plates) {
+        if (!intersects(pb, plate.box)) continue;
+        collisions.push({
+          pill: text(pill), pillBox: pb,
+          plate: text(plate.el.querySelector('.player-name') || plate.el), plateBox: plate.box,
+        });
+      }
+    }
+
     return {
       viewport: { w: vw, h: vh },
       coarsePointer: window.matchMedia('(pointer: coarse)').matches,
@@ -187,6 +206,7 @@ export function measureTouchTargets(page, opts = {}) {
       rotatePromptVisible: rotateUp,
       items,
       type,
+      collisions,
     };
   }, { selector: INTERACTIVE_SELECTOR, touchMin, floors, scope });
 }
@@ -195,7 +215,10 @@ export function measureTouchTargets(page, opts = {}) {
  * Folds one measurement into a verdict fragment.
  *
  * @param {object|null} m result of `measureTouchTargets`
- * @param {{scene:string, viewport:string, touchMin?:number, expectDialogLock?:boolean, expectRotatePrompt?:boolean}} where
+ * @param {{scene:string, viewport:string, touchMin?:number, expectDialogLock?:boolean, expectRotatePrompt?:boolean, expectNoPageScroll?:boolean}} where
+ *   `expectNoPageScroll`: the table view is one screen on a phone
+ *   (routes/app-phone.scss), so the document may be no taller than the
+ *   viewport; a taller one is the scroll trap the audit measured at 1040 px.
  */
 export function foldTouchTargets(m, where) {
   const touchMin = where.touchMin ?? TOUCH_MIN_PX;
@@ -222,6 +245,12 @@ export function foldTouchTargets(m, where) {
   if (m.documentScrollWidth > m.viewport.w) {
     problems.push(`the document is ${m.documentScrollWidth} px wide in a ${m.viewport.w} px viewport (horizontal scroll)`);
   }
+  if (where.expectNoPageScroll && m.documentScrollHeight > m.viewport.h + 1) {
+    problems.push(`the document is ${m.documentScrollHeight} px tall in a ${m.viewport.h} px viewport: the table view scrolls (a flick on the felt moves the action row)`);
+  }
+  for (const c of m.collisions || []) {
+    problems.push(`the side-pot pill "${c.pill}" (${c.pillBox.w}x${c.pillBox.h} at ${c.pillBox.x},${c.pillBox.y}) stands on the plate of "${c.plate}" (${c.plateBox.w}x${c.plateBox.h} at ${c.plateBox.x},${c.plateBox.y})`);
+  }
   if (where.expectDialogLock && m.dialogOpen && !m.scrollLocked) {
     problems.push('a dialog is open and the page behind it is not scroll-locked (html.cd-scroll-lock missing)');
   }
@@ -237,6 +266,7 @@ export function foldTouchTargets(m, where) {
     + (smallest ? `; smallest painted box ${smallest.s} px ("${smallest.text}")` : '')
     + `; document ${m.documentScrollWidth}x${m.documentScrollHeight} in ${m.viewport.w}x${m.viewport.h}`
     + `; type floors ${(m.type || []).filter((t) => !t.ok).length ? 'BROKEN' : 'met'}`
+    + ((m.collisions || []).length ? `; ${m.collisions.length} pot pill(s) on a plate` : '')
     + (m.dialogOpen ? `; dialog open, scroll ${m.scrollLocked ? 'locked' : 'NOT locked'}` : '')
     + (m.rotatePromptVisible ? '; rotate prompt showing' : '');
   return { ok: problems.length === 0, measurement: m, problems, notes, scene: where.scene, viewport: where.viewport };

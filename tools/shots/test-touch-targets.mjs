@@ -94,4 +94,28 @@ check('the rotate prompt is asserted both ways when asked', () => {
   assert.equal(foldTouchTargets(m, { scene: 's', viewport: 'mobile', expectRotatePrompt: false }).ok, false);
 });
 
+check('a document taller than the viewport fails only where no page scroll is expected', () => {
+  const m = { ...base(), items: [item()], documentScrollHeight: 1040 };
+  const v = foldTouchTargets(m, { scene: 's', viewport: 'mobile', expectNoPageScroll: true });
+  assert.equal(v.ok, false);
+  assert.match(v.problems[0], /1040 px tall in a 844 px viewport/);
+  assert.equal(foldTouchTargets(m, { scene: 'lobby', viewport: 'mobile' }).ok, true);
+  assert.equal(foldTouchTargets({ ...m, documentScrollHeight: 844 }, { scene: 's', viewport: 'mobile', expectNoPageScroll: true }).ok, true);
+});
+
+check('a side-pot pill standing on a plate fails', () => {
+  const m = {
+    ...base(),
+    items: [item()],
+    collisions: [{
+      pill: 'SIDE 1 11.90', pillBox: { x: 150, y: 460, w: 95, h: 18, right: 245, bottom: 478 },
+      plate: 'Nakamoto', plateBox: { x: 25, y: 455, w: 140, h: 46, right: 165, bottom: 501 },
+    }],
+  };
+  const v = foldTouchTargets(m, { scene: 's', viewport: 'mobile' });
+  assert.equal(v.ok, false);
+  assert.match(v.problems[0], /"SIDE 1 11.90".*stands on the plate of "Nakamoto"/);
+  assert.match(v.notes, /1 pot pill\(s\) on a plate/);
+});
+
 console.log(`\ntouch-targets fold: ${n} cases passed`);

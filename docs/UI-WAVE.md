@@ -27,16 +27,22 @@ lost when the handoffs are.
   (RotatePrompt.svelte, coarse pointer under 560 px tall; the trust bar and
   the header stay on screen and the table keeps polling). The proper fix is
   the audit's: `100dvh` wrapper, a 22 px strip, icon overlays, a one-row
-  dock, no page scroll. Nothing photographs landscape in run.mjs; the
-  touch-target script measures it at 750x342.
-- **The phone cashier as one screen.** DepositModal and WithdrawModal are
-  full-height sheets on a phone now (fixed header, one scroller, sticky
-  actions row, 44 px controls, scroll lock behind), but the amount field
-  still sits under the notices, the custody disclosure and the solvency
-  block. The audit's one-screen cashier (amount + quick chips + CTA in the
-  first 420 px, legal copy as the existing one-line strip with "Read all")
-  is the money-flows phase's to build; the notices, the custody block and
-  the solvency block keep their order above the money controls by rule.
+  dock, no page scroll. Portrait is one screen now (routes/app-phone.scss:
+  the on-table shell is 100dvh, the footer is off the phone table view and
+  its two links ride the Log drawer). Nothing photographs landscape in
+  run.mjs; the touch-target script measures it at 750x342.
+- **The phone cashier's Deposit button under the disclosures.** DepositModal
+  and WithdrawModal are full-height sheets on a phone (fixed header, one
+  scroller, 44 px controls, scroll lock behind, money-sheet-phone.scss), and
+  the phone's first screen is now the five protected phrases as a compact
+  strip, the amount field with its quick chips (the table's minimum buy-in
+  and twice it, QuickAmounts.svelte) and the wallet balance. The Deposit
+  button stays BELOW the custody, network, solvency and runway disclosures:
+  docs/SECURITY-FINDINGS.md FINDING 23 / 35 / 42 put each of them before
+  every control that can move money, and a sticky row over them covered a
+  solvency figure (the occlusion gate). A "sticky only while the form block
+  is in view" row (a wrapper around the form and the actions) is the
+  money-flows phase's call, with the security placement rule in hand.
 - **Sound for an anonymous spectator on a phone table.** The phone's table
   header has no slot for the sound toggle; it rides the dock beside Log,
   which renders for everyone, signed in or not. If the dock ever drops for

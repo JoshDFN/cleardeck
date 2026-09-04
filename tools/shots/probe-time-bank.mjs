@@ -130,6 +130,34 @@ async function probeViewport(vp, ctx, browser, outDir) {
       + `hit area at the touch floor: ${before.hitsAtTouchFloor} (${before.hitProbes.map((h) => (h ? 'y' : 'n')).join('')}); clock ${before.clock}; `
       + `over the clock digits: ${before.overClockDigits}`);
 
+    // THE SECONDS ON THE PRIMARY BUTTON in the last ten seconds ("Call 0.10
+    // · 8s", ActionBar.svelte `data-secs`): wait for the badge, photograph
+    // it, record what it paints (a pseudo-element; the button's text stays
+    // "Call 0.10" for the chain-agreement check).
+    const urgent = await page.waitForSelector('.actions .action-btn.primary.with-secs', { timeout: 12_000 })
+      .then(() => true).catch(() => false);
+    let urgentBadge = null;
+    if (urgent) {
+      await settle(page);
+      urgentBadge = await page.evaluate(() => {
+        const btn = document.querySelector('.actions .action-btn.primary.with-secs');
+        if (!btn) return null;
+        const after = getComputedStyle(btn, '::after');
+        return {
+          text: (btn.textContent || '').replace(/\s+/g, ' ').trim(),
+          dataSecs: btn.getAttribute('data-secs'),
+          painted: after.content,
+          podClock: (document.querySelector('.player-nameplate.highlight-me .turn-timer')?.textContent || '').trim() || null,
+        };
+      });
+      const urgentFile = path.join(outDir, `PROBE-clock-urgent-${vp.name}.png`);
+      await page.screenshot({ path: urgentFile, fullPage: false });
+      results.urgentBadge = { file: path.relative(REPO_ROOT, urgentFile), ...urgentBadge };
+      log(`  urgent: primary button text "${urgentBadge?.text}" paints ${urgentBadge?.painted} (data-secs ${urgentBadge?.dataSecs}, pod clock ${urgentBadge?.podClock})`);
+    } else {
+      log('  urgent badge not seen within 12 s (the pill was pressed before the last ten seconds)');
+    }
+
     // Press it: the canister's use_time_bank moves the clock onto the bank.
     await page.locator('.time-bank-pill').first().click();
     await page.waitForSelector('.turn-indicator.time-bank, .player-nameplate.highlight-me .turn-timer', { timeout: 10_000 }).catch(() => {});

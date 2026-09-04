@@ -121,6 +121,15 @@ export function raiseToast(page, text) {
       if (scope) span.classList.add(scope);
       span.textContent = message;
       node.appendChild(span);
+      // The real toast's dismiss control (routes/+page.svelte `.toast-close`),
+      // with the same scope class, so the app's own rule sizes it and
+      // tools/shots/touch-targets.mjs can measure it at the touch floor.
+      const close = document.createElement('button');
+      close.className = ['toast-close', scope].filter(Boolean).join(' ');
+      close.setAttribute('type', 'button');
+      close.setAttribute('aria-label', 'Dismiss');
+      close.textContent = '×';
+      node.appendChild(close);
       app.appendChild(node);
 
       // PROOF THAT THE APP'S OWN RULE IS PAINTING THIS NODE, not a resemblance.

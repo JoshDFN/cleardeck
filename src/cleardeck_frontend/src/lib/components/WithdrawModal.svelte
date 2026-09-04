@@ -664,7 +664,11 @@
   </div>
 </div>
 
-<style>
+<style lang="scss">
+  /* The phone sheet's rules, shared with DepositModal (a mixin, included in
+     the phone block at the end of this style). */
+  @use './money-sheet-phone' as sheet;
+
   .modal-backdrop {
     position: fixed;
     inset: 0;
@@ -1117,49 +1121,9 @@
     color: #fecaca;
   }
 
-  /* THE PHONE: a full-height sheet (see DepositModal.svelte for the rules). */
+  /* THE PHONE: a full-height sheet, the rules shared with DepositModal
+     (money-sheet-phone.scss). */
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {
-    .modal-content {
-      top: 0;
-      left: 0;
-      transform: none;
-      width: 100%;
-      max-width: none;
-      height: 100dvh;
-      max-height: 100dvh;
-      border-radius: 0;
-      border: 0;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      padding-top: var(--cd-safe-top);
-    }
-
-    .modal-header { flex: 0 0 auto; padding: 8px 8px 8px 16px; }
-    .modal-header h2 { font-size: var(--cd-text-lg); }
-
-    .close-btn {
-      width: var(--cd-touch-min);
-      height: var(--cd-touch-min);
-      min-width: var(--cd-touch-min);
-      font-size: 30px;
-    }
-
-    .modal-body {
-      flex: 1 1 auto;
-      min-height: 0;
-      overflow-y: auto;
-      overscroll-behavior: contain;
-      -webkit-overflow-scrolling: touch;
-      padding: 14px 16px calc(24px + var(--cd-safe-bottom));
-    }
-
-    .player-notice { font-size: 12px; line-height: 1.45; padding: 10px 12px; }
-    input[type='number'] { font-size: 16px; min-height: var(--cd-touch-min); }
-    .max-btn { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
-    .btn-primary, .btn-secondary { min-height: 48px; font-size: 15px; }
-
-    /* In flow, not sticky: see DepositModal.svelte (the occlusion gate). */
-    .actions { padding-top: var(--cd-space-1); }
+    @include sheet.sheet;
   }
 </style>

@@ -12,7 +12,14 @@
      * as every figure on the felt. Without this the log re-derived its own
      * precision per value and printed "0.0000" beside "50.00".
      */
-    format = null
+    format = null,
+    /**
+     * The page footer's two links. On a phone the table view is one screen
+     * with no footer (routes/app-phone.scss), so "How it works" and "Verify
+     * code" ride the bottom of this drawer instead; null hides the row.
+     */
+    onHowItWorks = null,
+    onVerifyCode = null
   } = $props();
 
   // Toggle to show previous hand
@@ -173,6 +180,17 @@
       {/each}
     {/if}
   </div>
+
+  {#if onHowItWorks || onVerifyCode}
+    <div class="feed-links">
+      {#if onHowItWorks}
+        <button type="button" class="feed-link" onclick={onHowItWorks}>How it works</button>
+      {/if}
+      {#if onVerifyCode}
+        <button type="button" class="feed-link" onclick={onVerifyCode}>Verify code</button>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -605,9 +623,35 @@
     }
   }
 
-  @media (max-width: 900px) {
-    .action-feed {
-      display: none;
-    }
+  /* The two page links at the drawer's foot, at the touch floor everywhere
+     (a drawer is a thumb surface on the phone and costs nothing on desktop). */
+  .feed-links {
+    flex: 0 0 auto;
+    display: flex;
+    gap: var(--cd-space-1);
+    padding: var(--cd-space-1) var(--cd-space-2) calc(var(--cd-space-1) + var(--cd-safe-bottom));
+    border-top: 1px solid var(--cd-line-soft);
   }
+
+  .feed-link {
+    flex: 1 1 0;
+    min-height: var(--cd-touch-min);
+    padding: 0 var(--cd-space-2);
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--cd-ink-2);
+    font-family: inherit;
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-strong);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .feed-link:hover { color: var(--cd-ink); border-color: var(--cd-line); }
+
+  /* The drawer used to be `display: none` under 900 px, which left the
+     phone's Log button opening nothing. It is an overlay sized by
+     `.feed-container` (PokerTable.svelte) at every viewport now. */
 </style>

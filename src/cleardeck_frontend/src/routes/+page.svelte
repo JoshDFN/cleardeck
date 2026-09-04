@@ -43,7 +43,7 @@
   // The audit's critical mobile finding: an anonymous "Sit" tap reached the
   // canister and came back as a red balance error over the phone header. The
   // decision (sign in / top up / join) is a pure module; this file only acts.
-  import { joinGateDecision, seatToResume } from '$lib/join-gate.js';
+  import { escrowFromRead, joinGateDecision, joinGateFacts, seatToResume } from '$lib/join-gate.js';
   import RotatePrompt from '$lib/components/RotatePrompt.svelte';
   import { untrack } from 'svelte';
 
@@ -731,14 +731,18 @@
     clockPolicy = null;
   }
 
-  // Get current balance
-  let myBalance = $state(0);
+  // The escrow at this table, as last READ. Null until `get_balance()` has
+  // answered and null again after a failed read: the join gate treats null as
+  // unknown, not as zero (lib/join-gate.js escrowFromRead), and the dock shows
+  // no figure it has not been given.
+  let myBalance = $state(null);
   async function loadBalance() {
     if (!tableActor) return;
     try {
-      myBalance = Number(await tableActor.get_balance());
+      myBalance = escrowFromRead({ ok: true, value: await tableActor.get_balance() });
     } catch (e) {
       logger.error('Failed to load balance:', e);
+      myBalance = escrowFromRead({ ok: false });
     }
   }
 
@@ -821,11 +825,13 @@
           // buy-in: open the cashier with the shortfall filled in. Only a
           // signed-in, funded tap reaches the canister (the canister still
           // decides; this only stops the two taps whose answer is known).
-          const decision = joinGateDecision({
+          // The facts are CERTIFIED ones: the table canister's own config
+          // (never the lobby record, T-11) and the escrow as last read.
+          const decision = joinGateDecision(joinGateFacts({
             isAuthenticated: $auth.isAuthenticated,
             escrow: myBalance,
-            minBuyIn: currentTableInfo?.config?.min_buy_in ?? null,
-          });
+            tableView: tableState,
+          }));
           if (decision.kind === 'login') {
             resumeSeat = { seat: data, tableKey: currentTableKey() };
             try {
@@ -1267,6 +1273,8 @@
             onToggleSound={toggleSound}
             {shuffleProof}
             onShowProof={() => showProofPanel = true}
+            onHowItWorks={() => { showHowItWorks = true; }}
+            onVerifyCode={() => { showVerify = true; }}
           />
           <!-- The phone held sideways: over the table area only, so the trust
                bar and the header stay on screen (RotatePrompt.svelte). -->
@@ -1358,6 +1366,7 @@
     tableCanisterId={currentTableInfo?.canister_id?.[0]}
     currency={getTableCurrency(currentTableInfo)}
     initialAmount={depositPrefill}
+    minBuyIn={tableState?.config?.min_buy_in ?? null}
     onClose={() => { showDepositModal = false; depositPrefill = null; }}
     onDepositSuccess={() => { refreshAllBalances(); loadTableState(); }}
   />
@@ -1559,6 +1568,7 @@
      included below where its rules used to sit (the cascade is
      order-sensitive) and scoped by Svelte like everything else. */
   @use './table-header-phone' as phone;
+  @use './app-phone' as app-phone;
 
   :global(*) {
     box-sizing: border-box;
@@ -2935,52 +2945,10 @@
   }
   .hash-row .hash.live-unknown { color: #fcd34d; }
 
-  /* =========================================================================
-     THE PHONE (portrait, or a window under 560 px tall): touch floors and the
-     toast's place. Last in the file on purpose: these outrank the desktop
-     rules of the same specificity above.
-     ========================================================================= */
-  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
-    /* The table area anchors the sideways-phone panel (RotatePrompt). */
-    .table-area { position: relative; }
-
-    /* THE TOAST NEVER COVERS NAVIGATION. On the table view it stands UNDER
-       the header (over the far seats, dismissable), not over Lobby / History
-       / Verify Fair; on every other view it is a bottom snackbar above the
-       home indicator. The protected notices are above both, which
-       tools/shots/lib/toast-notices.mjs measures on every scene. */
-    .toast {
-      top: calc(var(--notice-safe-top, 80px) + var(--header-h, 0px) + var(--cd-space-2));
-      max-width: calc(100vw - var(--cd-space-4));
-      padding: var(--cd-space-2) var(--cd-space-3);
-      gap: var(--cd-space-2);
-    }
-
-    .app:not(.on-table) .toast {
-      top: auto;
-      bottom: calc(var(--cd-safe-bottom) + var(--cd-space-4));
-      animation-name: slideUp;
-    }
-
-    /* Dialog close controls at the touch floor. */
-    .sidebar-header .close-btn,
-    .verify-modal .close-btn {
-      width: var(--cd-touch-min);
-      height: var(--cd-touch-min);
-      min-width: var(--cd-touch-min);
-    }
-
-    /* The lobby header's controls (the table view's are in table-header-phone.scss). */
-    header:not(.compact) .sound-toggle-btn {
-      width: var(--cd-touch-min);
-      min-height: var(--cd-touch-min);
-    }
-
-    /* The footer's two text links and the trust bar's FULL TERMS strip (a
-       41 px button on the sideways phone) at the touch floor. */
-    .footer-link { min-height: var(--cd-touch-min); display: inline-flex; align-items: center; }
-    .alpha-warning-banner.on-table .banner-strip { min-height: var(--cd-touch-min); }
-  }
+  /* THE PHONE (portrait, or a window under 560 px tall): the one-screen table
+     view, the toast's place and the shell's touch floors. A mixin, included
+     LAST on purpose (see app-phone.scss). */
+  @include app-phone.rules;
 
   @keyframes slideUp {
     from { transform: translateX(-50%) translateY(20px); opacity: 0; }

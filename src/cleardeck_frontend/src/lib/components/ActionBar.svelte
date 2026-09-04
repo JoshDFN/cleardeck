@@ -46,6 +46,7 @@
     fmt = (v) => String(v),
     clockFraction = 0,
     clockUrgent = false,
+    clockSecs = null,        // the displayed seconds, for the urgent badge on the primary button
     actionError = null,
     preOptions = [],         // [] when the hero cannot pre-act
     preArmedId = null,
@@ -66,6 +67,11 @@
   const live = $derived(isMyTurn && gameInProgress && !actionPending && !sent);
   const showPre = $derived(gameInProgress && !isMyTurn && !sent && preOptions.length > 0);
   const raiseDisabled = $derived(!canRaise || raiseProblem !== null);
+  // "8s" on the primary button while the clock is urgent and the seconds are
+  // known; null otherwise (no attribute, no pseudo-element).
+  const secsBadge = $derived(
+    clockUrgent && Number.isFinite(Number(clockSecs)) && Number(clockSecs) > 0 ? `${Math.round(Number(clockSecs))}s` : null,
+  );
 
   // ALL IN NEEDS TWO PRESSES on the keyboard (the audit's 800 ms rule): the
   // first arms, the button says so, the second within the window fires.
@@ -158,12 +164,30 @@
       <button type="button" class="action-btn secondary" onclick={() => onAction('fold')} title="Fold (F)">
         <u>F</u>old
       </button>
+      <!-- THE SECONDS ON THE PRIMARY BUTTON in the last ten seconds ("Call
+           0.10 · 8s"): painted by a pseudo-element from `data-secs`, so the
+           button's text stays "Call 0.10" for the harness's "Call X" check and
+           the census (the digits are the pod clock's, already on screen). -->
       {#if canCheck}
-        <button type="button" class="action-btn primary" onclick={() => onAction('check')} title="Check (C)">
+        <button
+          type="button"
+          class="action-btn primary"
+          class:with-secs={secsBadge !== null}
+          data-secs={secsBadge}
+          onclick={() => onAction('check')}
+          title="Check (C)"
+        >
           <u>C</u>heck
         </button>
       {:else}
-        <button type="button" class="action-btn primary" onclick={() => onAction('call')} title="Call (C)">
+        <button
+          type="button"
+          class="action-btn primary"
+          class:with-secs={secsBadge !== null}
+          data-secs={secsBadge}
+          onclick={() => onAction('call')}
+          title="Call (C)"
+        >
           <u>C</u>all {fmt(callAmount)}
         </button>
       {/if}
@@ -297,6 +321,15 @@
   .actions.urgent .action-btn.secondary,
   .actions.urgent .action-btn.primary { animation: urgent-pulse 1s ease-in-out infinite; }
 
+  /* The seconds beside the primary label in the last ten seconds. */
+  .action-btn.primary.with-secs::after {
+    content: ' · ' attr(data-secs);
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-figure);
+    font-variant-numeric: tabular-nums;
+    opacity: 0.85;
+  }
+
   @keyframes urgent-pulse {
     0%, 100% { box-shadow: 0 0 0 0 var(--cd-danger-line); }
     50% { box-shadow: 0 0 0 var(--cd-space-1) var(--cd-danger-dim); }
@@ -423,6 +456,18 @@
       min-height: calc(var(--cd-touch-min) + var(--cd-space-1));
       padding: 0 var(--cd-space-1);
       font-size: var(--cd-text-md);
+    }
+
+    /* The urgent seconds on the phone's primary cell go UNDER the label
+       ("Call 0.10" over "10s"): inline, "Call 0.10 · 10s" overran the ~92 px
+       cell (measured: "Call 0.10 · 1" and a clipped "s"). */
+    .action-btn.primary.with-secs { line-height: 1.15; }
+    .action-btn.primary.with-secs::after {
+      /* A BLOCK, not a flex column: as a flex column the hotkey's <u>C</u>
+         became its own row ("C" over "all 0.10", measured). */
+      content: attr(data-secs);
+      display: block;
+      font-size: var(--cd-text-xs);
     }
     .action-btn u { text-decoration: none; }
     /* Fold needs the least room; the raise cell (two lines plus the 44 px

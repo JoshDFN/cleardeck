@@ -60,9 +60,14 @@
     // A canister refusal of the last action, shown beside the buttons.
     actionError = null,
     onDismissError = null,
-    tableBalance = 0,
+    // Null until the page has read get_balance() (routes/+page.svelte).
+    tableBalance = null,
     onShowDeposit = null,
     onShowWithdraw = null,
+    // The footer's two links, carried by the Log drawer: on a phone the table
+    // view is one screen and has no footer (routes/app-phone.scss).
+    onHowItWorks = null,
+    onVerifyCode = null,
     currency = 'ICP',
     // The lobby's known seat count, used for the ring until the canister's
     // config arrives so a spectator never sees nine chairs on a 6-max table
@@ -466,12 +471,16 @@
       let bx = nx * CHIP_IN;
       let by = ny * CHIP_IN;
       if (tall && bottom) {
-        // THE HERO'S CHIPS ON A PHONE sit BESIDE the hero's pair, at the pair's
-        // lower half, on its right. Above the pair (the old spot, further up
-        // the normal) is the band the lower flank plates' pucks, chips and
-        // badges share. These mirror the CSS ratios --card-hero-r and
-        // --off-hero-r for each ring density (PokerTable's portrait block).
-        bx = crowded ? 0.25 : 0.27;
+        // THE HERO'S CHIPS ON A PHONE sit BESIDE the hero's pair, in the
+        // pair's visible half, on its right. Above the pair (the old spot,
+        // further up the normal) is the band the lower flank plates' pucks,
+        // chips and badges share. These mirror the CSS ratios --card-hero-r
+        // (0.19 / 0.17 crowded / 0.20 sparse, so the pair's right edge is at
+        // ~0.20 fw) and the tucked --off-hero-r (poker-table-tokens.scss):
+        // the disc's centre at 0.30 fw clears the fanned edge (at 0.27 it sat
+        // on the right card's lower corner, measured this round), and 0.14 fw
+        // up the normal is inside the visible span of every density's pair.
+        bx = crowded ? 0.25 : 0.30;
         by = -(crowded ? 0.14 : sparse ? 0.17 : 0.14);
       } else if (!alongNormal) {
         // Tangent, taken away from the axis the board sits on so the disc never
@@ -484,11 +493,14 @@
           // hero), away from the board from an upper one (the board's first
           // card sits right under its plate).
           // On the 6-max ring (ring-kx 0.70, the plate well inside the felt)
-          // a LOWER flank seat's chips also lean a little outward: measured,
-          // the inward lean put the amount capsule under the pot module's
-          // edge. On the nine-seat ring (ring-kx 0.90) the plate already
-          // hangs off the felt, so its chips keep the inward lean.
-          const lean = (sn > 0 && !crowded) ? -0.5 : 1;
+          // a LOWER flank seat's chips also lean outward: measured, the
+          // inward lean put the amount capsule under the pot module's edge,
+          // and at -0.5 the two-pot row (PotModule .two-pots, one row) still
+          // reached the capsule's right end; at -0.9 the capsule ends ~6 px
+          // before the row starts. On the nine-seat ring (ring-kx 0.90) the
+          // plate already hangs off the felt, so its chips keep the inward
+          // lean.
+          const lean = (sn > 0 && !crowded) ? -0.9 : 1;
           bx = nx * CHIP_SIDE_IN * lean;
           by = -CHIP_SIDE;
         } else {
@@ -1624,6 +1636,8 @@
               {shuffleProof}
               {onShowProof}
               format={fmt}
+              {onHowItWorks}
+              {onVerifyCode}
             />
           </div>
         {/if}
@@ -1764,6 +1778,7 @@
           {fmt}
           {clockFraction}
           {clockUrgent}
+          clockSecs={timeRemaining}
           {actionError}
           {preOptions}
           preArmedId={preArmed?.id ?? null}
@@ -1792,7 +1807,7 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>
           </svg>
-          {#if walletCollapsed}<span class="collapsed-balance">{formatWithUnit(tableBalance)}</span>{/if}
+          {#if walletCollapsed}<span class="collapsed-balance">{tableBalance === null ? '…' : formatWithUnit(tableBalance)}</span>{/if}
         </button>
         {#if !walletCollapsed || portrait}
           <!-- On the phone the panel is always open: its toggle has no row
@@ -1801,7 +1816,9 @@
           <div class="wallet-panel">
             <div class="wallet-balance">
               <span class="balance-label">Table balance</span>
-              <span class="balance-value">{formatWithUnit(tableBalance)}</span>
+              <!-- Null = not read yet (or the read failed): no figure is
+                   shown that the canister has not given. -->
+              <span class="balance-value">{tableBalance === null ? '…' : formatWithUnit(tableBalance)}</span>
             </div>
             <!-- IN FLOW, directly under the balance it corrects. Never an overlay:
                  nothing in this app may cover the notices (HARD RULE 2). -->

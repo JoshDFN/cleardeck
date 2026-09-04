@@ -1,0 +1,80 @@
+/* ==========================================================================
+   THE MONEY SHEETS ON A PHONE (a partial of DepositModal.svelte's and
+   WithdrawModal.svelte's styles)
+   ==========================================================================
+   A full-height sheet, not a floating box: the header fixed at the top, the
+   body the one scroller (its overscroll contained so the table behind never
+   moves; the page itself is locked by lib/scroll-lock.js), the close control
+   and every button at the 44 px touch floor, 16 px inputs so iOS does not
+   zoom the page on focus. Included INSIDE each component's own
+   `@media (max-aspect-ratio: 1/1), (max-height: 560px)` block, after which
+   the component adds what is its own (DepositModal: the first screen's
+   order). Svelte scopes every rule here to the including component, so a
+   selector one of them lacks is a warning there, not a leak. */
+
+@mixin sheet {
+  .modal-content {
+    top: 0;
+    left: 0;
+    transform: none;
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    border: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding-top: var(--cd-safe-top);
+  }
+
+  .modal-header {
+    flex: 0 0 auto;
+    padding: var(--cd-space-2) var(--cd-space-2) var(--cd-space-2) var(--cd-space-4);
+  }
+
+  .modal-header h2 { font-size: var(--cd-text-lg); }
+
+  .close-btn {
+    width: var(--cd-touch-min);
+    height: var(--cd-touch-min);
+    min-width: var(--cd-touch-min);
+    font-size: var(--cd-text-xl);
+  }
+
+  .modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: var(--cd-space-3) var(--cd-space-4) calc(var(--cd-space-5) + var(--cd-safe-bottom));
+    gap: var(--cd-space-3);
+  }
+
+  /* The five protected phrases as a compact strip, the size the table view's
+     trust bar uses (11 px); every word stays. */
+  .player-notice {
+    font-size: var(--cd-text-xs);
+    line-height: 1.45;
+    padding: var(--cd-space-2) var(--cd-space-3);
+  }
+
+  /* 16 px: the one literal that must stay a literal. Below 16 px iOS Safari
+     zooms the page when the field takes focus, and no token means 16. */
+  input[type='number'] { font-size: 16px; min-height: var(--cd-touch-min); }
+  .max-btn { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
+
+  .btn-primary, .btn-secondary {
+    min-height: calc(var(--cd-touch-min) + var(--cd-space-1));
+    font-size: var(--cd-text-md);
+  }
+
+  /* NOT sticky. A row pinned to the bottom of the scroller stood over the
+     solvency advice's figures at rest (the occlusion gate measured 37.5% of
+     "I DO NOT KNOW whether this canister can pay everyone it owes" under
+     it); nothing in this app may paint over a money figure. The row is in
+     flow, one short scroll under the disclosures it must follow. */
+  .actions { padding-top: var(--cd-space-1); }
+}

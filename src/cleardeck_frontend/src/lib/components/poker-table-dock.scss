@@ -321,7 +321,7 @@
     .action-dock {
       grid-template-columns: auto minmax(0, 1fr);
       grid-template-rows: auto auto;
-      gap: 3px 8px;
+      gap: var(--cd-space-1) var(--cd-space-2);
       min-height: var(--dock-h);
       padding: 0 var(--cd-space-2);
     }
@@ -335,9 +335,9 @@
     .panel-toggle { display: none; }
 
     /* EVERY PIXEL BETWEEN THE STAGE AND THE DOCK IS FELT. */
-    .poker-table { gap: 4px; }
-    .pot-odds-display { font-size: var(--cd-text-xs); line-height: 1.1; gap: 6px; }
-    .pot-odds-value { font-size: 12px; }
+    .poker-table { gap: var(--cd-space-1); }
+    .pot-odds-display { font-size: var(--cd-text-xs); line-height: 1.1; gap: calc(var(--cd-space-1) * 1.5); }
+    .pot-odds-value { font-size: var(--cd-text-xs); }
 
     /* THUMB REACH: the action row is the BOTTOM row on a phone. */
     .dock-center { grid-column: 1 / -1; grid-row: 2; }
@@ -350,15 +350,21 @@
        in the old shape (a column squeezed to 77 px beside the buttons) the
        note wrapped to five lines and the wallet row was 122 px; as a full-width
        row of the panel it is 26 px, and every word is still there. */
-    .wallet-panel { padding: 4px 8px; gap: 4px 5px; }
+    .wallet-panel { padding: var(--cd-space-1) var(--cd-space-2); gap: var(--cd-space-1); }
     .balance-label { display: none; }
     /* THE TABLE BALANCE MUST NEVER BE SQUEEZED (a money figure lying only in
        pixels); the committed block pays instead, on one line. */
     .wallet-balance { flex: 0 0 auto; }
     .committed-note { line-height: 1.2; }
-    .wallet-committed { order: 1; margin-top: 0; padding: 2px 6px; column-gap: 5px; row-gap: 0; }
+    .wallet-committed {
+      order: 1;
+      margin-top: 0;
+      padding: calc(var(--cd-space-1) / 2) calc(var(--cd-space-1) * 1.5);
+      column-gap: var(--cd-space-1);
+      row-gap: 0;
+    }
     .committed-label { font-size: var(--cd-text-xs); letter-spacing: 0.08em; }
-    .committed-value { font-size: 12px; }
+    .committed-value { font-size: var(--cd-text-xs); }
     .committed-note { font-size: var(--cd-text-xs); }
     /* EVERY DOCK CONTROL AT THE TOUCH FLOOR (the audit measured 28-30 px):
        Log, Sound, the wallet toggle, Deposit and Withdraw are 44 px tall.
@@ -373,7 +379,7 @@
       font-size: 0;
       gap: 0;
     }
-    .log-toggle svg { width: 18px; height: 18px; }
+    .log-toggle svg { width: var(--cd-icon-sm); height: var(--cd-icon-sm); }
     .sound-btn { display: inline-flex; }
     .wallet-action-btn { min-height: var(--cd-touch-min); padding: 0 var(--cd-space-3); }
     /* The balance reads at body size on a phone: it is the figure a player

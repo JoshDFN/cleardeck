@@ -17,12 +17,12 @@
    shrinks. The row fits 374 px because the three tool buttons are glyph-only
    squares (the word is the button's aria-label and title), the sound toggle
    lives in the dock on the phone (PokerTable's dock-left), and the wallet
-   chip drops its caret and clamps the name. Measured content at 390 px,
-   signed in: 44 + 4 + 112 (the longest stakes pill, "Heads Up · 0.01/0.02")
-   + 4 + 44 + 4 + 44 + 4 + 102 = 362 of 374. Signed OUT the right group is
-   wider (Connect Wallet, plus Dev Login on a local build) and the row is
-   allowed to wrap to a second one: a spectator's felt is 44 px shorter, a
-   player's never is. */
+   chip is the avatar alone (the name is its aria-label and title). Measured
+   content at 390 px, signed in: 44 + 4 + 112 (the longest stakes pill,
+   "Heads Up · 0.01/0.02") + 4 + 44 + 4 + 44 + 4 + 44 = 304 of 374. Signed
+   OUT the right group is wider (Connect Wallet, plus Dev Login on a local
+   build) and the row is allowed to wrap to a second one: a spectator's felt
+   is 44 px shorter, a player's never is. */
 
 @mixin header {
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {
@@ -32,8 +32,8 @@
       flex-wrap: wrap;
       align-items: center;
       min-height: 0;
-      padding: 2px 8px;
-      gap: 2px 4px;
+      padding: calc(var(--cd-space-1) / 2) var(--cd-space-2);
+      gap: calc(var(--cd-space-1) / 2) var(--cd-space-1);
     }
 
     /* The brand mark and the tagline, on the one screen where the player is
@@ -59,7 +59,7 @@
     header.compact .header-left,
     header.compact .header-right {
       min-width: 0;
-      gap: 4px;
+      gap: var(--cd-space-1);
       flex-wrap: nowrap;
     }
 
@@ -94,9 +94,9 @@
       display: none;
     }
 
-    header.compact .back-btn svg { width: 20px; height: 20px; }
+    header.compact .back-btn svg { width: var(--cd-icon-md); height: var(--cd-icon-md); }
     header.compact .history-btn svg,
-    header.compact .verify-btn svg { width: 18px; height: 18px; }
+    header.compact .verify-btn svg { width: var(--cd-icon-sm); height: var(--cd-icon-sm); }
 
     /* The sound toggle rides the dock on the phone (beside Log), where a
        thumb reaches it; the header has no row to spare for it. */
@@ -111,7 +111,7 @@
        ellipsised: a money figure lying in pixels. */
     header.compact .current-table-name {
       font-size: var(--cd-text-xs);
-      padding: 0 8px;
+      padding: 0 var(--cd-space-2);
       min-height: var(--cd-touch-min);
       display: inline-flex;
       align-items: center;
@@ -119,34 +119,37 @@
       white-space: nowrap;
     }
 
-    /* The wallet chip at the touch floor. The display name is kept and
-       merely narrowed: `.display-name` is a fault-injection target
-       (`SHOTS_INJECT_DRIFT=censusshape` writes a money-shaped token into it to
-       prove the census refuses one), and the census only gates tokens it can
-       SEE, so hiding this element would quietly disarm that self-test. */
+    /* THE WALLET CHIP IS THE AVATAR ALONE: a 44 px square, the way a phone
+       poker client shows the player (GGPoker, PokerStars). The name is the
+       button's aria-label and title (WalletButton.svelte), so a screen reader
+       and a long press still say it; the menu it opens shows it in full. It
+       used to be clamped at 5.5em and ellipsised ("ShadowD..."), which is
+       neither the name nor an avatar. `.display-name` was the census's
+       fault-injection target (`SHOTS_INJECT_DRIFT=censusshape`); the drift
+       injector now takes the first PAINTED match of `.display-name,
+       .player-name`, so on this view a seat's name (excused by the same
+       allowlist rule) carries the fault instead. */
     header.compact :global(.wallet-container),
     header.compact :global(.wallet-btn) {
       min-width: 0;
     }
 
-    header.compact :global(.wallet-btn) {
+    header.compact :global(.wallet-btn.connected) {
+      width: var(--cd-touch-min);
       min-height: var(--cd-touch-min);
-      padding: 0 8px;
-      gap: 6px;
+      padding: 0;
+      gap: 0;
+      justify-content: center;
       font-size: var(--cd-text-xs);
     }
 
     header.compact :global(.wallet-btn .avatar-img) {
-      width: 22px;
-      height: 22px;
+      width: var(--cd-icon-xl);
+      height: var(--cd-icon-xl);
     }
 
-    /* 5.5em at 11px = 60 px, against 71 px for the generated names this build
-       produces, so the longest of those ellipsises by two letters and every
-       shorter one renders in full. The clamp exists so a very long name cannot
-       push the document past 390 px and re-arm the T-19 zoom-out. */
-    header.compact :global(.wallet-btn .display-name) {
-      max-width: 5.5em;
+    header.compact :global(.wallet-btn.connected .display-name) {
+      display: none;
     }
 
     /* The caret is 12 px of width the row does not have; the chip is a
@@ -156,8 +159,15 @@
     }
 
     /* Signed out: the login buttons at the touch floor too. */
+    header.compact :global(.wallet-btn.connect),
+    header.compact :global(.wallet-btn.dev) {
+      min-height: var(--cd-touch-min);
+      padding: 0 var(--cd-space-2);
+      font-size: var(--cd-text-xs);
+    }
+
     header.compact :global(.login-buttons) {
-      gap: 4px;
+      gap: var(--cd-space-1);
     }
 
     /* ---------------- the last 4 px above the felt ----------------------- */
@@ -165,7 +175,7 @@
        the felt as directly as the header is. The wrapper already goes full-bleed
        horizontally (PokerTable.svelte), so this is only the vertical inset. */
     main[data-view='table'] .table-area {
-      padding-top: 4px;
+      padding-top: var(--cd-space-1);
     }
   }
 
@@ -191,7 +201,7 @@
 
     /* Two lines of strip, not three: the same words on a wider screen. */
     .alpha-warning-banner.on-table .banner-strip {
-      padding: 5px 10px 6px;
+      padding: var(--cd-space-1) var(--cd-space-2) calc(var(--cd-space-1) * 1.5);
     }
   }
 }

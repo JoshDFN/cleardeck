@@ -296,7 +296,10 @@ portrait, on an opponent's avatar), and the `.actions-clock` line across the top
 action row (`ActionBar.svelte`), 2 px on desktop and 4 px on a phone. The audit measured
 the earlier phone form at 13 px of type over a 3 px line; the mobile phase set the floors
 in `tools/shots/lib/touch-targets.mjs` (digits at least 11 px, the line a full space
-unit) and `tools/shots/touch-targets.mjs` measures them on every table scene.
+unit) and `tools/shots/touch-targets.mjs` measures them on every table scene. In the last
+ten seconds the primary button carries the seconds too ("Call 0.10 · 8s", painted from
+`data-secs` by a pseudo-element so the button's text stays the chain-asserted "Call X");
+`tools/shots/probe-time-bank.mjs` photographs it.
 
 **3. Re-run headed before quoting any frame rate.** §3.
 

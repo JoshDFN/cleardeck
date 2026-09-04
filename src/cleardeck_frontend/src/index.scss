@@ -224,6 +224,13 @@
   --cd-control-sm: 32px;
   --cd-control-md: 40px;
   --cd-touch-min: 44px;
+
+  /* Glyphs inside controls: a 44 px square carries an 18-20 px glyph, a
+     44 px chip a 28 px avatar. */
+  --cd-icon-sm: 18px;
+  --cd-icon-md: 20px;
+  --cd-icon-lg: 24px;
+  --cd-icon-xl: 28px;
   /* The phone's home-indicator and notch insets (0 everywhere else). Needs
      `viewport-fit=cover` in app.html to be non-zero on an iPhone. */
   --cd-safe-top: env(safe-area-inset-top, 0px);
@@ -235,6 +242,10 @@
      the dock raises over the pot-odds line and the wallet row sits above
      them, under the page's toasts and modals. */
   --cd-z-dock-sheet: 40;
+  /* The money dialogs and the history / how-it-works panels (their own
+     styles still carry the literal 200); what must stand over an OPEN
+     dialog reads this. */
+  --cd-z-dialog: 200;
 
   /* --- Shadows -----------------------------------------------------------
      One key light, above centre, so every shadow falls DOWN. */

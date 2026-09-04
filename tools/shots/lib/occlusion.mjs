@@ -560,7 +560,7 @@ export async function assertNothingCoversAFigure(page, meta = {}) {
 
   const checks = {
     mode: reportOnly
-      ? 'REPORT ONLY (SHOTS_OCCLUSION=report) — NOT GATING'
+      ? 'REPORT ONLY (SHOTS_OCCLUSION=report), NOT GATING'
       : 'gating',
     scene: meta.scene ?? null,
     viewport: meta.viewport ?? null,
@@ -676,8 +676,8 @@ export async function assertNothingCoversAFigure(page, meta = {}) {
     ? `pixel gate: ${scan.targets.length} money/equity/card figures on screen, `
       + `${targetsProbed} with something overlapping them, ${pairsMeasured} pairs pixel-tested, `
       + `0 occluded${overlayNote}`
-    : `${reportOnly ? 'OCCLUSION (REPORT ONLY, NOT GATING — SHOTS_OCCLUSION=report): ' : 'OCCLUSION FAILED: '}`
-      + `${byTarget.size} of ${scan.targets.length} figures on screen are covered — `
+    : `${reportOnly ? 'OCCLUSION (REPORT ONLY, NOT GATING, SHOTS_OCCLUSION=report): ' : 'OCCLUSION FAILED: '}`
+      + `${byTarget.size} of ${scan.targets.length} figures on screen are covered: `
       + worst.slice(0, 3).map((f) => `${(f.pixels.coveredInkFraction * 100).toFixed(1)}% of `
         + `"${f.occluded.text || f.occluded.kind}" (${f.occluded.path.split(' > ').pop()}) by `
         + `${f.occluder.path.split(' > ').pop()}`).join(' | ');

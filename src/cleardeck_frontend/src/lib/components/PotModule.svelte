@@ -81,7 +81,7 @@
   <!-- `tall-column`: three or more pots stack three pill rows under the
        module; in portrait that column reached the lower flank seat's dealer
        puck, so the module tightens (see the portrait block). -->
-  <div class="pot-display" class:waiting={totalPot <= 0} class:tall-column={sidePots.length >= 3}>
+  <div class="pot-display" class:waiting={totalPot <= 0} class:two-pots={sidePots.length === 2} class:tall-column={sidePots.length >= 3}>
     <div class="main-pot" class:has-chips={totalPot > 0} class:at-risk={allInMoment} title={breakdown}>
       <span class="pot-meta">
         <span class="pot-label" title={allInMoment ? `All in · ${allInCount} at risk` : undefined}>
@@ -340,6 +340,26 @@
        0.58 fw width and the pair reached the left flank's bet pill. */
     .pot-display.tall-column .side-pots { flex-direction: column; align-items: center; gap: calc(var(--fw) * 0.002); margin-top: 0; }
     .pot-display.tall-column .side-pot { padding: 0.02em 0.5em; }
+
+    /* TWO POTS on the 6-max phone (main + one side pot, the all-in and the
+       facing-bet scenes): the two pills on ONE tight row. Measured: wrapped
+       to two rows the second pill stood on the lower flank plate's top
+       corner ("SIDE 1 11.90" over Nakamoto's plate at y 460 vs the plate's
+       455), and the single row at its old pitch touched it. The band between
+       the board and the lower flank plates holds the module plus one row,
+       and the band's width is set by the LEFT flank's bet capsule (0.20 at
+       x 84..120): a row moved 4 px up and 20 px wider covered 19.7% of it in
+       this round's first run, so the module keeps its place (0.02 fw under
+       the board) and only its own padding and the pills' pitch come down:
+       the row is ~150 px, clear of the capsule by ~6 px and of the plate's
+       top edge by ~4 px. tools/shots/touch-targets.mjs asserts no
+       `.side-pot` box meets a `.player-nameplate` box. The nine-seat ring
+       keeps the wrapping row (its pills would reach the seat-7 chair). */
+    :global(.poker-table-wrapper:not(.ring-crowded)) .pot-display.two-pots .main-pot { padding: 0.12em 0.7em 0.12em 0.6em; }
+    :global(.poker-table-wrapper:not(.ring-crowded)) .pot-display.two-pots .side-pots { flex-wrap: nowrap; gap: calc(var(--fw) * 0.003); margin-top: calc(var(--fw) * 0.002); }
+    :global(.poker-table-wrapper:not(.ring-crowded)) .pot-display.two-pots .side-pot { padding: 0.02em 0.4em; gap: 0.3em; }
+    :global(.poker-table-wrapper:not(.ring-crowded)) .pot-display.two-pots .side-pot-label { letter-spacing: 0.06em; }
+    :global(.poker-table-wrapper:not(.ring-crowded)) .pot-display.two-pots .side-pot-amount { font-size: var(--cd-felt-label); }
 
     /* Two short rows by design: the figure, then the hand and the street. A
        long single row wrapped unpredictably and reached a flank plate. */

@@ -24,8 +24,11 @@
 
 <div class="player-cards" class:hero={isHero} class:shown={!isHero && !!revealed} class:winner>
   {#if isHero && heroCards && showCards}
-    <Card card={heroCards[0]} index={0} />
-    <Card card={heroCards[1]} index={1} />
+    <!-- Each card in its own fan cell: the card's deal keyframe ends on
+         `transform: none` with `both` fill, so the fan's rotation lives on
+         the wrapper, not the card. -->
+    <span class="fan fan-l"><Card card={heroCards[0]} index={0} /></span>
+    <span class="fan fan-r"><Card card={heroCards[1]} index={1} /></span>
   {:else if revealed}
     <Card card={revealed[0]} index={0} />
     <Card card={revealed[1]} index={1} />
@@ -117,6 +120,26 @@
         calc(var(--nx, 0) * var(--fw) * var(--off-hero-r)),
         calc(var(--ny, 0) * var(--fw) * var(--off-hero-r))
       );
+  }
+
+  .fan { display: block; line-height: 0; }
+
+  /* THE PHONE'S HERO PAIR: a 6 degree fan (each card 3 degrees about its
+     bottom centre), 0.19 fw (60 px) instead of 0.14, the way GGPoker and
+     PokerStars stand a player's cards. The room comes from the hero seat
+     sitting lower on the 6-max ring, and on the nine-seat ring from the pair
+     standing a little BEHIND the plate's top edge (--hero-tuck,
+     poker-table-tokens.scss); the plate therefore paints over the pair here
+     (z 5 under the plate's 6), and the corner index and pip, the card's
+     readable figure, are its top. */
+  @media (max-aspect-ratio: 1/1) {
+    .player-cards.hero {
+      z-index: 5;
+      gap: 0;
+    }
+    .fan { transform-origin: 50% 100%; }
+    .fan-l { transform: rotate(-3deg); }
+    .fan-r { transform: rotate(3deg); }
   }
 
   /* ---- cards revealing: bar 11, a flip is 150 ms, rotateY only ---- */
