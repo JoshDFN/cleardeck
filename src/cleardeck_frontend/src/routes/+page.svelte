@@ -443,7 +443,7 @@
             pendingAction = null;
           } else if (pendingExpired(pendingAction, Date.now())) {
             pendingAction = null;
-            showActionError('The table has not confirmed your action yet. It will show on the next update.');
+            showActionError('The table has not confirmed your action yet. It will show on the next update.', { verbatim: true });
           }
         }
         const nextView = projectPending(currentTableView, pendingAction);
@@ -536,8 +536,8 @@
   let actionErrorTimer = null;
   const ACTION_ERROR_MS = 6000;
 
-  function showActionError(err) {
-    actionError = humaneActionError(err);
+  function showActionError(err, opts = {}) {
+    actionError = humaneActionError(err, opts);
     if (actionErrorTimer) clearTimeout(actionErrorTimer);
     actionErrorTimer = setTimeout(() => { actionError = null; actionErrorTimer = null; }, ACTION_ERROR_MS);
   }
@@ -873,7 +873,8 @@
         stopPolling();
         await auth.logout();
       } else if (PLAYER_ACTION_VARIANTS[action]) {
-        showActionError(e);
+        // A throw, not a canister Err: the update may have landed. Say so.
+        showActionError(e, { refusal: false });
         playSound('error');
       } else {
         error = e.message || 'Action failed';
@@ -2737,7 +2738,7 @@
      mistake costs the reader money. */
   .net-chip.mainnet {
     background: var(--cd-danger);
-    color: var(--cd-ink);
+    color: var(--cd-danger-ink);
   }
 
   .net-footer {

@@ -119,6 +119,7 @@
 
   /* --- Danger, warn, brand oranges --------------------------------------- */
   --cd-danger: #e8503a;                     /* fold, all-in, errors */
+  --cd-danger-ink: var(--cd-ink-on-light);  /* text ON a danger fill: dark ink is 5.2:1 on it, white was 3.7:1 */
   --cd-danger-hi: #ff8b6b;                  /* urgent clock digits */
   --cd-danger-dim: rgba(232, 80, 58, 0.16);
   --cd-danger-line: rgba(232, 80, 58, 0.5);

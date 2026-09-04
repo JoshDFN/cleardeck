@@ -16,10 +16,11 @@
    *   no game      "Waiting for players" / "Hand complete".
    *
    * Keyboard (desktop): F fold, C check or call, R raise at the sizer's
-   * figure, A twice for all in, 1-5 presets, + and - a big blind, Enter
+   * figure, A twice for all in, 1-5 presets, + and - a big blind; never Enter or Space, which belong to whatever has focus,
    * confirms, Esc cancels. Inactive while any field has focus.
    */
   import { PRESETS } from '$lib/bet-sizing.js';
+  import { dialogIsOpen, focusKindOf, resolveHotkey } from '$lib/hotkeys.js';
   import PreActions from './PreActions.svelte';
 
   const {
@@ -72,33 +73,34 @@
     return () => clearTimeout(id);
   });
 
-  function fieldHasFocus() {
-    if (typeof document === 'undefined') return false;
-    const el = document.activeElement;
-    if (!el) return false;
-    const tag = el.tagName;
-    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true;
-  }
+  // The dock's root, so a focused button INSIDE it can be told apart from a
+  // modal's Close or the header's wallet ($lib/hotkeys.js has the rules).
+  let dockEl = $state(null);
 
   function onKey(event) {
-    if (!live) return;
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
-    if (fieldHasFocus()) return;
-    const key = event.key;
-    const preset = PRESETS.find((p) => p.key === key);
-    let handled = true;
-    if (key === 'f' || key === 'F') onAction('fold');
-    else if (key === 'c' || key === 'C') onAction(canCheck ? 'check' : 'call');
-    else if ((key === 'r' || key === 'R' || key === 'Enter') && !raiseDisabled) onCommitRaise();
-    else if (key === 'a' || key === 'A') {
-      if (allInArmed) { allInArmedAt = 0; onAction('allin'); } else allInArmedAt = Date.now();
+    if (typeof document === 'undefined') return;
+    const decision = resolveHotkey(event.key, {
+      live,
+      modifier: event.metaKey || event.ctrlKey || event.altKey,
+      focusKind: focusKindOf(document.activeElement, dockEl),
+      dialogOpen: dialogIsOpen(document),
+      canCheck, canRaise, raiseDisabled, allInArmed, compact, sizerOpen,
+      presets: PRESETS,
+    });
+    if (!decision) return;
+    switch (decision.type) {
+      case 'action':
+        if (decision.action === 'allin') allInArmedAt = 0;
+        onAction(decision.action);
+        break;
+      case 'arm-allin': allInArmedAt = Date.now(); break;
+      case 'commit-raise': onCommitRaise(); break;
+      case 'preset': onPreset(decision.id); break;
+      case 'step': onStep(decision.delta); break;
+      case 'escape': allInArmedAt = 0; if (compact && sizerOpen) onToggleSizer(); break;
+      default: return;
     }
-    else if (preset && canRaise) onPreset(preset.id);
-    else if ((key === '+' || key === '=') && canRaise) onStep(1);
-    else if ((key === '-' || key === '_') && canRaise) onStep(-1);
-    else if (key === 'Escape') { allInArmedAt = 0; if (compact && sizerOpen) onToggleSizer(); }
-    else handled = false;
-    if (handled) event.preventDefault();
+    event.preventDefault();
   }
 </script>
 
@@ -114,6 +116,7 @@
 
   <div
     class="actions"
+    bind:this={dockEl}
     class:disabled={!isMyTurn || !gameInProgress || actionPending || sent}
     class:can-pre={showPre}
     class:sent
@@ -351,7 +354,7 @@
 
   .action-btn.danger {
     background: var(--cd-danger);
-    color: var(--cd-ink);
+    color: var(--cd-danger-ink);
   }
 
   .action-btn.danger.armed { animation: urgent-pulse 0.4s ease-in-out infinite; }

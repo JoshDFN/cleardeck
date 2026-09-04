@@ -274,7 +274,7 @@
 
   .avatar-overlay.allin {
     background: var(--cd-danger);
-    color: var(--cd-ink);
+    color: var(--cd-danger-ink);
     box-shadow: inset 0 0 0 2px var(--cd-glow-white);
   }
 

@@ -27,9 +27,48 @@
  * @property {number} sentAt        Date.now() at the click
  * @property {number} callAmount    what was owed at the click
  * @property {{ chips: number, currentBet: number, folded: boolean, allIn: boolean }} snapshot
+ * @property {{ phase: string|null, board: number, lastAction: string }} street
+ *   the street, board length and last-action identity at the click: a check
+ *   changes none of the hero's own figures, so these are what prove it landed
  */
 
 const KINDS = new Set(['fold', 'check', 'call', 'raise', 'bet', 'allin']);
+
+/** The tag of a Candid variant object, or the value itself when it is not one. */
+function variantKey(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'object') { const keys = Object.keys(v); return keys.length ? keys[0] : null; }
+  return String(v);
+}
+
+/** A BigInt-safe, order-stable string for any Candid value. */
+function stableString(value) {
+  if (value === null || value === undefined) return 'null';
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value !== 'object') return String(value);
+  if (Array.isArray(value)) return '[' + value.map(stableString).join(',') + ']';
+  return '{' + Object.keys(value).sort().map((k) => k + ':' + stableString(value[k])).join(',') + '}';
+}
+
+/**
+ * Identity of the table's `last_action` record (an opt in the Candid view, so
+ * it arrives as `[record]` or `[]`), as a string. Two different actions never
+ * collapse to the same string; no action is 'none'.
+ */
+export function lastActionIdentity(view) {
+  const raw = view?.last_action;
+  const rec = Array.isArray(raw) ? (raw.length ? raw[0] : null) : raw ?? null;
+  return rec ? stableString(rec) : 'none';
+}
+
+/** The street the view is on, the board length, and the last action, frozen. */
+function streetSnapshot(view) {
+  return Object.freeze({
+    phase: variantKey(view?.phase),
+    board: Array.isArray(view?.community_cards) ? view.community_cards.length : 0,
+    lastAction: lastActionIdentity(view),
+  });
+}
 
 /** The hero's own player record out of a table view, or null. */
 export function heroRecord(view) {
@@ -63,6 +102,7 @@ export function beginPending(kind, amount, view, now) {
       folded: player.has_folded === true,
       allIn: player.is_all_in === true,
     }),
+    street: streetSnapshot(view),
   });
 }
 
@@ -117,14 +157,29 @@ export function sentLabel(pending, fmt) {
 
 /**
  * Has a certified view absorbed the pending action? A view has when the hand
- * moved on, the clock left the hero's seat, or the hero's own record changed
- * from the snapshot taken at the click. A view that still shows the exact
- * pre-click state is a replica that has not seen the update yet: still open.
+ * moved on, the street or board or last action changed, the clock left the
+ * hero's seat, or the hero's own record changed from the snapshot taken at
+ * the click. A view that still shows the exact pre-click state is a replica
+ * that has not seen the update yet: still open.
+ *
+ * The street test matters for a CHECK: it changes none of the hero's own
+ * figures, and when every other live player is all-in the turn can come
+ * straight back to the hero on the next street with the same chips, the same
+ * zero bet and the same seat on the clock. Without it the echo stayed open
+ * for the whole TTL while the hero's real clock burned (code review,
+ * 2026-09-04).
  * @returns {'open'|'absorbed'}
  */
 export function pendingStatus(pending, view) {
   if (!pending || !view) return 'open';
   if (Number(view.hand_number ?? 0) !== pending.handNumber) return 'absorbed';
+  const street = pending.street;
+  if (street) {
+    const now = streetSnapshot(view);
+    if (now.phase !== street.phase) return 'absorbed';
+    if (now.board !== street.board) return 'absorbed';
+    if (now.lastAction !== street.lastAction) return 'absorbed';
+  }
   if (view.is_my_turn !== true) return 'absorbed';
   if (Number(view.action_on) !== pending.seat) return 'absorbed';
   const hero = heroRecord(view);
@@ -158,13 +213,29 @@ export function projectPending(view, pending) {
   return { ...view, is_my_turn: false };
 }
 
+/** The wording for a send that threw before the table answered. */
+export const UNCONFIRMED_SEND_TEXT =
+  'Your action may not have reached the table. The next update will show whether it landed. Do not act again until it does.';
+
 /**
- * A canister refusal, in words for the strip beside the buttons. The
- * canister's own messages are precise about WHY (docs/DEFECTS.md), so most
- * are kept; the ones that read like a stack trace are rephrased.
+ * An action failure, in words for the strip beside the buttons.
+ *
+ * `refusal: true` (the default) is a canister `Err`: the table looked at the
+ * action and said no, so nothing was sent, and the canister's own messages
+ * are precise about WHY (docs/DEFECTS.md), so most are kept; the ones that
+ * read like a stack trace are rephrased.
+ *
+ * `refusal: false` is a throw from the agent or the network. The update may
+ * already have been ingested (a read_state timeout, a gateway 5xx on the
+ * reply leg), so this must NEVER say "nothing was sent": a player who believes
+ * that acts twice (code review, 2026-09-04).
+ *
+ * `verbatim: true` shows the text as given.
  */
-export function humaneActionError(err) {
+export function humaneActionError(err, { refusal = true, verbatim = false } = {}) {
   const text = String(err?.message ?? err ?? '').trim();
+  if (verbatim) return text;
+  if (!refusal) return UNCONFIRMED_SEND_TEXT;
   if (!text) return 'The table did not accept that action.';
   if (/timer expired|hand has moved on/i.test(text)) {
     return 'The clock ran out before your action arrived; the hand has moved on.';

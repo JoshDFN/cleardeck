@@ -120,3 +120,68 @@ describe('pendingExpired / echoedPlayer', () => {
     expect(player.chips).toBe(11.9 * E8);
   });
 });
+
+describe('pendingStatus: a check that changes no hero figure', () => {
+  const E8n = 100_000_000;
+  const hero = { chips: 11.9 * E8n, current_bet: 0, has_folded: false, is_all_in: false };
+  const preflop = viewWith(hero, { call_amount: 0, phase: { PreFlop: null }, community_cards: [], last_action: [] });
+  const pending = beginPending('check', null, preflop, 1000);
+
+  it('records the street, the board and the last action at the click', () => {
+    expect(pending.street).toEqual({ phase: 'PreFlop', board: 0, lastAction: 'none' });
+  });
+
+  it('stays open while the view is byte-for-byte the pre-click state', () => {
+    expect(pendingStatus(pending, preflop)).toBe('open');
+  });
+
+  it('is absorbed when the street advances and the turn comes straight back with identical figures', () => {
+    const flop = viewWith(hero, {
+      call_amount: 0, phase: { Flop: null },
+      community_cards: [{ rank: 2, suit: 0 }, { rank: 9, suit: 1 }, { rank: 12, suit: 2 }], last_action: [],
+    });
+    expect(pendingStatus(pending, flop)).toBe('absorbed');
+  });
+
+  it('is absorbed when only the board length changes', () => {
+    const board = viewWith(hero, { call_amount: 0, phase: { PreFlop: null }, community_cards: [{ rank: 2, suit: 0 }], last_action: [] });
+    expect(pendingStatus(pending, board)).toBe('absorbed');
+  });
+
+  it('is absorbed when the last action identity changes, BigInt amounts included', () => {
+    const acted = viewWith(hero, {
+      call_amount: 0, phase: { PreFlop: null }, community_cards: [],
+      last_action: [{ seat: 0, action: { Check: null }, timestamp: 1_700_000_000_000n }],
+    });
+    expect(pendingStatus(pending, acted)).toBe('absorbed');
+    const other = viewWith(hero, {
+      call_amount: 0, phase: { PreFlop: null }, community_cards: [],
+      last_action: [{ seat: 0, action: { Raise: { amount: 30_000_000n } }, timestamp: 1_700_000_000_001n }],
+    });
+    expect(pendingStatus(pending, other)).toBe('absorbed');
+  });
+
+  it('a pending record without a street snapshot still reconciles on the old rules', () => {
+    const legacy = { ...pending, street: undefined };
+    expect(pendingStatus(legacy, preflop)).toBe('open');
+    expect(pendingStatus(legacy, viewWith(hero, { is_my_turn: false }))).toBe('absorbed');
+  });
+});
+
+describe('humaneActionError: refusal, transport failure, verbatim', () => {
+  it('a canister refusal says nothing was sent', () => {
+    expect(humaneActionError('Insufficient chips')).toBe('Insufficient chips. Nothing was sent.');
+  });
+
+  it('a throw never claims nothing was sent, because the update may have landed', () => {
+    const text = humaneActionError(new Error('Failed to fetch'), { refusal: false });
+    expect(text).not.toMatch(/nothing was sent/i);
+    expect(text).toMatch(/may not have reached the table/i);
+    expect(text).toMatch(/do not act again/i);
+  });
+
+  it('verbatim shows the text as given, with no suffix', () => {
+    const msg = 'The table has not confirmed your action yet. It will show on the next update.';
+    expect(humaneActionError(msg, { verbatim: true })).toBe(msg);
+  });
+});

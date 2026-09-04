@@ -1098,8 +1098,10 @@
   // changes underneath it or the hand moves on.
 
   let preArmed = $state(null);
+  // Not at showdown: the hand is being awarded, and a "fold to any bet"
+  // control on a hand that is over is a control that cannot mean anything.
   const heroCanPreAct = $derived(
-    gameInProgress && !isMyTurn && !pendingAction && myPlayer !== null
+    gameInProgress && !isShowdown && !isMyTurn && !pendingAction && myPlayer !== null
       && isInHand(myPlayer) && !myPlayer.is_all_in
   );
   const preOptions = $derived(heroCanPreAct ? availablePreActions({ callAmount, fmt }) : []);
