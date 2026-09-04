@@ -33,6 +33,7 @@
     unit = 'ICP',
     open = true,             // phone: the caret state; desktop: always true
     compact = false,         // phone layout
+    muted = false,           // a send is open: keep the row, take its hands off
     problem = null,          // an illegal size, in words, or null
     onChange = () => {},
     onCommit = () => {},
@@ -87,7 +88,7 @@
   }
 </script>
 
-<div class="raise-slider-panel" class:compact hidden={compact && !open} role="group" aria-label="Bet size">
+<div class="raise-slider-panel" class:compact class:muted hidden={compact && !open} role="group" aria-label="Bet size" aria-disabled={muted}>
   <div class="preset-buttons">
     {#each PRESETS as p (p.id)}
       <button
@@ -151,6 +152,9 @@
      `[hidden]` rule, so the closed sizer must say so itself; measured: without
      this the phone dock grew by 130 px and the felt fell to 33.9%. */
   .raise-slider-panel[hidden] { display: none; }
+
+  /* A send is open: the row keeps its place and its figures, hands off. */
+  .raise-slider-panel.muted { opacity: 0.35; pointer-events: none; }
 
   .preset-buttons {
     display: flex;

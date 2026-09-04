@@ -1651,7 +1651,10 @@
         <!-- THE SIZER LIVES IN THE DOCK, never over the felt or the hero's
              cards. Desktop: a row above the buttons whenever the hero can
              raise. Phone: in the DOM but hidden until the caret opens it. -->
-        {#if isMyTurn && gameInProgress && canRaise && !pendingAction}
+        {#if (isMyTurn || pendingAction) && gameInProgress && canRaise}
+          <!-- Stays mounted, muted, while a send is open: unmounting it at
+               the click made the desktop dock jump a row at the one moment
+               the bar is meant to go quiet. It leaves when the turn does. -->
           <BetSizer
             value={raiseAmount}
             ctx={sizing}
@@ -1661,6 +1664,7 @@
             unit={currencySymbol}
             open={!portrait || sizerOpen}
             compact={portrait}
+            muted={!!pendingAction}
             problem={raiseIllegal}
             onChange={setRaise}
             onCommit={commitRaise}
