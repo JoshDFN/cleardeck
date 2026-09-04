@@ -416,7 +416,7 @@
     z-index: 9;
     /* Past the plate's end; and past the avatar too when the badge takes the
        left end, which is the edge the avatar breaks. */
-    --badge-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + 2.1em) - max(0px, -1 * var(--rdx, 0) * var(--avatar) * 0.6));
+    --badge-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + 2.1em) - max(0px, -1 * var(--rdx, 0) * var(--avatar) * 0.45));
     --badge-dy: calc(var(--rdy, 0) * (var(--pod-h) * 0.5 + 0.8em));
     transform: translate(-50%, -50%) translate(var(--badge-dx), var(--badge-dy));
     display: inline-flex;
@@ -776,9 +776,12 @@
       --award-dx: calc(-1 * var(--rdx, 0) * var(--pod-w) * 0.26);
       --award-dy: calc(-1 * sign(var(--sn, 1)) * (var(--pod-h) * 0.5 + 1.4em));
     }
-    /* ...and the flank seat's badge sits a hair below mid-plate, under the
-       winner line's method footnote. */
-    :global(.seat:not(.spoke-y)) .equity-badge { --badge-dy: 0.5em; }
+    /* ...and the flank seat's badge hangs BELOW the plate's inner end: at
+       mid-plate height it sat under the winner line's method footnote (a three
+       row winner line reaches 0.25 fw from the centre, the flank plate's band
+       starts at 0.22). Below the plate is clear: the revealed pair is at the
+       plate's centre, the hero's pair starts 0.406 fw from the centre. */
+    :global(.seat:not(.spoke-y)) .equity-badge { --badge-dy: calc(var(--pod-h) * 0.5 + 0.7em); }
     /* Top/bottom seat (vertical spoke): the badge at one end of the far edge,
        the award at the other; both were measured touching at the old 0.24. */
     .winner-award.on-spoke.spoke-y {

@@ -526,7 +526,7 @@
       let puckY = 0;
       if (tall) {
         if (alongNormal) { puckX = (cs >= 0 ? 1 : -1) * 0.19; puckY = ny * 0.10; }
-        else { const away = sn >= 0 ? 1 : -1; puckX = nx * 0.14; puckY = -away * 0.075; }
+        else { const away = sn >= 0 ? 1 : -1; puckX = nx * 0.16; puckY = -away * 0.09; }
       } else if (alongNormal) {
         puckX = nx * 0.10; puckY = -cyDir * 0.07;
       } else {
@@ -1299,6 +1299,15 @@
           {@const win = isHandComplete ? winInfoFor(i) : null}
           {@const equityText = (allInMoment || isShowdown) ? equityFor(i) : null}
           {@const live = isInHand(player)}
+          <!-- THE READOUT SPOKE FLIPS WHEN THE CHIPS ARE GONE. A landscape top or
+               bottom seat's spoke takes the end opposite its bet chips; once the
+               street's bets are swept (the showdown, the flop of an all-in) that
+               end is free and the other one is where the avatar, the dealer puck
+               and the neighbouring plate's award live. Measured: the hero's
+               equity badge under the winner's award (6.8%) and under the
+               next plate on a nine-seat ring (10.9%). -->
+          {@const rdx = (!portrait && point.side === 'center' && point.rdx !== 0
+            && Number(player?.current_bet ?? 0) === 0) ? 1 : point.rdx}
           <div
             class="seat seat-{point.side}"
             class:occupied={!!player}
@@ -1317,7 +1326,7 @@
             style:--by={point.by}
             style:--ax={point.ax}
             style:--ay={point.ay}
-            style:--rdx={point.rdx}
+            style:--rdx={rdx}
             style:--rdy={point.rdy}
             style:--px={point.px}
             style:--py={point.py}
