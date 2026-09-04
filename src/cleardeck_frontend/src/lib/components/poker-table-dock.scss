@@ -51,6 +51,23 @@
 
   .log-toggle.active { background: var(--cd-accent-dim); color: var(--cd-accent); border-color: var(--cd-accent-line); }
 
+  /* The phone's sound toggle (PokerTable dock-left). Off in landscape, where
+     the header carries it. */
+  .sound-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: var(--cd-touch-min);
+    min-height: var(--cd-touch-min);
+    padding: 0;
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-2);
+    cursor: pointer;
+  }
+
   /* The turn indicator with the time-bank pill UNDER it (TimeBankPill), one
      column in the row of dock-left controls. */
   .turn-cell {
@@ -295,13 +312,27 @@
      PORTRAIT: a two-row dock, the action row at the bottom for the thumb.
      ========================================================================== */
   @media (max-aspect-ratio: 1/1) {
+    /* THE LEFT CELL IS SIZED BY ITS TWO BUTTONS, THE RIGHT CELL TAKES THE
+       REST. With `1fr auto` the wallet panel's max-content (the committed
+       note is a sentence) took the whole row and the 1fr cell collapsed to
+       nothing: Log and Sound painted under the wallet toggle (measured by
+       tools/shots/touch-targets.mjs: five probes of five hit something else).
+       `auto minmax(0, 1fr)` lets the note wrap inside the panel instead. */
     .action-dock {
-      grid-template-columns: 1fr auto;
+      grid-template-columns: auto minmax(0, 1fr);
       grid-template-rows: auto auto;
       gap: 3px 8px;
       min-height: var(--dock-h);
       padding: 0 var(--cd-space-2);
     }
+    .dock-left { overflow: visible; }
+    .dock-right { justify-content: flex-start; }
+    .wallet-panel { width: 100%; }
+    /* The wallet toggle has no row to itself on a phone: the panel is always
+       open here (PokerTable renders it whenever `portrait`), and the 44 px
+       the toggle took is what lets Deposit and Withdraw stay 44 px tall
+       beside the balance. */
+    .panel-toggle { display: none; }
 
     /* EVERY PIXEL BETWEEN THE STAGE AND THE DOCK IS FELT. */
     .poker-table { gap: 4px; }
@@ -329,8 +360,31 @@
     .committed-label { font-size: var(--cd-text-xs); letter-spacing: 0.08em; }
     .committed-value { font-size: 12px; }
     .committed-note { font-size: var(--cd-text-xs); }
-    .wallet-action-btn, .panel-toggle { min-height: 28px; padding: 0 9px; }
+    /* EVERY DOCK CONTROL AT THE TOUCH FLOOR (the audit measured 28-30 px):
+       Log, Sound, the wallet toggle, Deposit and Withdraw are 44 px tall.
+       Log is a glyph on the phone so the row still fits 374 px beside the
+       wallet panel: measured Log 44 + Sound 44 + toggle 44 + balance ~70 +
+       Deposit ~70 + Withdraw ~74 = 346 plus gaps. */
+    .log-toggle {
+      width: var(--cd-touch-min);
+      min-height: var(--cd-touch-min);
+      padding: 0;
+      justify-content: center;
+      font-size: 0;
+      gap: 0;
+    }
+    .log-toggle svg { width: 18px; height: 18px; }
+    .sound-btn { display: inline-flex; }
+    .wallet-action-btn { min-height: var(--cd-touch-min); padding: 0 var(--cd-space-3); }
+    /* The balance reads at body size on a phone: it is the figure a player
+       checks between hands, at arm's length. */
+    .balance-value { font-size: var(--cd-text-md); }
     .sit-controls { display: none; }
+
+    /* THE THUMB ZONE ENDS AT THE HOME INDICATOR. The action row is the dock's
+       last row; the inset (0 outside an iPhone in standalone or Safari with
+       viewport-fit=cover) keeps Fold out of the gesture area. */
+    .action-dock { padding-bottom: var(--cd-safe-bottom); }
 
     .feed-container.left { width: min(230px, 62cqw); max-height: 60cqh; }
   }

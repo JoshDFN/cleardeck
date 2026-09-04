@@ -306,5 +306,7 @@
   .raise-slider-panel.compact .preset-buttons button { min-height: var(--cd-touch-min); font-size: var(--cd-text-md); }
   .raise-slider-panel.compact .step { width: var(--cd-touch-min); min-height: var(--cd-touch-min); }
   .raise-slider-panel.compact .amount-field { min-height: var(--cd-touch-min); }
-  .raise-slider-panel.compact .raise-input { width: 5.5em; }
+  .raise-slider-panel.compact .raise-input { width: 5.5em; font-size: 16px; min-height: var(--cd-touch-min); }
+  /* The track is a touch target too: 44 px tall so the thumb lands on it. */
+  .raise-slider-panel.compact .raise-slider { min-height: var(--cd-touch-min); }
 </style>

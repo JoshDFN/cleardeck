@@ -40,6 +40,12 @@
   import { HttpAgent } from '@dfinity/agent';
   import { Principal } from '@dfinity/principal';
   import { beginPending, humaneActionError, pendingExpired, pendingStatus, projectPending } from '$lib/optimistic.js';
+  // The audit's critical mobile finding: an anonymous "Sit" tap reached the
+  // canister and came back as a red balance error over the phone header. The
+  // decision (sign in / top up / join) is a pure module; this file only acts.
+  import { joinGateDecision, seatToResume } from '$lib/join-gate.js';
+  import RotatePrompt from '$lib/components/RotatePrompt.svelte';
+  import { untrack } from 'svelte';
 
   let view = $state('lobby'); // 'lobby' | 'table'
   let tables = $state([]);
@@ -290,6 +296,17 @@
   });
   let showDepositModal = $state(false);
   let showWithdrawModal = $state(false);
+  // The shortfall a Sit tap found, handed to the cashier as its opening figure
+  // (smallest unit, or null). Cleared when the dialog closes.
+  let depositPrefill = $state(null);
+  // The seat an anonymous Sit tap wanted, resumed once sign-in lands (a NEW
+  // object each time; never mutated). Keyed by table so a sign-in on another
+  // table does not seat the player somewhere they did not tap.
+  let resumeSeat = $state(null);
+  // The header's measured height, published as `--header-h` so the phone's
+  // toast can stand UNDER the header instead of over it (the audit measured
+  // the error panel covering Lobby / History / Verify Fair at 390 px).
+  let headerHeight = $state(0);
 
   // Current table info - stores the canister ID of the table we joined
   let currentTableInfo = $state(null);
@@ -769,6 +786,29 @@
     return result;
   }
 
+  /** The key `resumeSeat` is remembered under: this table's canister id. */
+  function currentTableKey() {
+    const cid = currentTableInfo?.canister_id?.[0];
+    if (cid?.toText) return cid.toText();
+    return String(cid ?? currentTableInfo?.id ?? '');
+  }
+
+  // THE RESUME. When sign-in lands and a seat was remembered for THIS table,
+  // refresh the balances (the gate reads escrow) and tap the seat again on
+  // the player's behalf. `untrack` keeps the effect keyed to the sign-in edge
+  // and the remembered seat only.
+  $effect(() => {
+    const authed = $auth.isAuthenticated;
+    const seat = seatToResume(resumeSeat, untrack(currentTableKey));
+    if (!authed || !seat) return;
+    resumeSeat = null;
+    untrack(() => {
+      refreshAllBalances()
+        .then(() => handleTableAction('join', seat.seat))
+        .catch((e) => { error = e?.message || 'Could not take the seat after sign-in.'; });
+    });
+  });
+
   async function handleTableAction(action, data) {
     if (actionPending || !tableActor) return;
     actionPending = true;
@@ -776,7 +816,31 @@
     try {
       let result;
       switch (action) {
-        case 'join':
+        case 'join': {
+          // THE GATE. Anonymous: open sign-in and remember the seat. Under the
+          // buy-in: open the cashier with the shortfall filled in. Only a
+          // signed-in, funded tap reaches the canister (the canister still
+          // decides; this only stops the two taps whose answer is known).
+          const decision = joinGateDecision({
+            isAuthenticated: $auth.isAuthenticated,
+            escrow: myBalance,
+            minBuyIn: currentTableInfo?.config?.min_buy_in ?? null,
+          });
+          if (decision.kind === 'login') {
+            resumeSeat = { seat: data, tableKey: currentTableKey() };
+            try {
+              await auth.login();
+            } catch (e) {
+              resumeSeat = null;
+              error = e?.message || 'Sign-in did not complete.';
+            }
+            break;
+          }
+          if (decision.kind === 'deposit') {
+            depositPrefill = decision.shortfall;
+            showDepositModal = true;
+            break;
+          }
           result = await tableActor.join_table(data);
           if ('Err' in result) {
             error = result.Err;
@@ -785,6 +849,7 @@
             await refreshAllBalances();
           }
           break;
+        }
 
         case 'fold':
         case 'check':
@@ -929,7 +994,7 @@
 <!-- `--notice-safe-top` is the measured height of the protected-notice banner.
      Everything that floats over the page reads it so that nothing can be
      positioned on top of the notices (docs/DEFECTS.md E-52). -->
-<div class="app" class:on-table={view === 'table'} style="--notice-safe-top: {noticeBannerHeight}px">
+<div class="app" class:on-table={view === 'table'} style="--notice-safe-top: {noticeBannerHeight}px; --header-h: {headerHeight}px">
   <!-- Ambient background: ONE static gradient (the audit retired the three
        animated blur orbs), and none at all behind the table, where the stage
        paints its own single pool of light. -->
@@ -1049,14 +1114,16 @@
     {/if}
   </div>
 
-  <header class:compact={view === 'table'}>
+  <header class:compact={view === 'table'} bind:clientHeight={headerHeight}>
     <div class="header-left">
       {#if view === 'table'}
-        <button class="back-btn" onclick={backToLobby}>
+        <!-- The labels are spans so the phone's one-row header can keep the
+             glyph and drop the word without a second markup path. -->
+        <button class="back-btn" onclick={backToLobby} aria-label="Back to the lobby" title="Lobby">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M19 12H5M12 19l-7-7 7-7"/>
           </svg>
-          Lobby
+          <span class="btn-label">Lobby</span>
         </button>
         {#if currentTableInfo}
           <span class="current-table-name">{headerStakes}</span>
@@ -1105,19 +1172,19 @@
         {/if}
       </button>
       {#if view === 'table'}
-        <button class="history-btn" onclick={() => showHandHistory = true}>
+        <button class="history-btn" onclick={() => showHandHistory = true} aria-label="Hand history" title="Hand history">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/>
             <polyline points="12,6 12,12 16,14"/>
           </svg>
-          History
+          <span class="btn-label">History</span>
         </button>
-        <button class="verify-btn" onclick={() => showProofPanel = !showProofPanel}>
+        <button class="verify-btn" onclick={() => showProofPanel = !showProofPanel} aria-label="Verify fair" title="Verify fair">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             <path d="M9 12l2 2 4-4"/>
           </svg>
-          Verify Fair
+          <span class="btn-label">Verify Fair</span>
         </button>
       {/if}
       <WalletButton onProfileChange={handleProfileChange} />
@@ -1132,7 +1199,7 @@
         <line x1="9" y1="9" x2="15" y2="15"/>
       </svg>
       <span>{error}</span>
-      <button onclick={() => error = null}>×</button>
+      <button class="toast-close" onclick={() => error = null} aria-label="Dismiss">×</button>
     </div>
   {/if}
 
@@ -1196,9 +1263,14 @@
             customName={currentCustomName}
             onShowDeposit={() => showDepositModal = true}
             onShowWithdraw={() => showWithdrawModal = true}
+            {soundMuted}
+            onToggleSound={toggleSound}
             {shuffleProof}
             onShowProof={() => showProofPanel = true}
           />
+          <!-- The phone held sideways: over the table area only, so the trust
+               bar and the header stay on screen (RotatePrompt.svelte). -->
+          <RotatePrompt />
         </div>
 
         {#if showProofPanel}
@@ -1285,7 +1357,8 @@
     {tableActor}
     tableCanisterId={currentTableInfo?.canister_id?.[0]}
     currency={getTableCurrency(currentTableInfo)}
-    onClose={() => { showDepositModal = false; }}
+    initialAmount={depositPrefill}
+    onClose={() => { showDepositModal = false; depositPrefill = null; }}
     onDepositSuccess={() => { refreshAllBalances(); loadTableState(); }}
   />
 {/if}
@@ -1849,13 +1922,22 @@
     color: #00d4aa;
   }
 
+  /* A 44 px dismiss target (the audit measured ~20x24). The negative margins
+     keep the toast's box the size it was; only the hit area grew. */
   .toast button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    min-width: var(--cd-touch-min);
+    min-height: var(--cd-touch-min);
+    margin: calc(-1 * var(--cd-space-2)) calc(-1 * var(--cd-space-3)) calc(-1 * var(--cd-space-2)) 0;
     background: none;
     border: none;
     color: inherit;
     font-size: 20px;
     cursor: pointer;
-    padding: 0 0 0 8px;
+    padding: 0;
     opacity: 0.7;
   }
 
@@ -2852,4 +2934,56 @@
     font-weight: 700;
   }
   .hash-row .hash.live-unknown { color: #fcd34d; }
+
+  /* =========================================================================
+     THE PHONE (portrait, or a window under 560 px tall): touch floors and the
+     toast's place. Last in the file on purpose: these outrank the desktop
+     rules of the same specificity above.
+     ========================================================================= */
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    /* The table area anchors the sideways-phone panel (RotatePrompt). */
+    .table-area { position: relative; }
+
+    /* THE TOAST NEVER COVERS NAVIGATION. On the table view it stands UNDER
+       the header (over the far seats, dismissable), not over Lobby / History
+       / Verify Fair; on every other view it is a bottom snackbar above the
+       home indicator. The protected notices are above both, which
+       tools/shots/lib/toast-notices.mjs measures on every scene. */
+    .toast {
+      top: calc(var(--notice-safe-top, 80px) + var(--header-h, 0px) + var(--cd-space-2));
+      max-width: calc(100vw - var(--cd-space-4));
+      padding: var(--cd-space-2) var(--cd-space-3);
+      gap: var(--cd-space-2);
+    }
+
+    .app:not(.on-table) .toast {
+      top: auto;
+      bottom: calc(var(--cd-safe-bottom) + var(--cd-space-4));
+      animation-name: slideUp;
+    }
+
+    /* Dialog close controls at the touch floor. */
+    .sidebar-header .close-btn,
+    .verify-modal .close-btn {
+      width: var(--cd-touch-min);
+      height: var(--cd-touch-min);
+      min-width: var(--cd-touch-min);
+    }
+
+    /* The lobby header's controls (the table view's are in table-header-phone.scss). */
+    header:not(.compact) .sound-toggle-btn {
+      width: var(--cd-touch-min);
+      min-height: var(--cd-touch-min);
+    }
+
+    /* The footer's two text links and the trust bar's FULL TERMS strip (a
+       41 px button on the sideways phone) at the touch floor. */
+    .footer-link { min-height: var(--cd-touch-min); display: inline-flex; align-items: center; }
+    .alpha-warning-banner.on-table .banner-strip { min-height: var(--cd-touch-min); }
+  }
+
+  @keyframes slideUp {
+    from { transform: translateX(-50%) translateY(20px); opacity: 0; }
+    to { transform: translateX(-50%) translateY(0); opacity: 1; }
+  }
 </style>

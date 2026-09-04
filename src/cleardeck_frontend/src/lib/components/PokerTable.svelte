@@ -73,7 +73,11 @@
     avatarStyle = 'bottts',
     customName = null,
     shuffleProof = null,
-    onShowProof = null
+    onShowProof = null,
+    // The sound toggle rides the dock on the phone (the one-row header has no
+    // slot for it); the page owns the state, the dock only shows the button.
+    soundMuted = false,
+    onToggleSound = null
   } = $props();
 
   const isBTC = $derived(currency === 'BTC');
@@ -1635,6 +1639,32 @@
           </svg>
           Log
         </button>
+        {#if onToggleSound}
+          <!-- THE SOUND TOGGLE ON THE PHONE: a 44 px square beside Log, where a
+               thumb reaches it. Painted only in portrait (poker-table-dock.scss);
+               the header carries it everywhere else. -->
+          <button
+            class="sound-btn"
+            onclick={onToggleSound}
+            title={soundMuted ? 'Unmute sounds' : 'Mute sounds'}
+            aria-label={soundMuted ? 'Unmute sounds' : 'Mute sounds'}
+            aria-pressed={!soundMuted}
+          >
+            {#if soundMuted}
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M11 5L6 9H2v6h4l5 4V5z"/>
+                <line x1="23" y1="9" x2="17" y2="15"/>
+                <line x1="17" y1="9" x2="23" y2="15"/>
+              </svg>
+            {:else}
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M11 5L6 9H2v6h4l5 4V5z"/>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+              </svg>
+            {/if}
+          </button>
+        {/if}
         {#if gameInProgress && mySeat !== null}
           <div class="turn-cell">
           <div class="turn-indicator" class:my-turn={isMyTurn} class:waiting={!isMyTurn} class:time-bank={usingTimeBank}>
@@ -1764,7 +1794,10 @@
           </svg>
           {#if walletCollapsed}<span class="collapsed-balance">{formatWithUnit(tableBalance)}</span>{/if}
         </button>
-        {#if !walletCollapsed}
+        {#if !walletCollapsed || portrait}
+          <!-- On the phone the panel is always open: its toggle has no row
+               (poker-table-dock.scss), so a collapse remembered from a
+               desktop session must not hide Deposit and Withdraw here. -->
           <div class="wallet-panel">
             <div class="wallet-balance">
               <span class="balance-label">Table balance</span>

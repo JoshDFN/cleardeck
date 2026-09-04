@@ -372,6 +372,32 @@ export function scrapeLobby(page) {
     });
 }
 
+/**
+ * The solvency block (SolvencyNotice.svelte) inside an open money dialog: its
+ * state, each labelled figure row ("Owed to players" / "Held on the ledger" /
+ * "Short by"), and the canister-authored advice sentence. Every number in
+ * these is money and is asserted against get_solvency() by
+ * chain-agreement.mjs; the census site `solvency-figures` reads the same
+ * elements.
+ */
+export function scrapeSolvency(page) {
+    return page.evaluate(() => {
+        const txt = (el) => (el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : null);
+        const block = document.querySelector('.modal-content .solvency');
+        if (!block) return { present: false, state: null, rows: [], advice: null };
+        const rows = [...block.querySelectorAll('.figures > div')].map((row) => ({
+            label: txt(row.querySelector('dt')),
+            text: txt(row.querySelector('dd')),
+        }));
+        return {
+            present: true,
+            state: block.getAttribute('data-solvency-state'),
+            rows,
+            advice: txt(block.querySelector('.advice')),
+        };
+    });
+}
+
 /** The deposit modal's money figures. */
 export function scrapeDeposit(page) {
     return page.evaluate(() => {

@@ -224,6 +224,12 @@
   --cd-control-sm: 32px;
   --cd-control-md: 40px;
   --cd-touch-min: 44px;
+  /* The phone's home-indicator and notch insets (0 everywhere else). Needs
+     `viewport-fit=cover` in app.html to be non-zero on an iPhone. */
+  --cd-safe-top: env(safe-area-inset-top, 0px);
+  --cd-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --cd-safe-left: env(safe-area-inset-left, 0px);
+  --cd-safe-right: env(safe-area-inset-right, 0px);
 
   /* Layers. The stage's own objects stop at 32 (PokerTable.svelte); a sheet
      the dock raises over the pot-odds line and the wallet row sits above
@@ -381,6 +387,29 @@ img {
 @media (max-aspect-ratio: 1/1) {
   .footer-disclaimer { display: none; }
 }
+
+/* ==========================================================================
+   TOUCH: NO 300 MS DOUBLE-TAP DELAY, NO ZOOM ON A FAST SECOND TAP.
+   `touch-action: manipulation` keeps pan and pinch-zoom (app.html forbids
+   neither) and removes only the double-tap-to-zoom gesture, which on a poker
+   client turns a quick Call-Call into a zoomed felt. Every control, not a
+   list that the next button forgets to join.
+   ========================================================================== */
+button, [role='button'], input[type='range'], summary, a[href] {
+  touch-action: manipulation;
+}
+
+/* ==========================================================================
+   THE PAGE DOES NOT SCROLL BEHIND A DIALOG, AND THE TABLE DOES NOT PULL TO
+   REFRESH.
+   `lib/scroll-lock.js` puts `cd-scroll-lock` on <html> while any dialog is
+   open (reference-counted), so the document cannot scroll under a sheet on a
+   phone. On the table view a downward flick at the top of the page used to
+   trigger Chrome's pull-to-refresh and reload a live hand; the table view
+   contains its overscroll instead.
+   ========================================================================== */
+html.cd-scroll-lock { overflow: hidden; }
+html:has(.app.on-table) { overscroll-behavior-y: none; }
 
 /* ==========================================================================
    REDUCED MOTION, GLOBALLY.

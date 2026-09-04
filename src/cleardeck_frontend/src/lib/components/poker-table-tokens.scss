@@ -177,7 +177,10 @@
       --card-hero-r: 0.13;
       --off-hero-r: 0.16;
       --cluster-dy-r: -0.180;
-      --card-board-r: 0.098;
+      /* 0.116 fw = 34.5 px on the nine-seat phone: the corner index (0.32 of
+         the card) reaches the 11 px on-felt floor. At 0.098 it was 9.3 px,
+         measured by tools/shots/touch-targets.mjs. */
+      --card-board-r: 0.116;
       --card-opp-r: 0.076;
       --off-opp-r: 0.085;
       --off-shown-r: 0.094;

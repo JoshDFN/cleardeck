@@ -227,4 +227,9 @@
 
   .refresh:disabled { opacity: 0.6; cursor: default; }
   .refresh:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+
+  /* THE PHONE: the refresh control at the 44 px touch floor. */
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    .refresh { min-height: var(--cd-touch-min); }
+  }
 </style>

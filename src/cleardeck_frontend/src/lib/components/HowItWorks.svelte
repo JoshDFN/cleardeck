@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import { scrollLock } from '$lib/scroll-lock.js';
 
   const { onClose } = $props();
 
@@ -77,6 +78,7 @@
   role="dialog"
   aria-modal="true"
   aria-labelledby="how-it-works-title"
+  use:scrollLock
 >
   <div class="modal-header">
     <h2 id="how-it-works-title">
@@ -751,5 +753,9 @@
     .section h3 {
       font-size: 15px;
     }
+  }
+  /* THE PHONE: the close control at the 44 px touch floor. */
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    .close-btn { width: var(--cd-touch-min); height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
   }
 </style>

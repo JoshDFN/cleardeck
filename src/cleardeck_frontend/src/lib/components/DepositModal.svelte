@@ -17,8 +17,15 @@
     depositSubaccount,
   } from '$lib/depositAddress.js';
   import { isTrustedTableId, untrustedTableMessage } from '$lib/trustedTables.js';
+  import { scrollLock } from '$lib/scroll-lock.js';
 
-  const { tableActor, tableCanisterId, onClose, onDepositSuccess, currency = 'ICP' } = $props();
+  const {
+    tableActor, tableCanisterId, onClose, onDepositSuccess, currency = 'ICP',
+    // The figure the dialog opens with, in the smallest unit (e8s or sats), or
+    // null. A Sit tap on a seat the player cannot yet afford hands the
+    // shortfall here (lib/join-gate.js) so the cashier is one tap from the seat.
+    initialAmount = null,
+  } = $props();
 
   // ==========================================================================
   // IS THIS CANISTER ID ONE THIS BUILD HAS EVER HEARD OF?
@@ -126,7 +133,16 @@
     return unsub;
   });
 
-  let depositAmount = $state('');
+  // Opens on the shortfall a Sit tap found, when there is one: e8s to ICP for
+  // an ICP table (trailing zeros dropped), sats as they are for a BTC table
+  // (the BTC input starts in sats). Otherwise empty, as before.
+  const openingAmount = (() => {
+    const n = initialAmount === null || initialAmount === undefined ? null : Number(initialAmount);
+    if (n === null || !Number.isFinite(n) || n <= 0) return '';
+    if (currency === 'BTC') return String(Math.ceil(n));
+    return (n / 1e8).toFixed(8).replace(/\.?0+$/, '');
+  })();
+  let depositAmount = $state(openingAmount);
   let processing = $state(false);
   let error = $state(null);
   let success = $state(null);
@@ -908,6 +924,7 @@
   role="dialog"
   aria-labelledby="deposit-modal-title"
   data-table-trust={tableIsTrusted ? 'pinned' : 'refused'}
+  use:scrollLock
 >
   <div class="modal-header">
     <h2 id="deposit-modal-title">
@@ -1245,6 +1262,7 @@
             <input
               id="deposit-amount"
               type="number"
+              inputmode="decimal"
               step={isBTC && inputUnit === 'sats' ? "1" : "0.00000001"}
               min={inputMinAttr}
               placeholder={inputMinAttr}
@@ -2749,5 +2767,74 @@
     font-family: 'Monaco', 'Menlo', monospace;
     font-size: 11px;
     word-break: break-all;
+  }
+
+  /* =========================================================================
+     THE PHONE: A FULL-HEIGHT SHEET, NOT A FLOATING BOX.
+     Header fixed at the top, the body the one scroller (its overscroll
+     contained so the table behind never moves), the close control and every
+     button at the 44 px touch floor, the actions row sticky at the bottom of
+     the scroller once the form is in view, 16 px inputs so iOS does not zoom
+     the page on focus. The notices, the custody disclosure and the solvency
+     block keep their order and every word; only their spacing is tighter.
+     ========================================================================= */
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    .modal-content {
+      top: 0;
+      left: 0;
+      transform: none;
+      width: 100%;
+      max-width: none;
+      height: 100dvh;
+      max-height: 100dvh;
+      border-radius: 0;
+      border: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding-top: var(--cd-safe-top);
+    }
+
+    .modal-header {
+      flex: 0 0 auto;
+      padding: 8px 8px 8px 16px;
+    }
+
+    .modal-header h2 { font-size: var(--cd-text-lg); }
+
+    .close-btn {
+      width: var(--cd-touch-min);
+      height: var(--cd-touch-min);
+      min-width: var(--cd-touch-min);
+      font-size: 30px;
+    }
+
+    .modal-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      padding: 14px 16px calc(24px + var(--cd-safe-bottom));
+      gap: 14px;
+    }
+
+    .player-notice, .custody-notice, .network-line { font-size: 12px; line-height: 1.45; padding: 10px 12px; }
+
+    .deposit-method-toggle button,
+    .wallet-source-toggle button { min-height: var(--cd-touch-min); }
+
+    input[type='number'] { font-size: 16px; min-height: var(--cd-touch-min); }
+    .max-btn { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
+    .unit-toggle button { min-height: 36px; min-width: var(--cd-touch-min); }
+
+    .btn-primary, .btn-secondary { min-height: 48px; font-size: 15px; }
+
+    /* NOT sticky. A row pinned to the bottom of the scroller stood over the
+       solvency advice's figures at rest (the occlusion gate measured 37.5% of
+       "I DO NOT KNOW whether this canister can pay everyone it owes" under
+       it); nothing in this app may paint over a money figure. The row is in
+       flow at 48 px, one short scroll under the amount field. */
+    .actions { padding-top: var(--cd-space-1); }
   }
 </style>

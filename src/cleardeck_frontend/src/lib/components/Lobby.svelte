@@ -2467,5 +2467,15 @@
        WPT Global's phone lobby drops it for the same reason; tapping a row
        opens the real table, which is a better preview than a picture of one. */
     .preview { display: none; }
+
+    /* EVERY TAPPABLE CONTROL AT THE 44 PX TOUCH FLOOR (the audit measured the
+       pills at 26 px and the copy buttons at ~24 px). The filter pills keep
+       their type and radius and grow only in height; five still fit one row
+       at 390 px (measured 366 px of content). */
+    .pill { min-height: var(--cd-touch-min); padding: 0 10px; display: inline-flex; align-items: center; }
+    .drift-chip { min-height: var(--cd-touch-min); display: inline-flex; align-items: center; }
+    .btn, .btn.sm, .btn.icon, .btn.ghost { min-height: var(--cd-touch-min); }
+    .link-btn, .mono.copy, .linkish { min-height: var(--cd-touch-min); display: inline-flex; align-items: center; }
+    .sort { min-height: var(--cd-touch-min); }
   }
 </style>

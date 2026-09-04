@@ -260,6 +260,13 @@ export const CHAIN_SITES = [
         why: 'the fiat conversion of that balance',
     },
     {
+        id: 'solvency-figures',
+        selector: '.solvency .figures dd, .solvency .advice',
+        label: /^solvency /,
+        why: 'the money a table owes, holds and is short by, and the canister\'s own advice '
+            + 'sentence quoting them, against get_solvency() (docs/SECURITY-FINDINGS.md FINDING 35)',
+    },
+    {
         id: 'deposit-minimum-and-fee',
         selector: '.minimum-notice',
         // The third alternative is the wallet requirement T-30 added ("charged twice
@@ -272,7 +279,7 @@ export const CHAIN_SITES = [
         // different numbers with different consequences (docs/DEFECTS.md E-86). Both
         // are labelled `deposit modal "Minimum deposit"`, disambiguated in the rest
         // of the label, so this pattern still matches all four.
-        label: /^deposit modal "(Minimum deposit|Network fee|you need N in your wallet)"/,
+        label: /^deposit modal "(Minimum deposit|Network fee|above the N network fee|At or below N nothing can move it|you need N in your wallet)"/,
         why: 'the address minimum, the connected-wallet minimum, the network fee, and '
             + 'the wallet balance the modal says is needed to deposit that minimum — '
             + 'all four stated as fact',

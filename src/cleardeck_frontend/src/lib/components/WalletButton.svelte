@@ -1583,4 +1583,28 @@
   @keyframes spin {
     to { transform: rotate(360deg); }
   }
+  /* =========================================================================
+     THE PHONE: the chip, the login buttons and every row of the menu at the
+     44 px touch floor (the audit measured Connect Wallet at 24 px and the
+     menu rows at ~26). The menu becomes a sheet pinned to the right edge of
+     the screen rather than the chip, so it never runs past 390 px.
+     ========================================================================= */
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    .wallet-btn { min-height: var(--cd-touch-min); }
+    .dev-menu button { min-height: var(--cd-touch-min); font-size: 14px; }
+    .dropdown {
+      position: fixed;
+      top: auto;
+      right: 8px;
+      left: 8px;
+      max-height: calc(100dvh - 120px);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      min-width: 0;
+    }
+    .dropdown-btn { min-height: var(--cd-touch-min); font-size: 14px; }
+    .copy-btn, .copy-btn.small { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
+    .pref-row { min-height: var(--cd-touch-min); align-items: center; }
+    .pref-row input { width: 22px; height: 22px; margin: 0 4px 0 0; }
+  }
 </style>

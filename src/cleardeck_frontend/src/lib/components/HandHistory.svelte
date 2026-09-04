@@ -34,6 +34,7 @@
   import { get } from 'svelte/store';
   import { history } from '$lib/canisters';
   import Card from './Card.svelte';
+  import { scrollLock } from '$lib/scroll-lock.js';
   import logger from '$lib/logger.js';
   import { auth } from '$lib/auth.js';
   import { verifyHandLocally } from '$lib/shuffle-verify.js';
@@ -730,7 +731,7 @@
        `.replay-cols` rule): everything it claims then fits in one frame instead
        of hiding the action log a scroll below the verdict, which is the shape of
        docs/DEFECTS.md H-30. The LIST keeps the narrow dialog it always had. -->
-  <div class="modal-content" class:wide={!!selected}>
+  <div class="modal-content" class:wide={!!selected} use:scrollLock>
     <div class="modal-header">
       <h2>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1825,5 +1826,9 @@
     .proof-label { min-width: 0; }
     .legal { padding: 8px 12px 10px; }
     .legal p { font-size: 9.5px; }
+  }
+  /* THE PHONE: the close control at the 44 px touch floor. */
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    .close-btn { width: var(--cd-touch-min); height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
   }
 </style>

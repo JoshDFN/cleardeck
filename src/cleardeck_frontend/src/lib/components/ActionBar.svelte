@@ -436,6 +436,10 @@
     .action-btn.caret { flex: 0 0 var(--cd-touch-min); min-width: var(--cd-touch-min); width: var(--cd-touch-min); }
     .no-game-message, .not-your-turn { min-height: calc(var(--cd-touch-min) + var(--cd-space-1)); font-size: var(--cd-text-md); }
     .key-hints { display: none; }
+    /* The clock line is read from 240 px away on a phone: a full space unit
+       (4 px), not the desktop's hairline (the audit measured 3 px as
+       invisible at arm's length). */
+    .actions-clock { height: var(--cd-space-1); }
   }
 
   @media (min-aspect-ratio: 1/1) and (max-height: 560px) {

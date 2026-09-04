@@ -43,14 +43,18 @@
     transition: color var(--cd-fast) var(--cd-ease);
   }
 
-  /* The whole footprint of a plate is the hit area, as it always was. */
+  /* The whole footprint of a plate is the hit area, as it always was, and
+     never under the 44 px touch floor: the nine-seat phone's plates are 34 px
+     tall (0.112 fw), so without the floor a Sit tap there was a 41 px target.
+     The floor grows the invisible hit area only; the painted disc and label
+     keep the felt budget the harness protects. */
   .join-seat::before {
     content: '';
     position: absolute;
     left: 50%;
     top: 50%;
-    width: var(--pod-w);
-    height: calc(var(--pod-h) * 1.2);
+    width: max(var(--pod-w), var(--cd-touch-min));
+    height: max(calc(var(--pod-h) * 1.2), var(--cd-touch-min));
     transform: translate(-50%, -50%);
   }
 

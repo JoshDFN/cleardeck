@@ -1,0 +1,13 @@
+{
+  "name": "ClearDeck",
+  "short_name": "ClearDeck",
+  "description": "Provably fair on-chain poker. Unaudited alpha: your funds are NOT safe.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "icons": [
+    { "src": "/logo2.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

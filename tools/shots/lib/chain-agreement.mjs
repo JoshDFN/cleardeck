@@ -48,7 +48,8 @@ import {
   RANK_BY_GLYPH, SUIT_BY_SYMBOL, cardToText, fmt,
 } from './money.mjs';
 import {
-  closeBetPresets, readBetPreset, scrapeDeposit, scrapeHandHistory, scrapeLobby, scrapeTable,
+  closeBetPresets, readBetPreset, scrapeDeposit, scrapeHandHistory, scrapeLobby, scrapeSolvency,
+  scrapeTable,
 } from './dom-scrape.mjs';
 import { devPlayerPrincipal } from './identities.mjs';
 import { thirdPartyObservations } from './browser.mjs';
@@ -58,6 +59,74 @@ import {
 } from './equity-oracle.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * `formatTokenAmount(v, { includeUnit: true })` as the client renders it, so
+ * a solvency row can be compared with what SolvencyNotice.svelte prints:
+ * "140.00 ICP (14000000000 e8s)". Mirrors src/lib/utils.js; a change there
+ * fails here, on purpose.
+ */
+export function clientTokenText(smallestUnit, currency = 'ICP') {
+    const num = Number(smallestUnit);
+    if (currency === 'BTC') {
+        if (num >= 100_000_000) return `${(num / 100_000_000).toFixed(2)} BTC`;
+        if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M sats`;
+        if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K sats`;
+        return `${num} sats`;
+    }
+    const tokens = num / 100_000_000;
+    if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}K ICP`;
+    if (tokens >= 0.01) return `${tokens.toFixed(2)} ICP`;
+    return `${tokens.toFixed(4)} ICP`;
+}
+
+/**
+ * One solvency row: the rounded token figure AND the exact e8s integer must
+ * both be the canister's. The whole row text is the figure's `domText`, so the
+ * census credits every literal in it (the "8" of "e8s" included) to this check.
+ */
+export function checkSolvencyLine(label, chainValue, domText, currency = 'ICP') {
+    const chain = chainValue === null || chainValue === undefined ? null : Number(chainValue);
+    if (chain === null) {
+        return {
+            label, chain: null, domText: domText ?? null, agrees: false, discriminates2x: false,
+            ok: false, detail: 'the canister publishes no figure for this row, yet the row is on screen',
+        };
+    }
+    const text = String(domText ?? '');
+    const wantTokens = clientTokenText(chain, currency);
+    const wantExact = `(${chain} e8s)`;
+    const agrees = text.includes(wantTokens) && text.includes(wantExact);
+    return {
+        label, chain, domText: text, agrees, discriminates2x: true, ok: agrees,
+        detail: agrees
+            ? `screen "${text}" carries both "${wantTokens}" and "${wantExact}"`
+            : `screen "${text}" does not carry both "${wantTokens}" and "${wantExact}"`,
+    };
+}
+
+/**
+ * The canister-authored advice sentence quotes its figures at four decimals
+ * ("140.0000 ICP (14000000000 e8s)"). Every numeric literal in it must be one
+ * of the report's own figures, as e8s or as tokens at any precision, or the
+ * literal "8" of "e8s".
+ */
+export function checkSolvencyAdvice(label, knownE8s, domText) {
+    const text = String(domText ?? '');
+    const literals = text.match(/\d+(?:[.,]\d+)*/g) || [];
+    const asNumber = (s) => Number(s.replace(/,/g, ''));
+    const explained = (n) => n === 8
+        || knownE8s.some((k) => k === n || Math.abs(k / 100_000_000 - n) < 0.00005);
+    const strays = literals.filter((s) => !explained(asNumber(s)));
+    const ok = strays.length === 0;
+    return {
+        label, chain: knownE8s.length ? knownE8s[0] : null, domText: text, agrees: ok,
+        discriminates2x: true, ok,
+        detail: ok
+            ? `every figure in the advice is one of get_solvency()'s own (${knownE8s.join(', ')} e8s)`
+            : `the advice quotes ${strays.join(', ')}, which is none of get_solvency()'s figures (${knownE8s.join(', ')} e8s)`,
+    };
+}
 
 /** Attempts before a disagreement is believed, and the gap between them. */
 const MAX_ATTEMPTS = Number(process.env.SHOTS_AGREEMENT_ATTEMPTS || 3);
@@ -1537,12 +1606,18 @@ export async function assertDepositAgreement(ctx, page, opts) {
     // asserted. The token census then re-reads the page independently, so a
     // figure that appears after even this loop still cannot slip through: it
     // would be counted as UNASSERTED.
-    const priceServed = servedIcpUsd();
+    // THE QUOTE CAN LAND AFTER THE FIRST SCRAPE. `servedIcpUsd()` is re-read
+    // on every attempt: read once before the loop it was null while the
+    // request was still in flight, the loop settled on the balance alone, and
+    // the fiat figure that rendered a moment later reached the census with no
+    // check behind it (measured: "0.0015" in .usd-value asserted by nothing).
     let dom = await scrapeDeposit(page);
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+        const priceServed = servedIcpUsd();
         const settled = dom.found.modal
             && dom.cryptoBalances.length > 0
-            && (!priceServed || priceServed.mode === 'unavailable' || dom.usdValues.length > 0);
+            && priceServed !== null
+            && (priceServed.mode === 'unavailable' || dom.usdValues.length > 0);
         if (settled) break;
         await sleep(ATTEMPT_GAP_MS);
         dom = await scrapeDeposit(page);
@@ -1613,6 +1688,19 @@ export async function assertDepositAgreement(ctx, page, opts) {
                 re: new RegExp(`network fee\\s*${N}`, 'i'),
                 expected: Number(fee),
             },
+            // T-26's consequence sentence quotes the fee TWICE more ("above the
+            // N network fee", "At or below N nothing can move it"); each quote is
+            // a token the census has to see asserted, one check per quote.
+            {
+                label: 'deposit modal "above the N network fee" vs the ledger\'s own icrc1_fee()',
+                re: new RegExp(`above the\\s*${N}\\s*(?:ICP|BTC|sats)?\\s*network fee`, 'i'),
+                expected: Number(fee),
+            },
+            {
+                label: 'deposit modal "At or below N nothing can move it" vs the ledger\'s own icrc1_fee()',
+                re: new RegExp(`at or below\\s*${N}`, 'i'),
+                expected: Number(fee),
+            },
             {
                 label: 'deposit modal "you need N in your wallet" vs minimum + 2 x icrc1_fee()',
                 re: new RegExp(`you need\\s*${N}`, 'i'),
@@ -1657,6 +1745,42 @@ export async function assertDepositAgreement(ctx, page, opts) {
         }
     }
 
+    // THE SOLVENCY BLOCK NAMES MONEY (docs/SECURITY-FINDINGS.md FINDING 35).
+    // "Owed to players 140.00 ICP (14000000000 e8s)" is two spellings of the
+    // canister's `owed`; "Held" and "Short by" the same for `held` and
+    // `shortfall_e8s`; and the advice sentence is the canister's own words,
+    // which quote the same figures at four decimals. SolvencyNotice.svelte's
+    // header asked for exactly this site the day the figures started to render;
+    // until it existed both deposit shots were UNVERIFIED on the census.
+    const solvencyDom = await scrapeSolvency(page);
+    if (solvencyDom.present) {
+        const solvencyTable = await tableActorFor(opts.asPlayer, tableId);
+        const report = await solvencyTable.get_solvency();
+        const opt = (v) => (Array.isArray(v) ? (v.length ? v[0] : null) : (v ?? null));
+        const expectedByLabel = {
+            'Owed to players': opt(report.owed),
+            'Held on the ledger': opt(report.held),
+            'Short by': opt(report.shortfall_e8s),
+        };
+        for (const row of solvencyDom.rows) {
+            const expected = expectedByLabel[row.label];
+            if (expected === undefined) {
+                structural.push(`the solvency block shows a row labelled "${row.label}" that this check does not know`);
+                continue;
+            }
+            figures.push(checkSolvencyLine(
+                `solvency "${row.label}" vs get_solvency()`, expected, row.text, truth.currency,
+            ));
+        }
+        if (solvencyDom.advice && /\d/.test(solvencyDom.advice)) {
+            const known = [opt(report.owed), opt(report.held), opt(report.shortfall_e8s)]
+                .filter((v) => v !== null).map((v) => Number(v));
+            figures.push(checkSolvencyAdvice(
+                'solvency advice figures vs get_solvency()', known, solvencyDom.advice,
+            ));
+        }
+    }
+
     const folded = foldFigures(figures);
     const ok = folded.ok && structural.length === 0;
     return {
@@ -1667,6 +1791,7 @@ export async function assertDepositAgreement(ctx, page, opts) {
             moneyMismatches: folded.mismatches,
             structuralProblems: structural,
             figures: folded.figures.map((f) => ({ label: f.label, chain: f.chain, screen: f.domText, ok: f.ok, detail: f.detail })),
+            solvencyOnScreen: solvencyDom,
             onChain: {
                 heroPrincipal,
                 ledgerBalanceE8s: wallet,

@@ -440,6 +440,27 @@
     .player-nameplate.highlight-me { padding-block: 0.15em; }
     .hero-hand { line-height: 1.05; margin-top: -0.06em; }
 
+    /* AN OPPONENT'S CLOCK DIGITS SIT ON THE AVATAR, inside the ring that
+       already shows the arc (GGPoker's grammar). In the plate's row they
+       took 26 px of a 115 px plate and ellipsised the name on the acting
+       flank seat ("Nakam... 38s", measured in phase 2). The hero's plate is
+       wider and keeps its digits in the row. */
+    .player-nameplate:not(.highlight-me) .pod-slot {
+      position: absolute;
+      left: calc(var(--avatar) * 0.56);
+      top: 50%;
+      width: var(--avatar);
+      height: var(--avatar);
+      transform: translate(-50%, -50%);
+      justify-content: center;
+      border-radius: 50%;
+      background: var(--cd-capsule);
+      z-index: 3;
+    }
+
+    .player-nameplate:not(.highlight-me) .turn-timer {
+      font-size: var(--cd-felt-label);
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
