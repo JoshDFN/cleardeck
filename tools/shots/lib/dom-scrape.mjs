@@ -128,7 +128,7 @@ export function scrapeTable(page) {
             equityMethodText: one(document, '.equity-method'),
             equityMethodTitle: document.querySelector('.equity-method')?.getAttribute('title') ?? null,
             boardCaptionTag: one(document, '.board-caption .caption-tag'),
-            heroHandText: one(document, '.board-caption .caption-hand'),
+            heroHandText: one(document, '.caption-hand'),
             winnerText: one(document, '.winner-display .winner-text') ?? one(document, '.winner-display'),
             winnerHandRank: one(document, '.winner-display .winner-hand-rank'),
             splitInfo: one(document, '.winner-display .split-info'),

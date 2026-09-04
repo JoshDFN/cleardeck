@@ -4,16 +4,20 @@
    * has gone.
    *
    * ONE gold figure with a POT label and the street, as every reference client
-   * and every broadcast graphic draws it. The decomposition (collected +
-   * betting), the side pots and the equity method are footnotes UNDER it, one
-   * type step down, shown only when they say something the headline does not.
+   * and every broadcast graphic draws it. The felt is not a document: the
+   * decomposition (collected + betting) is the module's tooltip, the equity
+   * method is the badges' tooltip and a LOG line, and the side-pot row is
+   * drawn only when there is more than one pot to tell apart.
    *
    * THE HARNESS CONTRACT. `.pot-display > .main-pot > .pot-amount` is the
    * figure asserted against get_pot(); `.pot-breakdown` must carry two numbers
    * that sum to it; `.side-pot > .side-pot-label + .side-pot-amount` one per
-   * layer; `.phase-indicator` the street; `.equity-method` the method line with
-   * its `title`; `.winner-display > .winner-text | .winner-hand-rank |
-   * .split-info`. tools/shots/lib/dom-scrape.mjs reads exactly these.
+   * layer, as many as the canister has; `.phase-indicator` the street;
+   * `.equity-method` the method line with its `title`; `.winner-display >
+   * .winner-text | .winner-hand-rank | .split-info`. tools/shots/lib/dom-scrape
+   * reads these by textContent, so the demoted lines stay in the DOM with
+   * `visibility: hidden` (out of flow), which the token census also treats as
+   * not on screen.
    *
    * The parent positions this component's root inside `.board-cluster`; the
    * rules for that anchor live here because they are the module's own shape.
@@ -38,13 +42,14 @@
   } = $props();
 
   const showWinner = $derived(isHandComplete && winners.length > 0);
+  const breakdown = $derived(liveBets > 0 ? `${fmt(collectedPot)} collected + ${fmt(liveBets)} betting` : '');
 </script>
 
 {#snippet equityMethodLine()}
   {#if equityMethodLabel}
     <!-- THE METHOD TRAVELS WITH THE FIGURE (docs/DEFECTS.md T-27): the same
-         element under whichever readout is on screen. -->
-    <div class="equity-method" title={equityNote}>{equityMethodLabel}</div>
+         element under whichever readout is on screen; demoted to the tooltip. -->
+    <div class="equity-method demoted" title={equityNote}>{equityMethodLabel}</div>
   {/if}
 {/snippet}
 
@@ -73,7 +78,7 @@
   </div>
 {:else}
   <div class="pot-display" class:waiting={totalPot <= 0}>
-    <div class="main-pot" class:has-chips={totalPot > 0} class:at-risk={allInMoment}>
+    <div class="main-pot" class:has-chips={totalPot > 0} class:at-risk={allInMoment} title={breakdown}>
       <span class="pot-meta">
         <span class="pot-label">
           {#if allInMoment}
@@ -86,26 +91,22 @@
       </span>
       <span class="pot-amount cd-money">{totalPot > 0 ? fmt(totalPot) : '--'}</span>
     </div>
-    {#if sidePots.length > 0 || liveBets > 0}
-      <div class="pot-foot">
-        {#if sidePots.length > 0}
-          <!-- index 0 is the MAIN pot (docs/DEFECTS.md T-12) -->
-          <div class="side-pots">
-            {#each sidePots as sidePot, i}
-              <div class="side-pot">
-                <span class="side-pot-label">{i === 0 ? 'Main' : `Side ${i}`}</span>
-                <span class="side-pot-amount cd-money">{fmt(sidePot.amount)}</span>
-              </div>
-            {/each}
+    {#if sidePots.length > 0}
+      <!-- index 0 is the MAIN pot (docs/DEFECTS.md T-12). One pot alone is
+           the headline figure restated, so the row is drawn only for two or
+           more; the elements stay for the count the harness asserts. -->
+      <div class="side-pots" class:demoted={sidePots.length < 2}>
+        {#each sidePots as sidePot, i}
+          <div class="side-pot">
+            <span class="side-pot-label">{i === 0 ? 'Main' : `Side ${i}`}</span>
+            <span class="side-pot-amount cd-money">{fmt(sidePot.amount)}</span>
           </div>
-        {/if}
-        {#if liveBets > 0}
-          <!-- Both legs are chain figures and sum back to get_pot(). -->
-          <div class="pot-breakdown">
-            {fmt(collectedPot)} collected + {fmt(liveBets)} betting
-          </div>
-        {/if}
+        {/each}
       </div>
+    {/if}
+    {#if liveBets > 0}
+      <!-- Both legs are chain figures and sum back to get_pot(). -->
+      <div class="pot-breakdown demoted">{breakdown}</div>
     {/if}
     {@render equityMethodLine()}
   </div>
@@ -116,19 +117,38 @@
   .pot-display,
   .winner-display {
     position: absolute;
-    bottom: calc(100% + var(--fw) * 0.014);
+    bottom: calc(100% + var(--fw) * 0.016);
     left: 50%;
     transform: translateX(-50%);
-    /* Sized by its own content, not by the board tray it is anchored to: an
-       absolutely positioned flex column takes its containing block's width as
-       the available width, and the tray is ~0.6 fw, so a split-pot winner line
-       wrapped to three rows and its footnote reached a flank seat's badge. */
+    /* Sized by its own content, not by the board tray it is anchored to. */
     width: max-content;
     max-width: var(--fw);
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: calc(var(--fw) * 0.006);
+    pointer-events: none;
+    transition: opacity var(--cd-move) var(--cd-ease);
+  }
+
+  /* No money in the middle yet: the module stays in the DOM and painted (the
+     harness reads `.pot-amount` on every non-complete hand and the in-frame
+     probe wants a painted pot readout on every table view) but says only
+     the street, as a quiet capsule: no POT label, no `--` figure, no gold. */
+  .pot-display.waiting .main-pot {
+    background: var(--cd-capsule);
+    border-color: var(--cd-line-soft);
+    box-shadow: none;
+    padding: 0.2em 0.8em;
+    opacity: 0.85;
+  }
+  .pot-display.waiting .pot-label,
+  .pot-display.waiting .pot-amount { display: none; }
+
+  /* DEMOTED LINES: in the DOM for the harness, out of flow, not painted. */
+  .demoted {
+    position: absolute;
+    visibility: hidden;
     pointer-events: none;
   }
 
@@ -186,50 +206,16 @@
     box-shadow: 0 0 calc(var(--fw) * 0.03) var(--cd-money-dim), var(--cd-shadow-pod);
   }
 
-  /* No money in the middle yet: the module stays in the DOM (the harness reads
-     `.pot-amount` on every non-complete hand) but steps back. */
-  .pot-display.waiting .main-pot { opacity: 0.55; }
-
   /* The all-in moment: the figure at risk grows, in gold. Transform only. */
   .main-pot.at-risk { transform: scale(1.07); }
   .main-pot.at-risk .pot-label { color: var(--cd-ink-1); letter-spacing: 0.1em; }
 
-  /* ---- footnotes ---- */
-
-  .pot-foot {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: calc(var(--fw) * 0.004);
-  }
-
-  .pot-breakdown {
-    font-size: var(--cd-felt-label);
-    letter-spacing: 0.04em;
-    color: var(--cd-ink-felt);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-    padding: 0.1em 0.6em;
-    border-radius: var(--cd-radius-pill);
-    background: var(--cd-capsule);
-  }
-
-  .equity-method {
-    pointer-events: auto;
-    cursor: help;
-    font-size: var(--cd-felt-label);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--cd-ink-felt);
-    white-space: nowrap;
-    padding: 0.1em 0.6em;
-    border-radius: var(--cd-radius-pill);
-    background: var(--cd-capsule);
-  }
+  /* ---- the side-pot row (two or more pots) ---- */
 
   .side-pots {
     display: flex;
     gap: calc(var(--fw) * 0.006);
+    margin-top: calc(var(--fw) * 0.004);
   }
 
   .side-pot {
@@ -256,11 +242,18 @@
     color: var(--cd-money);
   }
 
-  /* ---- the winner line: one gold line, the hand named beside it ---- */
-
-  .winner-display {
-    gap: 0.2em;
+  /* The demoted breakdown and method lines keep their type so a tooltip or
+     an inspector still reads them as the felt would have. */
+  .pot-breakdown,
+  .equity-method {
+    font-size: var(--cd-felt-label);
+    letter-spacing: 0.04em;
+    color: var(--cd-ink-felt);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
+
+  /* ---- the winner line: one gold line, the hand named beside it ---- */
 
   .winner-line {
     display: flex;
@@ -298,65 +291,52 @@
     color: var(--cd-ink-2);
   }
 
-  /* The method line hangs off the winner line on the side facing away from the
-     board (docs/DEFECTS.md T-27): above it in landscape, below it in portrait. */
-  .winner-display .equity-method {
-    position: absolute;
-    left: 50%;
-    bottom: calc(100% + 0.25em);
-    transform: translateX(-50%);
-  }
-
   /* =========================================================================
-     PORTRAIT: the readout sits UNDER the board and inside a 166 px slot
+     PORTRAIT: the readout sits UNDER the board
      ========================================================================= */
 
   @media (max-aspect-ratio: 1/1) {
     .pot-display, .winner-display {
       bottom: auto;
-      top: calc(100% + var(--fw) * 0.016);
+      top: calc(100% + var(--fw) * 0.02);
       line-height: 1.15;
-      max-width: var(--fw);
+      /* The readout sits in the band between the board and the lower flank
+         plates (0.17 fw below the centre on the 6-max ring), not beside them,
+         so its width is the felt's; its HEIGHT is what must stay short. */
+      max-width: calc(var(--fw) * 0.9);
     }
 
     .main-pot { padding: 0.18em 0.7em 0.18em 0.6em; gap: 0.5em; }
     .pot-amount { font-size: 1.3em; }
-    .pot-breakdown, .equity-method, .side-pot-label { font-size: var(--cd-felt-label); }
+    .side-pot-label { font-size: var(--cd-felt-label); }
     .side-pot-amount { font-size: var(--cd-felt-small); }
     .side-pots { flex-wrap: wrap; justify-content: center; }
 
-    /* One row, so the block stays inside the 0.175 fw above the flank plates:
-       at 0.86em "You won 24.00 ICP · STRAIGHT · COMPLETE" wrapped and the
-       method footnote landed on the flank plate's name row. */
-    .winner-line { padding: 0.2em 0.6em; column-gap: 0.45em; }
-    .winner-text { font-size: 0.78em; }
+    /* Two short rows by design: the figure, then the hand and the street. A
+       long single row wrapped unpredictably and reached a flank plate. */
+    .winner-line { padding: 0.22em 0.7em; column-gap: 0.45em; max-width: 100%; }
+    .winner-text { font-size: 0.8em; flex: 1 0 100%; text-align: center; }
     .winner-hand-rank, .split-info { font-size: var(--cd-felt-label); }
     .winner-display .phase-indicator { font-size: var(--cd-felt-label); }
-    /* In flow under the winner line rather than hung off it: the flank seats'
-       badges sit right below, and a hung line landed on one. */
-    .winner-display .equity-method { position: static; transform: none; }
 
-    /* Nine seats on a phone: the two mid-height flank plates sit 0.26 fw from
-       the centre line, so everything in the middle column wraps inside 0.5 fw
-       rather than running under them. */
+    /* Nine seats on a phone: the board sits high, so the readout goes ABOVE
+       it, as in landscape; below it ran through the mid-height flank plates. */
     :global(.ring-crowded) .pot-display,
     :global(.ring-crowded) .winner-display {
-      max-width: calc(var(--fw) * 0.5);
-      /* ...and ABOVE the board, as in landscape: the crowded ring's board sits
-         high (cluster-dy -0.18 fw) and a column under it ran through the two
-         mid-height flank plates and over the lower seats' chips. Above it
-         there is 0.47 fw of clear felt below the two top chairs. */
       top: auto;
-      bottom: calc(100% + var(--fw) * 0.016);
+      bottom: calc(100% + var(--fw) * 0.02);
+      /* The upper flank plates' inner ends are 0.26 fw either side of the
+         centre line at the readout's height (measured: the module over
+         Turing's plate at 0.58 fw). */
+      max-width: calc(var(--fw) * 0.46);
     }
-    :global(.ring-crowded) .pot-breakdown,
-    :global(.ring-crowded) .equity-method,
     :global(.ring-crowded) .pot-label { white-space: normal; text-align: center; }
-    :global(.ring-crowded) .main-pot { white-space: normal; }
+    :global(.ring-crowded) .main-pot { white-space: normal; padding: 0.15em 0.5em; gap: 0.35em; }
+    :global(.ring-crowded) .winner-line { padding: 0.2em 0.5em; }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .main-pot { transition: none; }
+    .main-pot, .pot-display, .winner-display { transition: none; }
     .main-pot.at-risk { transform: none; }
   }
 </style>

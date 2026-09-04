@@ -25,6 +25,7 @@
   import PotModule from './PotModule.svelte';
   import BoardStrip from './BoardStrip.svelte';
   import { generatedName, shortName } from '$lib/table-visuals.js';
+  import { isFlankSeat, isBottomSeat, puckSpot, readoutSpoke } from '$lib/table-geometry.js';
   import { playSound } from '$lib/sounds.js';
   import { computeEquity, describeHand, formatEquity, cardCodes } from '$lib/equity.js';
   // Importing this module installs the app-wide BigInt/JSON guard (see the
@@ -206,18 +207,18 @@
    * AT SHOWDOWN, `status` is no longer safe to read, and this cost a whole
    * capture before it was found. `sit_out_next_hand` only sets a FLAG; the flag
    * is consumed by the next `start_hand`, which writes `status = SittingOut`
-   * BEFORE it checks whether two active players are left (lib.rs:2644-2665) —
+   * BEFORE it checks whether two active players are left (lib.rs:2644-2665),
    * and an update that returns `Err` still commits what it wrote. So an
    * auto-deal that fires and correctly refuses to deal leaves a player who is
    * sitting in the finished hand, cards face up on the felt, marked SittingOut.
    * Reading `status` there dropped that player out of the live set and the
-   * showdown rendered with NO equity badges at all — nondeterministically,
+   * showdown rendered with NO equity badges at all, nondeterministically,
    * depending on whether the auto-deal timer beat the screenshot.
    *
    * The cards themselves do not have that problem. At showdown the canister
    * reveals `hole_cards` for every non-folded player it dealt in, and leaves
    * them null for everyone it did not, so "has cards on the wire" IS "was dealt
-   * in" — a fact about this hand, not about what the seat intends to do next.
+   * in": a fact about this hand, not about what the seat intends to do next.
    */
   function isInHand(p) {
     if (!p || p.has_folded) return false;
@@ -306,7 +307,11 @@
     return formatEquity(share, equity.method);
   }
 
-  /** One line naming the method, shown on the felt beside the pot (bar 15). */
+  /**
+   * One line naming the method (bar 15). Not painted on the felt: it is the
+   * badges' tooltip, the pot module's hidden `.equity-method` line (the
+   * harness reads it by textContent) and one LOG line per computation.
+   */
   const equityMethodLabel = $derived.by(() => {
     if (!equity) return null;
     if (equity.mode === 'showdown') {
@@ -316,6 +321,11 @@
     }
     return `Equity vs ${equity.opponents} random · Monte Carlo · ${equity.trials.toLocaleString('en-US')} trials`;
   });
+
+  /** The tooltip on every equity badge: the method, then the engine's note. */
+  const equityTooltip = $derived(
+    [equityMethodLabel, equity?.note ?? ''].filter(Boolean).join('. ')
+  );
 
   /**
    * YOUR hand, named in words -- GGPoker's hand-strength readout (bar 15/16).
@@ -411,25 +421,43 @@
       // the rule: top and bottom seats push inward (their normal is vertical
       // there), flank seats push along the tangent, up or down.
       const tall = aspect < 1;
+      const crowded = n >= 8;
+      const sparse = n <= 3;
+      // WHICH RUN OF THE RAIL the seat sits on decides everything below. The
+      // classifiers are $lib/table-geometry.js (unit-tested): landscape keeps
+      // the |cos| > 0.35 test; portrait reads the seat's x, because the old
+      // normal-component comparison was a coin flip (0.90 vs 0.92) for the
+      // 6-max lower flank seat and flipped its badge, cards and chips.
+      const flank = isFlankSeat({ tall, cs });
+      const bottom = isBottomSeat({ tall, cs, sn });
       const CHIP_IN = tall ? 0.255 : 0.155;
       const CHIP_SIDE = tall ? 0.150 : 0.140;
       const CHIP_SIDE_IN = tall ? 0.045 : 0.050;
-      // A seat sits on a rail segment that is either mostly horizontal (its
-      // normal points up or down) or mostly vertical. `alongNormal` is true when
-      // pushing inward already moves the disc along the roomy axis. The
-      // LANDSCAPE test is left exactly as it was -- `side`, i.e. |cos| > 0.35 --
-      // so the proven desktop chip positions do not move by a pixel.
-      const alongNormal = tall ? Math.abs(ny) >= Math.abs(nx) : side !== 'center';
+      // `alongNormal` is true when pushing inward already moves the disc along
+      // the roomy axis: flank seats in landscape, top/bottom seats in portrait.
+      const alongNormal = tall ? !flank : flank;
       let bx = nx * CHIP_IN;
       let by = ny * CHIP_IN;
-      if (!alongNormal) {
+      if (tall && bottom) {
+        // THE HERO'S CHIPS ON A PHONE sit BESIDE the hero's pair, at the pair's
+        // lower half, on its right. Above the pair (the old spot, further up
+        // the normal) is the band the lower flank plates' pucks, chips and
+        // badges share. These mirror the CSS ratios --card-hero-r and
+        // --off-hero-r for each ring density (PokerTable's portrait block).
+        bx = crowded ? 0.25 : 0.27;
+        by = -(crowded ? 0.133 : sparse ? 0.17 : 0.14);
+      } else if (!alongNormal) {
         // Tangent, taken away from the axis the board sits on so the disc never
         // drifts under it. Dead centre is broken to the right (landscape) or
         // downward (portrait).
         if (tall) {
-          const away = sn >= 0 ? 1 : -1;
+          // A PORTRAIT FLANK SEAT'S CHIPS RIDE THE RAIL UPWARD, whichever half
+          // of the ring it is on: toward the board from a lower seat (the band
+          // between its plate and the pot module is free; below it is the
+          // hero), away from the board from an upper one (the board's first
+          // card sits right under its plate).
           bx = nx * CHIP_SIDE_IN;
-          by = away * CHIP_SIDE + ny * CHIP_SIDE_IN;
+          by = -CHIP_SIDE;
         } else {
           const away = cs >= 0 ? 1 : -1;
           bx = away * CHIP_SIDE + nx * CHIP_SIDE_IN;
@@ -489,12 +517,11 @@
       //     surface ending at y=753). The plate's two ends are free, so the
       //     readout takes the end OPPOSITE the bet disc and the award, both of
       //     which ride the tangent there.
-      const flank = Math.abs(nx) > Math.abs(ny);
-      let rdx = 0;
-      let rdy = 0;
-      if (flank) rdx = nx >= 0 ? 1 : -1;
-      else if (tall) rdy = ny >= 0 ? -1 : 1;
-      else rdx = cs >= 0 ? -1 : 1;
+      //   bottom seat, PORTRAIT: below the plate is the action dock and above
+      //     it are the hero's own cards, so the badge takes the plate's LEFT
+      //     end and the award its RIGHT end (`spokeEnds`).
+      // The rule itself is $lib/table-geometry.js readoutSpoke(), unit-tested.
+      const { rdx, rdy, spokeEnds } = readoutSpoke({ tall, flank, bottom, cs, nx, ny });
 
       // IN PORTRAIT THE AWARD JOINS THE BADGE ON THE SPOKE. At a portrait flank
       // seat the chip's tangent and the cards' `cy` are the SAME direction (see
@@ -509,29 +536,14 @@
       // Landscape keeps the chip vector, where it is proven and has room.
       const awardOnSpoke = tall;
 
-      // THE DEALER PUCK'S SPOT, in felt widths from the seat point. On the felt,
-      // in front of the plate, on whichever side of the seat neither the cards
-      // nor the bet chips claim:
-      //   landscape flank seat: inward a little, and along the rail AWAY from
-      //     the cards (the cards ride -cy; the puck rides +cy).
-      //   landscape top/bottom seat: above/below the plate, on the side
-      //     OPPOSITE the chips (which took the tangent `away`).
-      //   portrait top/bottom seat: above/below the plate, outward along the
-      //     tangent, clear of the hero's wide pair.
-      //   portrait flank seat: toward the board (the chips and the cards both
-      //     went the other way), over the plate's inner corner, where the
-      //     winner's award (on the outer half) cannot reach.
-      const cyDir = (tall && Math.abs(nx) > Math.abs(ny)) ? (sn >= 0 ? 1 : -1) : (sn >= 0 ? -1 : 1);
-      let puckX = 0;
-      let puckY = 0;
-      if (tall) {
-        if (alongNormal) { puckX = (cs >= 0 ? 1 : -1) * 0.19; puckY = ny * 0.10; }
-        else { const away = sn >= 0 ? 1 : -1; puckX = nx * 0.16; puckY = -away * 0.09; }
-      } else if (alongNormal) {
-        puckX = nx * 0.10; puckY = -cyDir * 0.07;
-      } else {
-        const away = cs >= 0 ? 1 : -1; puckX = -away * 0.12; puckY = ny * 0.075;
-      }
+      // THE DEALER PUCK'S SPOT: felt widths (px/py) plus plate sizes (pkx/pky)
+      // from the seat point, so "just past the plate's inner end" stays just
+      // past it whatever size the plate is. The rule is $lib/table-geometry.js
+      // puckSpot(), unit-tested; measured failures it replaces: the lowest
+      // landscape flank seat's puck on the rail, the portrait flank puck on
+      // its own plate's top edge.
+      const cyDir = (tall && flank) ? (sn >= 0 ? 1 : -1) : (sn >= 0 ? -1 : 1);
+      const puck = puckSpot({ tall, flank, cs, sn, ny });
 
       out.push({
         cs: Number(cs.toFixed(5)),
@@ -544,8 +556,11 @@
         ay: Number(ay.toFixed(5)),
         rdx,
         rdy,
-        px: Number(puckX.toFixed(5)),
-        py: Number(puckY.toFixed(5)),
+        spokeEnds,
+        px: puck.px,
+        py: puck.py,
+        pkx: puck.pkx,
+        pky: puck.pky,
         awardOnSpoke,
         // Which way an OPPONENT's hole cards peek out from behind their plate.
         // Never along the inward normal: at a side seat the normal is horizontal
@@ -923,6 +938,19 @@
     if (lines.length > 0) actionFeed = [...actionFeed, ...lines];
   });
 
+  /**
+   * THE EQUITY METHOD, IN THE LOG. The felt no longer states how the badges
+   * were computed (that sentence is the badges' tooltip); the log keeps one
+   * line per computation so the method survives the hand. Counts only (trials,
+   * opponents), never a percentage or a chip figure.
+   */
+  $effect(() => {
+    const label = equityMethodLabel;
+    if (!label) return;
+    if (actionFeed.some(a => a.type === 'phase' && a.text === label)) return;
+    actionFeed = [...actionFeed, { type: 'phase', text: label, timestamp: Date.now() }];
+  });
+
   $effect(() => {
     if (!isHandComplete || lastWinners.length === 0) return;
     if (actionFeed.some(a => a.type === 'winner')) return;
@@ -1113,7 +1141,7 @@
    * Both flights used to be un-mounted by a `setTimeout` returned as the
    * effect's teardown, which reads naturally and is wrong twice over: Svelte
    * runs the previous teardown before EVERY re-run, and both effects read
-   * `players`, which is a fresh array on every poll — so the timer that removes
+   * `players`, which is a fresh array on every poll, so the timer that removes
    * a ghost was liable to be cancelled by the next poll. The frame probe in
    * $SCRATCH caught it: `chipFlights: 2` still in the DOM a full second after
    * the flight had ended. Invisible (the animation fills to `opacity: 0`), but
@@ -1243,6 +1271,7 @@
         class="table-inner"
         class:all-in-moment={allInMoment}
         class:showdown={isShowdown}
+        class:has-board={communityCards.length > 0}
       >
         <!-- THE RAIL: black padded leather with a lit crown, drawn as its own
              element BEHIND the felt so the felt's layout box stays the green
@@ -1270,7 +1299,7 @@
             allInCount={allInSeats.length}
             {streetLabel}
             {equityMethodLabel}
-            equityNote={equity?.note ?? ''}
+            equityNote={equityTooltip}
             winners={lastWinners}
             {myWinInfo}
             {isHandComplete}
@@ -1280,12 +1309,7 @@
             {handRankWords}
           />
           {#if gameInProgress || isShowdown || communityCards.length > 0}
-            <BoardStrip
-              cards={communityCards}
-              framed={allInMoment || isShowdown}
-              showdown={isShowdown}
-              {heroHandName}
-            />
+            <BoardStrip cards={communityCards} />
           {/if}
         </div>
 
@@ -1313,6 +1337,7 @@
             class:occupied={!!player}
             class:award-on-spoke={point.awardOnSpoke}
             class:spoke-y={point.rdy !== 0}
+            class:spoke-ends={point.spokeEnds}
             class:acting
             class:is-me={isHero}
             class:folded={player?.has_folded}
@@ -1330,6 +1355,8 @@
             style:--rdy={point.rdy}
             style:--px={point.px}
             style:--py={point.py}
+            style:--pkx={point.pkx}
+            style:--pky={point.pky}
             style:--cy={point.cy}
           >
             <SeatPod
@@ -1347,6 +1374,7 @@
               puckFrom={puckFrom && puckFrom.seat === i ? puckFrom : null}
               showCards={gameInProgress || isShowdown}
               heroCards={myCards}
+              heroHandName={isHero && (gameInProgress || isShowdown) ? heroHandName : null}
               revealed={isHero ? null : revealedHole(player)}
               betAmount={Number(player?.current_bet ?? 0)}
               betAllIn={!!player?.is_all_in}
@@ -1356,11 +1384,12 @@
               {clockUrgent}
               {equityText}
               equityModelled={equityMode === 'hero'}
-              equityNote={equity?.note ?? ''}
+              equityNote={equityTooltip}
               awardAmount={win ? `+${fmt(Number(win.amount))}` : null}
               handTag={win ? handRankWords(win.hand_rank) : ''}
               awardOnSpoke={point.awardOnSpoke}
               spokeY={point.rdy !== 0}
+              spokeEnds={point.spokeEnds}
               {fmt}
               onJoin={(seat) => onAction('join', seat)}
             />
@@ -1793,7 +1822,8 @@
     pointer-events: none;
   }
 
-  /* One centre mark, low contrast, UNDER the board. */
+  /* One centre mark, low contrast, UNDER the board. It fades out while a
+     board is out: cards on top of a watermark read as a page, not a table. */
   .felt-marks {
     position: absolute;
     left: 50%;
@@ -1806,7 +1836,10 @@
     white-space: nowrap;
     pointer-events: none;
     color: var(--cd-felt-mark);
+    transition: opacity var(--cd-move) var(--cd-ease);
   }
+
+  .table-inner.has-board .felt-marks { opacity: 0; }
 
   .mark-1 {
     font-size: calc(var(--fw) * 0.16);
@@ -2400,13 +2433,19 @@
       --pod-h-r: 0.140;
       --avatar-r: 0.098;
       --card-board-r: 0.112;
-      --card-hero-r: 0.150;
       --card-opp-r: 0.092;
       --board-gap-r: 0.010;
       --card-nudge-r: 0.050;
       --off-opp-r: 0.068;
       --off-shown-r: 0.112;
-      --off-hero-r: 0.132;
+      /* The hero's pair stands fully clear of the hero plate's top edge:
+         half the hero plate + half a card + a hair. */
+      --off-hero-r: 0.16;
+      --card-hero-r: 0.14;
+      /* The hero plate on a phone: wider (the bottom of the felt is free) and
+         tall enough for three rows (name, stack, your hand). */
+      --pod-w-hero-r: 0.58;
+      --pod-h-hero-r: 0.165;
       --cluster-dy-r: -0.066;
       --ui-r: 0.058;
       --rail-side-r: 0.05;
@@ -2426,7 +2465,12 @@
       --ring-ky: 1.00;
       --pod-w-r: 0.38;
       --pod-h-r: 0.112;
-      --avatar-r: 0.066;
+      /* Big enough for the ALL IN disc's two words at the type floor. */
+      --avatar-r: 0.078;
+      --pod-w-hero-r: 0.46;
+      --pod-h-hero-r: 0.135;
+      --card-hero-r: 0.13;
+      --off-hero-r: 0.153;
       --cluster-dy-r: -0.180;
       --card-board-r: 0.098;
       --card-opp-r: 0.076;
@@ -2445,9 +2489,20 @@
       --card-opp-r: 0.104;
       --off-opp-r: 0.074;
       --off-shown-r: 0.124;
+      --pod-w-hero-r: 0.62;
+      --pod-h-hero-r: 0.18;
+      --off-hero-r: 0.19;
+      --card-hero-r: 0.15;
       --ui-r: 0.062;
     }
     .ring-sparse .table-inner { --fw: min(87cqw, 55cqh); }
+
+    /* THE HERO SEAT'S OWN PLATE SIZE. Everything that hangs off the seat
+       (plate, badge, award, puck) reads --pod-w/--pod-h, so it all follows. */
+    .seat.is-me {
+      --pod-w: calc(var(--fw) * var(--pod-w-hero-r));
+      --pod-h: calc(var(--fw) * var(--pod-h-hero-r));
+    }
 
     /* FULL BLEED: the wrapper takes the whole viewport width back. */
     .poker-table-wrapper {
@@ -2480,7 +2535,7 @@
 
     /* EVERY PIXEL BETWEEN THE STAGE AND THE DOCK IS FELT. */
     .poker-table { gap: 4px; }
-    .pot-odds-display { font-size: 10px; line-height: 1.1; gap: 6px; }
+    .pot-odds-display { font-size: var(--cd-text-xs); line-height: 1.1; gap: 6px; }
     .pot-odds-value { font-size: 12px; }
 
     /* THUMB REACH: the action row is the BOTTOM row on a phone. */
@@ -2519,9 +2574,9 @@
     .wallet-balance { flex: 0 0 auto; }
     .committed-note { line-height: 1.2; }
     .wallet-committed { order: 1; margin-top: 0; padding: 2px 6px; column-gap: 5px; row-gap: 0; }
-    .committed-label { font-size: 10px; letter-spacing: 0.08em; }
+    .committed-label { font-size: var(--cd-text-xs); letter-spacing: 0.08em; }
     .committed-value { font-size: 12px; }
-    .committed-note { font-size: 10px; }
+    .committed-note { font-size: var(--cd-text-xs); }
     .wallet-action-btn, .panel-toggle { min-height: 28px; padding: 0 9px; }
     .sit-controls { display: none; }
 

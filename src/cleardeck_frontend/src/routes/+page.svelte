@@ -382,13 +382,13 @@
   // This function used to open with `await tableActor.check_timeouts()`, and it
   // is driven by `setInterval(..., POLL_INTERVAL)` at 500 ms. `check_timeouts` is
   // `#[ic_cdk::update]` in `src/table_canister/src/lib.rs` and carries no `query`
-  // in `table_canister.did`, so THE RENDER RATE WAS DRIVING AN UPDATE LOOP — one
+  // in `table_canister.did`, so THE RENDER RATE WAS DRIVING AN UPDATE LOOP: one
   // per open browser tab, forever, whether or not anything was due.
   //
   // Measured on the local replica with `tools/cycles/tab-burn.mjs`, ten tabs open
   // on an idle table: the loop cost more than the whole rest of the canister put
   // together, and no cycles figure in this repository counted it. Every runway
-  // number in the tree therefore read HIGH — the dangerous direction, and the
+  // number in the tree therefore read HIGH, the dangerous direction, and the
   // same failure [E-55](docs/DEFECTS.md#e-55) was reopened for one level down.
   //
   // So the two jobs are now two loops:
@@ -511,13 +511,13 @@
   // =========================================================================
   //
   // `check_timeouts` is the only update the old 500 ms poll made, and it is still
-  // needed for three things — an action clock the on-chain timer has not resolved,
+  // needed for three things: an action clock the on-chain timer has not resolved,
   // the between-hands `AutoDealReady` signal (which the on-chain clock deliberately
   // never delivers to anybody by itself), and the stall opportunities that make
   // `abandon_stuck_hand` reachable when a timer is lost.
   //
   // What it is NOT needed for is a repaint. `$lib/clockNudge.js` holds the whole
-  // decision — is anything due, and may we call yet — and it is pure, so
+  // decision (is anything due, and may we call yet) and it is pure, so
   // `tools/shots/test-clock-nudge.mjs` simulates a day of table states against it
   // offline and asserts a ceiling on the calls one tab can emit.
   //
@@ -540,7 +540,7 @@
       result = await tableActor.check_timeouts();
     } catch (e) {
       // A failed nudge is still a nudge: `observe` below has to see it, or the
-      // policy cannot back off on a canister that is refusing — which is the one
+      // policy cannot back off on a canister that is refusing, which is the one
       // time backing off matters most. Not surfaced to the player: the poll's own
       // error path already reports a table that has stopped answering.
       logger.debug('check_timeouts failed:', e);
@@ -978,7 +978,7 @@
     <div class="banner-content">
       <p class="banner-warning">
         <span class="warning-icon">⚠️</span>
-        <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk—your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
+        <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk: your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
       </p>
       <!-- WAVE 5 COHERENCE PASS. The canonical no-rake sentence is stated HERE,
            not only in `.banner-strip`.
@@ -989,14 +989,14 @@
            so DESKTOP read 4 of 5 on the lobby signed out, the lobby signed in,
            the table, the table behind the Deposit modal and the table behind
            Verify Fair, and PORTRAIT dropped to 4 of 5 the moment a player TAPPED
-           the strip — this very block covers the strip and did not restate the
+           the strip: this very block covers the strip and did not restate the
            property. The missing phrase was always "No rake is taken from any pot
            on any table".
 
            `.banner-content` is now a strict superset of `.banner-strip`, which
            is what a "FULL TERMS" button has to be. -->
       <p class="banner-info">
-        No middleman, no house. <strong>No rake is taken from any pot on any table.</strong> Built to demonstrate the power of the Internet Computer: 100% on-chain—frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
+        No middleman, no house. <strong>No rake is taken from any pot on any table.</strong> Built to demonstrate the power of the Internet Computer: 100% on-chain, with the frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
       </p>
       <p class="banner-ai">
         This entire project was built 100% by AI. <span class="warning-icon">⚠️</span>
@@ -1116,7 +1116,7 @@
     screenshot or not depending on when the shutter fired.
 
     It is now a real either/or, and the spinner only stands in when there is
-    genuinely nothing to show yet (`tables.length === 0`) — a background refresh
+    genuinely nothing to show yet (`tables.length === 0`), a background refresh
     of an already-populated lobby must not blank the list.
 
     `data-lobby-state` exposes the settled/unsettled distinction to the
@@ -1186,10 +1186,10 @@
       <div class="disclaimer-content">
         <p class="disclaimer-warning">
           <span class="warning-icon">⚠️</span>
-          <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk—your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
+          <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk: your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
         </p>
         <p class="disclaimer-info">
-          No middleman, no house. <strong>No rake is taken from any pot on any table.</strong> Built to demonstrate the power of the Internet Computer: 100% on-chain—frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
+          No middleman, no house. <strong>No rake is taken from any pot on any table.</strong> Built to demonstrate the power of the Internet Computer: 100% on-chain, with the frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
         </p>
         <p class="disclaimer-ai">
           This entire project was built 100% by AI. <span class="warning-icon">⚠️</span>
@@ -1216,7 +1216,7 @@
              screenshot harness's token census requires every numeric token on
              screen to be matched to a canister figure or excused by a REVIEWED
              rule, and a bare principal in a <span> is four unexplained numbers
-             ("4", "5", "777", "77775") on every scene — it failed the census on
+             ("4", "5", "777", "77775") on every scene: it failed the census on
              all 24 shots the first time this shipped. `token-allowlist.mjs`
              already has the right rule (`identifier-digits`, scoped to
              `.canister-id` among others), so this reuses it rather than widening
@@ -1289,7 +1289,7 @@
       <h3>0. What this page is connected to</h3>
       <dl class="wiring-list">
         <div><dt>Network</dt><dd class:live={IS_MAINNET_BUILD}>
-          {IS_MAINNET_BUILD ? 'Internet Computer mainnet — REAL funds' : `${NETWORK} — test funds only`}
+          {IS_MAINNET_BUILD ? 'Internet Computer mainnet: REAL funds' : `${NETWORK}: test funds only`}
         </dd></div>
         <div><dt>Gateway</dt><dd><code>{agentHost()}</code></dd></div>
         <div><dt>Sign-in</dt><dd><code>{IS_MAINNET_BUILD ? II_URL : 'local Internet Identity'}</code></dd></div>
@@ -1299,7 +1299,7 @@
       {#if !IS_MAINNET_BUILD}
         <p class="hash-note">
           This is a <strong>{NETWORK}</strong> development build. It cannot reach the live
-          canisters — the build refuses to wire them (docs/DEFECTS.md T-01) — so nothing
+          canisters (the build refuses to wire them, docs/DEFECTS.md T-01), so nothing
           you do here moves real money. The mainnet ids below are shown for reference.
         </p>
       {/if}
@@ -1353,7 +1353,7 @@
         <strong>These are a claim, not a measurement.</strong> Declared
         {EXPECTED_PROVENANCE.declaredOn} by {EXPECTED_PROVENANCE.declaredBy}:
         {EXPECTED_PROVENANCE.claim}. This page was built on a machine that
-        {EXPECTED_PROVENANCE.whyNot}, so press the button and compare for yourself —
+        {EXPECTED_PROVENANCE.whyNot}, so press the button and compare for yourself:
         the reading comes from {LIVE_HASH_SOURCE.name}, which is not us.
       </p>
 
@@ -1388,7 +1388,7 @@
                       live&nbsp;&nbsp;&nbsp;&nbsp; {displayHash(live.live)}
                       {live.verdict === 'match' ? '  ✓ match' : '  ✗ MISMATCH'}
                     {:else}
-                      live&nbsp;&nbsp;&nbsp;&nbsp; could not be read — {live.error ?? 'unknown'}
+                      live&nbsp;&nbsp;&nbsp;&nbsp; could not be read: {live.error ?? 'unknown'}
                     {/if}
                   </code>
                 </td>
@@ -1419,7 +1419,7 @@
                                         that opens this dialog, so the top banner
                                         is above the fold)
            .disclaimer-warning y  674  in the viewport, and under
-                                       `.modal-backdrop` — rgba(0,0,0,0.8) plus a
+                                       `.modal-backdrop`: rgba(0,0,0,0.8) plus a
                                        4 px blur at z-index 1000
            .strip-text         display:none (portrait table strip, not this view)
 
@@ -1433,7 +1433,7 @@
          additional copy only, nothing anywhere else weakened. -->
     <p class="modal-notices">
       <span class="notice-icon" aria-hidden="true">⚠️</span>
-      <strong>Unaudited code with known bugs</strong> — this is for education and testing, any
+      <strong>Unaudited code with known bugs</strong>: this is for education and testing, any
       deposit is at your own risk and your funds are NOT safe. Online gambling is illegal in many
       jurisdictions; only use it where legally permitted. 18+ only. No middleman, no house, 0% rake.
       No rake is taken from any pot on any table.
@@ -2524,12 +2524,30 @@
 
     /* 30 px controls on the phone header, as wave 5 measured them: the 40 px
        desktop primitive wraps the wallet chip onto a third row here, and a
-       third row is felt. The 44 px touch target is the mobile phase's job. */
+       third row is felt (measured: +28 px of header takes the 9-max felt from
+       46% to 42% of the frame, under the 45% floor). The 44 px TOUCH TARGET is
+       met without a taller layout: each control carries an invisible hit area
+       7 px above and below its painted box, the same technique Material uses
+       for dense toolbars. Two 30 px rows plus 2 px gaps means the hit areas of
+       the two rows meet but do not cross. */
     header.compact .back-btn,
     header.compact .history-btn,
     header.compact .verify-btn,
     header.compact .sound-toggle-btn {
       min-height: 30px;
+      position: relative;
+    }
+
+    header.compact .back-btn::after,
+    header.compact .history-btn::after,
+    header.compact .verify-btn::after,
+    header.compact .sound-toggle-btn::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc((30px - var(--cd-touch-min)) / 2);
+      bottom: calc((30px - var(--cd-touch-min)) / 2);
     }
 
     header.compact .sound-toggle-btn {

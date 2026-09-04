@@ -190,6 +190,17 @@ export const ALLOWLIST = [
             + 'get_community_cards()',
     },
 
+    {
+        id: 'log-equity-method-counts',
+        selector: '.feed-item .phase-text',
+        tokens: '^\\d{1,3}(?:,\\d{3})*$',
+        why: 'the equity method line the felt no longer paints ("Equity vs 2 random · '
+            + 'Monte Carlo · 200,000 trials") is logged once per computation in the '
+            + 'action log as a phase-style line. Trial counts and opponent counts only, '
+            + 'the same non-money shape as `equity-method-counts`; a decimal here is '
+            + 'not excused',
+    },
+
     // ---- identifiers and cryptographic material ------------------------------
     {
         id: 'identifier-digits',
