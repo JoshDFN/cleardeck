@@ -1724,29 +1724,13 @@
       radial-gradient(ellipse 70% 80% at 50% 50%, var(--cd-stage-hi) 0%, var(--cd-stage) 55%, var(--cd-stage-lo) 100%);
   }
 
+  /* --fw and the derived scale (--fh, --rx, --ry, --pod-w, --pod-h, --avatar,
+     --ui) are declared in poker-table-tokens.scss, landscape then portrait. */
   .table-inner {
     position: absolute;
     inset: 0;
-    /* THE single scale input. Both caps are the stage box divided by what the
-       RING needs (the pods hang off the felt on every side, and the avatar now
-       breaks the plate's outer edge by half its width):
-         width  needs  ring-kx + pod-w-r + avatar-r = 1.02 + 0.235 + 0.066 = 1.32 -> 75cqw
-         height needs  ring-ky / ar + pod-h-r        = 0.476 + 0.086         = 0.562 -> 177cqh */
-    --fw: min(75cqw, 177cqh);
-    --fh: calc(var(--fw) / var(--ar));
-    --rx: calc(var(--fw) * 0.5 * var(--ring-kx));
-    --ry: calc(var(--fh) * 0.5 * var(--ring-ky));
-    --pod-w: calc(var(--fw) * var(--pod-w-r));
-    --pod-h: calc(var(--fw) * var(--pod-h-r));
-    --avatar: calc(var(--fw) * var(--avatar-r));
-    --ui: calc(var(--fw) * var(--ui-r));
     font-size: var(--ui);
   }
-
-  /* 1.02 + 0.202 + 0.056 = 1.278 -> 78cqw ; 0.476 + 0.074 = 0.550 -> 181cqh */
-  .ring-crowded .table-inner { --fw: min(78cqw, 181cqh); }
-  /* 1.02 + 0.262 + 0.072 = 1.354 -> 73cqw ; 0.476 + 0.094 = 0.570 -> 175cqh */
-  .ring-sparse  .table-inner { --fw: min(73cqw, 175cqh); }
 
   /* The all-in vignette: the room darkens around the surface. Opacity only. */
   .table-inner::after {
