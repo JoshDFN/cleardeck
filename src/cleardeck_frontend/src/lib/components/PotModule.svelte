@@ -119,6 +119,12 @@
     bottom: calc(100% + var(--fw) * 0.014);
     left: 50%;
     transform: translateX(-50%);
+    /* Sized by its own content, not by the board tray it is anchored to: an
+       absolutely positioned flex column takes its containing block's width as
+       the available width, and the tray is ~0.6 fw, so a split-pot winner line
+       wrapped to three rows and its footnote reached a flank seat's badge. */
+    width: max-content;
+    max-width: var(--fw);
     display: flex;
     flex-direction: column;
     align-items: center;
