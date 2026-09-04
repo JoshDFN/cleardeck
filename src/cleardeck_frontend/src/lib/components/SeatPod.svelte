@@ -416,7 +416,7 @@
     z-index: 9;
     /* Past the plate's end; and past the avatar too when the badge takes the
        left end, which is the edge the avatar breaks. */
-    --badge-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + 1.55em) - max(0px, -1 * var(--rdx, 0) * var(--avatar) * 0.6));
+    --badge-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + 2.1em) - max(0px, -1 * var(--rdx, 0) * var(--avatar) * 0.6));
     --badge-dy: calc(var(--rdy, 0) * (var(--pod-h) * 0.5 + 0.8em));
     transform: translate(-50%, -50%) translate(var(--badge-dx), var(--badge-dy));
     display: inline-flex;
@@ -762,17 +762,19 @@
     /* PORTRAIT HAS NO ROOM ON THE CHIP VECTOR (T-23), so the award rides the
        readout spoke with the badge: one step further out on a horizontal spoke,
        the other END of the same edge on a vertical one. */
-    /* Flank seat (horizontal spoke): the badge keeps the spoke; the award
-       goes past the plate's inner end and one step toward the rail's far half
-       (the same side the revealed pair takes, but inward of it: measured, the
-       pair reaches 0.10 fw past the plate's inner end and the award starts at
-       0.12). The middle belongs to the pot readout, which paints above seats
-       in portrait; the award stays out of it. */
+    /* Flank seat (horizontal spoke): the award sits on the plate's OUTER half,
+       on the side facing the board. Measured on the 6-max portrait ring every
+       other spot is taken: past the inner end is the hero's pair (0.406 fw
+       from the centre) or the winner line and its method footnote (to 0.22 fw,
+       within 0.3 fw of the centre line, which the outer half never reaches);
+       past the outer end is the screen edge; along the rail away from the
+       board is the seat's own revealed pair; on the plate is the name. The
+       badge keeps the spoke past the inner end. */
     .winner-award.on-spoke {
       flex-direction: column;
       gap: 0.1em;
-      --award-dx: calc(var(--rdx, 0) * (var(--pod-w) * 0.5 + 2.2em));
-      --award-dy: calc(sign(var(--sn, 1)) * (var(--pod-h) * 0.5 + 1.4em));
+      --award-dx: calc(-1 * var(--rdx, 0) * var(--pod-w) * 0.26);
+      --award-dy: calc(-1 * sign(var(--sn, 1)) * (var(--pod-h) * 0.5 + 1.4em));
     }
     /* ...and the flank seat's badge sits a hair below mid-plate, under the
        winner line's method footnote. */

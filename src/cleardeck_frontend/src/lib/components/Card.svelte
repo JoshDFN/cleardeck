@@ -159,14 +159,14 @@
   .rank, .rank-mirror {
     /* bar 10: the display face, used for NOTHING but card ranks. */
     font-family: var(--cd-font-rank);
-    font-size: calc(var(--w) * 0.34);
+    font-size: calc(var(--w) * 0.32);
     font-weight: 700;
     letter-spacing: -0.03em;
     font-variant-numeric: lining-nums tabular-nums;
   }
 
   .pip, .pip-mirror {
-    font-size: calc(var(--w) * 0.22);
+    font-size: calc(var(--w) * 0.2);
     margin-top: calc(var(--w) * 0.01);
     /* Suit glyphs come from the UI font: the serif face carries the rank only. */
     font-family: var(--cd-font-ui);
@@ -175,9 +175,9 @@
   .centre-pip {
     position: absolute;
     left: 50%;
-    top: 52%;
+    top: 58%;
     transform: translate(-50%, -50%);
-    font-size: calc(var(--w) * 0.62);
+    font-size: calc(var(--w) * 0.5);
     font-family: var(--cd-font-ui);
     line-height: 1;
   }

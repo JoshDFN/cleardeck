@@ -331,7 +331,15 @@
        the centre line, so everything in the middle column wraps inside 0.5 fw
        rather than running under them. */
     :global(.ring-crowded) .pot-display,
-    :global(.ring-crowded) .winner-display { max-width: calc(var(--fw) * 0.5); }
+    :global(.ring-crowded) .winner-display {
+      max-width: calc(var(--fw) * 0.5);
+      /* ...and ABOVE the board, as in landscape: the crowded ring's board sits
+         high (cluster-dy -0.18 fw) and a column under it ran through the two
+         mid-height flank plates and over the lower seats' chips. Above it
+         there is 0.47 fw of clear felt below the two top chairs. */
+      top: auto;
+      bottom: calc(100% + var(--fw) * 0.016);
+    }
     :global(.ring-crowded) .pot-breakdown,
     :global(.ring-crowded) .equity-method,
     :global(.ring-crowded) .pot-label { white-space: normal; text-align: center; }

@@ -519,13 +519,14 @@
       //   portrait top/bottom seat: above/below the plate, outward along the
       //     tangent, clear of the hero's wide pair.
       //   portrait flank seat: toward the board (the chips and the cards both
-      //     went the other way), at the plate's outer end.
+      //     went the other way), over the plate's inner corner, where the
+      //     winner's award (on the outer half) cannot reach.
       const cyDir = (tall && Math.abs(nx) > Math.abs(ny)) ? (sn >= 0 ? 1 : -1) : (sn >= 0 ? -1 : 1);
       let puckX = 0;
       let puckY = 0;
       if (tall) {
         if (alongNormal) { puckX = (cs >= 0 ? 1 : -1) * 0.19; puckY = ny * 0.10; }
-        else { const away = sn >= 0 ? 1 : -1; puckX = -nx * 0.08; puckY = -away * 0.105; }
+        else { const away = sn >= 0 ? 1 : -1; puckX = nx * 0.14; puckY = -away * 0.075; }
       } else if (alongNormal) {
         puckX = nx * 0.10; puckY = -cyDir * 0.07;
       } else {
@@ -2469,7 +2470,9 @@
     }
 
     /* EVERY PIXEL BETWEEN THE STAGE AND THE DOCK IS FELT. */
-    .poker-table { gap: 5px; }
+    .poker-table { gap: 4px; }
+    .pot-odds-display { font-size: 10px; line-height: 1.1; gap: 6px; }
+    .pot-odds-value { font-size: 12px; }
 
     /* THUMB REACH: the action row is the BOTTOM row on a phone. */
     .dock-center { grid-column: 1 / -1; grid-row: 2; }
