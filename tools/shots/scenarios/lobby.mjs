@@ -35,9 +35,18 @@ export default {
     // the defect cannot silently come back.
     const spinnerVisible = await page.locator('.loading-state').isVisible().catch(() => false);
     const lobbyState = await lobbyStateOf(page);
+    // The audit's first metric: where the first table card lands, as a share
+    // of the viewport (docs/DESIGN-BAR.md reference band 26.6-36.1%).
+    const firstCard = await page.evaluate(() => {
+      const tr = document.querySelector('tbody tr');
+      if (!tr) return null;
+      const r = tr.getBoundingClientRect();
+      return { y: Math.round(r.y), pct: Math.round((100 * r.y) / window.innerHeight) };
+    });
     const checks = {
       rows,
       namedTables,
+      firstCardTop: firstCard,
       showsConnectWallet: anonymous,
       disclaimerVisible: disclaimer,
       lobbyState,
@@ -52,7 +61,8 @@ export default {
       checks,
       notes:
         `${rows} live table rows; signed out; lobby state="${lobbyState}"; ` +
-        `loading spinner ${spinnerVisible ? 'VISIBLE (defect H-09 is back)' : 'absent'}`,
+        `loading spinner ${spinnerVisible ? 'VISIBLE (defect H-09 is back)' : 'absent'}; ` +
+        (firstCard ? `first card at y ${firstCard.y} (${firstCard.pct}% of the viewport)` : 'no first card'),
     }, agreement);
   },
 };

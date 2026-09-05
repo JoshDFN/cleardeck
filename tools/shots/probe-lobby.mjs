@@ -80,6 +80,42 @@ async function probeViewport(vp, ids, browser, outDir) {
     await removeToast(page);
     log(`  toast: ${states.toast.rect.w}x${states.toast.rect.h} at y ${states.toast.rect.y}, notices ${states.toast.noticesOnScreen}`);
 
+    // ---- 1b. the app's OWN failure toast, with its Retry ------------------
+    // Every canister call is aborted at the transport and the page reloaded
+    // (the toast-notices scene's reproducer): the toast must read the humane
+    // sentence, carry the raw agent text as a detail line and a Retry, and
+    // Retry must clear it once the transport is back.
+    const API_ROUTES = ['**/api/v2/**', '**/api/v3/**'];
+    for (const route of API_ROUTES) await page.route(route, (r) => r.abort('failed'));
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await page.waitForSelector('.toast.error', { timeout: 20_000 });
+    await settle(page);
+    const realToast = await page.evaluate(() => {
+      const el = document.querySelector('.toast.error');
+      const r = el.getBoundingClientRect();
+      const text = (node) => (node ? node.textContent.replace(/\s+/g, ' ').trim() : null);
+      return {
+        message: text(el.querySelector('span')),
+        detail: text(el.querySelector('.toast-detail')),
+        action: text(el.querySelector('.toast-action')),
+        rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+      };
+    });
+    const realNotices = foldProtectedNotices(await probeProtectedNotices(page), 'the lobby under its own failure toast');
+    states.realToast = { file: await shoot(page, outDir, 'real-toast', vp), ...realToast, noticesOnScreen: `${realNotices.onScreen}/${realNotices.total}` };
+    if (!realNotices.ok) problems.push(...realNotices.problems);
+    if (!/^Could not reach the tables\. Retrying in \d+ s\./.test(realToast.message || '')) problems.push(`the failure toast does not read the humane sentence (read "${realToast.message}")`);
+    if (!realToast.detail) problems.push('the failure toast carries no detail line with the raw text');
+    if (realToast.action !== 'Retry') problems.push(`the failure toast has no Retry (found "${realToast.action}")`);
+    for (const route of API_ROUTES) await page.unroute(route);
+    await page.click('.toast.error .toast-action');
+    const cleared = await page.waitForSelector('.toast.error', { state: 'detached', timeout: 20_000 }).then(() => true).catch(() => false);
+    states.realToast.clearedByRetry = cleared;
+    if (!cleared) problems.push('Retry did not clear the failure toast once the transport was back');
+    await waitForLobbySettled(page);
+    await settle(page);
+    log(`  real toast: "${realToast.message}" + Retry, detail ${realToast.detail ? 'present' : 'MISSING'}, ${realToast.rect.w}x${realToast.rect.h} at y ${realToast.rect.y}, notices ${states.realToast.noticesOnScreen}, cleared by Retry: ${cleared}`);
+
     // ---- 2. FULL TERMS ------------------------------------------------------
     await page.click('.banner-strip');
     await page.waitForSelector('.banner-content', { timeout: 10_000 });
@@ -123,7 +159,36 @@ async function probeViewport(vp, ids, browser, outDir) {
     if (searchAfter !== '') problems.push(`the URL still carries a table on the lobby (${searchAfter})`);
     log(`  invite link: table view ${onTable}, search "${search}", after Back "${searchAfter}"`);
 
-    // ---- 5. signed in ------------------------------------------------------
+    // ---- 5. the sign-in button while Internet Identity opens ---------------
+    // Desktop only: the hero's button is the phone header's on a phone. The
+    // II popup's document is held at the network layer so the button stays in
+    // its "Opening Internet Identity…" state long enough to photograph; the
+    // popup is then closed, which is the AuthClient's own interrupt path.
+    if (vp.name === 'desktop') {
+      const appHost = new URL(getAppOrigin()).hostname;
+      const hold = (url) => url.hostname !== appHost && url.hostname.endsWith('.localhost');
+      await context.route(hold, () => new Promise(() => {}));
+      const popupPromise = context.waitForEvent('page', { timeout: 15_000 }).catch(() => null);
+      await page.click('.intro .btn.primary');
+      const popup = await popupPromise;
+      await page.waitForTimeout(700);
+      const label = (await page.locator('.intro .btn.primary').textContent().catch(() => '') || '').trim();
+      const errorLine = (await page.locator('.intro-error').textContent().catch(() => '') || '').trim();
+      const widthAfter = await rectOf(page, '.intro .btn.primary');
+      states.signingIn = { file: await shoot(page, outDir, 'signing-in', vp), label, errorLine, popupOpened: Boolean(popup), rect: widthAfter };
+      // A local stack with no Internet Identity canister rejects before any
+      // popup (auth.js, T-39): the photographed state is then the failure
+      // line under a button that kept its width, which is the other half of
+      // the same claim. A stack WITH an II id must show the opening state.
+      const opening = /^Opening Internet Identity/.test(label);
+      if (!opening && !errorLine) problems.push(`the hero button neither read "Opening Internet Identity…" nor showed a failure line (read "${label}")`);
+      if (popup) await popup.close().catch(() => {});
+      await context.unroute(hold);
+      await page.waitForTimeout(500);
+      log(`  signing in: button "${label}", popup ${popup ? 'opened' : 'not seen'}${errorLine ? `, failure line "${errorLine}" (no II canister on this stack, T-39)` : ''}`);
+    }
+
+    // ---- 6. signed in ------------------------------------------------------
     await openApp(page);
     await waitForLobbySettled(page);
     await devLogin(page, 1);
@@ -167,7 +232,7 @@ async function main() {
     for (const b of bad) log(`FAILED at ${b.viewport}: ${b.problems.join(' | ')}`);
     return 1;
   }
-  log('the lobby: toast under the trust bar, FULL TERMS a superset, the bar pinned when scrolled, the invite link opens its table, signed in the cards say Sit');
+  log('the lobby: toast under the trust bar, FULL TERMS a superset, the bar pinned when scrolled, the invite link opens its table, the sign-in button says what it is doing, signed in the cards say Sit');
   return 0;
 }
 

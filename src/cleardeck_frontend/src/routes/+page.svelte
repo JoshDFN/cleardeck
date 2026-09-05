@@ -14,6 +14,8 @@
   import { playSound, setSoundEnabled, isSoundEnabled } from "$lib/sounds.js";
   import logger from "$lib/logger.js";
   import { auth, isSignatureError, wallet } from "$lib/auth.js";
+  import { LOBBY_RETRY_MS, describeLobbyFailure } from "$lib/humane-errors.js";
+  import NoticeLine from "$lib/components/NoticeLine.svelte";
   // docs/DEFECTS.md T-02: the "Verify the Code" panel used to hardcode
   // `icp canister status qrhly-… -e ic` in both the visible <code> block and the
   // Copy button, so a LOCAL dev build handed the user a mainnet command. The
@@ -58,7 +60,46 @@
   let loadingTableState = false; // Non-reactive flag to prevent concurrent loadTableState calls
   let loadTableStateRequestId = 0; // Counter to discard stale responses
   let error = $state(null);
+  /** The raw text behind a humane `error`, shown as a detail line, or null. */
+  let errorDetail = $state(null);
+  /** A control the toast offers for THIS `error` ({ label, message, run }), or null. */
+  let errorAction = $state(null);
   let success = $state(null);
+  /** The pending automatic re-read of the lobby after a failed one. */
+  let lobbyRetryTimer = null;
+
+  function dismissError() {
+    error = null;
+    errorDetail = null;
+    errorAction = null;
+  }
+
+  /** The lobby read failed: one sentence, the raw text demoted, a Retry, and a re-read on a timer. */
+  function showLobbyFailure(e) {
+    const failure = describeLobbyFailure(e, { retryMs: LOBBY_RETRY_MS });
+    error = failure.message;
+    errorDetail = failure.detail;
+    errorAction = { label: 'Retry', message: failure.message, run: retryLoadTables };
+    clearTimeout(lobbyRetryTimer);
+    lobbyRetryTimer = setTimeout(retryLoadTables, LOBBY_RETRY_MS);
+  }
+
+  /** The spectator dock's one control: the same Internet Identity flow as the header. */
+  async function signInFromTable() {
+    try {
+      await auth.login();
+    } catch (e) {
+      logger.error('sign-in from the table failed', e);
+      error = 'Could not open Internet Identity. Try the Sign in button in the header.';
+    }
+  }
+
+  function retryLoadTables() {
+    clearTimeout(lobbyRetryTimer);
+    lobbyRetryTimer = null;
+    if (view !== 'lobby') return;
+    loadTables();
+  }
   let showProofPanel = $state(false);
   let showHandHistory = $state(false);
   let showHowItWorks = $state(false);
@@ -324,6 +365,8 @@
     loading = true;
     try {
       let lobbyTables = await lobby.get_tables();
+      // A read that succeeds after a failed one clears that failure's toast.
+      if (errorAction && errorAction.message === error) dismissError();
 
       // For tables that have a canister_id, try to fetch their player counts
       for (let i = 0; i < lobbyTables.length; i++) {
@@ -366,7 +409,9 @@
         error = 'Session expired. Please log in again.';
         await auth.logout();
       } else {
-        error = e.message;
+        // Not the agent's paragraph: what happened and what happens next
+        // (lib/humane-errors.js), the raw text on a detail line, a Retry.
+        showLobbyFailure(e);
       }
     }
     loading = false;
@@ -1153,8 +1198,14 @@
         <line x1="15" y1="9" x2="9" y2="15"/>
         <line x1="9" y1="9" x2="15" y2="15"/>
       </svg>
-      <span>{error}</span>
-      <button class="toast-close" onclick={() => error = null} aria-label="Dismiss">×</button>
+      <span>
+        {error}
+        {#if errorDetail}<small class="toast-detail">{errorDetail}</small>{/if}
+      </span>
+      {#if errorAction && errorAction.message === error}
+        <button class="toast-action" type="button" onclick={errorAction.run}>{errorAction.label}</button>
+      {/if}
+      <button class="toast-close" onclick={dismissError} aria-label="Dismiss">×</button>
     </div>
   {/if}
 
@@ -1197,6 +1248,7 @@
           {tables}
           onJoinTable={joinTable}
           onRefresh={loadTables}
+          loadFailed={Boolean(errorAction) && errorAction.message === error}
         />
       {/if}
     {:else}
@@ -1218,6 +1270,8 @@
             customName={currentCustomName}
             onShowDeposit={() => showDepositModal = true}
             onShowWithdraw={() => showWithdrawModal = true}
+            signedIn={$auth.isAuthenticated}
+            onSignIn={signInFromTable}
             {soundMuted}
             onToggleSound={toggleSound}
             {shuffleProof}
@@ -1497,10 +1551,7 @@
          additional copy only, nothing anywhere else weakened. -->
     <p class="modal-notices">
       <span class="notice-icon" aria-hidden="true">⚠️</span>
-      <strong>Unaudited code with known bugs</strong>: this is for education and testing, any
-      deposit is at your own risk and your funds are NOT safe. Online gambling is illegal in many
-      jurisdictions; only use it where legally permitted. 18+ only. No middleman, no house, 0% rake.
-      No rake is taken from any pot on any table.
+      <NoticeLine />
     </p>
   </div>
 {/if}
@@ -1815,12 +1866,50 @@
     border-radius: 50%;
   }
 
+  /* The error toast is a panel at its full width budget, whatever its
+     message: it carries a Retry and a detail line, and the harness compares
+     the box of the toast it injects with the one the app raises
+     (toast-notices scene), which a content-sized box would fail on x. */
   .toast.error {
+    width: min(560px, calc(100vw - 24px));
     background: var(--cd-sheet);
     border: 1px solid var(--cd-line-strong);
     color: var(--cd-ink);
     box-shadow: var(--cd-shadow-lift);
   }
+
+  .toast span { flex: 1 1 auto; }
+
+  /* The raw text behind the sentence: three lines at most, then the console. */
+  .toast-detail {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+    margin-top: var(--cd-space-1);
+    font-family: var(--cd-font-mono);
+    font-size: var(--cd-text-xs);
+    line-height: 1.4;
+    color: var(--cd-ink-2);
+    overflow-wrap: anywhere;
+  }
+
+  .toast .toast-action {
+    flex: 0 0 auto;
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-3);
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line-strong);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink);
+    font: inherit;
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-strong);
+    cursor: pointer;
+  }
+
+  .toast .toast-action:hover { background: var(--cd-surface-3); }
 
   .toast.error svg {
     background: var(--cd-danger-dim);
@@ -1841,7 +1930,7 @@
 
   /* A 44 px dismiss target (the audit measured ~20x24). The negative margins
      keep the toast's box the size it was; only the hit area grew. */
-  .toast button {
+  .toast .toast-close {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1859,8 +1948,8 @@
     padding: 0;
   }
 
-  .toast button:hover,
-  .toast button:focus-visible {
+  .toast .toast-close:hover,
+  .toast .toast-close:focus-visible {
     color: var(--cd-ink);
     background: var(--cd-surface-3);
     outline: none;
@@ -2353,7 +2442,7 @@
     color: rgba(255, 255, 255, 0.9);
   }
 
-  .verify-modal .modal-notices strong { color: #fef08a; }
+  .verify-modal .modal-notices :global(strong) { color: #fef08a; }
   .verify-modal .notice-icon { font-size: 12px; }
 
   .verify-modal h2 {

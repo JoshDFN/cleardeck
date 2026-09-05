@@ -54,7 +54,7 @@ describe('seats and status', () => {
 
   it('states the table status as an invitation when nobody is seated', () => {
     expect(nowOf(table(), view({ players: [[], [], [], [], [], []] })))
-      .toEqual({ kind: 'open', label: 'No one seated yet', detail: null });
+      .toEqual({ kind: 'open', label: 'Open', detail: null });
     expect(nowOf(table(), view())).toMatchObject({ kind: 'waiting', label: 'Waiting for one more' });
     expect(nowOf(table(), view({ players: [player('A', 1), player('B', 1), [], [], [], []] })))
       .toMatchObject({ kind: 'ready' });

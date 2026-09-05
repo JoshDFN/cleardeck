@@ -1,5 +1,6 @@
 <script>
   import IcpLogo from './IcpLogo.svelte';
+  import NoticeLine from './NoticeLine.svelte';
   import SolvencyNotice from './SolvencyNotice.svelte';
   import { readTableSolvency, refreshTableSolvency } from '$lib/solvency.js';
   import CycleRunwayNotice from './CycleRunwayNotice.svelte';
@@ -488,12 +489,7 @@
          clause states the no-rake property in the weaker wording, so the repo's own
          notice gate read 4 of 5 with this dialog open at both viewports. The
          canonical sentence is added verbatim below it; nothing already here moved. -->
-    <p class="player-notice">
-      <strong>Unaudited code with known bugs: your funds are NOT safe.</strong>
-      Online gambling is illegal in many jurisdictions. 18+ only.
-      No middleman, no house, 0% rake.
-      No rake is taken from any pot on any table.
-    </p>
+    <p class="player-notice"><NoticeLine /></p>
 
     <!-- Whether the ledger actually holds the balance below. In flow, above it,
          and never an overlay. docs/SECURITY-FINDINGS.md FINDING 35. -->
@@ -1117,7 +1113,7 @@
     line-height: 1.5;
   }
 
-  .player-notice strong {
+  .player-notice :global(strong) {
     color: #fecaca;
   }
 

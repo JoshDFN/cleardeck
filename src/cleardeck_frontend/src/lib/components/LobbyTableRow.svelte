@@ -147,9 +147,6 @@
     {#if row.hands !== null && row.hands > 0}
       <span class="hands-value">{row.hands} {row.hands === 1 ? 'hand' : 'hands'} dealt</span>
     {/if}
-    {#if empty}
-      <span class="first">Be the first to sit.</span>
-    {/if}
   </td>
 
   <td class="c-go">
@@ -162,6 +159,8 @@
       </svg>
     </span>
     {#if empty && inviteLink}
+      <!-- A pill at the touch floor beside Watch (the phone) or under it
+           (desktop): the round-1 text link measured 29 px wide. -->
       <button class="invite" type="button" onclick={copyInvite} title="Copy a link that opens this table">
         {copied ? 'Link copied' : 'Invite'}
       </button>
@@ -209,7 +208,7 @@
   .cell-label {
     display: block;
     margin-bottom: 2px;
-    font-size: 9.5px;
+    font-size: var(--cd-text-xs);
     font-weight: var(--cd-weight-strong);
     letter-spacing: 0.09em;
     text-transform: uppercase;
@@ -230,7 +229,7 @@
     min-width: 0;
     color: var(--cd-ink);
     font-weight: var(--cd-weight-strong);
-    font-size: 15px;
+    font-size: var(--cd-text-figure);
     letter-spacing: -0.005em;
     white-space: nowrap;
     overflow: hidden;
@@ -246,7 +245,7 @@
 
   .stale-flag {
     flex: none;
-    font-size: 9.5px;
+    font-size: var(--cd-text-xs);
     font-weight: var(--cd-weight-figure);
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -263,7 +262,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 9.5px;
+    font-size: var(--cd-text-xs);
     font-weight: var(--cd-weight-strong);
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -276,17 +275,17 @@
 
   .tag.currency { background: var(--cd-accent-dim); color: var(--cd-accent-hi); }
   .tag.currency.btc { background: var(--cd-btc-dim); color: var(--cd-btc); }
-  .btc-mark { font-size: 12px; line-height: 1; }
+  .btc-mark { font-size: var(--cd-text-sm); line-height: 1; }
 
   /* ---------------------------------------------------------------- money */
   .num {
     font-variant-numeric: tabular-nums;
     font-weight: var(--cd-weight-figure);
-    font-size: 15px;
+    font-size: var(--cd-text-figure);
     color: var(--cd-money);
   }
 
-  .num.muted { color: var(--cd-ink-1); font-weight: var(--cd-weight-medium); font-size: 13.5px; }
+  .num.muted { color: var(--cd-ink-1); font-weight: var(--cd-weight-medium); font-size: var(--cd-text-sm); }
   .unit { font-size: var(--cd-text-xs); color: var(--cd-ink-2); margin-left: 4px; }
 
   /* The dollar line under a figure. Always "about"; never the figure the
@@ -305,7 +304,7 @@
   .drift-mark {
     display: block;
     margin-top: 3px;
-    font-size: 9.5px;
+    font-size: var(--cd-text-xs);
     font-weight: var(--cd-weight-strong);
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -337,7 +336,7 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .seat-count strong { color: var(--cd-ink); font-size: 15px; }
+  .seat-count strong { color: var(--cd-ink); font-size: var(--cd-text-figure); }
 
   .seat-note {
     display: block;
@@ -376,8 +375,7 @@
   .now.open { color: var(--cd-ink-2); }
 
   .now-detail,
-  .hands-value,
-  .first {
+  .hands-value {
     display: block;
     margin-top: 3px;
     font-size: var(--cd-text-xs);
@@ -385,8 +383,6 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
-
-  .first { color: var(--cd-accent-hi); }
 
   /* ---------------------------------------------------------------- action */
   .c-go {
@@ -406,7 +402,7 @@
     border-radius: var(--cd-radius-chip);
     border: 1px solid var(--cd-line-strong);
     background: var(--cd-surface-2);
-    font-size: 12px;
+    font-size: var(--cd-text-sm);
     font-weight: var(--cd-weight-figure);
     color: var(--cd-ink);
     white-space: nowrap;
@@ -421,22 +417,27 @@
   .go.sit.btc { background: var(--cd-btc); color: var(--cd-ink-on-light); }
   tr:hover .go:not(.sit) { border-color: var(--cd-accent-line-strong); }
 
+  /* Never narrower than the touch floor: a 44 px box even when the word is
+     shorter (touch-targets.mjs measures the painted box). */
   .invite {
-    background: none;
-    border: none;
-    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--cd-touch-min);
     min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-3);
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--cd-radius-chip);
     font: inherit;
-    font-size: var(--cd-text-xs);
+    font-size: var(--cd-text-sm);
     font-weight: var(--cd-weight-strong);
     color: var(--cd-accent);
-    text-decoration: underline;
-    text-underline-offset: 3px;
     cursor: pointer;
     white-space: nowrap;
   }
 
-  .invite:hover { color: var(--cd-accent-hi); }
+  .invite:hover { color: var(--cd-accent-hi); border-color: var(--cd-accent-line); }
 
   /* ------------------------------------------------------------ the phone */
   @media (max-width: 760px) {
@@ -467,7 +468,7 @@
 
     .c-buyin .num::before {
       content: 'Buy-in ';
-      font-size: 10px;
+      font-size: var(--cd-text-xs);
       letter-spacing: 0.07em;
       text-transform: uppercase;
       color: var(--cd-ink-2);
@@ -476,9 +477,9 @@
 
     .fiat { display: inline; margin-left: 6px; }
     .drift-mark, .seat-note { display: inline; margin-top: 0; margin-left: 6px; }
-    .now-detail, .hands-value, .first { display: inline; margin-left: 8px; }
+    .now-detail, .hands-value { display: inline; margin-left: 8px; }
 
     .go { min-height: var(--cd-touch-min); padding: 0 var(--cd-space-4); font-size: var(--cd-text-sm); }
-    .invite { min-height: var(--cd-touch-min); }
+    .invite { min-height: var(--cd-touch-min); padding: 0 var(--cd-space-2); }
   }
 </style>

@@ -73,15 +73,33 @@ lost when the handoffs are.
   deciding whether the site is alive. Every figure it would render is money
   or a duration and needs a chain-agreement site before it ships.
 - **`scripts/dev.sh hygiene` "notices not weakened"** diffs whole lines
-  against ceacc37 and is red on the footer's former copy of the disclaimer
-  (moved, verbatim, into TrustBar.svelte's FULL TERMS overlay) and on the
-  banner paragraph's em-dash. A phrase-level check belongs to the script's
-  owner; the rendered-pixel gate (protected-notices.mjs) is 5/5 everywhere.
+  against ceacc37 and is red on every line the single-sourcing removed: the
+  five phrases now live in `lib/notices.js` and every surface (TrustBar,
+  HowItWorks, HandHistory, DepositModal, WithdrawModal, the Verify code
+  dialog) renders them from there, so the six hand-synced copies are gone
+  from the diff. The presence grep (`FRONTEND_NOTICES`) is green because it
+  recurses into `src/`; a phrase-level "not weakened" check (count the
+  phrases the rendered surfaces carry, not the lines) belongs to the
+  script's owner. The rendered-pixel gate (protected-notices.mjs) is 5/5 on
+  every scene.
 - **The cold-start panel with players seated elsewhere.** It shows only when
   every table is empty; a lobby with one table waiting for a second player
   says so on the row ("Waiting for one more") but has no headline nudge.
-- **HowItWorks** still leads with cryptography; the audit wants Money / Fair
-  deal / If something goes wrong tabs and a header entry point.
+- **HowItWorks** now opens with the one-sentence pitch the hero used to
+  carry, then the 0% rake banner, then cryptography; the audit's Money /
+  Fair deal / If something goes wrong tabs and a header entry point are
+  still to do.
+- **A drifted-record still.** The lobby's "record differs" footnote and the
+  struck-through stale name are resolved by code (lobby-rows.js, tested)
+  but not photographed: the local lobby's records are synced to the
+  contracts (`local-lobby-sync`), and a deliberately drifted record makes
+  the lobby scene's chain agreement red (T-11), so there is no fixture. A
+  probe that drifts one record, photographs, and re-syncs is the way to get
+  a still without touching the gate.
+- **The lobby's automatic retry** (`LOBBY_RETRY_MS`, 12 s) re-reads the
+  lobby once per failure; it does not back off. A visitor on a dead
+  transport sees the sentence refresh every 12 s, which is the intent, but
+  a long outage could use a growing interval.
 
 ## Canister follow-ups (Rust lane, out of the wave's scope)
 

@@ -1,12 +1,17 @@
 <script>
-  // THE FIRST SCREEN'S ONE PARAGRAPH: what this is, how to start.
+  // THE FIRST SCREEN'S VALUE LINE: what this is, how to start.
   //
   // A stranger gets three things in the first five seconds: the name of the
-  // game and where it runs, the three claims that make it different (no
-  // rake, a committed deck, contracts you can query), and the one way in.
-  // The way in is Internet Identity, explained in a sentence, because the
-  // audit found "Connect Wallet" set a MetaMask expectation the flow cannot
-  // meet and told nobody that a passkey is all it takes.
+  // game, the three claims that make it different (no rake, a committed
+  // deck, contracts you can query), and the one way in. The way in is
+  // Internet Identity, explained in a sentence, because the audit found
+  // "Connect Wallet" set a MetaMask expectation the flow cannot meet and
+  // told nobody that a passkey is all it takes.
+  //
+  // Round 2 cut this to one band the height of its button: the eyebrow and
+  // the lead sentence are gone (the sentence lives in How it works now),
+  // because the audit's first metric is where the first table card lands,
+  // and the hero plus the cold-start panel had pushed it below the band.
   //
   // Signed in, the same band collapses to the three claims as chips.
 
@@ -23,12 +28,7 @@
 {#if !signedIn}
   <section class="intro" aria-label="About ClearDeck">
     <div class="intro-copy">
-      <p class="eyebrow">No Limit Hold'em on the Internet Computer</p>
       <h1>Poker you can check.</h1>
-      <p class="intro-lead">
-        Every table is a contract on-chain, the deck is committed before the deal
-        and revealed after it, and the pot is never raked.
-      </p>
       <ul class="claims" aria-label="What makes this different">
         <li><span class="claim-figure">0%</span> rake</li>
         <li><span class="claim-figure">SHA-256</span> committed deck</li>
@@ -46,9 +46,8 @@
         {/if}
       </button>
       <p class="cta-hint">
-        <span class="hint-wide">A passkey or Google sign-in, no app and no wallet.</span>
-        <span class="hint-phone">Sign in (top right) with a passkey or Google, no app and no wallet.</span>
-        Nothing to sign in for just to look: pick a table below and watch.
+        <span class="hint-wide">A passkey or Google sign-in, no app and no wallet. Watching needs no sign-in.</span>
+        <span class="hint-phone">Sign in (top right) with a passkey or Google, no app and no wallet. Watching needs no sign-in: tap a table.</span>
         <button class="link-btn hint-phone" onclick={onHow}>How it works</button>
       </p>
       {#if error}
@@ -68,11 +67,11 @@
 <style>
   .intro {
     display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
-    gap: var(--cd-space-5) var(--cd-space-6);
+    grid-template-columns: minmax(0, 1.2fr) minmax(280px, 1fr);
+    gap: var(--cd-space-4) var(--cd-space-6);
     align-items: center;
-    padding: var(--cd-space-3) var(--cd-space-5);
-    margin: 0 0 var(--cd-space-3);
+    padding: var(--cd-space-2) var(--cd-space-5);
+    margin: 0 0 var(--cd-space-2);
     border: 1px solid var(--cd-line-soft);
     border-radius: var(--cd-radius-panel);
     background:
@@ -80,32 +79,15 @@
       var(--cd-surface-1);
   }
 
-  .eyebrow {
-    margin: 0 0 var(--cd-space-1);
-    font-size: var(--cd-text-xs);
-    font-weight: var(--cd-weight-strong);
-    letter-spacing: var(--cd-tracking-label);
-    text-transform: uppercase;
-    color: var(--cd-ink-2);
-  }
-
   .hint-phone { display: none; }
 
   h1 {
-    margin: 0 0 var(--cd-space-1);
-    font-size: 26px;
+    margin: 0 0 var(--cd-space-2);
+    font-size: var(--cd-text-xl);
     line-height: 1.1;
     font-weight: var(--cd-weight-figure);
     letter-spacing: -0.025em;
     color: var(--cd-ink);
-  }
-
-  .intro-lead {
-    margin: 0 0 var(--cd-space-2);
-    max-width: 60ch;
-    font-size: var(--cd-text-md);
-    line-height: 1.5;
-    color: var(--cd-ink-1);
   }
 
   .claims {
@@ -129,7 +111,7 @@
 
   .intro-cta {
     display: grid;
-    gap: var(--cd-space-2);
+    gap: var(--cd-space-1);
     justify-items: stretch;
   }
 
@@ -137,12 +119,12 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 48px;
+    min-height: var(--cd-touch-min);
     padding: 0 var(--cd-space-5);
     border-radius: var(--cd-radius-chip);
     border: 1px solid transparent;
     font: inherit;
-    font-size: 15px;
+    font-size: var(--cd-text-md);
     font-weight: var(--cd-weight-strong);
     cursor: pointer;
     transition: transform var(--cd-fast) var(--cd-ease), background var(--cd-fast) var(--cd-ease);
@@ -151,7 +133,7 @@
   .btn.primary {
     background: var(--cd-accent);
     color: var(--cd-accent-ink);
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset;
+    box-shadow: var(--cd-gloss);
   }
 
   .btn.primary:hover:not(:disabled) { background: var(--cd-accent-hi); transform: translateY(-1px); }
@@ -162,6 +144,7 @@
     font-size: var(--cd-text-xs);
     line-height: 1.5;
     color: var(--cd-ink-2);
+    text-align: center;
   }
 
   .intro-error {
@@ -209,21 +192,20 @@
 
   @media (max-width: 1080px) {
     .intro { grid-template-columns: minmax(0, 1fr); gap: var(--cd-space-3); }
+    .cta-hint { text-align: left; }
   }
 
-  /* The phone: the sentence and the claims; the sign-in button is the one in
-     the header, 44 px and in view, so it is not repeated here. */
+  /* The phone: the headline and the sign-in hint. The sign-in button is the
+     one in the header, 44 px and in view, so it is not repeated here, and
+     the claims ride How it works. */
   @media (max-width: 760px) {
     .intro {
-      padding: var(--cd-space-3) var(--cd-space-4);
-      margin-bottom: var(--cd-space-2);
+      gap: var(--cd-space-1);
+      padding: var(--cd-space-2) var(--cd-space-4);
       border-radius: var(--cd-radius-card);
     }
 
-    .eyebrow { display: none; }
-    h1 { font-size: 22px; }
-    .intro-lead { font-size: var(--cd-text-sm); margin-bottom: 0; }
-    /* The lead already states the three claims; the row would repeat it. */
+    h1 { font-size: 22px; margin-bottom: var(--cd-space-1); }
     .claims { display: none; }
     .intro-cta { gap: 0; }
     .intro-cta .btn { display: none; }
@@ -237,6 +219,14 @@
       min-height: var(--cd-touch-min);
       margin: calc(-1 * var(--cd-space-3)) 0 calc(-1 * var(--cd-space-3)) var(--cd-space-1);
       vertical-align: middle;
+    }
+
+    /* The signed-in row's link at the touch floor without growing the row. */
+    .intro-slim .link-btn {
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--cd-touch-min);
+      margin: calc(-1 * var(--cd-space-3)) 0;
     }
   }
 </style>

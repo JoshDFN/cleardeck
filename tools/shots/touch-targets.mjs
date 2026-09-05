@@ -32,7 +32,7 @@ import { GATEWAY_HOST, GATEWAY_ORIGIN, GATEWAY_PORT, REPO_ROOT, VIEWPORTS } from
 import { readLocalIds, requireId } from './lib/ids.mjs';
 import { lobbyActor, optional } from './lib/agent.mjs';
 import { gitShortSha, runDirs } from './lib/capture.mjs';
-import { launchBrowser, newContext, setAppOrigin, settle, watchPage } from './lib/browser.mjs';
+import { devLogin, launchBrowser, newContext, setAppOrigin, settle, watchPage } from './lib/browser.mjs';
 import { probeProtectedNotices } from './lib/protected-notices.mjs';
 import { raiseToast, removeToast, TOAST_MESSAGES } from './lib/toast-notices.mjs';
 import { scenesByName } from './scenarios/index.mjs';
@@ -170,6 +170,36 @@ const EXTRA_STATES = {
       },
       async close(page) {
         await page.locator('.wallet-btn.dev').first().click().catch(() => {});
+      },
+    },
+    {
+      // Signed in: every card's Watch becomes Sit and the wallet chip opens
+      // its menu (avatar picker, balances, sign out). Measured whole, then
+      // with the menu open. Last in the list on purpose: it leaves the page
+      // signed in.
+      label: 'signed in, Sit cards',
+      async open(page) {
+        if (!(await page.locator('.wallet-btn.dev').count())) return false;
+        await devLogin(page, 1);
+        await page.waitForSelector('.intro-slim', { timeout: 30_000 });
+        await settle(page);
+        return true;
+      },
+      async close() {},
+    },
+    {
+      label: 'signed in, wallet menu open',
+      scope: '.dropdown',
+      async open(page) {
+        const chip = page.locator('.wallet-btn.connected');
+        if (!(await chip.count())) return false;
+        await chip.first().click();
+        await page.waitForSelector('.dropdown', { timeout: 10_000 });
+        await settle(page);
+        return true;
+      },
+      async close(page) {
+        await page.locator('.wallet-btn.connected').first().click().catch(() => {});
       },
     },
   ],

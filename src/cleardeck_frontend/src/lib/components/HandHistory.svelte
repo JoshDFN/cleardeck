@@ -32,6 +32,7 @@
   // filter is a visible toggle with counts.
 
   import { get } from 'svelte/store';
+  import { NOTICE_LEAD, NOTICE_NO_RAKE, NOTICE_TERMS } from '../notices.js';
   import { history } from '$lib/canisters';
   import Card from './Card.svelte';
   import { scrollLock } from '$lib/scroll-lock.js';
@@ -1217,10 +1218,10 @@
          whether anything is painted on top of it. -->
     <div class="legal">
       <p class="legal-warning">
-        <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk: your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
+        <strong>DISCLAIMER:</strong> {NOTICE_LEAD}. {NOTICE_TERMS.warningBody}
       </p>
       <p class="legal-norake">
-        <strong class="norake">No rake is taken from any pot on any table.</strong> Every amount in
+        <strong class="norake">{NOTICE_NO_RAKE}</strong> Every amount in
         this record is money that went to a player.
       </p>
     </div>

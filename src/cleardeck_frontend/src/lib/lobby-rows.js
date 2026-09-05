@@ -129,7 +129,9 @@ export function nowOf(table, view) {
   if (ready >= 2) return { kind: 'ready', label: 'Ready to deal', detail: null };
   if (ready === 1) return { kind: 'waiting', label: 'Waiting for one more', detail: null };
   if (seated > 0) return { kind: 'waiting', label: 'All sitting out', detail: null };
-  return { kind: 'open', label: 'No one seated yet', detail: null };
+  // "Open", not "No one seated yet": the cold-start row above the list says
+  // that once; the card's status is that its seats are open.
+  return { kind: 'open', label: 'Open', detail: null };
 }
 
 /** Hands dealt at this table, straight off the table canister. */

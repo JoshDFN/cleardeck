@@ -142,6 +142,10 @@
   --cd-felt-line: rgba(255, 255, 255, 0.10);  /* the betting line */
   --cd-felt-mark: rgba(255, 255, 255, 0.055); /* the centre mark */
   --cd-felt-shade: rgba(0, 0, 0, 0.55);       /* vignette under the rail lip */
+  /* The BTC table's felt in a preview: the same key light on a brown baize,
+     so a sats table reads as one at a glance (the lobby's mini map). */
+  --cd-felt-btc-hi: #4a3212;
+  --cd-felt-btc-lo: #2c1e0b;
 
   /* --- The rail ----------------------------------------------------------
      Black padded leather with a lit crown, as on every broadcast table. */
@@ -196,6 +200,7 @@
   --cd-text-xs: 11px;      /* micro labels, uppercase tracking (the floor) */
   --cd-text-sm: 13px;      /* secondary, buttons, table cells */
   --cd-text-md: 14px;      /* body */
+  --cd-text-figure: 15px;  /* a money figure or a table's name in a list row or a preview */
   --cd-text-lg: 18px;      /* dialog titles */
   --cd-text-xl: 24px;      /* section headings */
   --cd-text-display: 34px; /* the pot, the 0% rake figure */
@@ -258,6 +263,8 @@
   --cd-shadow-lift: 0 18px 50px rgba(0, 0, 0, 0.6);
   --cd-shadow-rail: 0 24px 60px rgba(0, 0, 0, 0.7);
   --cd-shadow-inset-soft: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* The 1 px lit top edge on a filled primary button (the gloss). */
+  --cd-gloss: inset 0 1px 0 rgba(255, 255, 255, 0.18);
 
   /* --- Motion ------------------------------------------------------------
      docs/DESIGN-BAR.md bars 11-13: 500 ms for anything that MOVES an object,

@@ -166,13 +166,6 @@
     <div><dt>Last pot</dt><dd>{lastPot === null ? 'None yet' : formatAmount(lastPot, currency)}</dd></div>
   </dl>
 
-  <p class="rake-line">
-    <strong>0% rake.</strong> {lastPot === null
-      ? 'Whatever this table collects is paid straight back out.'
-      : `All ${formatAmount(lastPot, currency)} ${unitOf(currency)} of the last pot went to the winner.`}
-    <button class="link-btn" onclick={(e) => stop(e, onHow)}>How it works</button>
-  </p>
-
   <div class="proofs" class:two-up={Boolean(commitment) && Boolean(contractId)}>
     <div class="proof">
       <span class="proof-label">Deck commitment</span>
@@ -207,6 +200,15 @@
         : 'Watching is free and needs no sign-in. Sign in when you want a seat.'}
     </p>
   </div>
+
+  <!-- Under the CTA, not above it: the button is what has to be on screen at
+       first paint at 1440x900; this is the receipt for the last pot. -->
+  <p class="rake-line">
+    <strong>0% rake.</strong> {lastPot === null
+      ? 'Whatever this table collects is paid straight back out.'
+      : `All ${formatAmount(lastPot, currency)} ${unitOf(currency)} of the last pot went to the winner.`}
+    <button class="link-btn" onclick={(e) => stop(e, onHow)}>How it works</button>
+  </p>
 </aside>
 
 <style>
@@ -231,7 +233,7 @@
 
   .preview-head h3 {
     margin: 0 0 4px;
-    font-size: 15px;
+    font-size: var(--cd-text-figure);
     font-weight: var(--cd-weight-strong);
     color: var(--cd-ink);
   }
@@ -244,7 +246,7 @@
 
   .preview-drift {
     margin: 5px 0 0;
-    font-size: 10.5px;
+    font-size: var(--cd-text-xs);
     line-height: 1.4;
     color: var(--cd-ink-2);
   }
@@ -257,7 +259,7 @@
   }
 
   .stale-flag {
-    font-size: 9.5px;
+    font-size: var(--cd-text-xs);
     font-weight: var(--cd-weight-figure);
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -272,7 +274,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 10px;
+    font-size: var(--cd-text-xs);
     font-weight: var(--cd-weight-strong);
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -284,10 +286,10 @@
   }
 
   .tag.btc { background: var(--cd-btc-dim); color: var(--cd-btc); }
-  .btc-mark { font-size: 12px; line-height: 1; }
+  .btc-mark { font-size: var(--cd-text-sm); line-height: 1; }
 
   /* ------------------------------------------------------------- the map */
-  .map { padding: 14px 18px 10px; }
+  .map { padding: var(--cd-space-2) var(--cd-space-4) var(--cd-space-2); }
 
   .mini-felt {
     position: relative;
@@ -300,7 +302,7 @@
   }
 
   .mini-felt.btc {
-    background: radial-gradient(120% 150% at 50% 0%, #4a3212, #2c1e0b 70%);
+    background: radial-gradient(120% 150% at 50% 0%, var(--cd-felt-btc-hi), var(--cd-felt-btc-lo) 70%);
     border-color: var(--cd-btc-line);
   }
 
@@ -310,7 +312,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 8.5px;
+    font-size: var(--cd-text-xs);
     letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--cd-felt-mark);
@@ -328,7 +330,7 @@
   }
 
   .felt-pot {
-    font-size: 15px;
+    font-size: var(--cd-text-figure);
     font-weight: var(--cd-weight-figure);
     color: var(--cd-money);
     font-variant-numeric: tabular-nums;
@@ -336,7 +338,7 @@
   }
 
   .felt-phase {
-    font-size: 8px;
+    font-size: var(--cd-text-xs);
     letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--cd-ink-felt);
@@ -362,14 +364,14 @@
     border-radius: 3px;
     background: var(--cd-card-face);
     color: var(--cd-card-black);
-    font-size: 9.5px;
+    font-size: var(--cd-text-xs);
     font-weight: var(--cd-weight-figure);
     line-height: 1;
     box-shadow: var(--cd-shadow-card);
   }
 
   .mini-card.red { color: var(--cd-card-red); }
-  .mc-suit { font-size: 9px; }
+  .mc-suit { font-size: var(--cd-text-xs); }
 
   .pod {
     position: absolute;
@@ -447,7 +449,7 @@
   }
 
   .facts dt {
-    font-size: 9px;
+    font-size: var(--cd-text-xs);
     font-weight: var(--cd-weight-strong);
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -458,7 +460,7 @@
 
   .facts dd {
     margin: 0;
-    font-size: 12px;
+    font-size: var(--cd-text-sm);
     color: var(--cd-ink);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -467,14 +469,14 @@
   .fiat {
     display: block;
     margin-top: 2px;
-    font-size: 10px;
+    font-size: var(--cd-text-xs);
     color: var(--cd-ink-2);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 
   .rake-line {
-    margin: 0 0 10px;
+    margin: var(--cd-space-3) 0 0;
     padding: 8px 11px;
     border-radius: 10px;
     background: var(--cd-accent-dim);
@@ -491,7 +493,7 @@
     border: none;
     color: var(--cd-accent);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--cd-text-sm);
     cursor: pointer;
     padding: 0;
     text-decoration: underline;
@@ -502,7 +504,7 @@
   .proofs { display: grid; gap: 7px; margin-bottom: 11px; }
   .proofs.two-up { grid-template-columns: 1fr 1fr; }
   .two-up button.mono { flex-direction: column; align-items: flex-start; gap: 2px; }
-  .two-up .copy-state { font-size: 8.5px; }
+  .two-up .copy-state { font-size: var(--cd-text-xs); }
 
   .proof {
     padding: 8px 10px;
@@ -513,7 +515,7 @@
 
   .proof-label {
     display: block;
-    font-size: 9px;
+    font-size: var(--cd-text-xs);
     font-weight: var(--cd-weight-strong);
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -523,7 +525,7 @@
 
   .proof-idle {
     margin: 0;
-    font-size: 10.5px;
+    font-size: var(--cd-text-xs);
     line-height: 1.45;
     color: var(--cd-ink-2);
   }
@@ -554,7 +556,7 @@
   .copy-state {
     flex: none;
     font-family: inherit;
-    font-size: 9.5px;
+    font-size: var(--cd-text-xs);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--cd-accent);
@@ -578,7 +580,7 @@
     cursor: pointer;
     background: var(--cd-accent);
     color: var(--cd-accent-ink);
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset;
+    box-shadow: var(--cd-gloss);
   }
 
   .btn:hover { background: var(--cd-accent-hi); }

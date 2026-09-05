@@ -1660,7 +1660,15 @@
     }
     .dropdown-btn { min-height: var(--cd-touch-min); font-size: var(--cd-text-md); }
     .copy-btn, .copy-btn.small { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
-    .pref-row { min-height: var(--cd-touch-min); align-items: center; }
+    /* The label is the checkbox's hit area; it reaches into the section's
+       padding so a thumb 21 px left of the box still lands on it. */
+    .pref-row {
+      min-height: var(--cd-touch-min);
+      align-items: center;
+      margin-left: calc(-1 * var(--cd-space-3));
+      padding-left: var(--cd-space-3);
+    }
     .pref-row input { width: var(--cd-icon-lg); height: var(--cd-icon-lg); margin: 0 var(--cd-space-1) 0 0; }
+    .refresh-btn, .show-address-btn { min-height: var(--cd-touch-min); }
   }
 </style>

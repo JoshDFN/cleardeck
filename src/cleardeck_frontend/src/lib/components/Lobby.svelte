@@ -26,6 +26,7 @@
   import LobbyTableRow from './LobbyTableRow.svelte';
   import LobbyPreview from './LobbyPreview.svelte';
   import LobbyColdStart from './LobbyColdStart.svelte';
+  import LobbyEmpty from './LobbyEmpty.svelte';
   import { shortId, stakeTier, tierDefinition } from '$lib/lobby-format.js';
   import {
     buildRow, canisterIdOf, configDrift, currencyOf, effectiveConfig, isDealing, nameQuote, opt,
@@ -34,7 +35,13 @@
   import { loadPrices } from '$lib/prices.js';
   import { inviteLinkFor } from '$lib/invite-link.js';
 
-  const { tables, onJoinTable, onRefresh } = $props();
+  const {
+    tables,
+    onJoinTable,
+    onRefresh,
+    /** True while the page's last read of the lobby failed (the toast says so too). */
+    loadFailed = false,
+  } = $props();
 
   /** How often the live per-table view is re-read while the lobby is open. */
   const LIVE_POLL_MS = 12_000;
@@ -264,15 +271,15 @@
               <span class="sep">·</span>
               <strong class="hot">{handsRunning}</strong> {handsRunning === 1 ? 'hand' : 'hands'} in play
             {/if}
-            <span class="sep">·</span>
-            <span class="norake">0% rake</span>
           </p>
         </div>
 
         <!-- WRAPS, never scrolls (docs/DESIGN-BAR.md BAR 28): a wrapped pill is
              legible, a sliced one is not. -->
         <div class="filters">
-          <button class="pill" class:on={!openSeatsOnly} onclick={() => openSeatsOnly = false}>All tables</button>
+          <button class="pill" class:on={!openSeatsOnly} onclick={() => openSeatsOnly = false}>
+            <span class="wide">All tables</span><span class="phone">All</span>
+          </button>
           <button class="pill" class:on={openSeatsOnly} onclick={() => openSeatsOnly = true}>Open seats</button>
 
           {#if currenciesPresent.length > 1}
@@ -302,36 +309,25 @@
         </div>
       </header>
 
-      {#if tables.length === 0}
-        <div class="empty">
-          <h3>The lobby canister is reporting no tables.</h3>
-          <p>
-            Nothing is wrong with your connection: the lobby simply has no table
-            registered right now. You can confirm that yourself by querying
-            <code class="mono inline">get_tables()</code> on the lobby canister.
-          </p>
-          <button class="mono copy narrow" onclick={() => copyText(lobbyCanisterId, 'lobby')}>
-            {shortId(lobbyCanisterId)}
-            <span class="copy-state">{copiedId === 'lobby' ? 'copied' : 'copy'}</span>
-          </button>
-          <button class="btn ghost" onclick={refreshAll}>Try again</button>
-        </div>
+      {#if tables.length === 0 && loadFailed}
+        <!-- The read failed (the toast carries the raw text): the empty list
+             is not evidence of an empty lobby, and must not say it is. -->
+        <LobbyEmpty kind="failed" onRetry={refreshAll} />
+      {:else if tables.length === 0}
+        <LobbyEmpty
+          kind="none"
+          lobbyId={lobbyCanisterId}
+          copied={copiedId === 'lobby'}
+          onCopy={() => copyText(lobbyCanisterId, 'lobby')}
+          onRetry={refreshAll}
+        />
       {:else if !liveLoaded}
         <!-- Rows are held back for exactly one round of `get_table_view()`: the
              lobby canister's cached config can be wrong, so rendering it even
              for a frame would put stakes on screen the table will not charge. -->
-        <div class="skeleton" aria-live="polite">
-          <p>Reading each table's own contract…</p>
-          {#each tables as t (t.id)}
-            <span class="skeleton-row"></span>
-          {/each}
-        </div>
+        <LobbyEmpty kind="loading" count={tables.length} />
       {:else if visibleTables.length === 0}
-        <div class="empty">
-          <h3>No table matches this filter.</h3>
-          <p>{tables.length} {tables.length === 1 ? 'table is' : 'tables are'} open; none of them fits the filters above.</p>
-          <button class="btn ghost" onclick={clearFilters}>Clear filters</button>
-        </div>
+        <LobbyEmpty kind="filtered" count={tables.length} onClearFilters={clearFilters} />
       {:else}
         {#if seatsTaken === 0}
           <LobbyColdStart
@@ -432,9 +428,10 @@
     {/if}
   </div>
 
+  <!-- The no-rake sentence is the trust bar's (lib/notices.js), stated once
+       per screen; the hero's claims line carries the 0% figure. -->
   <p class="foot">
-    Texas Hold'em No Limit. <strong>No rake is taken from any pot on any table.</strong>
-    Every deal is verifiable from the hand history.
+    Texas Hold'em No Limit. Every deal is verifiable from the hand history.
   </p>
 </div>
 
@@ -446,7 +443,7 @@
   .lobby {
     max-width: 1320px;
     margin: 0 auto;
-    padding: var(--cd-space-3) var(--cd-space-5) var(--cd-space-6);
+    padding: var(--cd-space-2) var(--cd-space-5) var(--cd-space-6);
     color: var(--cd-ink-1);
   }
 
@@ -476,14 +473,14 @@
 
   .btn.ghost:hover:not(:disabled) { background: var(--cd-surface-3); color: var(--cd-ink); }
   .btn.icon { padding: 0 11px; font-weight: var(--cd-weight-medium); gap: 6px; }
-  .icon-label { font-size: 12px; }
+  .icon-label { font-size: var(--cd-text-sm); }
 
   .link-btn {
     background: none;
     border: none;
     color: var(--cd-accent);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--cd-text-sm);
     cursor: pointer;
     padding: 0;
     text-decoration: underline;
@@ -576,7 +573,6 @@
   .pane-sub strong { color: var(--cd-ink); font-weight: var(--cd-weight-strong); }
   .pane-sub .hot { color: var(--cd-accent); }
   .pane-sub .sep { color: var(--cd-line-strong); margin: 0 5px; }
-  .norake { color: var(--cd-accent); font-weight: var(--cd-weight-strong); }
 
   .pane-actions { display: flex; align-items: center; gap: var(--cd-space-2); flex: none; }
 
@@ -584,7 +580,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
+    font-size: var(--cd-text-sm);
     color: var(--cd-ink-2);
   }
 
@@ -596,7 +592,7 @@
     background: var(--cd-surface-2);
     color: var(--cd-ink-1);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--cd-text-sm);
   }
 
   /* ---------------------------------------------------------------- filters */
@@ -621,7 +617,7 @@
     border: 1px solid var(--cd-line);
     color: var(--cd-ink-2);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--cd-text-sm);
     padding: 4px 11px;
     border-radius: var(--cd-radius-pill);
     cursor: pointer;
@@ -630,6 +626,7 @@
   }
 
   .pill:hover { color: var(--cd-ink); }
+  .pill .phone { display: none; }
 
   .pill.on {
     background: var(--cd-accent-dim);
@@ -671,43 +668,7 @@
   .foot-copy { margin: 0; min-width: 0; }
   .list-foot strong { color: var(--cd-ink-1); font-weight: var(--cd-weight-strong); }
 
-  /* ------------------------------------------------------------ empty state */
-
-  .empty {
-    padding: 56px 32px;
-    text-align: center;
-  }
-
-  .empty h3 {
-    margin: 0 0 var(--cd-space-2);
-    font-size: 16px;
-    font-weight: var(--cd-weight-strong);
-    color: var(--cd-ink);
-  }
-
-  .empty p {
-    margin: 0 auto 14px;
-    max-width: 46ch;
-    font-size: var(--cd-text-sm);
-    line-height: 1.6;
-    color: var(--cd-ink-2);
-  }
-
-  .skeleton { padding: 22px 18px 20px; }
-
-  .skeleton p {
-    margin: 0 0 14px;
-    font-size: 12px;
-    color: var(--cd-ink-2);
-  }
-
-  .skeleton-row {
-    display: block;
-    height: 64px;
-    border-radius: var(--cd-radius-card);
-    background: var(--cd-surface-1);
-    margin-bottom: var(--cd-space-2);
-  }
+  /* The empty, failed, loading and filtered states are LobbyEmpty.svelte. */
 
   .mono {
     font-family: var(--cd-font-mono);
@@ -716,42 +677,16 @@
     word-break: break-all;
   }
 
-  .mono.inline { color: var(--cd-ink-1); }
-
-  button.mono {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--cd-space-2);
-    background: var(--cd-surface-2);
-    border: 1px solid var(--cd-line);
-    border-radius: 7px;
-    padding: 6px 9px;
-    cursor: pointer;
-  }
-
-  button.mono.narrow { width: auto; margin: 0 auto 14px; }
   button.linkish.mono { display: inline; width: auto; padding: 0; border: none; background: none; }
-
-  .copy-state {
-    flex: none;
-    font-family: inherit;
-    font-size: 9.5px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--cd-accent);
-  }
 
   /* ----------------------------------------------------------------- footer */
 
   .foot {
     margin: var(--cd-space-4) 0 0;
     text-align: center;
-    font-size: 12px;
+    font-size: var(--cd-text-sm);
     color: var(--cd-ink-2);
   }
-
-  .foot strong { color: var(--cd-accent); font-weight: var(--cd-weight-strong); }
 
   /* ------------------------------------------------------------ responsive */
 
@@ -777,10 +712,13 @@
        opens the real table, which is a better preview than a picture of one. */
     .board :global(aside.preview) { display: none; }
 
-    /* Every tappable control at the 44 px touch floor. */
-    .pill { min-height: var(--cd-touch-min); padding: 0 10px; display: inline-flex; align-items: center; }
+    /* Every tappable control at the 44 px touch floor, and the five pills
+       on ONE row at 390 px (the first reads "All" here). */
+    .pill { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); padding: 0 9px; display: inline-flex; align-items: center; justify-content: center; }
+    .pill .wide { display: none; }
+    .pill .phone { display: inline; }
     .btn, .btn.icon, .btn.ghost { min-height: var(--cd-touch-min); }
     .sort-ctl select { min-height: var(--cd-touch-min); }
-    .link-btn, .mono.copy, .linkish { min-height: var(--cd-touch-min); display: inline-flex; align-items: center; }
+    .link-btn, .linkish { min-height: var(--cd-touch-min); display: inline-flex; align-items: center; }
   }
 </style>

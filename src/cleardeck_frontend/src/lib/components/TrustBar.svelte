@@ -7,7 +7,8 @@
   // table" are the literal strings that `FRONTEND_NOTICES` in scripts/dev.sh
   // greps for in the source and `PROTECTED_PHRASES` in
   // tools/shots/lib/protected-notices.mjs hit-tests on the rendered pixels.
-  // This component only decides how they are typeset.
+  // This component only decides how they are typeset; the words themselves
+  // are lib/notices.js, the one source every surface renders.
   //
   // One neutral bar, the same on the lobby and the table: the amber glyph, the
   // sentences, and FULL TERMS. It replaced a 160 px (desktop) / 268 px (phone)
@@ -20,6 +21,9 @@
   // it is measured there (`--notice-safe-top`, the toast's anchor) and the
   // screenshot harness reads that element's scope class to style the toast it
   // injects. This component is the bar's content.
+
+  import NoticeLine from './NoticeLine.svelte';
+  import { NOTICE_LEAD, NOTICE_NO_RAKE, NOTICE_TERMS } from '../notices.js';
 
   const {
     /** The full text is open as an overlay. */
@@ -45,7 +49,7 @@
       <circle cx="12" cy="17" r="0.8" fill="currentColor" stroke="none"/>
     </svg>
   </span>
-  <span class="strip-text"><strong>Unaudited code with known bugs:</strong> your funds are NOT safe. Online gambling is illegal in many jurisdictions. 18+ only. No middleman, no house. No rake is taken from any pot on any table.</span>
+  <span class="strip-text"><NoticeLine /></span>
   <span class="strip-more">Full terms</span>
 </button>
 
@@ -57,13 +61,13 @@
     <div class="terms">
       <p class="terms-title">Player-protection terms</p>
       <p class="banner-warning">
-        <strong>Disclaimer:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk: your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
+        <strong>Disclaimer:</strong> {NOTICE_LEAD}. {NOTICE_TERMS.warningBody}
       </p>
       <p class="banner-info">
-        No middleman, no house. <strong>No rake is taken from any pot on any table.</strong> Built to demonstrate the power of the Internet Computer: 100% on-chain, with the frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
+        {NOTICE_TERMS.infoBefore} <strong>{NOTICE_NO_RAKE}</strong> {NOTICE_TERMS.infoAfter}
       </p>
       <p class="banner-ai">
-        This entire project was built 100% by AI.
+        {NOTICE_TERMS.ai}
       </p>
     </div>
     <button
@@ -107,7 +111,7 @@
     font-weight: var(--cd-weight-medium);
   }
 
-  .strip-text strong {
+  .strip-text :global(strong) {
     color: var(--cd-ink);
     font-weight: var(--cd-weight-strong);
   }
@@ -220,11 +224,10 @@
       min-height: 0;
       margin-left: 5px;
       padding: 1px 6px;
-      font-size: 10px;
+      font-size: var(--cd-text-xs);
     }
 
-    .banner-content { padding: var(--cd-space-5) 18px 84px; }
-    .terms p { font-size: 13.5px; }
+    .banner-content { padding: var(--cd-space-5) var(--cd-space-4) 84px; }
   }
 
   /* The phone held sideways: two lines of strip, not three. */

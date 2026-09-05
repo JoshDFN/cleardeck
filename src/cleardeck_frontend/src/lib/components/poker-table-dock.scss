@@ -178,6 +178,25 @@
     overflow: hidden;
   }
 
+  /* The signed-out spectator's dock: no balance, no cashier, one way in. */
+  .spectator-dock {
+    display: flex;
+    align-items: center;
+    gap: var(--cd-space-2) var(--cd-space-3);
+    flex: 0 1 auto;
+    padding: 6px 10px;
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-surface-1);
+    border: 1px solid var(--cd-line-soft);
+    min-width: 0;
+  }
+
+  .spectator-note {
+    font-size: var(--cd-text-xs);
+    color: var(--cd-ink-2);
+    white-space: nowrap;
+  }
+
   /* A money figure is never squeezed: the balance keeps its width and the
      committed block takes a row of its own beneath it. */
   .wallet-balance { display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; }
@@ -328,6 +347,11 @@
     .dock-left { overflow: visible; }
     .dock-right { justify-content: flex-start; }
     .wallet-panel { width: 100%; }
+    /* The spectator's dock on a phone: the button takes the cell, the note
+       (a sentence) would push it off the right edge (measured). */
+    .spectator-dock { width: 100%; padding: var(--cd-space-1) var(--cd-space-2); }
+    .spectator-note { display: none; }
+    .spectator-dock .sign-in-to-sit { flex: 1 1 auto; min-height: var(--cd-touch-min); }
     /* The wallet toggle has no row to itself on a phone: the panel is always
        open here (PokerTable renders it whenever `portrait`), and the 44 px
        the toggle took is what lets Deposit and Withdraw stay 44 px tall

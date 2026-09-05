@@ -64,6 +64,11 @@
     tableBalance = null,
     onShowDeposit = null,
     onShowWithdraw = null,
+    // A signed-out spectator has no table balance: the dock's wallet panel
+    // is replaced by "Sign in to sit" (the audit saw "0.00 ICP Deposit
+    // Withdraw" offered to a visitor with no identity).
+    signedIn = true,
+    onSignIn = null,
     // The footer's two links, carried by the Log drawer: on a phone the table
     // view is one screen and has no footer (routes/app-phone.scss).
     onHowItWorks = null,
@@ -1808,6 +1813,12 @@
       </div>
 
       <div class="dock-aux dock-right" class:collapsed={walletCollapsed}>
+        {#if !signedIn}
+          <div class="spectator-dock">
+            <span class="spectator-note">Watching. A seat needs a sign-in.</span>
+            <button class="wallet-action-btn deposit sign-in-to-sit" onclick={() => onSignIn?.()}>Sign in to sit</button>
+          </div>
+        {:else}
         <button
           class="panel-toggle"
           onclick={toggleWalletPanel}
@@ -1866,6 +1877,7 @@
               {/if}
             </div>
           </div>
+        {/if}
         {/if}
       </div>
     </div>

@@ -56,11 +56,20 @@
       gap: var(--cd-space-2);
     }
 
+    /* Above the footer (95 / 96): a short page or one scrolled to its foot
+       puts the footer under the snackbar, and at the toast's own 90 the
+       footer painted over its Retry and Dismiss (measured by
+       tools/shots/probe-lobby.mjs, the click intercepted by the footer's
+       paragraph). Still under the trust bar (100). */
     .app:not(.on-table) .toast {
       top: auto;
       bottom: calc(var(--cd-safe-bottom) + var(--cd-space-4));
+      z-index: 99;
       animation-name: slideUp;
     }
+
+    /* The toast's Retry at the touch floor. */
+    .toast .toast-action { min-height: var(--cd-touch-min); }
 
     /* A TOAST OVER AN OPEN SHEET. The dialogs are z 200 and the toast 90,
        so an error raised while a money sheet was open on a phone stood
@@ -86,7 +95,9 @@
 
     /* The lobby header's controls (the table view's are in table-header-phone.scss). */
     header:not(.compact) .sound-toggle-btn {
+      flex: 0 0 auto;
       width: var(--cd-touch-min);
+      min-width: var(--cd-touch-min);
       min-height: var(--cd-touch-min);
     }
 

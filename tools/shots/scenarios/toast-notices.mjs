@@ -121,7 +121,10 @@ export default {
     // ---- the injected toast, same page, same viewport ----------------------
     // Raised while the real one is still up would measure two toasts, so the
     // real one is dismissed first through its own close button.
-    await page.click('.toast.error button').catch(() => {});
+    // Its OWN close control: the error toast also carries a Retry button now,
+    // and a bare `button` would press that, re-read the dead transport and
+    // raise the toast again.
+    await page.click('.toast.error .toast-close').catch(() => {});
     await page.waitForSelector('.toast', { state: 'detached', timeout: 10_000 }).catch(() => {});
     const injected = await raiseToast(page, TOAST_MESSAGES[0].text);
     await removeToast(page);

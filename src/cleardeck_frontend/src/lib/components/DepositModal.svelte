@@ -1,5 +1,6 @@
 <script>
   import { auth } from '$lib/auth.js';
+  import NoticeLine from './NoticeLine.svelte';
   import { oisy, formatOisyBalance } from '$lib/oisy.js';
   import { Actor } from '@dfinity/agent';
   import { Principal } from '@dfinity/principal';
@@ -982,12 +983,7 @@
          app's own canonical sentence, was left outside the dialog behind the very
          scrim this notice exists to escape. It is stated verbatim now, on its own
          line, with every existing word left where it was. -->
-    <p class="player-notice">
-      <strong>Unaudited code with known bugs: your funds are NOT safe.</strong>
-      Online gambling is illegal in many jurisdictions. 18+ only.
-      No middleman, no house, 0% rake.
-      No rake is taken from any pot on any table.
-    </p>
+    <p class="player-notice"><NoticeLine /></p>
 
     <!-- WHO CAN TAKE THIS MONEY, ON THE SCREEN IT LEAVES FROM.
          docs/SECURITY-FINDINGS.md FINDING 23. The README sold "fully decentralized"
@@ -2762,7 +2758,7 @@
     line-height: 1.5;
   }
 
-  .player-notice strong {
+  .player-notice :global(strong) {
     color: #fecaca;
   }
 

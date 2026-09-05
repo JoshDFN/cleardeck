@@ -1,5 +1,7 @@
 <script>
   import { onMount } from 'svelte';
+  import NoticeLine from './NoticeLine.svelte';
+  import { NOTICE_LEAD, NOTICE_TERMS } from '../notices.js';
   import { scrollLock } from '$lib/scroll-lock.js';
 
   const { onClose } = $props();
@@ -96,6 +98,12 @@
   </div>
 
   <div class="modal-body">
+    <!-- The one-sentence version, which the lobby's hero used to carry. -->
+    <p class="intro-line">
+      Every table is a contract on the Internet Computer: the deck is committed
+      before the deal and revealed after it, and the pot is never raked.
+    </p>
+
     <!-- The strongest claim first, because it is the one a rake-funded operator
          structurally cannot make. It is a property of the payout code, not a
          promotion, so it is stated as a fact and not as an offer. -->
@@ -304,13 +312,8 @@
           </p>
         </div>
         <div class="limit danger">
-          <strong>Unaudited code with known bugs.</strong>
-          <p>
-            This is published for education and testing. Any deposit is at your own risk
-            and your funds are NOT safe: expect to lose everything you deposit. Online
-            gambling is illegal in many jurisdictions. Only use it where legally
-            permitted. 18+ only.
-          </p>
+          <strong>{NOTICE_LEAD}.</strong>
+          <p>{NOTICE_TERMS.warningBody}</p>
         </div>
       </div>
     </section>
@@ -333,13 +336,7 @@
        nothing anywhere else is weakened by it. -->
   <p class="modal-notices">
     <span class="notice-icon" aria-hidden="true">⚠️</span>
-    <strong>Unaudited code with known bugs</strong>: this is for education and testing, any
-    deposit is at your own risk and your funds are NOT safe. Online gambling is illegal in many
-    jurisdictions; only use it where legally permitted. 18+ only. No middleman, no house, 0% rake.
-    <!-- WAVE 5 COHERENCE PASS: added, nothing changed. "0% rake" above is the
-         property in different words; this is the sentence both of the repo's
-         notice checks actually look for. -->
-    No rake is taken from any pot on any table.
+    <NoticeLine />
   </p>
 </div>
 
@@ -396,7 +393,7 @@
     color: rgba(255, 255, 255, 0.9);
   }
 
-  .modal-notices strong { color: #fef08a; }
+  .modal-notices :global(strong) { color: #fef08a; }
   .notice-icon { font-size: 12px; }
 
   .modal-header h2 {
@@ -432,6 +429,13 @@
     padding: 24px;
     overflow-y: auto;
     flex: 1;
+  }
+
+  .intro-line {
+    margin: 0 0 var(--cd-space-4);
+    font-size: var(--cd-text-md);
+    line-height: 1.55;
+    color: var(--cd-ink-1);
   }
 
   .section {
