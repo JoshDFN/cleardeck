@@ -11,7 +11,10 @@
   // exact decimal parse are the same lines they were.
 
   import IcpLogo from './IcpLogo.svelte';
+  import BtcGlyph from './BtcGlyph.svelte';
   import NoticeLine from './NoticeLine.svelte';
+  import CashierAlert from './CashierAlert.svelte';
+  import { phoneMedia } from '$lib/phone-media.svelte.js';
   import SolvencyNotice from './SolvencyNotice.svelte';
   import { readTableSolvency, refreshTableSolvency } from '$lib/solvency.js';
   import CycleRunwayNotice from './CycleRunwayNotice.svelte';
@@ -44,6 +47,10 @@
     onWithdrawSuccess,
     currency = 'ICP',
   } = $props();
+
+  // The phone sheet keeps the button row in the scroller after the
+  // disclosures; the wide dialog puts it in a footer under the scroller.
+  const phone = phoneMedia();
 
   // WHETHER THERE IS ENOUGH ON THE LEDGER TO PAY THIS WITHDRAWAL
   // (docs/SECURITY-FINDINGS.md FINDING 35). `Available balance` is a number the
@@ -83,7 +90,7 @@
 
   // >>> MIRRORED-LIMITS-BEGIN  (tests/money_safety/tests/ui_limits.rs reads this fence)
   // ===========================================================================
-  // MIRRORED CANISTER LIMITS -- THE ONLY NUMBERS IN THIS FILE (docs/DEFECTS.md T-26)
+  // MIRRORED CANISTER LIMITS: THE ONLY NUMBERS IN THIS FILE (docs/DEFECTS.md T-26)
   // ===========================================================================
   //
   // Every limit this modal states or enforces is derived from this block, so no
@@ -98,7 +105,7 @@
   // the deposit floor and the withdrawal floor are one number per currency,
   // compile-time asserted in lib.rs ("THE FLOOR INVARIANT"). This file mirrors it.
   //
-  // src/table_canister/src/lib.rs -- MIRRORED, keep in step:
+  // src/table_canister/src/lib.rs, MIRRORED, keep in step:
   //   :36 ICP_TRANSFER_FEE          10_000          (0.0001 ICP)
   //   :40 CKBTC_TRANSFER_FEE        10              (10 sats)
   //   :47 ICP_MAX_WITHDRAWAL_PER_TX 10_000_000_000  (100 ICP)
@@ -207,6 +214,11 @@
   let prices = $state(null);
   const perTokenUsd = $derived(prices ? (isBTC ? prices.btcUsd : prices.icpUsd) : null);
   const balanceUsd = $derived(usdValue(toSmallest(currentBalance), perTokenUsd));
+  /** A figure's dollars at the sheet's quote, for the receipt; null without a quote. */
+  const fiatOf = (smallestUnit) => {
+    const v = usdValue(smallestUnit, perTokenUsd);
+    return v === null ? null : formatUsd(v);
+  };
 
   const summaryRows = $derived.by(() => {
     if (!net) return [];
@@ -296,9 +308,9 @@
         lastWithdrawalAt = Date.now();
         receipt = {
           rows: [
-            { id: 'withdrawn', label: 'Withdrawn from the table', value: amountText },
-            { id: 'fee', label: 'Network fee', value: formatWithUnit(transferFee) },
-            { id: 'received', label: 'Reached your wallet', value: formatWithUnit(received), strong: true },
+            { id: 'withdrawn', label: 'Withdrawn from the table', value: amountText, fiat: fiatOf(amountSmallest) },
+            { id: 'fee', label: 'Network fee', value: formatWithUnit(transferFee), fiat: fiatOf(transferFee) },
+            { id: 'received', label: 'Reached your wallet', value: formatWithUnit(received), fiat: fiatOf(received), strong: true },
             { id: 'block', label: 'Ledger block', value: block, mono: true },
           ],
           link: IS_MAINNET_BUILD
@@ -413,18 +425,32 @@
 
 <svelte:window onkeydown={onWindowKeydown} />
 
+<!-- THE BUTTON ROW, ONCE: in the scroller after the disclosures on a phone
+     (in flow, never sticky: the round that pinned it measured it over the
+     solvency advice), in the footer on a wide screen. -->
+{#snippet actionRow()}
+  <div class="actions">
+    <button type="button" class="btn-secondary" onclick={onClose} disabled={processing}>
+      Cancel
+    </button>
+    <button
+      type="button"
+      class="btn-primary money"
+      onclick={handleWithdraw}
+      disabled={processing || cooldownLeft > 0 || !withdrawAmount || Number(withdrawAmount) <= 0}
+    >
+      {#if processing}<span class="spinner"></span>{/if}
+      {primaryLabel}
+    </button>
+  </div>
+{/snippet}
+
 <div class="modal-backdrop" onclick={onClose} role="presentation"></div>
 
 <div class="modal-content" class:btc-modal={isBTC} role="dialog" aria-labelledby="withdraw-modal-title" use:scrollLock>
   <div class="modal-header">
     <h2 id="withdraw-modal-title">
-      {#if isBTC}
-        <svg width="22" height="22" viewBox="0 0 64 64" aria-hidden="true">
-          <path fill="var(--cd-btc)" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
-        </svg>
-      {:else}
-        <IcpLogo size={22} />
-      {/if}
+      {#if isBTC}<BtcGlyph size={22} />{:else}<IcpLogo size={22} />{/if}
       <span>
         Withdraw {currencySymbol}
         <span class="title-sub">From your balance at this table to your wallet</span>
@@ -594,17 +620,7 @@
       {/if}
 
       {#if errorView}
-        <div class="alert error" role="alert">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <circle cx="12" cy="12" r="10"/>
-            <line x1="12" y1="8" x2="12" y2="12"/>
-            <line x1="12" y1="16" x2="12.01" y2="16"/>
-          </svg>
-          <span class="alert-text">
-            {errorView.message}
-            {#if errorView.detail}<span class="alert-detail">{errorView.detail}</span>{/if}
-          </span>
-        </div>
+        <CashierAlert message={errorView.message} detail={errorView.detail} />
       {/if}
 
       <p class="cashier-note">
@@ -615,22 +631,13 @@
         {/if}
       </p>
 
-      <div class="actions">
-        <button type="button" class="btn-secondary" onclick={onClose} disabled={processing}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          class="btn-primary money"
-          onclick={handleWithdraw}
-          disabled={processing || cooldownLeft > 0 || !withdrawAmount || Number(withdrawAmount) <= 0}
-        >
-          {#if processing}<span class="spinner"></span>{/if}
-          {primaryLabel}
-        </button>
-      </div>
+      {#if phone.matches}{@render actionRow()}{/if}
     {/if}
   </div>
+
+  {#if !receipt && !phone.matches}
+    <div class="modal-foot">{@render actionRow()}</div>
+  {/if}
 </div>
 
 <style lang="scss">
@@ -638,7 +645,7 @@
 
   @include cashier.shell;
   @include cashier.columns;
-  @include cashier.money($balance: false, $preview: false);
+  @include cashier.money($preview: false, $destination: true);
   @include cashier.feedback($money-button: true, $success: true);
 
   .modal-content { --cashier-w: 860px; }

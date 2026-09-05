@@ -228,11 +228,21 @@ export function measureTouchTargets(page, opts = {}) {
       '.solvency .figures dd', '.solvency .advice', '.balance-crypto', '.balance-value', '.usd-value',
       '.minimum-notice', '.conversion-preview', '.cd-money', 'input[type="number"]',
     ].join(', ');
+    // ...AND NEVER ON A DISCLOSURE. The row pins only after the warnings have
+    // been seen (lib/pin-after.js); the cashier wave's second round photographed
+    // it over the runway panel's "Do not deposit" headline, which the money
+    // list above cannot see (a headline is not a figure). So every painted
+    // disclosure block in the dialog, whole, against every sticky element.
+    const DISCLOSURES_IN_DIALOG = [
+      '.solvency', '.runway-notice', '.custody-notice', '.network-line', '.untrusted-table',
+    ].join(', ');
     const stickyCover = [];
+    const stickyOverDisclosure = [];
     if (dialog) {
       const stickies = [...dialog.querySelectorAll('*')]
         .filter((el) => painted(el) && getComputedStyle(el).position === 'sticky');
       const figures = [...dialog.querySelectorAll(MONEY_IN_DIALOG)].filter(painted);
+      const disclosures = [...dialog.querySelectorAll(DISCLOSURES_IN_DIALOG)].filter(painted);
       for (const st of stickies) {
         const sb = box(st);
         for (const fig of figures) {
@@ -240,6 +250,12 @@ export function measureTouchTargets(page, opts = {}) {
           const fb = box(fig);
           if (!intersects(sb, fb)) continue;
           stickyCover.push({ sticky: text(st), stickyBox: sb, figure: text(fig), figureBox: fb });
+        }
+        for (const block of disclosures) {
+          if (st.contains(block) || block.contains(st)) continue;
+          const bb = box(block);
+          if (!intersects(sb, bb)) continue;
+          stickyOverDisclosure.push({ sticky: text(st), stickyBox: sb, block: text(block), blockBox: bb });
         }
       }
     }
@@ -256,6 +272,7 @@ export function measureTouchTargets(page, opts = {}) {
       type,
       collisions,
       stickyCover,
+      stickyOverDisclosure,
     };
   }, { selector: INTERACTIVE_SELECTOR, touchMin, floors, scope });
 }
@@ -303,6 +320,9 @@ export function foldTouchTargets(m, where) {
   for (const c of m.stickyCover || []) {
     problems.push(`the sticky row "${c.sticky}" (${c.stickyBox.w}x${c.stickyBox.h} at ${c.stickyBox.x},${c.stickyBox.y}) stands on the money figure "${c.figure}" (${c.figureBox.w}x${c.figureBox.h} at ${c.figureBox.x},${c.figureBox.y})`);
   }
+  for (const c of m.stickyOverDisclosure || []) {
+    problems.push(`the sticky row "${c.sticky}" (${c.stickyBox.w}x${c.stickyBox.h} at ${c.stickyBox.x},${c.stickyBox.y}) stands on the disclosure "${c.block}" (${c.blockBox.w}x${c.blockBox.h} at ${c.blockBox.x},${c.blockBox.y}): it pinned before that warning was read`);
+  }
   if (where.expectDialogLock && m.dialogOpen && !m.scrollLocked) {
     problems.push('a dialog is open and the page behind it is not scroll-locked (html.cd-scroll-lock missing)');
   }
@@ -320,6 +340,7 @@ export function foldTouchTargets(m, where) {
     + `; type floors ${(m.type || []).filter((t) => !t.ok).length ? 'BROKEN' : 'met'}`
     + ((m.collisions || []).length ? `; ${m.collisions.length} pot pill(s) on a plate` : '')
     + ((m.stickyCover || []).length ? `; ${m.stickyCover.length} money figure(s) under a sticky row` : '')
+    + ((m.stickyOverDisclosure || []).length ? `; ${m.stickyOverDisclosure.length} disclosure(s) under a sticky row` : '')
     + (m.dialogOpen ? `; dialog open, scroll ${m.scrollLocked ? 'locked' : 'NOT locked'}` : '')
     + (m.rotatePromptVisible ? '; rotate prompt showing' : '');
   return { ok: problems.length === 0, measurement: m, problems, notes, scene: where.scene, viewport: where.viewport };

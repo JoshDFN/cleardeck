@@ -412,10 +412,18 @@ export function scrapeSolvency(page) {
             label: txt(row.querySelector('dt')),
             text: txt(row.querySelector('dd')),
         }));
+        // The exact e8s integers, once, under "What the table said" (the
+        // cashier wave's second round moved them off the row); read by
+        // `data-exact` id, open or closed.
+        const exact = [...block.querySelectorAll('.exact [data-exact]')].map((row) => ({
+            id: row.getAttribute('data-exact'),
+            text: txt(row.querySelector('dd')),
+        }));
         return {
             present: true,
             state: block.getAttribute('data-solvency-state'),
             rows,
+            exact,
             advice: txt(block.querySelector('.advice')),
         };
     });
@@ -458,6 +466,13 @@ export function scrapeDeposit(page) {
                 .map((row) => ({ id: row.getAttribute('data-row'), text: txt(row.querySelector('dd')) })),
             amountFiat: [...document.querySelectorAll('.modal-content .usd-amount')].map((e) => txt(e)),
             buttonText: txt(document.querySelector('.modal-content .actions .btn-primary')),
+            // THE ADDRESS ROUTE'S OWN READING: what the card says has arrived
+            // at the derived deposit subaccount ("Detected 0.0005 ICP"),
+            // asserted against icrc1_balance_of on that subaccount whenever it
+            // is on screen. Null on the wallet route and while nothing has
+            // arrived.
+            route: document.querySelector('.modal-content')?.getAttribute('data-route') ?? null,
+            detectedAmount: txt(document.querySelector('.modal-content .detected-amount')),
         };
     });
 }

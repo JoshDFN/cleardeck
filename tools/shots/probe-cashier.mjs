@@ -138,8 +138,21 @@ async function openCashier(page, kind) {
   // still waits for the block so the disclosures column is photographed as
   // a player sees it a beat later, not as an empty heading.
   await page.waitForSelector('.modal-content .solvency', { timeout: 10_000 }).catch(() => {});
+  await page.waitForFunction(() => !document.querySelector('.runway-notice.pending'), null, { timeout: 15_000 }).catch(() => {});
   await page.waitForTimeout(400);
   await settle(page);
+}
+
+/** Is the primary button's whole rectangle inside the viewport right now? */
+async function primaryInFrame(page) {
+  return page.evaluate(() => {
+    const el = document.querySelector('.modal-content .actions .btn-primary');
+    if (!el) return { ok: false, rect: null };
+    const r = el.getBoundingClientRect();
+    const rect = { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), bottom: Math.round(r.bottom) };
+    const inside = r.top >= 0 && r.left >= 0 && r.bottom <= window.innerHeight && r.right <= window.innerWidth;
+    return { ok: inside, rect, viewport: { w: window.innerWidth, h: window.innerHeight } };
+  });
 }
 
 async function closeReceipt(page) {
@@ -193,6 +206,14 @@ async function probeDeposit(page, vp, ctx, outDir, tableId) {
   await settle(page);
   const geometry = await solvencyAboveButton(page);
   if (!geometry.ok) problems.push(`deposit: the solvency block is not above the Deposit button with an amount typed (${JSON.stringify(geometry)})`);
+  // THE BUTTON IS IN THE FRAME WITH AN AMOUNT TYPED. On a wide screen the row
+  // is a footer under the scroller; on the phone the summary is the first
+  // screen and the row is in flow under the disclosures, so it is legitimately
+  // below the fold there. Asserted on the desktop; recorded on the phone.
+  const frame = await primaryInFrame(page);
+  if (vp.name === 'desktop' && !frame.ok) {
+    problems.push(`deposit: the Deposit button is not inside the ${vp.width}x${vp.height} viewport with an amount typed (${JSON.stringify(frame.rect)})`);
+  }
   states.summary = {
     file: await shoot(page, outDir, 'deposit-summary', vp),
     rows: await rowsOf(page, '.modal-content .cost-summary [data-row]', 'data-row'),
@@ -200,6 +221,7 @@ async function probeDeposit(page, vp, ctx, outDir, tableId) {
     noticesOnScreen: await noticesUnder(page, 'the deposit sheet with an amount typed', problems),
     touch: await touchUnder(page, vp, 'deposit-summary', problems),
     solvencyAboveButton: geometry.ok,
+    buttonInFrame: frame,
   };
   const expectedByRow = {
     send: DEPOSIT_E8S, fees: fee * 2n, total: DEPOSIT_E8S + fee * 2n, credited: DEPOSIT_E8S,

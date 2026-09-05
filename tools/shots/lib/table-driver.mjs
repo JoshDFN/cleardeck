@@ -161,6 +161,60 @@ export async function ledgerBalance(principalText) {
 }
 
 /**
+ * Ledger balance of `(owner, subaccount)`: the deposit address's own balance.
+ * @param {string} ownerText the table canister
+ * @param {Uint8Array} subaccount 32 bytes
+ */
+export async function ledgerSubaccountBalance(ownerText, subaccount) {
+  const ledger = await ledgerActor(ICP_LEDGER_CANISTER_ID);
+  return ledger.icrc1_balance_of({
+    owner: Principal.fromText(ownerText),
+    subaccount: [subaccount],
+  });
+}
+
+/**
+ * A real ICRC-1 transfer signed by a dev player, to any account: the way an
+ * exchange or another wallet pays a deposit address.
+ * @param {number} fromPlayerNum
+ * @param {{ownerText: string, subaccount?: Uint8Array|null, amountE8s: bigint}} p
+ * @returns {Promise<bigint>} the ledger block index
+ */
+export async function ledgerTransferFrom(fromPlayerNum, { ownerText, subaccount = null, amountE8s }) {
+  const ledger = await ledgerActor(ICP_LEDGER_CANISTER_ID, devPlayer(fromPlayerNum));
+  return unwrap(
+    await ledger.icrc1_transfer({
+      to: { owner: Principal.fromText(ownerText), subaccount: subaccount ? [subaccount] : [] },
+      amount: amountE8s,
+      fee: [], memo: [], from_subaccount: [], created_at_time: [],
+    }),
+    'icrc1_transfer',
+  );
+}
+
+/**
+ * Drains a dev player's ledger balance down to `leaveE8s` by paying the rest
+ * to the hero's default account (a real transfer, one fee), so the deposit
+ * sheet opens on the address route for that player. Nothing to drain when
+ * the balance is already at or below the target.
+ * @param {number} playerNum
+ * @param {bigint} leaveE8s
+ * @returns {Promise<{before: bigint, after: bigint, moved: bigint}>}
+ */
+export async function drainLedgerTo(playerNum, leaveE8s, toPlayerNum) {
+  const principalText = devPlayer(playerNum).getPrincipal().toText();
+  const before = await ledgerBalance(principalText);
+  if (before <= leaveE8s) return { before, after: before, moved: 0n };
+  const moved = before - leaveE8s - ICP_TRANSFER_FEE_E8S;
+  if (moved <= 0n) return { before, after: before, moved: 0n };
+  await ledgerTransferFrom(playerNum, {
+    ownerText: devPlayer(toPlayerNum).getPrincipal().toText(), amountE8s: moved,
+  });
+  const after = await ledgerBalance(principalText);
+  return { before, after, moved };
+}
+
+/**
  * The ledger's own transfer fee, read live.
  *
  * The deposit modal prints "(Network fee: 0.0001 ICP)" from a literal in the

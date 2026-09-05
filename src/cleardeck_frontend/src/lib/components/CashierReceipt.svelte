@@ -7,7 +7,11 @@
     title = 'Done',
     /** One sentence under the title. */
     lead = '',
-    /** @type {Array<{id: string, label: string, value: string, mono?: boolean, strong?: boolean}>} */
+    /**
+     * `fiat` is the row's dollars at the quote the sheet opened with ("~$0.03"),
+     * shown small beside the value; a receipt meant to be kept carries it.
+     * @type {Array<{id: string, label: string, value: string, fiat?: string|null, mono?: boolean, strong?: boolean}>}
+     */
     rows = [],
     /** An optional explorer link { href, label }. */
     link = null,
@@ -43,6 +47,7 @@
           <dt>{row.label}</dt>
           <dd class:mono={row.mono} class:cd-money={!row.mono}>
             <span class="value">{row.value}</span>
+            {#if row.fiat}<span class="fiat">{row.fiat}</span>{/if}
             {#if row.mono}
               <button type="button" class="copy" onclick={() => copyRow(row)} aria-label="Copy {row.label}">
                 {copiedId === row.id ? 'Copied' : 'Copy'}
@@ -109,6 +114,13 @@
 
   dt { margin: 0; color: var(--cd-ink-2); }
   dd { margin: 0; text-align: right; color: var(--cd-ink); font-weight: var(--cd-weight-strong); }
+
+  .fiat {
+    margin-left: var(--cd-space-2);
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-medium);
+  }
 
   dd.mono {
     display: inline-flex;

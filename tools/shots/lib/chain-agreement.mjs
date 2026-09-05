@@ -33,7 +33,8 @@
 // verdict was won.
 
 import { Principal } from '@dfinity/principal';
-import { ledgerBalance, ledgerTransferFee, tableActorFor } from './table-driver.mjs';
+import { ledgerBalance, ledgerSubaccountBalance, ledgerTransferFee, tableActorFor } from './table-driver.mjs';
+import { depositSubaccountBytes } from './deposit-address.mjs';
 import { BTC_MIN_DEPOSIT_SATS as BTC_MIN_DEPOSIT, ICP_MIN_DEPOSIT_E8S as ICP_MIN_DEPOSIT } from './config.mjs';
 import { lobbyActor, optional, variantKey } from './agent.mjs';
 // The archive and the table's hand record are read through the HARNESS's own
@@ -81,9 +82,11 @@ export function clientTokenText(smallestUnit, currency = 'ICP') {
 }
 
 /**
- * One solvency row: the rounded token figure AND the exact e8s integer must
- * both be the canister's. The whole row text is the figure's `domText`, so the
- * census credits every literal in it (the "8" of "e8s" included) to this check.
+ * One solvency row: the rounded token figure on the row must be the
+ * canister's, rendered exactly as the client renders it. The whole row text is
+ * the figure's `domText`, so the census credits every literal in it to this
+ * check. (The exact e8s integer moved under "What the table said" in the
+ * cashier wave's second round; `checkSolvencyExact` asserts it there.)
  */
 export function checkSolvencyLine(label, chainValue, domText, currency = 'ICP') {
     const chain = chainValue === null || chainValue === undefined ? null : Number(chainValue);
@@ -95,13 +98,34 @@ export function checkSolvencyLine(label, chainValue, domText, currency = 'ICP') 
     }
     const text = String(domText ?? '');
     const wantTokens = clientTokenText(chain, currency);
-    const wantExact = `(${chain} e8s)`;
-    const agrees = text.includes(wantTokens) && text.includes(wantExact);
+    const agrees = text.includes(wantTokens);
     return {
         label, chain, domText: text, agrees, discriminates2x: true, ok: agrees,
         detail: agrees
-            ? `screen "${text}" carries both "${wantTokens}" and "${wantExact}"`
-            : `screen "${text}" does not carry both "${wantTokens}" and "${wantExact}"`,
+            ? `screen "${text}" carries "${wantTokens}"`
+            : `screen "${text}" does not carry "${wantTokens}"`,
+    };
+}
+
+/**
+ * One exact solvency figure: the e8s integer under "What the table said"
+ * must be the canister's, digit for digit. The census credits the "8" of
+ * "e8s" and the integer itself to this check.
+ */
+export function checkSolvencyExact(label, chainValue, domText) {
+    const chain = chainValue === null || chainValue === undefined ? null : Number(chainValue);
+    if (chain === null) {
+        return {
+            label, chain: null, domText: domText ?? null, agrees: false, discriminates2x: false,
+            ok: false, detail: 'the canister publishes no figure for this row, yet an exact figure is on screen',
+        };
+    }
+    const text = String(domText ?? '');
+    const wantExact = `${chain} e8s`;
+    const agrees = text.trim() === wantExact;
+    return {
+        label, chain, domText: text, agrees, discriminates2x: true, ok: agrees,
+        detail: agrees ? `screen "${text}" is exactly "${wantExact}"` : `screen "${text}" is not "${wantExact}"`,
     };
 }
 
@@ -1762,15 +1786,21 @@ export async function assertDepositAgreement(ctx, page, opts) {
         // one fee (src/table_canister/src/lib.rs ICP_MIN_EXTERNAL_DEPOSIT).
         const externalMinimum = minimum + Number(fee);
         const N = '(-?\\d[\\d.,]*)';
+        // THE LINE IS ROUTE-AWARE (the cashier wave's second round): on the
+        // wallet route it leads with the wallet minimum ("Minimum from this
+        // wallet: N") and names the address floor after it ("your deposit
+        // address instead has a minimum of N"); on the address route the
+        // order is the older one. Each figure keeps a label in both orders,
+        // and each label is accepted in both phrasings.
         const claims = [
             {
                 label: 'deposit modal "Minimum deposit" (to the address) vs the canister\'s external-deposit floor',
-                re: new RegExp(`Minimum to this address:\\s*${N}`, 'i'),
+                re: new RegExp(`(?:Minimum to this address:|deposit address instead has a minimum of)\\s*${N}`, 'i'),
                 expected: externalMinimum,
             },
             {
                 label: 'deposit modal "Minimum deposit" (from a connected wallet) vs the minimum the table canister enforces',
-                re: new RegExp(`lower minimum of\\s*${N}`, 'i'),
+                re: new RegExp(`(?:lower minimum of|Minimum from this wallet:)\\s*${N}`, 'i'),
                 expected: minimum,
             },
             {
@@ -1869,8 +1899,27 @@ export async function assertDepositAgreement(ctx, page, opts) {
                 ));
             }
         }
-    } else if (dom.buttonText && /\d/.test(dom.buttonText)) {
+    } else if (dom.buttonText && /\d/.test(dom.buttonText) && dom.route !== 'address') {
         structural.push(`the deposit button names a figure (${dom.buttonText}) with no cost summary on screen`);
+    }
+
+    // THE ADDRESS ROUTE'S READING (the cashier wave's second round). The card
+    // says what has arrived at the derived deposit subaccount and sweeps it in
+    // by itself; the figure it names is the ledger's, re-read here from the
+    // subaccount the harness derives on its own (lib/deposit-address.mjs).
+    if (dom.detectedAmount) {
+        const subaccount = depositSubaccountBytes(heroPrincipal);
+        const arrived = await ledgerSubaccountBalance(tableId, subaccount);
+        figures.push(checkFigure(
+            'deposit modal detected at the address vs icrc1_balance_of(deposit subaccount)',
+            Number(arrived), dom.detectedAmount, { currency: truth.currency },
+        ));
+        if (dom.buttonText && /\d/.test(dom.buttonText)) {
+            figures.push(checkFigure(
+                'deposit modal detected at the address vs the figure the button names',
+                Number(arrived), dom.buttonText, { currency: truth.currency },
+            ));
+        }
     }
 
     // Re-read after the settle loop: a quote can land between the two.
@@ -1920,6 +1969,15 @@ export async function assertDepositAgreement(ctx, page, opts) {
             figures.push(checkSolvencyLine(
                 `solvency "${row.label}" vs get_solvency()`, expected, row.text, truth.currency,
             ));
+        }
+        const expectedById = { owed: opt(report.owed), held: opt(report.held), shortfall: opt(report.shortfall_e8s) };
+        for (const row of solvencyDom.exact || []) {
+            const expected = expectedById[row.id];
+            if (expected === undefined) {
+                structural.push(`the solvency block shows an exact figure "${row.id}" that this check does not know`);
+                continue;
+            }
+            figures.push(checkSolvencyExact(`solvency exact "${row.id}" vs get_solvency()`, expected, row.text));
         }
         if (solvencyDom.advice && /\d/.test(solvencyDom.advice)) {
             const known = [opt(report.owed), opt(report.held), opt(report.shortfall_e8s)]

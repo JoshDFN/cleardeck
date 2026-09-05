@@ -20,6 +20,12 @@
     warning = null,
     /** True while the address is being derived. */
     deriving = false,
+    /** lib/deposit-detect.js: what the last reading of the address means. */
+    detectStatus = 'empty',
+    /** The detected balance with its unit, or null while nothing has arrived. */
+    detectedText = null,
+    /** The sentence under the figure (lib/deposit-detect.js detectionCopy). */
+    detectCopy = '',
   } = $props();
 
   let copied = $state(false);
@@ -53,8 +59,8 @@
       <p class="address-mismatch">Heads up: {warning}</p>
     {/if}
     <p class="address-hint">
-      Yours alone, at this table. Send ICP here from an exchange or any wallet, then come
-      back and press Claim.
+      Yours alone, at this table. Send ICP here from an exchange or any wallet; this card
+      sees it land and sweeps it into your balance.
     </p>
     <div class="address-body">
       {#if qr}
@@ -76,10 +82,22 @@
         </button>
       </div>
     </div>
+    <!-- WHAT THE ADDRESS HOLDS RIGHT NOW. The figure is the ledger's own
+         reading of the derived subaccount (DepositModal polls it); the
+         harness asserts `.detected-amount` against icrc1_balance_of. -->
+    <p class="detected" data-detect={detectStatus} aria-live="polite">
+      {#if detectedText}
+        <span class="detected-glyph" aria-hidden="true"></span>
+        <span><strong class="detected-amount">Detected {detectedText}</strong> {detectCopy}</span>
+      {:else}
+        <span class="detected-glyph idle" aria-hidden="true"></span>
+        <span>{detectCopy}</span>
+      {/if}
+    </p>
     <ol class="how-to-fund">
       <li>Copy the address, or scan the code with your wallet.</li>
       <li>Send ICP to it from an exchange or another wallet (the minimum is in Limits below).</li>
-      <li>When the transfer has landed, press Claim deposit. The table sweeps it into your balance.</li>
+      <li>Leave this open. When the transfer lands it is detected here and swept into your table balance by itself.</li>
     </ol>
   {:else if deriving}
     <p class="address-hint">Deriving your address from your principal…</p>
@@ -179,6 +197,46 @@
   }
 
   .copy-address-btn:hover { background: var(--cd-accent-line); }
+
+  .detected {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--cd-space-2);
+    margin: 0;
+    padding: var(--cd-space-2) var(--cd-space-3);
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-surface-1);
+    color: var(--cd-ink-1);
+    font-size: var(--cd-text-sm);
+    line-height: 1.5;
+  }
+
+  .detected[data-detect='ready'] { background: var(--cd-accent-dim); border: 1px solid var(--cd-accent-line); }
+  .detected[data-detect='short'], .detected[data-detect='stuck'] { background: var(--cd-warn-dim); border: 1px solid var(--cd-warn-line); }
+  .detected-amount { color: var(--cd-accent); font-variant-numeric: tabular-nums; }
+  .detected[data-detect='short'] .detected-amount, .detected[data-detect='stuck'] .detected-amount { color: var(--cd-warn); }
+
+  /* The watching dot: it breathes while the card polls, solid once something
+     is there. */
+  .detected-glyph {
+    flex: 0 0 auto;
+    width: var(--cd-space-2);
+    height: var(--cd-space-2);
+    margin-top: 6px;
+    border-radius: 50%;
+    background: var(--cd-accent);
+  }
+
+  .detected-glyph.idle {
+    background: var(--cd-ink-2);
+    animation: detect-breathe 1.6s ease-in-out infinite alternate;
+  }
+
+  @keyframes detect-breathe { to { opacity: 0.3; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .detected-glyph.idle { animation: none; }
+  }
 
   .how-to-fund {
     margin: 0;

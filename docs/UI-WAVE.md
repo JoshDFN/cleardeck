@@ -63,7 +63,17 @@ lost when the handoffs are.
   shows the destination account id derived from the signed-in principal, the
   net rows, a receipt with the ledger block and the cooldown counting down.
   `tools/shots/probe-cashier.mjs` moves real money through both and checks
-  every figure on the summary and the receipt against the ledger.
+  every figure on the summary and the receipt against the ledger. Round 2:
+  the button row rides a footer under the scroller on a wide screen and the
+  scroller on a phone (lib/phone-media.svelte.js picks the placement);
+  lib/pin-after.js re-measures when the content grows and
+  CycleRunwayNotice reserves its box while its read is in flight; the
+  address route watches its own subaccount every 5 s (lib/deposit-detect.js)
+  and sweeps what arrives with `claim_external_deposit` by itself, so a new
+  player never sees a Claim button; `tools/shots/probe-deposit-address.mjs`
+  drains a dev player's wallet, photographs the card, pays the derived
+  address from a second identity and checks the detection, the sweep and
+  the receipt against the ledger.
 - **Sound for an anonymous spectator on a phone table.** The phone's table
   header has no slot for the sound toggle; it rides the dock beside Log,
   which renders for everyone, signed in or not. If the dock ever drops for

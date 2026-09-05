@@ -39,12 +39,50 @@ export function shouldPin({ gateBottoms, rowHeight, viewportBottom }) {
 export const PHONE_MEDIA = '(max-aspect-ratio: 1/1), (max-height: 560px)';
 
 /**
+ * Watches the scroller's CONTENT for growth, not only its scroll position.
+ *
+ * The cashier wave's second round photographed the row pinned OVER the runway
+ * panel's headline: the panel is the result of a query that lands a beat after
+ * the sheet opens, so it rendered under a row that had already measured the
+ * one gate then in the DOM (the solvency block, above the line) and pinned. A
+ * row that measures only on scroll and resize cannot see a warning that
+ * arrives after it. So every direct child of the scroller is under a
+ * ResizeObserver (a panel growing anywhere inside one grows that child), and a
+ * MutationObserver re-collects the children when the DOM changes. Both are
+ * optional in the environment; without them the action behaves as it did.
+ *
+ * @param {HTMLElement|null} scroller
+ * @param {() => void} onChange
+ * @returns {() => void} disconnect
+ */
+function watchContent(scroller, onChange) {
+  if (!scroller) return () => {};
+  const hasResize = typeof window.ResizeObserver === 'function';
+  const hasMutation = typeof window.MutationObserver === 'function';
+  const resize = hasResize ? new window.ResizeObserver(onChange) : null;
+  const observeChildren = () => {
+    if (!resize) return;
+    resize.disconnect();
+    for (const child of Array.from(scroller.children)) resize.observe(child);
+  };
+  const mutation = hasMutation
+    ? new window.MutationObserver(() => { observeChildren(); onChange(); })
+    : null;
+  observeChildren();
+  mutation?.observe(scroller, { childList: true, subtree: true, characterData: true });
+  return () => {
+    resize?.disconnect();
+    mutation?.disconnect();
+  };
+}
+
+/**
  * Svelte action: `<div class="actions" use:pinAfter={{ gates: ['.solvency', '.runway-notice'], scroller: '.modal-body' }}>`.
- * Toggles `pinned` on the node from the scroller's scroll and the window's
- * resize, read on the next frame; a gate that is not in the DOM (the solvency
- * block when the canister says covered) is simply not a gate. Does nothing
- * where the phone media query does not match, so the desktop dialog keeps
- * its flow row.
+ * Toggles `pinned` on the node from the scroller's scroll, the window's
+ * resize and any growth of the scroller's content, read on the next frame; a
+ * gate that is not in the DOM (the solvency block when the canister says
+ * covered) is simply not a gate. Does nothing where the phone media query
+ * does not match, so the desktop dialog keeps its footer row.
  *
  * @param {HTMLElement} node
  * @param {{gates: string[], scroller: string, pinnedClass?: string}} params
@@ -72,6 +110,7 @@ export function pinAfter(node, params) {
   scroller?.addEventListener('scroll', schedule, { passive: true });
   window.addEventListener('resize', schedule);
   media.addEventListener?.('change', schedule);
+  const unwatch = watchContent(scroller, schedule);
   schedule();
 
   return {
@@ -81,6 +120,7 @@ export function pinAfter(node, params) {
     },
     destroy() {
       if (frame) window.cancelAnimationFrame(frame);
+      unwatch();
       scroller?.removeEventListener('scroll', schedule);
       window.removeEventListener('resize', schedule);
       media.removeEventListener?.('change', schedule);

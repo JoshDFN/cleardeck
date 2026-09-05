@@ -20,9 +20,11 @@
   //     finding is that it currently looks identical to "fine".
   //
   //  3. IT NAMES THE NUMBERS. "Something may be wrong" is not actionable. When
-  //     the canister gives figures, they are shown in full e8s as well as
-  //     rounded tokens, because a player reconciling a balance needs the exact
-  //     integer and `formatTokenAmount` rounds to four decimals.
+  //     the canister gives figures, the rounded token figure stands on the row
+  //     and the exact e8s integer stands once under "What the table said",
+  //     because a player reconciling a balance needs the exact integer and
+  //     `formatTokenAmount` rounds to four decimals, while a depositor reading
+  //     the row needs one figure, not two spellings of it.
 
   import {
     SOLVENCY_STATES, headlineFor, observationAge, severityOf,
@@ -44,24 +46,29 @@
   const severity = $derived(state ? severityOf(state) : 'ok');
   const visible = $derived(Boolean(state) && state !== SOLVENCY_STATES.COVERED);
 
-  // Both spellings of every figure: the rounded one a person reads, and the exact
-  // integer someone reconciling a balance needs (`formatTokenAmount` rounds to
-  // four decimals).
+  // Both spellings of every figure: the rounded one a person reads on the row,
+  // and the exact integer someone reconciling a balance needs, under the
+  // disclosure (`formatTokenAmount` rounds to four decimals).
   //
-  // NOTE FOR THE HARNESS. These are MONEY FIGURES. The moment the canister half
-  // of FINDING 35 lands and these render with real numbers, they need a site in
-  // `tools/shots/lib/chain-agreement.mjs` asserting them against the canister --
-  // NOT a rule in `token-allowlist.mjs`, which that file's own rule 5 forbids for
-  // money-shaped tokens. Today they never render (the state is `unsupported`,
-  // which carries no figures), so there is nothing yet to assert.
+  // NOTE FOR THE HARNESS. These are MONEY FIGURES, asserted against
+  // get_solvency() by `tools/shots/lib/chain-agreement.mjs` (the row by its
+  // label, the exact figure by its `data-exact` id), never excused by a rule in
+  // `token-allowlist.mjs`, which that file's own rule 5 forbids for money-shaped
+  // tokens.
   const amount = (v) =>
-    v === null || v === undefined
-      ? null
-      : `${formatTokenAmount(v, { currency, includeUnit: true })} (${v.toString()} e8s)`;
+    v === null || v === undefined ? null : formatTokenAmount(v, { currency, includeUnit: true });
+  const exact = (v) => (v === null || v === undefined ? null : `${v.toString()} e8s`);
 
   const shortfallText = $derived(amount(solvency?.shortfall ?? null));
   const heldText = $derived(amount(solvency?.held ?? null));
   const owedText = $derived(amount(solvency?.owed ?? null));
+
+  /** The exact integers, once, under the disclosure. */
+  const exactRows = $derived([
+    { id: 'owed', label: 'Owed to players', text: exact(solvency?.owed ?? null) },
+    { id: 'held', label: 'Held on the ledger', text: exact(solvency?.held ?? null) },
+    { id: 'shortfall', label: 'Short by', text: exact(solvency?.shortfall ?? null) },
+  ].filter((r) => r.text !== null));
 
   const age = $derived(
     solvency && solvency.observedAtNs !== undefined
@@ -130,10 +137,17 @@
          reads; this is the detail. Its figures are still read by
          tools/shots/lib/chain-agreement.mjs (textContent, open or closed) and
          asserted against get_solvency(). -->
-    {#if solvency?.advice}
+    {#if solvency?.advice || exactRows.length}
       <details class="more">
         <summary>What the table said</summary>
-        <p class="advice">{solvency.advice}</p>
+        {#if solvency?.advice}<p class="advice">{solvency.advice}</p>{/if}
+        {#if exactRows.length}
+          <dl class="exact">
+            {#each exactRows as row (row.id)}
+              <div data-exact={row.id}><dt>{row.label}, exactly</dt><dd>{row.text}</dd></div>
+            {/each}
+          </dl>
+        {/if}
       </details>
     {/if}
 
@@ -245,6 +259,18 @@
   .more[open] summary::after { content: ' \25B4'; }
   .more summary:hover { background: var(--cd-surface-2); }
   .more .advice { margin: var(--cd-space-1) 0 0; color: var(--cd-ink-1); }
+
+  .exact {
+    display: grid;
+    gap: 2px;
+    margin: var(--cd-space-2) 0 0;
+    font-size: var(--cd-text-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .exact div { display: flex; justify-content: space-between; gap: var(--cd-space-3); }
+  .exact dt { margin: 0; color: var(--cd-ink-2); }
+  .exact dd { margin: 0; font-family: var(--cd-font-mono); color: var(--cd-ink-1); }
 
   .refresh {
     margin-top: var(--cd-space-2);

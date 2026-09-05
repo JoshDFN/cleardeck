@@ -147,6 +147,10 @@ const EXTRA_STATES = {
       async open(page) {
         const body = page.locator('.modal-content .modal-body');
         if (!(await body.count())) return false;
+        // The runway panel is a query that lands a beat after the sheet opens
+        // (CycleRunwayNotice reserves its box meanwhile); scrolling before it
+        // has answered would measure a sheet no player scrolls.
+        await page.waitForFunction(() => !document.querySelector('.runway-notice.pending'), null, { timeout: 15_000 }).catch(() => {});
         await body.first().evaluate((el) => { el.scrollTop = el.scrollHeight; });
         await settle(page);
         return true;

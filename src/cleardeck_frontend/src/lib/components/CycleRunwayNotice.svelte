@@ -63,7 +63,19 @@
   });
 </script>
 
-{#if visible}
+{#if runway === null}
+  <!-- THE BOX IS RESERVED WHILE THE READ IS IN FLIGHT. The cycle status is a
+       query that lands a beat after the sheet opens; a panel that appears
+       under an already-pinned button row stands under that row (the cashier
+       wave's second round photographed it). This placeholder holds the panel's
+       place in flow, carries the same class so lib/pin-after.js treats it as
+       an unread gate, and renders no figure. -->
+  <div class="runway-notice pending" data-testid="cycle-runway-notice" data-runway-state="pending" role="status" aria-busy="true">
+    <p class="headline">Reading how long this table can keep honouring withdrawals</p>
+    <p class="advice">A canister below its freezing threshold rejects every update call at once, withdrawals included. The answer stands here in a moment.</p>
+    <span class="shimmer" aria-hidden="true"></span>
+  </div>
+{:else if visible}
   <div
     class="runway-notice {severity}"
     data-testid="cycle-runway-notice"
@@ -117,6 +129,35 @@
     background: var(--cd-danger-dim);
     border-color: var(--cd-danger-line);
     border-left-color: var(--cd-danger);
+  }
+
+  /* The reserved box: the panel's own padding and border in the neutral
+     surface, tall enough for a headline, its advice and the top-up line
+     (three spacing units of six), so the row under it does not move when
+     the answer lands. */
+  .runway-notice.pending {
+    min-height: calc(var(--cd-space-6) * 3);
+    background: var(--cd-surface-1);
+    border-color: var(--cd-line-soft);
+    border-left-color: var(--cd-line-strong);
+  }
+
+  .runway-notice.pending .headline { color: var(--cd-ink-2); }
+  .runway-notice.pending .advice { color: var(--cd-ink-2); }
+
+  .shimmer {
+    display: block;
+    height: var(--cd-space-2);
+    margin-top: var(--cd-space-2);
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-surface-3);
+    animation: runway-shimmer 1.2s ease-in-out infinite alternate;
+  }
+
+  @keyframes runway-shimmer { to { opacity: 0.35; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .shimmer { animation: none; }
   }
 
   .headline {

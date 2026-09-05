@@ -290,10 +290,19 @@ export const CHAIN_SITES = [
     },
     {
         id: 'solvency-figures',
-        selector: '.solvency .figures dd, .solvency .advice',
+        selector: '.solvency .figures dd, .solvency .advice, .solvency .exact dd',
         label: /^solvency /,
-        why: 'the money a table owes, holds and is short by, and the canister\'s own advice '
-            + 'sentence quoting them, against get_solvency() (docs/SECURITY-FINDINGS.md FINDING 35)',
+        why: 'the money a table owes, holds and is short by (the rounded figure on the row, '
+            + 'the exact e8s integer once under "What the table said"), and the canister\'s own '
+            + 'advice sentence quoting them, against get_solvency() (docs/SECURITY-FINDINGS.md FINDING 35)',
+    },
+    {
+        id: 'deposit-detected',
+        selector: '.deposit-address-section .detected-amount',
+        label: /^deposit modal detected at the address vs/,
+        why: 'what the address route says has arrived at the derived deposit subaccount '
+            + '("Detected 0.0005 ICP"), read from the ledger every few seconds and swept in by '
+            + 'itself; asserted against icrc1_balance_of on that subaccount',
     },
     {
         id: 'deposit-minimum-and-fee',
