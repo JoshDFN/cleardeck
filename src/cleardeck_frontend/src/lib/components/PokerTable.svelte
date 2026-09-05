@@ -2216,6 +2216,27 @@
     min-width: 0;
   }
 
+  /* MONEY OF MINE THAT IS IN THE MIDDLE (docs/SECURITY-FINDINGS.md FINDING 18).
+     Static flow, no z-index, no positioning: this rule is read out of THIS file
+     by tests/money_safety/tests/ui_limits.rs
+     (the_outstanding_stake_surface_cannot_cover_the_protected_notices), so it
+     stays here rather than in the dock partial. It precedes the include, so the
+     partial's `.wallet-committed.stuck` and portrait overrides still win. */
+  .wallet-committed {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 2px;
+    margin-top: 0;
+    padding: 4px 8px;
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-money-line);
+    background: var(--cd-money-dim);
+    min-width: 0;
+  }
+
   @include dock.dock;
 
   /* =========================================================================

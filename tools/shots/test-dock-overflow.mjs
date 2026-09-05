@@ -31,8 +31,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
+import * as sass from 'sass';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const COMPONENT = path.resolve(
@@ -49,13 +50,57 @@ const VIEWPORTS = {
 };
 const VIEWPORT = VIEWPORTS.mobile;
 
-/** The component's real `<style>` block. Svelte scoping is added at build time, so this is plain CSS. */
+/**
+ * The component's real stylesheet, compiled the way the build compiles it.
+ *
+ * The UI wave made the block `<style lang="scss">` and moved the dock's and the
+ * geometry's rules into Sass MIXINS (`poker-table-dock.scss`,
+ * `poker-table-tokens.scss`) that the block `@include`s where the rules used to
+ * sit. So the text between the style tags is no longer CSS a browser can read:
+ * it is compiled here with the same `sass` the frontend build uses, resolving
+ * the partials from the component's own directory, so this fixture keeps
+ * measuring the stylesheet the app ships and not a copy. Svelte's `:global(x)`
+ * wrapper is unwrapped exactly as the compiler unwraps it (minus the scoping
+ * hash, which this fixture never had).
+ */
+const INDEX_SCSS = path.resolve(HERE, '..', '..', 'src', 'cleardeck_frontend', 'src', 'index.scss');
+
+/**
+ * The app's token layer (`src/index.scss`), compiled. Every dock dimension the
+ * fixture measures is a `var(--cd-*)` now (the gap under the stage, the dock's
+ * padding, the touch floor), and a token the fixture does not define computes
+ * to nothing, so the box it measured would be a box the app never paints.
+ */
+function tokenCss() {
+    return sass.compileString(fs.readFileSync(INDEX_SCSS, 'utf8'), {
+        loadPaths: [path.dirname(INDEX_SCSS)],
+        url: pathToFileURL(INDEX_SCSS),
+        style: 'expanded',
+        silenceDeprecations: ['legacy-js-api'],
+        logger: sass.Logger.silent,
+    }).css;
+}
+
 function componentCss() {
     const src = fs.readFileSync(COMPONENT, 'utf8');
-    const open = src.lastIndexOf('<style>');
+    const openTag = src.match(/<style(?:\s+lang="scss")?>/g);
     const close = src.lastIndexOf('</style>');
-    if (open < 0 || close < 0) throw new Error('PokerTable.svelte has no <style> block');
-    return src.slice(open + '<style>'.length, close);
+    if (!openTag || close < 0) throw new Error('PokerTable.svelte has no <style> block');
+    const last = openTag[openTag.length - 1];
+    const open = src.lastIndexOf(last);
+    const block = src.slice(open + last.length, close);
+    const plain = last.includes('scss')
+        ? sass.compileString(block, {
+            loadPaths: [path.dirname(COMPONENT)],
+            url: pathToFileURL(COMPONENT),
+            style: 'expanded',
+            // The frontend build is on the same legacy warning; it is not a defect here.
+            silenceDeprecations: ['legacy-js-api'],
+            logger: sass.Logger.silent,
+        }).css
+        : block;
+    // `:global(.a .b)` -> `.a .b` (one level of parentheses inside is enough for this file).
+    return plain.replace(/:global\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g, '$1');
 }
 
 /**
@@ -109,7 +154,7 @@ async function measure(browser, { reintroduceTheDefect, viewport = VIEWPORT }) {
         colorScheme: 'dark',
     });
     const page = await context.newPage();
-    const css = componentCss();
+    const css = tokenCss() + '\n' + componentCss();
     // `--cd-avail` is what the app sets on the wrapper; here it is the measured
     // stage + dock so the fixture's poker-table column is the failing one.
     const availablePx = viewport.height - viewport.stageTop - viewport.belowDock;
@@ -223,17 +268,31 @@ check(
 // 2. THE SAME FIXTURE, WITH THE DEFECT PUT BACK. It has to convict.
 // ---------------------------------------------------------------------------
 const broken = await measure(browser, { reintroduceTheDefect: true });
-const overflowPx = broken.dock && broken.panel ? broken.dock.top - broken.panel.top : 0;
+// WHICH EDGE IT LEAVES BY IS THE DOCK'S LAYOUT, NOT THE DEFECT. The recorded
+// failure (E-63) had the panel spill out of the TOP of a flex dock and under the
+// stage. The UI wave's dock is a grid that keeps the panel's top on the dock's
+// top, so the same fixed height spills it out of the BOTTOM instead, under the
+// viewport's edge. Either way the money figure has left the one box that is
+// laid out to hold it, which is the thing this arm has to convict.
+const overflowAbove = broken.dock && broken.panel ? broken.dock.top - broken.panel.top : 0;
+const overflowBelow = broken.dock && broken.panel ? broken.panel.bottom - broken.dock.bottom : 0;
 check(
     '`height: var(--dock-h)` pushes the wallet panel OUT of the dock',
-    overflowPx > 1,
-    `the panel's top is ${overflowPx.toFixed(1)}px above the dock's top`,
+    overflowAbove > 1 || overflowBelow > 1,
+    `the panel's top is ${overflowAbove.toFixed(1)}px above the dock's top and its bottom `
+    + `${overflowBelow.toFixed(1)}px below the dock's bottom`,
 );
+// ...and the spilled part lands where the app paints something else: under the
+// stage (the shape E-63 recorded, the felt painting over a money row) or past
+// the dock's bottom edge (in the app, under the phone's home indicator). Which
+// edge depends on how the grid centres the panel; both are content the layout
+// no longer accounts for.
 check(
-    '...and into the stage, which paints over it — the shape the gate reported',
-    broken.panel && broken.stage && broken.panel.top < broken.stage.bottom - 1,
-    `stage.bottom=${broken.stage?.bottom} panel.top=${broken.panel?.top} `
-    + `(${(broken.stage.bottom - broken.panel.top).toFixed(1)}px of the panel is under the stage)`,
+    '...and the spilled part sits under the stage or past the dock\'s bottom edge',
+    broken.panel && broken.dock && broken.stage
+        && (broken.panel.top < broken.stage.bottom - 1 || broken.panel.bottom > broken.dock.bottom + 1),
+    `dock=[${broken.dock?.top}, ${broken.dock?.bottom}] panel=[${broken.panel?.top}, ${broken.panel?.bottom}] `
+    + `stage.bottom=${broken.stage?.bottom} figure=[${broken.committedValue?.top}, ${broken.committedValue?.bottom}]`,
 );
 
 // ---------------------------------------------------------------------------
@@ -300,23 +359,44 @@ console.log(
     const vp = VIEWPORTS.desktop;
     const d = await measure(browser, { reintroduceTheDefect: false, viewport: vp });
     const dBroken = await measure(browser, { reintroduceTheDefect: true, viewport: vp });
-    for (const [arm, m] of Object.entries({ 'with the fix': d, 'with the defect': dBroken })) {
-        check(
-            `desktop: the wallet panel is inside the dock ${arm}`,
-            m.panel && m.dock && m.panel.top >= m.dock.top - EPS && m.panel.bottom <= m.dock.bottom + EPS,
-            `dock=[${m.dock?.top}, ${m.dock?.bottom}] panel=[${m.panel?.top}, ${m.panel?.bottom}]`,
-        );
-    }
-    const stolen = dBroken.stage.h - d.stage.h;
     check(
-        'desktop: the change costs the stage nothing at all',
-        Math.abs(stolen) < 1,
-        `the dock took ${stolen.toFixed(1)}px of stage height at 1440x900`,
+        'desktop: the wallet panel is inside the dock with the fix',
+        d.panel && d.dock && d.panel.top >= d.dock.top - EPS && d.panel.bottom <= d.dock.bottom + EPS,
+        `dock=[${d.dock?.top}, ${d.dock?.bottom}] panel=[${d.panel?.top}, ${d.panel?.bottom}]`,
     );
+    // MEASURED ANSWER, RE-MEASURED AFTER THE UI WAVE. The wave's desktop wallet
+    // panel is three rows when a stake is outstanding (the balance, the IN THE
+    // POT line on its own row, the two buttons), taller than --dock-h, so the
+    // fixed height convicts on desktop too and the fix costs the stage the
+    // difference (about 13 px at 1440x900). The old pin here ("a no-op on
+    // desktop") described the one-row panel and is not a measurement of this
+    // dock; what is asserted instead is what the trade has to satisfy: the
+    // defect is convicted, and the felt keeps the desktop floor with a margin
+    // (the real run records 39.8% on the facing-bet scene with the stake row up).
+    const dSpill = dBroken.panel && dBroken.dock
+        && (dBroken.panel.top < dBroken.dock.top - 1 || dBroken.panel.bottom > dBroken.dock.bottom + 1);
     check(
-        'desktop: and the felt is byte-identical between the two arms',
-        d.feltWidth !== null && Math.abs(d.feltWidth - dBroken.feltWidth) < 0.5,
-        `${dBroken.feltWidth?.toFixed(1)}px -> ${d.feltWidth?.toFixed(1)}px`,
+        'desktop: the same fixed height convicts on desktop too (the panel leaves the dock)',
+        Boolean(dSpill),
+        `dock=[${dBroken.dock?.top}, ${dBroken.dock?.bottom}] panel=[${dBroken.panel?.top}, ${dBroken.panel?.bottom}]`,
+    );
+    const stolen = dBroken.stage.h - d.stage.h;
+    const desktopFrame = vp.width * vp.height;
+    const desktopFeltPct = (fw) => (fw === null ? null : ((fw * (fw / vp.aspect)) / desktopFrame) * 100);
+    const dAfter = desktopFeltPct(d.feltWidth);
+    check(
+        `desktop: the room the dock takes (${stolen.toFixed(1)}px) leaves the felt over the ${vp.feltFloor}% floor by ${REQUIRED_MARGIN} point`,
+        dAfter !== null && dAfter >= vp.feltFloor + REQUIRED_MARGIN,
+        `felt ${dAfter?.toFixed(1)}% of the frame with the fix (the fixture's desktop stage is larger `
+        + 'than the app\'s, so this is a bound on the trade, not the recorded figure)',
+    );
+    // The felt is NOT identical between the arms any more (the one-row panel's
+    // no-op is gone with it); the floor-with-margin check above is the bound on
+    // that trade, and the delta is printed so it can never creep in silence.
+    // The real run records 41.0% without the stake row and 39.8% with it.
+    console.log(
+        `note  desktop: felt width ${dBroken.feltWidth?.toFixed(1)}px -> ${d.feltWidth?.toFixed(1)}px `
+        + `between the fixed-height arm and the fix (the stake row's cost at 1440x900)`,
     );
 }
 

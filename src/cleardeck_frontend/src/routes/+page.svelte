@@ -661,10 +661,15 @@
     }
   }
 
-  // Fast polling - 250 ms for responsive gameplay. QUERIES ONLY (E-92): a
-  // query costs the canister nothing, and the in-flight guard in
-  // loadTableState keeps overlapping polls from racing.
-  const POLL_INTERVAL = 250;
+  // The render poll. QUERIES ONLY (E-92): the in-flight guard in loadTableState
+  // keeps overlapping polls from racing, and a load requested while one is in
+  // flight runs right after it, so the hero's own action is re-read the moment
+  // its update returns. The period is 500 ms because tools/cycles/tab-burn.mjs
+  // prices an open tab at exactly this loop and tools/cycles/burn-table.json
+  // was MEASURED with it (tools/shots/test-poll-updates.mjs fails on a drift
+  // between the two). The decision-loop wave ran it at 250 ms for a while; a
+  // faster poll needs the burn table re-measured at that period first.
+  const POLL_INTERVAL = 500;
   const HEARTBEAT_INTERVAL = 10000; // Send heartbeat every 10 seconds
   const BALANCE_REFRESH_INTERVAL = 5000; // Refresh balance every 5 seconds
   let actionPending = $state(false);

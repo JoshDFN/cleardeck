@@ -216,23 +216,12 @@
     white-space: nowrap;
   }
 
-  /* MONEY OF MINE THAT IS IN THE MIDDLE (docs/SECURITY-FINDINGS.md FINDING 18).
-     Static flow, no z-index, no positioning. */
-  .wallet-committed {
-    flex: 1 1 100%;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    column-gap: 8px;
-    row-gap: 2px;
-    margin-top: 0;
-    padding: 4px 8px;
-    border-radius: var(--cd-radius-chip);
-    border: 1px solid var(--cd-money-line);
-    background: var(--cd-money-dim);
-    min-width: 0;
-  }
-
+  /* MONEY OF MINE THAT IS IN THE MIDDLE (docs/SECURITY-FINDINGS.md FINDING 18):
+     the base `.wallet-committed` rule lives in PokerTable.svelte itself, just
+     before this mixin is included, because tests/money_safety/tests/ui_limits.rs
+     reads that file for the rule and asserts it is static flow (no z-index, no
+     positioning). The `.stuck` and portrait overrides below still follow it in
+     the cascade, as they did when all three sat here. */
   .wallet-committed.stuck {
     border-color: var(--cd-danger-line);
     background: var(--cd-danger-dim);
