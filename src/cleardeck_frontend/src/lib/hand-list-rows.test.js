@@ -26,6 +26,25 @@ const lost = {
 };
 const notMine = { handNumber: 3, seats: [1, 2], showdown: [], winners: [{ seat: 1, principal: THEM, amount: 9 }], verification: { ok: false, commitment: { match: true }, cardsChecked: 0 } };
 const open = { handNumber: 4, seats: [0, 1], showdown: [], winners: [], verification: null };
+// The hero folded pre-flop: in no showdown, no winner, but the record's
+// actions (the archive names who acted) and its player list say ME was in.
+const folded = {
+  handNumber: 5,
+  seats: [0, 1],
+  showdown: [],
+  winners: [{ seat: 1, principal: THEM, amount: 30 }],
+  actions: [{ kind: 'Fold', seat: 0, principal: ME, amount: null }],
+  verification: null,
+};
+const foldedByPlayers = {
+  handNumber: 6,
+  seats: [0, 1],
+  showdown: [],
+  winners: [{ seat: 1, principal: THEM, amount: 30 }],
+  players: [{ seat: 0, principal: ME }, { seat: 1, principal: THEM }],
+  actions: [{ kind: 'Fold', seat: 0, principal: null, amount: null }],
+  verification: null,
+};
 
 describe('heroResult', () => {
   it('reads the record, not the pot', () => {
@@ -34,6 +53,14 @@ describe('heroResult', () => {
     expect(heroResult(notMine, ME)).toBe('out');
     expect(heroResult(open, ME)).toBe('open');
     expect(heroResult(won, null)).toBe('out');
+  });
+  it('a hand the hero folded before showdown reads Lost, never "Not in"', () => {
+    expect(heroResult(folded, ME)).toBe('lost');
+    expect(heroResult(foldedByPlayers, ME)).toBe('lost');
+    expect(heroResult(folded, THEM)).toBe('won');
+    expect(heroResult(folded, 'cccc-nobody')).toBe('out');
+    expect(heroCards(folded, ME)).toBeNull();
+    expect(opponentCount(foldedByPlayers, ME)).toBe(1);
   });
 });
 
@@ -55,6 +82,7 @@ describe('applyFilter / filterCounts', () => {
   it('keeps every hand under "all" and what the record says under the rest', () => {
     expect(applyFilter(all, 'all', ME)).toHaveLength(4);
     expect(applyFilter(all, 'mine', ME).map((h) => h.handNumber)).toEqual([1, 2]);
+    expect(applyFilter([...all, folded], 'mine', ME).map((h) => h.handNumber)).toEqual([1, 2, 5]);
     expect(applyFilter(all, 'won', ME).map((h) => h.handNumber)).toEqual([1]);
     expect(applyFilter(all, 'showdown', ME).map((h) => h.handNumber)).toEqual([1, 2]);
   });

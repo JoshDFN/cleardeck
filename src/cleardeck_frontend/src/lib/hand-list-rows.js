@@ -10,6 +10,10 @@
  *     the pot and whether you won it, never "+0.72".
  *   - your cards when you folded. The table reveals hole cards only at a
  *     showdown, so a hand you folded shows two backs.
+ *
+ * "In the hand" is read from every list the record has (showdown, winners,
+ * the dealt-in players, the actions), so a hand you folded before showdown
+ * reads Lost, not "Not in" (hand-history-records.js participatedIn).
  */
 
 import { participatedIn, seatOfPrincipal } from './hand-history-records.js';

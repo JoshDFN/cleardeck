@@ -53,7 +53,13 @@ export function fromTableRecord(record, requestedNumber) {
     cards: opt(w.cards),
   }));
   const actions = (record.actions || []).map(normalizeAction);
+  // WHO PLAYED (FINDING 30): the table record's own two lists, when the
+  // canister recorded them (`opt`; null is "not recorded", not "nobody").
+  const dealtIn = (opt(record.dealt_in) || []).map((d) => ({ seat: Number(d.seat), principal: text(d.principal) }));
+  const participants = (opt(record.participants) || []).map((p) => ({ seat: Number(p.seat), principal: text(p.principal) }));
+  const players = seatPrincipals([...dealtIn, ...participants, ...showdown, ...winners]);
   const seats = new Set([
+    ...players.map((p) => p.seat),
     ...actions.map((a) => a.seat),
     ...showdown.map((p) => p.seat),
     ...winners.map((w) => w.seat),
@@ -67,6 +73,8 @@ export function fromTableRecord(record, requestedNumber) {
     actions,
     showdown,
     winners,
+    // Every (seat, principal) the record attributes to the hand, folds included.
+    players,
     seats: [...seats].sort((a, b) => a - b),
     potTotal: winners.reduce((sum, w) => sum + w.amount, 0),
     // The TABLE record carries no blind level of its own. Saying so is the
@@ -112,6 +120,8 @@ export function fromHistoryRecord(record) {
     actions,
     showdown: players.filter((p) => p.cards),
     winners,
+    // Every player the archive lists, folded or not (hole_cards is null for a fold).
+    players: seatPrincipals(players),
     seats: players.map((p) => p.seat).sort((a, b) => a - b),
     potTotal: num(record.total_pot),
     // This record DOES carry the level that was in force for this hand.
@@ -184,10 +194,8 @@ export function seatCardChecks(report, hand) {
 
 /** The principal the hand record itself attributes to a seat, if any. */
 export function principalForSeat(hand, seat) {
-  const shown = (hand?.showdown || []).find((p) => p.seat === seat);
-  if (shown?.principal) return shown.principal;
-  const won = (hand?.winners || []).find((w) => w.seat === seat);
-  return won?.principal ?? null;
+  const hit = playersOf(hand).find((p) => p.seat === seat);
+  return hit ? hit.principal : null;
 }
 
 /**
@@ -203,21 +211,46 @@ export function seatNameFor(hand, seat, tableFacts) {
   return live.name || null;
 }
 
-/** Whether this principal showed down or won in the hand. */
+/** One entry per (seat, principal), in first-seen order, nameless entries dropped. */
+function seatPrincipals(list) {
+  const seen = new Set();
+  const out = [];
+  for (const p of list) {
+    if (!p || p.principal === null || p.principal === undefined) continue;
+    const key = `${Number(p.seat)}:${p.principal}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ seat: Number(p.seat), principal: p.principal });
+  }
+  return out;
+}
+
+/**
+ * Every (seat, principal) the record attributes to the hand: the showdown,
+ * the winners, the dealt-in / participant lists, and the ACTIONS (the
+ * archive's action records name who acted). A hand the hero folded before
+ * showdown is in none of the first two, and read as "Not in" until the
+ * other lists were consulted.
+ */
+export function playersOf(hand) {
+  return seatPrincipals([
+    ...(hand?.showdown || []),
+    ...(hand?.winners || []),
+    ...(hand?.players || []),
+    ...(hand?.actions || []),
+  ]);
+}
+
+/** Whether this principal was in the hand: showed down, won, was dealt in, or acted. */
 export function participatedIn(hand, principal) {
-  return !!principal && (
-    (hand?.showdown || []).some((p) => p.principal === principal)
-    || (hand?.winners || []).some((w) => w.principal === principal)
-  );
+  return !!principal && playersOf(hand).some((p) => p.principal === principal);
 }
 
 /** The seat the record attributes to a principal, or null. */
 export function seatOfPrincipal(hand, principal) {
   if (!principal) return null;
-  const shown = (hand?.showdown || []).find((p) => p.principal === principal);
-  if (shown) return shown.seat;
-  const won = (hand?.winners || []).find((w) => w.principal === principal);
-  return won ? won.seat : null;
+  const hit = playersOf(hand).find((p) => p.principal === principal);
+  return hit ? hit.seat : null;
 }
 
 /** A hand-rank variant as words ("Full House"). */
