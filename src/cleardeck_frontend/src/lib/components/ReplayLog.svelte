@@ -17,7 +17,14 @@
     audit = null,
     blinds = null,
     streetsRecorded = true,
+    /** The line the current stop plays (lit). */
     activeLine = null,
+    /** The last line played at or before the current stop: everything up to it is `.played`. */
+    playedThrough = null,
+    /** The street the current stop belongs to: its header is lit on a reveal stop. */
+    activeStreet = null,
+    /** True at the paid stop: the audit line lights, so the sync is visible at the end. */
+    auditLit = false,
     actorLabel = (seat) => `Seat ${seat + 1}`,
     money = (v) => String(v),
     clock = () => '·',
@@ -48,7 +55,7 @@
   {#if logGroups.length}
     <div class="log">
       {#each logGroups as group}
-        <div class="log-street">
+        <div class="log-street" class:active={activeStreet === group.street}>
           <span class="street-name">{group.street}</span>
           {#if group.boardAfter !== null && group.boardAfter > 0}
             <span class="street-board">board of <span class="tally">{group.boardAfter}</span></span>
@@ -60,7 +67,7 @@
             class="log-line kind-{String(line.kind).toLowerCase()}"
             class:reconstructed={line.reconstructed}
             class:active
-            class:played={activeLine !== null && line.index < activeLine}
+            class:played={!active && playedThrough !== null && line.index <= playedThrough}
             role="button"
             tabindex="0"
             onclick={() => onSeekLine(line.index)}
@@ -80,7 +87,7 @@
     </div>
 
     {#if audit?.checkable}
-      <p class="audit {audit.match ? 'good' : 'bad'}" data-audit={audit.match ? 'balanced' : 'unbalanced'}>
+      <p class="audit {audit.match ? 'good' : 'bad'}" class:lit={auditLit} data-audit={audit.match ? 'balanced' : 'unbalanced'}>
         {#if audit.match}
           ✓ The blinds and every amount above add up to the pot the table paid out:
           <strong class="replay-money">{money(audit.sum)}</strong>. Nothing is missing from this log.
@@ -193,6 +200,10 @@
 
   .audit.good { background: var(--cd-accent-dim); border: 1px solid var(--cd-accent-line); }
   .audit.good strong { color: var(--cd-accent); }
+  /* the paid stop: the sum lights the way a played line does */
+  .audit.lit { box-shadow: 0 0 0 2px var(--cd-accent-line-strong); }
+  .log-street.active .street-name { color: var(--cd-accent-hi); }
+  .log-street.active { border-bottom-color: var(--cd-accent-line); }
   .audit.bad { background: var(--cd-danger-dim); border: 1px solid var(--cd-danger-line); }
   .audit.bad strong { color: var(--cd-danger-hi); }
 

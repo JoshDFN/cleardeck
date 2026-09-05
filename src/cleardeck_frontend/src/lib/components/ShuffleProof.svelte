@@ -35,6 +35,7 @@
   import ProofLimits from './ProofLimits.svelte';
   import ProofRetention from './ProofRetention.svelte';
   import logger from '$lib/logger.js';
+  import { copiedState, copyStateTtlMs, copyText } from '$lib/copy-text.js';
   import { verifyHandLocally, toCandidCard } from '$lib/shuffle-verify.js';
   import { hashFingerprint } from '$lib/hash-seal.js';
   import { readSighting, verdictForSighting } from '$lib/commitment-witness.js';
@@ -314,15 +315,16 @@
     runVerification();
   });
 
+  let copiedTimer = null;
+
+  /** Copies, and says on the button whether it worked (lib/copy-text.js). */
   async function copyToClipboard(value, label) {
     if (!value) return;
-    try {
-      await navigator.clipboard.writeText(value);
-      copied = label;
-      setTimeout(() => { copied = null; }, 2000);
-    } catch (e) {
-      logger.error('Failed to copy:', e);
-    }
+    const result = await copyText(value);
+    if (!result.ok) logger.warn(`copy (${label}) failed: ${result.reason}`);
+    copied = copiedState(label, result.ok);
+    clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => { copied = null; }, copyStateTtlMs(copied));
   }
 
   function formatTimestamp(ns) {
@@ -566,7 +568,10 @@
 
   .header-left { display: flex; gap: var(--cd-space-3); align-items: center; min-width: 0; }
   .proof-header h3 { color: var(--cd-ink); margin: 0; font-size: var(--cd-text-lg); font-weight: var(--cd-weight-figure); }
-  .subtitle { color: var(--cd-ink-2); font-size: var(--cd-text-xs); }
+  /* A block, balanced: the inline span wrapped "not / by us" with a loose gap
+     at 360 px once the Hand pill had taken its share of the row. */
+  .subtitle { display: block; color: var(--cd-ink-2); font-size: var(--cd-text-xs); line-height: 1.35; text-wrap: balance; }
+  .header-left > div { min-width: 0; flex: 1; }
 
   .hand-number {
     color: var(--cd-ink-2);

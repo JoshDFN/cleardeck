@@ -10,6 +10,7 @@
   import TrustBar from "$lib/components/TrustBar.svelte";
   import Toast from "$lib/components/Toast.svelte";
   import { searchWithTable, tableIdFromSearch } from "$lib/invite-link.js";
+  import { handNumberFromSearch } from "$lib/hand-link.js";
   import DepositModal from "$lib/components/DepositModal.svelte";
   import WithdrawModal from "$lib/components/WithdrawModal.svelte";
   import { playSound, setSoundEnabled, isSoundEnabled } from "$lib/sounds.js";
@@ -126,6 +127,8 @@
   }
   let showProofPanel = $state(false);
   let showHandHistory = $state(false);
+  /** The hand a `?table=…&hand=N` link asked for; the history dialog opens on it. */
+  let historyOpenHand = $state(null);
   let showHowItWorks = $state(false);
   let showVerify = $state(false);
 
@@ -500,7 +503,15 @@
       return cid === wanted;
     });
     if (match) {
+      // The hand half of the link (lib/hand-link.js): the table opens, and the
+      // history dialog opens on that hand once the table's records have landed.
+      let hand = null;
+      try { hand = handNumberFromSearch(window.location.search); } catch { hand = null; }
       joinTable(match);
+      if (hand) {
+        historyOpenHand = hand;
+        showHandHistory = true;
+      }
     } else {
       showError('That invite link points to a table this lobby does not list. Pick one below instead.');
       rememberTableInUrl(null);
@@ -1207,7 +1218,7 @@
         {/if}
       </button>
       {#if view === 'table'}
-        <button class="history-btn" onclick={() => showHandHistory = true} aria-label="Hand history" title="Hand history">
+        <button class="history-btn" onclick={() => { historyOpenHand = null; showHandHistory = true; }} aria-label="Hand history" title="Hand history">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/>
             <polyline points="12,6 12,12 16,14"/>
@@ -1364,7 +1375,8 @@
     {tableActor}
     handNumber={tableState?.hand_number || 0}
     tableName={currentTableInfo?.name || 'ClearDeck table'}
-    onClose={() => { showHandHistory = false; }}
+    openHand={historyOpenHand}
+    onClose={() => { showHandHistory = false; historyOpenHand = null; }}
   />
 {/if}
 
@@ -2119,7 +2131,12 @@
 
     .proof-sidebar {
       position: fixed;
-      inset: 0;
+      /* UNDER the trust bar and the nav, not beneath them: with `inset: 0`
+         the panel's own header (Fairness Proof, the close control) and the
+         top of the verdict card sat behind the sticky chrome and the first
+         screen of the phone showed no way to close it. Both heights are
+         measured and published by `.app`. */
+      inset: calc(var(--notice-safe-top, 0px) + var(--header-h, 0px)) 0 0 0;
       width: 100%;
       /* Above `footer`, which E-52 raised from 10 to 95 so that the copy of the
          notices a desktop player reads after scrolling wins its own hit test.

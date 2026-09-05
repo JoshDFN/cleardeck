@@ -8,7 +8,11 @@
    * HARNESS CONTRACT (tools/shots/scenarios/handreplay.mjs):
    *   `.felt .board .card` + `.felt .deck-pos.good`   the board at each stop
    *   `.pot-panel .pot-total strong`                  the pot (paid, at the end)
-   *   `.pot-panel .winner-line .seat-label|.won-amt`  the awards
+   *   `.pot-panel .winner-line[data-award=pod|line] .seat-label|.won-amt`
+   *       the winners; the amount rides the line ONLY when no pod paints it
+   *   `.board-slot[data-deck-check=good|bad][data-deck-pos]`  the board's
+   *       re-derivation, readable with the captions off; `.deck-pos` captions
+   *       render only while `showPositions` is on
    *   `.player-row .seat-tag|.player-cards .card|.deck-pos|.player-rank|.player-result .won-amt`
    *   `.replay-money` on every amount; `.replay-equity[data-seat]` on an equity
    * Nothing money-shaped is painted that the scene does not assert: an
@@ -33,6 +37,8 @@
     seatChecks = [],
     equity = null,
     dealerSeat = null,
+    /** Paint the "#N ✓" deck-position captions (off by default; the title keeps them). */
+    showPositions = false,
   } = $props();
 
   const board = $derived((hand?.community || []).slice(0, stop?.board ?? 0).map((card, at) => ({
@@ -61,7 +67,7 @@
   <div class="felt">
     <div class="pot-panel" class:paid={stop?.paid}>
       <div class="pot-total">
-        <span class="pot-word">{stop?.paid ? 'Pot' : 'Pot'}</span>
+        <span class="pot-word">Pot</span>
         {#if stop?.pot !== null && stop?.pot !== undefined}
           <strong class="replay-money cd-money">{money(stop.pot)}</strong>
         {:else}
@@ -70,25 +76,43 @@
       </div>
       {#if stop?.paid}
         {#each hand.winners as winner}
-          <div class="winner-line">
-            <span class="seat-label">{label(winner.seat)}{#if who(winner.seat)} · {who(winner.seat)}{/if}</span>
-            <span class="won-amt replay-money">+{money(winner.amount)}</span>
+          <!-- ONE FIGURE IN ONE PLACE. A winner whose pod carries the award chip
+               is named here without the amount; the amount rides the line only
+               for a seat the pod cannot paint (a hand won without a showdown). -->
+          {@const onPod = (showdownBySeat.get(winner.seat)?.won || 0) > 0}
+          <div class="winner-line" data-award={onPod ? 'pod' : 'line'}>
+            <span class="seat-label">{label(winner.seat)}{#if who(winner.seat)}{' · '}{who(winner.seat)}{/if}</span>
+            {#if onPod}
+              <span class="won-word">wins</span>
+            {:else}
+              <span class="won-amt replay-money">+{money(winner.amount)}</span>
+            {/if}
             {#if winner.potType}<span class="pot-type">{winner.potType}</span>{/if}
           </div>
         {/each}
       {/if}
     </div>
 
-    <div class="board" class:bare={board.length === 0}>
+    <div class="board" class:bare={board.length === 0} class:captioned={showPositions}>
       {#each board as slot, at (at)}
-        <div class="board-slot">
+        <!-- The deck position is a hover title at rest and a caption only when
+             "Deck positions" is on; the verdict itself (good / bad) rides the
+             slot as data so the harness can read it in either state. -->
+        <div
+          class="board-slot"
+          data-deck-check={slot.check ? (slot.check.match ? 'good' : 'bad') : null}
+          data-deck-pos={slot.check ? slot.check.positions[0] : null}
+          title={slot.check ? `deck position #${slot.check.positions[0]}, re-derived in this browser: ${slot.check.match ? 'matches' : 'does NOT match'}` : null}
+        >
           <Card card={slot.card} index={at} />
-          {#if slot.check}
-            <span class="deck-pos mono" class:good={slot.check.match} class:bad={!slot.check.match} title="deck position, re-derived in this browser">
-              #{slot.check.positions[0]} {slot.check.match ? '✓' : '✗'}
-            </span>
-          {:else}
-            <span class="deck-pos mono">·</span>
+          {#if showPositions}
+            {#if slot.check}
+              <span class="deck-pos mono" class:good={slot.check.match} class:bad={!slot.check.match}>
+                #{slot.check.positions[0]} {slot.check.match ? '✓' : '✗'}
+              </span>
+            {:else}
+              <span class="deck-pos mono">·</span>
+            {/if}
           {/if}
         </div>
       {/each}
@@ -98,8 +122,10 @@
     </div>
 
     {#if equity}
+      <!-- The same caption the live table prints under its pods, so a reader
+           knows what the percentages on the pods are. -->
       <span class="replay-equity-method" title={equity.note}>
-        {equity.method === 'exact' ? 'exact' : 'Monte Carlo'} · {equity.trials.toLocaleString('en-US')} {equity.method === 'exact' ? (equity.trials === 1 ? 'runout' : 'runouts') : 'trials'}
+        Equity · {equity.method === 'exact' ? 'exact' : 'Monte Carlo'} · {equity.trials.toLocaleString('en-US')} {equity.method === 'exact' ? (equity.trials === 1 ? 'runout' : 'runouts') : 'trials'}
       </span>
     {/if}
   </div>
@@ -143,7 +169,7 @@
             {#if reveal && shown?.rank}
               <span class="player-rank">{rankName(shown.rank) || ''}</span>
               {#if check}
-                <span class="deck-pos mono" class:good={check.match} class:bad={!check.match} title="deck positions #{check.positions[0]} and #{check.positions[1]}, re-derived in this browser">{check.match ? '✓' : '✗'}</span>
+                <span class="deck-pos mono" class:good={check.match} class:bad={!check.match} title="deck positions #{check.positions[0]} and #{check.positions[1]}, re-derived in this browser">{#if showPositions}#{check.positions[0]} #{check.positions[1]} {/if}{check.match ? '✓' : '✗'}</span>
               {/if}
             {:else if folded}
               <span class="pod-state fold">Folded</span>
@@ -250,6 +276,7 @@
   .pot-total .pot-unknown { color: var(--cd-ink-2); }
   .winner-line { display: flex; gap: 0.5em; align-items: baseline; font-size: 0.85em; color: var(--cd-ink-1); }
   .winner-line .won-amt { color: var(--cd-accent); font-weight: var(--cd-weight-figure); }
+  .winner-line .won-word { color: var(--cd-money); font-weight: var(--cd-weight-strong); }
   .pot-type { color: var(--cd-ink-2); font-size: 0.85em; }
 
   /* ---- the board ------------------------------------------------------ */
@@ -257,9 +284,11 @@
     --card-w: var(--board-card);
     display: flex;
     gap: calc(var(--board-card) * 0.12);
-    min-height: calc(var(--board-card) / 0.81 + 1.4em);
+    min-height: calc(var(--board-card) / 0.81);
     align-items: flex-start;
   }
+
+  .board.captioned { min-height: calc(var(--board-card) / 0.81 + 1.4em); }
 
   .board.bare { align-items: center; justify-content: center; }
   .board-slot { display: flex; flex-direction: column; align-items: center; gap: 2px; }

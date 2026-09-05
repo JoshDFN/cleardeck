@@ -12,6 +12,7 @@ import tableWaiting from './table-waiting.mjs';
 import tableAllin from './table-allin.mjs';
 import tableShowdown from './table-showdown.mjs';
 import tableSidepots from './table-sidepots.mjs';
+import tableLog from './table-log.mjs';
 import deposit from './deposit.mjs';
 import handhistory from './handhistory.mjs';
 import handreplay from './handreplay.mjs';
@@ -28,6 +29,7 @@ export const SCENES = [
   tableAllin,
   tableShowdown,
   tableSidepots,
+  tableLog,
   deposit,
   handhistory,
   handreplay,

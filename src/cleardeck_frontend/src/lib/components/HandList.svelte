@@ -1,20 +1,26 @@
 <script>
   /**
    * The hand list: one glance per hand. Result, your two cards, the board, the
-   * pot, who else was in, when, and the verdict seal; filters as chips with
-   * counts, so nothing is hidden silently.
+   * pot, who else was in, when, the hand's stable id with Copy, and the verdict
+   * seal; filters as chips with counts, so nothing is hidden silently.
    *
    * HARNESS CONTRACT (handhistory.mjs, handreplay.mjs, chain-agreement.mjs
    * assertHandHistoryAgreement): `.hand-row` per hand, newest first, each with
-   * `.hand-number` reading "Hand #N" and `.pot` carrying the hand's pot;
-   * `.list-head .chip` with the text "Every hand here"; `.live-note` while a
-   * hand is in play; `.gap-note` for missing numbers; `.list-foot`.
+   * `.hand-number` reading "Hand #N", `.hand-id` ("table_1#N"), `.copy-id`
+   * (copies "<id> <link>") and `.pot` carrying the hand's pot; `.list-head
+   * .chip` with the text "Every hand here"; `.live-note` while a hand is in
+   * play; `.gap-note` for missing numbers; `.list-foot`.
+   *
+   * The column heads and the rows share ONE grid template in rem: the heads
+   * are text-xs and the rows are body size, so an em template put the heads
+   * over the wrong columns (round 1's drifted heads).
    */
   import MiniCard from './MiniCard.svelte';
   import HashSeal from './HashSeal.svelte';
   import { FILTERS, RESULT_WORD, applyFilter, filterCounts, heroCards, heroResult, opponentCount, verdictOf } from '$lib/hand-list-rows.js';
   import { participatedIn } from '$lib/hand-history-records.js';
   import { reachedStreet } from '$lib/hand-record.js';
+  import { copyWord } from '$lib/copy-text.js';
 
   let {
     allHands = [],
@@ -26,6 +32,13 @@
     money = (v) => String(v),
     formatTimestamp = () => '',
     formatLocalClock = () => '',
+    /** "table_1#N" for a hand number, or null when the table has no name. */
+    handIdOf = () => null,
+    /** The deep link for a hand number, or null. */
+    handLinkOf = () => null,
+    /** The copy state (lib/copy-text.js copiedState) the parent holds. */
+    copied = null,
+    onCopy = () => {},
     onOpen = () => {},
   } = $props();
 
@@ -34,6 +47,18 @@
   const rederivedCount = $derived(hands.filter((h) => h.verification?.ok).length);
 
   const BOARD_SLOTS = [0, 1, 2, 3, 4];
+
+  const copyLabel = (hand) => `link-${hand.handNumber}`;
+
+  function copyId(e, hand) {
+    e.stopPropagation();
+    const parts = [handIdOf(hand.handNumber), handLinkOf(hand.handNumber)].filter(Boolean);
+    onCopy(parts.join(' '), copyLabel(hand));
+  }
+
+  function rowKey(e, hand) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(hand); }
+  }
 </script>
 
 <div class="list-head">
@@ -83,10 +108,20 @@
       {@const result = heroResult(hand, myPrincipal)}
       {@const mine = heroCards(hand, myPrincipal)}
       {@const others = opponentCount(hand, myPrincipal)}
-      <button class="hand-row" class:dim={!participatedIn(hand, myPrincipal)} onclick={() => onOpen(hand)}>
+      {@const id = handIdOf(hand.handNumber)}
+      <!-- A div with the button role, not a <button>: the Copy control inside
+           it is a button of its own, and buttons do not nest. -->
+      <div
+        class="hand-row"
+        class:dim={!participatedIn(hand, myPrincipal)}
+        role="button"
+        tabindex="0"
+        onclick={() => onOpen(hand)}
+        onkeydown={(e) => rowKey(e, hand)}
+      >
         <span class="row-result {result}">
           <span class="result-word">{RESULT_WORD[result]}</span>
-          <span class="result-street">to the {reachedStreet(hand.community.length)}{#if hand.showdown.length}<span class="sep">{'\u00a0·\u00a0'}</span>showdown{/if}</span>
+          <span class="result-street">to the {reachedStreet(hand.community.length)}{#if hand.showdown.length}<span class="sep">{' · '}</span>showdown{/if}</span>
         </span>
         <span class="row-cards" aria-label="your cards">
           {#if mine}
@@ -109,14 +144,29 @@
           <span class="seats">vs {others}</span>
         </span>
         <span class="row-main">
-          <span class="hand-number">Hand #{hand.handNumber}</span>
+          <span class="hand-line">
+            <span class="hand-number">Hand #{hand.handNumber}</span>
+            {#if id}
+              <span class="hand-id mono" title="This hand's id on this table">{id}</span>
+              <button
+                type="button"
+                class="copy-id"
+                class:failed={copied === `failed:${copyLabel(hand)}`}
+                onclick={(e) => copyId(e, hand)}
+                title="Copy the id and a link that opens this hand's replay"
+                aria-label="Copy the id and link for hand {hand.handNumber}"
+              >
+                {copyWord(copied, copyLabel(hand), 'Copy', 'Copied')}
+              </button>
+            {/if}
+          </span>
           <span class="hand-time">{formatTimestamp(hand.timestamp)}</span>
         </span>
         <span class="row-verdict {verdict.tone}" title={verdict.label}>
           <HashSeal hash={hand.proof.seedHash} size={22} tone={verdict.tone === 'good' ? 'accent' : 'muted'} />
           <span class="verdict-mark">{verdict.tone === 'good' ? '✓' : verdict.tone === 'bad' ? '✗' : '◌'}</span>
         </span>
-      </button>
+      </div>
     {/each}
   </div>
   <div class="list-foot">
@@ -169,18 +219,27 @@
 
   .state-block p { margin: 0; max-width: 46ch; }
 
-  .hands-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--cd-space-2) var(--cd-space-2); }
+  .hands-list {
+    /* ONE template for the heads and every row, in rem, so the tracks are the
+       same whatever font size each of them sets. */
+    --hand-cols: 8.75rem 3.6rem minmax(0, 1fr) 6.5rem 10.5rem 3rem;
+    --hand-gap: var(--cd-space-3);
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 var(--cd-space-2) var(--cd-space-2);
+  }
 
-  /* the same grid for the column heads and every row */
   .list-cols, .hand-row {
     display: grid;
-    grid-template-columns: 8.5em 3.6em minmax(0, 1fr) 6.5em 8em 3em;
-    gap: var(--cd-space-3);
+    grid-template-columns: var(--hand-cols);
+    gap: var(--hand-gap);
     align-items: center;
   }
 
   .list-cols {
-    padding: 0 var(--cd-space-3) var(--cd-space-1);
+    /* the row has a 1px border the heads do not; the padding absorbs it */
+    padding: 0 calc(var(--cd-space-3) + 1px) var(--cd-space-1);
     font-size: var(--cd-text-xs);
     text-transform: uppercase;
     letter-spacing: var(--cd-tracking-label);
@@ -191,6 +250,7 @@
 
   .hand-row {
     width: 100%;
+    box-sizing: border-box;
     padding: var(--cd-space-2) var(--cd-space-3);
     background: var(--cd-surface-1);
     border: 1px solid var(--cd-line-soft);
@@ -204,6 +264,7 @@
   }
 
   .hand-row:hover { background: var(--cd-surface-2); border-color: var(--cd-line); }
+  .hand-row:focus-visible { outline: 2px solid var(--cd-accent-line-strong); outline-offset: -2px; }
   .hand-row.dim { opacity: 0.6; }
 
   .row-result { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
@@ -221,9 +282,38 @@
   .pot { color: var(--cd-money); font-size: var(--cd-text-figure); line-height: 1.1; white-space: nowrap; }
   .seats { font-size: var(--cd-text-xs); color: var(--cd-ink-2); }
 
-  .row-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .hand-number { font-weight: var(--cd-weight-strong); color: var(--cd-ink-1); font-size: var(--cd-text-sm); }
+  .row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .hand-line { display: flex; align-items: center; gap: var(--cd-space-1); min-width: 0; flex-wrap: wrap; }
+  .hand-number { font-weight: var(--cd-weight-strong); color: var(--cd-ink-1); font-size: var(--cd-text-sm); white-space: nowrap; }
   .hand-time { font-size: var(--cd-text-xs); color: var(--cd-ink-2); white-space: nowrap; }
+
+  .hand-id {
+    font-family: var(--cd-font-mono);
+    font-size: var(--cd-text-xs);
+    color: var(--cd-accent);
+    padding: 0 var(--cd-space-1);
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-accent-dim);
+    white-space: nowrap;
+    user-select: all;
+  }
+
+  .copy-id {
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-2);
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-strong);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background var(--cd-base) var(--cd-ease), color var(--cd-base) var(--cd-ease);
+  }
+
+  .copy-id:hover { background: var(--cd-surface-3); color: var(--cd-ink); }
+  .copy-id.failed { color: var(--cd-warn); border-color: var(--cd-warn-line); white-space: normal; text-align: left; }
 
   .row-verdict { display: flex; align-items: center; gap: var(--cd-space-1); justify-self: end; }
   .verdict-mark { font-size: var(--cd-text-sm); font-weight: var(--cd-weight-figure); color: var(--cd-ink-2); }
@@ -241,23 +331,26 @@
 
   @media (max-width: 640px), #{f.$phone} {
     .list-cols { display: none; }
+    /* THE PHONE ROW KEEPS THE BOARD: the hole pair at 28 px and the five
+       board glyphs at 18 px share one row (56 + 90 px and their gaps fit
+       390 px with room), so a board can be scanned on the phone as on desktop. */
     .hand-row {
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: auto minmax(0, 1fr);
       grid-template-areas:
         'result pot'
-        'cards cards'
+        'cards board'
         'main verdict';
       gap: var(--cd-space-2) var(--cd-space-3);
       padding: var(--cd-space-3);
       margin-bottom: var(--cd-space-2);
     }
     .row-result { grid-area: result; }
-    .row-pot { grid-area: pot; }
+    .row-pot { grid-area: pot; justify-self: end; }
     .row-cards { grid-area: cards; --mini-card-w: 28px; }
-    .row-board { display: none; }
-    .row-cards::after { content: ''; }
-    .row-main { grid-area: main; flex-direction: row; gap: var(--cd-space-2); align-items: baseline; }
-    .row-verdict { grid-area: verdict; }
-    .chip { min-height: var(--cd-touch-min); }
+    .row-board { grid-area: board; --mini-card-w: 18px; justify-self: start; align-self: center; gap: 2px; }
+    .row-main { grid-area: main; }
+    .hand-line { gap: var(--cd-space-2); }
+    .row-verdict { grid-area: verdict; justify-self: end; }
+    .chip, .copy-id { min-height: var(--cd-touch-min); }
   }
 </style>

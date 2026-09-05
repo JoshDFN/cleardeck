@@ -69,14 +69,22 @@
     --ui-r: 0.018;
   }
 
-  /* Heads-up and 3-handed: bigger cards and bigger type. */
+  /* Heads-up and 3-handed: bigger plates and bigger type. The opponent's
+     pair is NOT bigger: on the two-seat ring the top seat hangs its shown
+     pair straight into the band the winner readout uses (measured at
+     1440x900, fw 1027.8: pair y 241-348, readout y 308-362, 43.6% of
+     "Nakamoto wins 12.00 ICP" covered; tools/shots/probe-heads-up.mjs).
+     At 0.066 fw and 0.074 off the pair ends at y 309, the cluster 9 px
+     lower puts the readout at 317-371, and the board's foot (530) still
+     clears the hero's pair (536). */
   .poker-table-wrapper.ring-sparse {
     --pod-w-r: 0.262;
     --pod-h-r: 0.094;
     --avatar-r: 0.072;
-    --card-opp-r: 0.084;
+    --card-opp-r: 0.066;
     --off-opp-r: 0.064;
-    --off-shown-r: 0.099;
+    --off-shown-r: 0.074;
+    --cluster-dy-r: 0.021;
     --ui-r: 0.0225;
   }
 
@@ -222,6 +230,9 @@
       --card-opp-r: 0.104;
       --off-opp-r: 0.10;
       --off-shown-r: 0.124;
+      /* The landscape sparse rule above carries two classes and would beat
+         the one-class portrait offset; the portrait value is restated here. */
+      --cluster-dy-r: -0.066;
       --pod-w-hero-r: 0.62;
       --pod-h-hero-r: 0.18;
       --card-hero-r: 0.20;

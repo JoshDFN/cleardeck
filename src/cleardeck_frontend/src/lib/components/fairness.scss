@@ -123,6 +123,8 @@ $phone: '(max-aspect-ratio: 1/1), (max-height: 560px)';
   }
 
   .copy-btn:hover { background: var(--cd-surface-3); color: var(--cd-ink); }
+  /* the humane failure: the sentence on the button, amber, until it clears */
+  .copy-btn.failed { color: var(--cd-warn); border-color: var(--cd-warn-line); white-space: normal; text-align: left; }
 
   @media #{$phone} {
     .copy-btn { min-height: var(--cd-touch-min); }

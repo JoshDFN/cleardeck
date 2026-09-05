@@ -19,6 +19,7 @@
    */
   import HashSeal from './HashSeal.svelte';
   import { hashFingerprint } from '$lib/hash-seal.js';
+  import { copyWord } from '$lib/copy-text.js';
 
   let {
     hand,
@@ -173,16 +174,16 @@
              ordering the banner above declines to claim, in the same modal. -->
         <span class="proof-label">commitment in this hand's record</span>
         <code class="hash">{hand.proof.seedHash || 'n/a'}</code>
-        <button class="copy-btn" onclick={() => onCopy(hand.proof.seedHash, 'hash')}>
-          {copied === 'hash' ? 'Copied' : 'Copy'}
+        <button class="copy-btn" class:failed={copied === 'failed:hash'} onclick={() => onCopy(hand.proof.seedHash, 'hash')}>
+          {copyWord(copied, 'hash', 'Copy')}
         </button>
       </div>
       <div class="proof-line">
         <span class="proof-label">seed, published with the finished hand</span>
         {#if hand.proof.revealedSeed}
           <code class="hash revealed">{hand.proof.revealedSeed}</code>
-          <button class="copy-btn" onclick={() => onCopy(hand.proof.revealedSeed, 'seed')}>
-            {copied === 'seed' ? 'Copied' : 'Copy'}
+          <button class="copy-btn" class:failed={copied === 'failed:seed'} onclick={() => onCopy(hand.proof.revealedSeed, 'seed')}>
+            {copyWord(copied, 'seed', 'Copy')}
           </button>
         {:else}
           <code class="hash muted">not revealed</code>

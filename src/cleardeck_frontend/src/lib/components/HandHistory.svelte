@@ -39,8 +39,21 @@
     factsFrom, fromHistoryRecord, fromTableRecord, num, opt, seatCardChecks, text,
   } from '$lib/hand-history-records.js';
   import { readSighting, recordSighting, verdictForSighting } from '$lib/commitment-witness.js';
+  import { handIdFor, handLinkFor, searchWithHand } from '$lib/hand-link.js';
+  import { copiedState, copyStateTtlMs, copyText } from '$lib/copy-text.js';
 
-  const { tableId = null, onClose, tableActor = null, handNumber = 0, tableName = 'ClearDeck table' } = $props();
+  const {
+    tableId = null,
+    onClose,
+    tableActor = null,
+    handNumber = 0,
+    tableName = 'ClearDeck table',
+    /**
+     * A hand to open the replayer on as soon as the records land: the `hand`
+     * half of `?table=<canister>&hand=N` (lib/hand-link.js), or null.
+     */
+    openHand = null,
+  } = $props();
 
   const WINDOW = 20; // how many hand numbers back to ask the table for
 
@@ -58,6 +71,13 @@
   let tableFacts = $state(null);
   /** Bumped whenever a commitment sighting is written, so derived reads re-run. */
   let sightingEpoch = $state(0);
+  /** The list's copy-button state (lib/copy-text.js copiedState), one for the whole list. */
+  let copied = $state(null);
+  let copiedTimer = null;
+  /** The deep link is honoured once: a later reload must not yank the reader back. */
+  let openHandConsumed = false;
+  /** Said once, in the list, when the linked hand is not on this table. */
+  let linkNote = $state(null);
 
   $effect(() => auth.subscribe((s) => {
     myPrincipal = s.principal?.toString ? s.principal.toString() : s.principal;
@@ -137,6 +157,7 @@
         }
         // A hand still in play is not a hand the table lost the record for.
         missing = gaps.filter((n) => n !== inProgress);
+        honourDeepLink();
       } else if (tableId) {
         // Fallback: the separate history canister. It only holds hands for
         // tables authorised with `authorize_table`, which the local dev wiring
@@ -161,6 +182,69 @@
     }
     loading = false;
   }
+
+  /**
+   * `?hand=N`: open the replayer on that hand the first time the records land.
+   * A number the table has no record of leaves the list showing and says so;
+   * nothing is guessed at.
+   */
+  function honourDeepLink() {
+    if (openHandConsumed) return;
+    const wanted = Number(openHand);
+    if (!Number.isInteger(wanted) || wanted < 1) return;
+    openHandConsumed = true;
+    const hand = allHands.find((h) => h.handNumber === wanted);
+    if (hand) {
+      selected = hand;
+    } else if (wanted === inProgress) {
+      linkNote = `Hand #${wanted} is still being played; it will be here when it ends.`;
+    } else {
+      linkNote = `This link points at hand #${wanted}, which this table has no record of in its last ${WINDOW} hands.`;
+    }
+  }
+
+  // ---- the hand's name and its link -----------------------------------------
+  const canisterText = $derived(text(tableId) || null);
+  const handIdOf = (n) => handIdFor(tableName, n);
+  const handLinkOf = (n) => {
+    try {
+      return handLinkFor(window.location, canisterText, n);
+    } catch {
+      return null;
+    }
+  };
+
+  /** Copies, and says on the button whether it worked (lib/copy-text.js). */
+  async function copyToClipboard(value, label) {
+    if (!value) return;
+    const result = await copyText(value);
+    if (!result.ok) logger.warn(`copy (${label}) failed: ${result.reason}`);
+    copied = copiedState(label, result.ok);
+    clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => { copied = null; }, copyStateTtlMs(copied));
+  }
+
+  /**
+   * The open replay rides the URL as `&hand=N` (replaced, never pushed, like
+   * the table itself in +page.svelte), and leaves it when the list or the
+   * dialog closes, so the address bar is always a link to what is on screen.
+   */
+  function rememberHandInUrl(n) {
+    try {
+      const next = searchWithHand(window.location.search, n);
+      if (next !== window.location.search) {
+        window.history.replaceState(null, '', `${window.location.pathname}${next}`);
+      }
+    } catch (e) {
+      logger.debug('could not update the URL for the open hand', e);
+    }
+  }
+
+  $effect(() => {
+    rememberHandInUrl(selected ? selected.handNumber : null);
+  });
+
+  $effect(() => () => rememberHandInUrl(null));
 
   /** Writes down the commitment of a hand that has not revealed its seed yet. */
   function noteSighting(view) {
@@ -298,13 +382,18 @@
         <HandReplayer
           hand={selected} {tableFacts} {myPrincipal} {currency} {money} {figure}
           {sighting} {sightingVerdict} {tableName} {maxPlayers}
+          handId={handIdOf(selected.handNumber)} handLink={handLinkOf(selected.handNumber)}
           onBack={() => { selected = null; }}
         />
       {/key}
     {:else}
+      {#if linkNote}
+        <p class="link-note" role="status">{linkNote}</p>
+      {/if}
       <HandList
         {allHands} {myPrincipal} bind:filter {inProgress} {liveSighting} {missing}
-        {money} {formatTimestamp} {formatLocalClock}
+        {money} {formatTimestamp} {formatLocalClock} {handIdOf} {handLinkOf} {copied}
+        onCopy={copyToClipboard}
         onOpen={(hand) => { selected = hand; }}
       />
     {/if}
@@ -415,6 +504,18 @@
 
   .state-block.bad { color: var(--cd-danger-hi); }
   .state-block p { margin: 0; max-width: 46ch; }
+
+  .link-note {
+    margin: var(--cd-space-3) var(--cd-space-4) 0;
+    padding: var(--cd-space-2) var(--cd-space-3);
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-warn-dim);
+    border: 1px solid var(--cd-warn-line);
+    color: var(--cd-ink-1);
+    font-size: var(--cd-text-sm);
+    line-height: 1.5;
+    flex-shrink: 0;
+  }
 
   .spinner {
     width: 26px;

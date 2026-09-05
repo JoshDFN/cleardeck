@@ -9,6 +9,7 @@
    * canister's own seed_hash; the `.section-toggle` reading "Show the work".
    */
   import ProofWork from './ProofWork.svelte';
+  import { copyWord } from '$lib/copy-text.js';
 
   let {
     proof,
@@ -26,8 +27,8 @@
     <span class="label">SHA-256 commitment</span>
     <div class="hash-row">
       <code class="hash" title={proof.seed_hash}>{proof.seed_hash}</code>
-      <button class="copy-btn" onclick={() => onCopy(proof.seed_hash, 'hash')}>
-        {copied === 'hash' ? 'Copied' : 'Copy'}
+      <button class="copy-btn" class:failed={copied === 'failed:hash'} onclick={() => onCopy(proof.seed_hash, 'hash')}>
+        {copyWord(copied, 'hash', 'Copy')}
       </button>
     </div>
   </div>
@@ -37,8 +38,8 @@
       <span class="label">Revealed seed</span>
       <div class="hash-row">
         <code class="hash revealed" title={revealedSeed}>{revealedSeed}</code>
-        <button class="copy-btn" onclick={() => onCopy(revealedSeed, 'seed')}>
-          {copied === 'seed' ? 'Copied' : 'Copy'}
+        <button class="copy-btn" class:failed={copied === 'failed:seed'} onclick={() => onCopy(revealedSeed, 'seed')}>
+          {copyWord(copied, 'seed', 'Copy')}
         </button>
       </div>
     </div>

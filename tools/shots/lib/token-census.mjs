@@ -332,6 +332,18 @@ export const CHAIN_SITES = [
             + 'all four stated as fact',
     },
     {
+        id: 'action-feed-amount',
+        selector: '.action-feed .action-amount',
+        label: /^feed line \d+ amount vs/,
+        why: 'every amount in the live table\'s LOG drawer (ActionFeed.svelte): each blind '
+            + 'post, each action\'s amount and each "won" line. The `table-log` scene matches '
+            + 'every one of them to the table canister\'s own get_hand_history record for the '
+            + 'hand on screen (blinds to get_table_view().config, awards to winners), in '
+            + 'order; a line whose amount matches nothing fails the scene. The drawer is '
+            + 'closed on every other table scene, so before that scene these figures had '
+            + 'never been censused',
+    },
+    {
         id: 'history-row-pot',
         selector: '.hand-row .pot',
         label: /^history row \d+ pot vs/,

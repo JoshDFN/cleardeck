@@ -106,17 +106,18 @@ export const ALLOWLIST = [
     },
     {
         id: 'wall-clock-timestamp',
-        selector: '.hand-time, .timestamp, .rung-note, .proof-time, .published-at',
+        selector: '.hand-time, .timestamp, .rung-note, .proof-time, .published-at, .action-time',
         tokens: '^\\d{1,4}$',
         why: 'a date or clock time ("8/5/2026, 3:15:12 AM") saying when a hand was '
-            + 'played or a commitment published',
+            + 'played or a commitment published; `.action-time` is the HH:MM at the head '
+            + 'of every line in the live LOG drawer (ActionFeed.svelte)',
     },
 
     // ---- ordinals and counts ------------------------------------------------
     {
         id: 'seat-ordinal',
         selector: '.sit-seat, .join-seat, .seat-label, .position-badge, .empty-seat, '
-            + '.winner-display, .seated-name, .side-pot-label',
+            + '.winner-display, .seated-name, .side-pot-label, .winner-name',
         tokens: '^\\d{1,2}$',
         why: 'a seat or pot ordinal ("Seat 3", "Side 1"). Seat mapping is asserted '
             + "structurally in mappingChecks(); each side pot's AMOUNT is a figure",
@@ -142,7 +143,7 @@ export const ALLOWLIST = [
     {
         id: 'hands-dealt-count',
         selector: '.hands-value, .c-hands, .hand-number, .hand-counter, .hand-id, .live-note, '
-            + '.gap-note',
+            + '.gap-note, .feed-title',
         tokens: '^#?\\d{1,6}$',
         why: "the canister's hand_number — an ordinal, not an amount. The preview pane's "
             + 'copy of it IS compared with hand_number as a figure',

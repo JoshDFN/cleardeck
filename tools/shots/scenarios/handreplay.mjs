@@ -287,10 +287,25 @@ function scrapeReplayer(page) {
       auditMoney: [...document.querySelectorAll('.log-panel .audit .replay-money')].map(t),
       provenance: t(document.querySelector('.log-panel .provenance')),
       potTotal: t(document.querySelector('.pot-panel .pot-total strong')),
+      // `data-award` says where the figure is painted: on the winner's pod
+      // (`pod`, the line then names the seat without an amount) or on the line
+      // itself (`line`, a seat no pod can paint). Never both: one figure, one place.
       winners: [...document.querySelectorAll('.pot-panel .winner-line')].map((el) => ({
         seat: t(el.querySelector('.seat-label')),
         amount: t(el.querySelector('.won-amt')),
+        award: el.getAttribute('data-award'),
       })),
+      // the board's re-derivation, readable with the captions off
+      boardSlotChecks: [...document.querySelectorAll('.hand-history-modal .felt .board-slot')]
+        .map((el) => el.getAttribute('data-deck-check')),
+      boardCaptions: document.querySelectorAll('.hand-history-modal .felt .deck-pos').length,
+      positionsPressed: document.querySelector('.positions-toggle')?.getAttribute('aria-pressed') ?? null,
+      // the sync, at the end: a lit line and a lit audit
+      activeLines: [...document.querySelectorAll('.log-panel .log-line.active')].map((el) => t(el.querySelector('.log-index'))),
+      playedLines: document.querySelectorAll('.log-panel .log-line.played').length,
+      auditLit: !!document.querySelector('.log-panel .audit.lit'),
+      handId: t(document.querySelector('.replay-title .hand-id')),
+      copyLinkText: t(document.querySelector('.replay-title .copy-link')),
       // The seat pods on the mini table. A seat that folded is on the table but
       // not a showdown row, so it is not compared with `showdown_players`.
       players: [...document.querySelectorAll('.player-row:not(.folded)')].map((el) => ({
@@ -357,11 +372,30 @@ function sumOnTable(label, chainValue, texts) {
   };
 }
 
-/** Clicks every street stop and reads the board at each one. */
+/**
+ * The "Deck positions" toggle: the "#N ✓" captions under the board cards and
+ * on the pods are off by default (the hover title keeps them); the walk turns
+ * them on so the ticks can be counted, and off again so the published frame is
+ * the resting one.
+ */
+async function setPositions(page, on) {
+  const toggle = page.locator('.positions-toggle');
+  if (!(await toggle.count())) throw new Error('no .positions-toggle in the replayer');
+  const pressed = (await toggle.getAttribute('aria-pressed')) === 'true';
+  if (pressed !== on) {
+    await toggle.click();
+    await settle(page, { extraFrames: 1 });
+  }
+  return (await toggle.getAttribute('aria-pressed')) === 'true';
+}
+
+/** Clicks every street stop and reads the board at each one, captions on. */
 async function walkStreets(page) {
   const stops = page.locator('.scrubber .stop');
   const count = await stops.count();
   const walk = [];
+  const captionsOn = await setPositions(page, true);
+  if (!captionsOn) throw new Error('the Deck positions toggle did not turn on');
   for (let i = 0; i < count; i += 1) {
     await stops.nth(i).click();
     await settle(page, { extraFrames: 1 });
@@ -387,7 +421,34 @@ async function walkStreets(page) {
       table,
     });
   }
+  // the resting frame: captions off, the stop still on Showdown
+  await setPositions(page, false);
   return walk;
+}
+
+/**
+ * Captures what a Copy button hands the clipboard. The headless context has
+ * no clipboard permission, so `writeText` is replaced with a recorder; the
+ * app's own fallback route is never reached because the recorder resolves.
+ */
+async function armClipboardRecorder(page) {
+  await page.evaluate(() => {
+    window.__copied = null;
+    const rec = (text) => { window.__copied = String(text); return Promise.resolve(); };
+    try {
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText: rec }, configurable: true });
+    } catch {
+      navigator.clipboard.writeText = rec;
+    }
+  });
+}
+
+const readCopied = (page) => page.evaluate(() => window.__copied ?? null);
+
+/** The lobby name slugged the way lib/hand-link.js tableSlug does. */
+export function tableSlug(name) {
+  const slug = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return slug || 'table';
 }
 
 /**
@@ -617,6 +678,24 @@ export default {
     }
     if (chain.seedRevealed === null) problems.push('the chain has no revealed seed for this hand');
 
+    // ---- 1b. the hand's stable id and its link, copied ---------------------
+    // Done first: the button wears "Copied" for two seconds and the published
+    // frame is minutes away.
+    const expectedId = `${tableSlug(tableDisplayName(ctx, TABLE))}#${chain.handNumber}`;
+    checks.handId = dom.handId;
+    checks.handIdExpected = expectedId;
+    if (dom.handId !== expectedId) problems.push(`the replay title's id reads "${dom.handId}", expected "${expectedId}"`);
+    await armClipboardRecorder(page);
+    await page.locator('.replay-title .copy-link').click();
+    await settle(page, { extraFrames: 1 });
+    checks.copiedLink = await readCopied(page);
+    checks.copyLinkAfter = (await page.locator('.replay-title .copy-link').textContent())?.trim() ?? null;
+    const expectedLinkTail = `?table=${tableId}&hand=${chain.handNumber}`;
+    if (!checks.copiedLink || !checks.copiedLink.startsWith(`${expectedId} `) || !checks.copiedLink.endsWith(expectedLinkTail)) {
+      problems.push(`Copy link handed the clipboard ${JSON.stringify(checks.copiedLink)}, expected "${expectedId} <origin>/${expectedLinkTail}"`);
+    }
+    if (checks.copyLinkAfter !== 'Copied') problems.push(`after copying, the button reads "${checks.copyLinkAfter}", not "Copied"`);
+
     // ---- 2. the streets, and the board growing ----------------------------
     const walk = await walkStreets(page);
     checks.streetWalk = walk;
@@ -726,6 +805,29 @@ export default {
     // The walk ends on Showdown, which is the frame this scene publishes.
     dom = await scrapeReplayer(page);
 
+    // ---- 2c. the resting frame: captions off, verdicts still readable -----
+    checks.positionsPressed = dom.positionsPressed;
+    checks.boardCaptionsAtRest = dom.boardCaptions;
+    checks.boardSlotChecks = dom.boardSlotChecks;
+    if (dom.positionsPressed !== 'false') problems.push(`the Deck positions toggle reads aria-pressed="${dom.positionsPressed}" at rest, not "false"`);
+    if (dom.boardCaptions !== 0) problems.push(`${dom.boardCaptions} "#N" caption(s) painted under the board with the toggle off`);
+    if (dom.boardSlotChecks.length !== 5 || dom.boardSlotChecks.some((c) => c !== 'good')) {
+      problems.push(`at rest the board slots carry data-deck-check ${JSON.stringify(dom.boardSlotChecks)}, expected five "good"`);
+    }
+    // the equity caption names what the percentages are, as the live table does
+    checks.equityMethodText = dom.equityMethodText;
+    if (dom.equityMethodText && !/^Equity\b/i.test(dom.equityMethodText)) {
+      problems.push(`the equity caption reads "${dom.equityMethodText}" without the word Equity`);
+    }
+    // the sync, visible at the end: the last line stays lit and the audit lights
+    checks.activeLinesAtEnd = dom.activeLines;
+    checks.playedLinesAtEnd = dom.playedLines;
+    checks.auditLitAtEnd = dom.auditLit;
+    if (dom.activeLines.length !== 1) problems.push(`${dom.activeLines.length} log line(s) lit at the Showdown stop, expected exactly one (the last played)`);
+    else if (dom.activeLines[0] !== `#${dom.lines.length}`) problems.push(`the lit line at the Showdown stop is ${dom.activeLines[0]}, not the last (#${dom.lines.length})`);
+    if (dom.playedLines !== Math.max(0, dom.lines.length - 1)) problems.push(`${dom.playedLines} line(s) marked played at the end for ${dom.lines.length} lines`);
+    if (!dom.auditLit) problems.push('the audit line is not lit at the paid stop');
+
     // ---- 3. the action log, line by line ----------------------------------
     // Two blind lines first, then one line per ActionRecord, in order.
     const expectLines = [
@@ -818,11 +920,26 @@ export default {
     }
     for (let i = 0; i < Math.min(dom.winners.length, chain.winners.length); i += 1) {
       const w = chain.winners[i];
-      if (!String(dom.winners[i].seat || '').startsWith(`Seat ${w.seat + 1}`)) {
-        problems.push(`winner line ${i + 1} names "${dom.winners[i].seat}", not Seat ${w.seat + 1}`);
+      const line = dom.winners[i];
+      if (!String(line.seat || '').startsWith(`Seat ${w.seat + 1}`)) {
+        problems.push(`winner line ${i + 1} names "${line.seat}", not Seat ${w.seat + 1}`);
       }
-      figures.push(checkFigure(`replay winner ${i + 1} award vs winners[${i}].amount`,
-        w.amount, dom.winners[i].amount, { currency: 'ICP' }));
+      // ONE FIGURE IN ONE PLACE. The award is painted on the winner's pod when
+      // the pod can carry it, and on the line only when it cannot; whichever it
+      // is, exactly one of the two holds the figure and it is the chain's.
+      const pod = dom.players.find((p) => String(p.seat || '').startsWith(`Seat ${w.seat + 1}`)) || null;
+      const onPod = pod?.won ?? null;
+      if (line.award === 'pod') {
+        if (line.amount !== null) problems.push(`winner line ${i + 1} says the award is on the pod but paints "${line.amount}" too`);
+        if (onPod === null) problems.push(`winner line ${i + 1} says the award is on the pod, and the pod for Seat ${w.seat + 1} shows none`);
+        // the pod's figure is asserted against amount_won in the showdown loop below
+      } else if (line.award === 'line') {
+        if (onPod !== null) problems.push(`winner line ${i + 1} carries the award and the pod for Seat ${w.seat + 1} paints "${onPod}" as well`);
+        figures.push(checkFigure(`replay winner ${i + 1} award vs winners[${i}].amount`,
+          w.amount, line.amount, { currency: 'ICP' }));
+      } else {
+        problems.push(`winner line ${i + 1} carries data-award="${line.award}", expected "pod" or "line"`);
+      }
     }
 
     checks.players = dom.players;

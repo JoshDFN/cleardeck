@@ -6,6 +6,8 @@
    * Harness: `.method .method-name` carries the numbered method names, which
    * the token allowlist excuses as static claim copy.
    */
+  import { copyWord } from '$lib/copy-text.js';
+
   const { proof, revealedSeed, players = 2, copied = null, onCopy = () => {} } = $props();
 
   const nodeCmd = $derived(`node src/poker_core/tests/verify/verify_shuffle.mjs ${revealedSeed} --players ${players} --seed-hash ${proof.seed_hash}`);
@@ -23,7 +25,7 @@
     <span class="method-name">1. Check the commitment with any SHA-256 tool</span>
     <div class="command-row">
       <code class="command">{shaCmd}</code>
-      <button class="copy-btn" onclick={() => onCopy(shaCmd, 'cmd')}>{copied === 'cmd' ? '✓' : 'Copy'}</button>
+      <button class="copy-btn" class:failed={copied === 'failed:cmd'} onclick={() => onCopy(shaCmd, 'cmd')}>{copyWord(copied, 'cmd', 'Copy', '✓')}</button>
     </div>
     <a href="https://emn178.github.io/online-tools/sha256.html" target="_blank" rel="noopener">
       Online SHA-256 calculator
@@ -49,11 +51,11 @@
     </p>
     <div class="command-row">
       <code class="command">{nodeCmd}</code>
-      <button class="copy-btn" onclick={() => onCopy(nodeCmd, 'node')}>{copied === 'node' ? '✓' : 'Copy'}</button>
+      <button class="copy-btn" class:failed={copied === 'failed:node'} onclick={() => onCopy(nodeCmd, 'node')}>{copyWord(copied, 'node', 'Copy', '✓')}</button>
     </div>
     <div class="command-row">
       <code class="command">{pyCmd}</code>
-      <button class="copy-btn" onclick={() => onCopy(pyCmd, 'py')}>{copied === 'py' ? '✓' : 'Copy'}</button>
+      <button class="copy-btn" class:failed={copied === 'failed:py'} onclick={() => onCopy(pyCmd, 'py')}>{copyWord(copied, 'py', 'Copy', '✓')}</button>
     </div>
     <p class="method-lead">
       Or write your own from <code>docs/SHUFFLE-SPEC.md</code>. If it disagrees with this page,

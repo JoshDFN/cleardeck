@@ -1,7 +1,7 @@
 <script>
   import HashSeal from './HashSeal.svelte';
-  import { hashFingerprint, sameHash } from '$lib/hash-seal.js';
-  import { hexToBytes, sha256Hex } from '$lib/shuffle-verify.js';
+  import { hashFingerprint } from '$lib/hash-seal.js';
+  import { SEAL_HINT, SEAL_WORD, checkSeal, revealedSeedOf, sealKey, sealStateFor } from '$lib/deck-seal.js';
 
   const {
     actions = [],
@@ -23,7 +23,9 @@
      * code" ride the bottom of this drawer instead; null hides the row.
      */
     onHowItWorks = null,
-    onVerifyCode = null
+    onVerifyCode = null,
+    /** Closes the drawer from inside it (the dock's Log toggle also does). */
+    onClose = null
   } = $props();
 
   // Toggle to show previous hand
@@ -34,52 +36,32 @@
   const displayHandNumber = $derived(showPreviousHand ? previousHandNumber : handNumber);
 
   /**
-   * THE SEAL, phase by phase. `sealed` while the hand runs (the commitment is
-   * on screen, the seed is not); `revealed` once the seed is published;
-   * `checked` once THIS browser has hashed the revealed seed and found the
-   * commitment (WebCrypto SHA-256, lib/shuffle-verify.js, no canister asked);
-   * `mismatch` if it did not. The full verdict (the cards re-derived) is the
-   * fairness panel's; this chip is the moment made visible in the log.
+   * THE SEAL, phase by phase (lib/deck-seal.js, shared with the deck object on
+   * the felt so the two can never disagree): `sealed` while the hand runs,
+   * `revealed` once the seed is published, `checked` once THIS browser has
+   * hashed the revealed seed and found the commitment, `mismatch` if it did
+   * not. The full verdict (the cards re-derived) is the fairness panel's; this
+   * chip is the moment made visible in the log.
    */
-  let checkedFor = $state(null);   // `${hash}|${seed}` this browser has hashed
+  let checkedFor = $state(null);   // the sealKey this browser has hashed
   let checkResult = $state(null);  // true (match) | false (mismatch)
-  const revealedSeed = $derived((() => {
-    const v = shuffleProof?.revealed_seed;
-    const seed = Array.isArray(v) ? v[0] : v;
-    return typeof seed === 'string' && seed.length > 0 ? seed : null;
-  })());
-  const sealState = $derived.by(() => {
-    if (!shuffleProof?.seed_hash) return null;
-    if (!revealedSeed) return 'sealed';
-    if (checkedFor !== `${shuffleProof.seed_hash}|${revealedSeed}`) return 'revealed';
-    return checkResult ? 'checked' : 'mismatch';
-  });
-  const SEAL_WORD = { sealed: 'Sealed', revealed: 'Revealed', checked: 'Checked ✓', mismatch: 'Mismatch ✗' };
-  const SEAL_HINT = {
-    sealed: 'The deck was sealed before the first card: this commitment is the SHA-256 of the seed. Copy it now and compare it after the reveal.',
-    revealed: 'The seed is published; this browser is hashing it.',
-    checked: 'This browser hashed the revealed seed and it is the commitment that was on screen all hand. Open the proof for the cards.',
-    mismatch: 'The revealed seed does NOT hash to the commitment. Do not trust this table.',
-  };
+  const revealedSeed = $derived(revealedSeedOf(shuffleProof));
+  const sealState = $derived(sealStateFor({
+    seedHash: shuffleProof?.seed_hash || null, revealedSeed, checkedKey: checkedFor, checkResult,
+  }));
 
   $effect(() => {
     const hash = shuffleProof?.seed_hash;
     const seed = revealedSeed;
     if (!hash || !seed) return;
-    const key = `${hash}|${seed}`;
+    const key = sealKey(hash, seed);
     if (checkedFor === key) return;
     let cancelled = false;
-    (async () => {
-      try {
-        const computed = await sha256Hex(hexToBytes(seed));
-        if (cancelled) return;
-        checkResult = sameHash(computed, hash);
-      } catch {
-        if (cancelled) return;
-        checkResult = false;
-      }
+    checkSeal(hash, seed).then((ok) => {
+      if (cancelled) return;
+      checkResult = ok;
       checkedFor = key;
-    })();
+    });
     return () => { cancelled = true; };
   });
 
@@ -137,6 +119,11 @@
           title={showPreviousHand ? 'Show current hand' : 'Show previous hand'}
         >
           {showPreviousHand ? 'Current' : 'Prev'}
+        </button>
+      {/if}
+      {#if onClose}
+        <button type="button" class="feed-close" onclick={onClose} aria-label="Close the action log" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
       {/if}
     </div>
@@ -248,6 +235,27 @@
   }
 
   .toggle-btn:hover { background: var(--cd-surface-3); color: var(--cd-ink-1); }
+
+  .feed-close {
+    margin-left: auto;
+    width: var(--cd-control-sm);
+    height: var(--cd-control-sm);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--cd-surface-2);
+    border: 1px solid var(--cd-line);
+    border-radius: var(--cd-radius-chip);
+    color: var(--cd-ink-2);
+    cursor: pointer;
+    transition: background var(--cd-fast) var(--cd-ease), color var(--cd-fast) var(--cd-ease);
+  }
+
+  .feed-close:hover { background: var(--cd-surface-3); color: var(--cd-ink); }
+
+  @media (max-aspect-ratio: 1/1) {
+    .feed-close { width: var(--cd-touch-min); height: var(--cd-touch-min); }
+  }
   .toggle-btn.active { background: var(--cd-accent-dim); border-color: var(--cd-accent-line); color: var(--cd-accent); }
 
   .feed-subtitle { font-size: var(--cd-text-xs); color: var(--cd-ink-2); text-transform: uppercase; letter-spacing: var(--cd-tracking-label); }

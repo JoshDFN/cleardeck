@@ -21,6 +21,7 @@
    */
   import { untrack } from 'svelte';
   import ActionFeed from './ActionFeed.svelte';
+  import DeckSeal from './DeckSeal.svelte';
   import SeatPod from './SeatPod.svelte';
   import PotModule from './PotModule.svelte';
   import BoardStrip from './BoardStrip.svelte';
@@ -1484,6 +1485,9 @@
           </div>
         </div>
 
+        <!-- the deck, sealed: the commitment made visible on the table -->
+        <DeckSeal {shuffleProof} {onShowProof} />
+
         <!-- board + pot cluster, dead centre -->
         <div class="board-cluster">
           <PotModule
@@ -1641,7 +1645,13 @@
 
         <!-- action log: a drawer over the surround (PokerNow LOG / WPT HANDS) -->
         {#if logOpen}
-          <div class="feed-container left">
+          <!-- A DIALOG, in the ARIA sense: a panel the player opens over the
+               table and dismisses (the dock's Log toggle or its own Close).
+               It paints over whatever seat sits under it, which is the nature
+               of a drawer; the occlusion gate reports the figures behind an
+               open dialog as layering rather than as a defect (lib/occlusion.mjs),
+               and the `table-log` scene measures them on every run. -->
+          <div class="feed-container left" role="dialog" aria-label="Action log">
             <ActionFeed
               actions={actionFeed}
               previousActions={previousActionFeed}
@@ -1653,6 +1663,7 @@
               format={fmt}
               {onHowItWorks}
               {onVerifyCode}
+              onClose={() => { logOpen = false; }}
             />
           </div>
         {/if}
