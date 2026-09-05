@@ -20,13 +20,18 @@
    * Keyboard (desktop): F fold, C check or call, R raise at the sizer's
    * figure, A twice for all in, 1-5 (1-6 pre-flop) presets, + and - a big
    * blind, Esc cancels; never Enter or Space, which belong to whatever has
-   * focus. Inactive while any field has focus ($lib/hotkeys.js).
+   * focus. Inactive while any field has focus ($lib/hotkeys.js), and OFF
+   * until the player turns the shortcuts on in the wallet menu
+   * ($lib/hotkeys-pref.js): the legend under the row says where while
+   * they are off, and lists the keys once they are on.
    *
    * Every size in the style block is a token: the row's rhythm is the design
    * system's, not this file's.
    */
   import { PRESETS } from '$lib/bet-sizing.js';
   import { dialogIsOpen, focusKindOf, resolveHotkey } from '$lib/hotkeys.js';
+  import { HOTKEYS_OFF_HINT } from '$lib/hotkeys-pref.js';
+  import { hotkeysPref } from '$lib/hotkeys-pref.svelte.js';
   import PreActions from './PreActions.svelte';
 
   const {
@@ -103,6 +108,9 @@
   function onKey(event) {
     if (typeof document === 'undefined') return;
     const decision = resolveHotkey(event.key, {
+      // The opt-in preference, read live: off by default, flipped in the
+      // wallet menu, in force on the next key press.
+      enabled: hotkeysPref.enabled,
       live,
       modifier: event.metaKey || event.ctrlKey || event.altKey,
       // The DOCK is the whole `.action-dock` (Log, Sound, the deck seal, Sit
@@ -253,12 +261,21 @@
   </div>
 
   {#if keyHints && live}
-    <div class="key-hints" aria-hidden="true">
-      <span><kbd>F</kbd> fold</span>
-      <span><kbd>C</kbd> {canCheck ? 'check' : 'call'}</span>
-      {#if canRaise}<span><kbd>R</kbd> raise</span><span><kbd>1</kbd>-<kbd>{presets.length}</kbd> sizes</span><span><kbd>+</kbd><kbd>-</kbd> blind</span>{/if}
-      <span><kbd>A</kbd><kbd>A</kbd> all in</span>
-    </div>
+    {#if hotkeysPref.enabled}
+      <div class="key-hints" aria-hidden="true">
+        <span><kbd>F</kbd> fold</span>
+        <span><kbd>C</kbd> {canCheck ? 'check' : 'call'}</span>
+        {#if canRaise}<span><kbd>R</kbd> raise</span><span><kbd>1</kbd>-<kbd>{presets.length}</kbd> sizes</span><span><kbd>+</kbd><kbd>-</kbd> blind</span>{/if}
+        <span><kbd>A</kbd><kbd>A</kbd> all in</span>
+      </div>
+    {:else}
+      <!-- The discovery surface while the shortcuts are off: the same line,
+           saying where the switch is. No digits (the token census reads
+           .key-hints for single key caps only). -->
+      <div class="key-hints off" aria-hidden="true">
+        <span>{HOTKEYS_OFF_HINT}</span>
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -447,6 +464,11 @@
     font-size: var(--cd-text-xs);
     color: var(--cd-ink-2);
     white-space: nowrap;
+  }
+
+  .key-hints.off {
+    color: var(--cd-ink-2);
+    opacity: 0.8;
   }
 
   kbd {

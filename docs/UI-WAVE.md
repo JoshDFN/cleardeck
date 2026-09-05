@@ -596,3 +596,19 @@ The post-wave review (2026-09-05) found the items below; each is fixed on
   `app.html` beside the manifest link. A standalone install needs a
   redirect-based sign-in flow first (the II `derivationOrigin` work in
   section 6, item 3).
+- **Hotkeys are opt-in, off by default.** `ActionBar.svelte`'s window
+  keydown shipped always-on, so with body focus a stray F, C, R or 1-6 folded,
+  called or committed a raise. The preference is `lib/hotkeys-pref.js`
+  (`poker_hotkeys_enabled`, only the literal `true` enables; a missing key, a
+  stale value or a storage that throws all mean off), held live in
+  `lib/hotkeys-pref.svelte.js` so the wallet-menu toggle (beside the your-turn
+  alert, under Table alerts) is in force on the next key press, and read as
+  the FIRST guard in `resolveHotkey` (`enabled !== true` is null before
+  anything else is looked at). The key-hints legend under the action row is
+  the discovery surface: while the shortcuts are off it reads "Keyboard
+  shortcuts off. Turn on in the wallet menu, under Table alerts." (no digit,
+  so the token census's `.key-hints` rule is untouched); on, it lists the
+  keys as before. The harness's `table-facing-bet` hotkey probe turns the
+  preference on through the same localStorage key (plus a `storage` event
+  the rune listens for) before its one arming press and off again before the
+  still, so the photographed legend is the default state.

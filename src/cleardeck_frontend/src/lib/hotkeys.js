@@ -4,6 +4,8 @@
  *
  * THE RULE THAT MATTERS: a key must never send a real-money action the player
  * did not choose. So:
+ *  - Nothing fires unless the player turned the shortcuts ON ($lib/hotkeys-pref.js,
+ *    off by default: a stray F with nothing focused folded a live hand).
  *  - Enter and Space are never shortcuts. They are the browser's own activation
  *    keys for whatever has focus, and intercepting them turned "Enter on the
  *    Fold button" into a raise (code review, 2026-09-04).
@@ -54,6 +56,7 @@ export function dialogIsOpen(doc) {
 
 /**
  * @typedef {object} HotkeyContext
+ * @property {boolean} enabled       the player's opt-in preference (hotkeys-pref.js); anything else is off
  * @property {boolean} live          the hero is on the clock and nothing is sent
  * @property {boolean} modifier      meta, ctrl or alt is held
  * @property {FocusKind} focusKind
@@ -83,7 +86,8 @@ export function dialogIsOpen(doc) {
  * @returns {HotkeyDecision|null}
  */
 export function resolveHotkey(key, ctx) {
-  if (!ctx || !ctx.live || ctx.modifier) return null;
+  if (!ctx || ctx.enabled !== true) return null;
+  if (!ctx.live || ctx.modifier) return null;
   if (ctx.dialogOpen) return null;
   if (ctx.focusKind === 'field' || ctx.focusKind === 'button') return null;
   if (key === 'Enter' || key === ' ' || key === 'Spacebar') return null;

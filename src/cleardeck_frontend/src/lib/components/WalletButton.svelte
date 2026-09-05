@@ -7,6 +7,7 @@
   import { isMainnet, IC_HOST } from '../ic-config.js';
   import logger from '$lib/logger.js';
   import { readTurnAlertPref, writeTurnAlertPref } from '$lib/turn-alert.js';
+  import { hotkeysPref } from '$lib/hotkeys-pref.svelte.js';
   import { playSound } from '$lib/sounds.js';
 
   // Props
@@ -694,6 +695,13 @@
             <label class="pref-row">
               <input type="checkbox" checked={turnAlert} onchange={toggleTurnAlert} />
               <span>Your-turn alert: a chime, a vibration on touch, and the tab title</span>
+            </label>
+            <!-- OFF BY DEFAULT ($lib/hotkeys-pref.js): the keys send real
+                 money, so the player opts in. The legend under the action
+                 row points here while they are off. -->
+            <label class="pref-row">
+              <input type="checkbox" checked={hotkeysPref.enabled} onchange={() => hotkeysPref.toggle()} />
+              <span>Keyboard shortcuts at the table: F fold, C check or call, R raise, A twice for all in, the number keys for sizes</span>
             </label>
           </div>
 

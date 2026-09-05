@@ -3,12 +3,24 @@ import { PRESETS } from './bet-sizing.js';
 import { dialogIsOpen, focusKindOf, resolveHotkey } from './hotkeys.js';
 
 const base = Object.freeze({
-  live: true, modifier: false, focusKind: 'none', dialogOpen: false,
+  enabled: true, live: true, modifier: false, focusKind: 'none', dialogOpen: false,
   canCheck: false, canRaise: true, raiseDisabled: false, allInArmed: false,
   compact: false, sizerOpen: false, presets: PRESETS,
 });
 
 describe('resolveHotkey: the keys that must never send money', () => {
+  it('nothing fires unless the preference is exactly on (off by default)', () => {
+    const { enabled, ...noPref } = base;
+    void enabled;
+    for (const key of ['f', 'c', 'r', 'a', '4', '+', '-', 'Escape']) {
+      expect(resolveHotkey(key, noPref)).toBeNull();
+      expect(resolveHotkey(key, { ...base, enabled: false })).toBeNull();
+      expect(resolveHotkey(key, { ...base, enabled: 'true' })).toBeNull();
+      expect(resolveHotkey(key, { ...base, enabled: 1 })).toBeNull();
+    }
+    expect(resolveHotkey('f', { ...base, enabled: true })).toEqual({ type: 'action', action: 'fold' });
+  });
+
   it('Enter and Space are never shortcuts, whatever has focus', () => {
     for (const focusKind of ['none', 'field', 'dock-button', 'button']) {
       expect(resolveHotkey('Enter', { ...base, focusKind })).toBeNull();

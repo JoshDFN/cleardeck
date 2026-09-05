@@ -13,7 +13,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { dialogIsOpen, focusKindOf, resolveHotkey } from './hotkeys.js';
 
 const base = {
-  live: true, modifier: false, canCheck: false, canRaise: true, raiseDisabled: false,
+  enabled: true, live: true, modifier: false, canCheck: false, canRaise: true, raiseDisabled: false,
   allInArmed: false, compact: false, sizerOpen: false, presets: [{ id: 'pot', key: '4' }],
 };
 
@@ -54,6 +54,11 @@ describe('hotkeys with the action log open', () => {
     expect(resolveHotkey('4', ctx)).toEqual({ type: 'preset', id: 'pot' });
     expect(resolveHotkey('+', ctx)).toEqual({ type: 'step', delta: 1 });
     expect(resolveHotkey('Escape', ctx)).toEqual({ type: 'escape' });
+  });
+
+  it('with the preference off, the open log changes nothing: still muted', () => {
+    expect(resolveHotkey('f', { ...contextFrom(document), enabled: false })).toBeNull();
+    expect(resolveHotkey('a', { ...contextFrom(document), enabled: false })).toBeNull();
   });
 
   it('a real modal still mutes everything', () => {

@@ -32,6 +32,14 @@ import {
 import { doAct, phaseOf, playUntil, startHand, view } from '../lib/table-driver.mjs';
 import { prepareTable, tableDisplayName } from './_shared.mjs';
 
+/** Flip the opt-in shortcuts preference the way the wallet menu does. */
+async function setHotkeysPref(page, enabled) {
+  await page.evaluate((on) => {
+    localStorage.setItem('poker_hotkeys_enabled', on ? 'true' : 'false');
+    window.dispatchEvent(new StorageEvent('storage', { key: 'poker_hotkeys_enabled', newValue: on ? 'true' : 'false' }));
+  }, enabled);
+}
+
 /**
  * THE HOTKEYS WITH THE ACTION LOG OPEN. Round 2 of the fairness wave made the
  * LOG drawer an ARIA dialog and $lib/hotkeys.js muted every key while it was
@@ -42,6 +50,12 @@ import { prepareTable, tableDisplayName } from './_shared.mjs';
  * again before the still. Real money is on the clock, so exactly one press.
  */
 async function hotkeysWithLogOpen(page) {
+  // THE SHORTCUTS ARE OPT-IN ($lib/hotkeys-pref.js, off by default): the
+  // probe turns them on through the same localStorage key the wallet menu
+  // writes, and tells the page (a `storage` event is what the shared rune
+  // listens for), then turns them off again after the still is safe from a
+  // stray key. The legend under the row is photographed in its OFF state.
+  await setHotkeysPref(page, true);
   const toggle = page.locator('.action-dock .log-toggle').first();
   await toggle.click();
   await page.waitForSelector('[data-surface="log"] .action-feed', { timeout: 8_000 });
@@ -59,6 +73,7 @@ async function hotkeysWithLogOpen(page) {
   const armedAfterEscape = await page.locator('.action-btn.danger.armed').count();
   await toggle.click();
   await page.waitForSelector('[data-surface="log"]', { state: 'detached', timeout: 8_000 });
+  await setHotkeysPref(page, false);
   await settle(page);
   const ok = surface.role !== 'dialog' && surface.modal !== 'true' && armedBefore === 0 && armed === 1 && armedAfterEscape === 0;
   return {
