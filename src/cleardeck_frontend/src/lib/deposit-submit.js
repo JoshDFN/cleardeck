@@ -8,6 +8,7 @@
 // A thrown error propagates, as it did, to the sheet's catch.
 
 import { depositSteps } from './cashier-steps.js';
+import { logger } from './logger.js';
 import { depositViaOisy, depositViaWallet } from './deposit-flow.js';
 import { oisyReceipt, walletReceipt } from './deposit-receipts.js';
 
@@ -82,7 +83,7 @@ export async function submitDeposit({
         }),
       };
     } catch (oisyError) {
-      console.error('OISY deposit failed:', oisyError);
+      logger.error('OISY deposit failed:', oisyError);
       flow.fail();
       // A throw, not an Err: the transfer or the claim may have landed.
       return { ok: false, failure: oisyError, thrown: true };

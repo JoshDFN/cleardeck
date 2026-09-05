@@ -14,6 +14,7 @@
 import { Principal } from '@dfinity/principal';
 import { depositSubaccount } from './depositAddress.js';
 import { approveSpender } from './deposit-icrc2.js';
+import { logger } from './logger.js';
 
 const toHex = (bytes) => Array.from(bytes ?? [], (b) => b.toString(16).padStart(2, '0')).join('');
 
@@ -62,7 +63,7 @@ export async function depositViaOisy({
       };
     }
   } catch (checkError) {
-    console.error('could not cross-check the deposit subaccount:', checkError);
+    logger.error('could not cross-check the deposit subaccount:', checkError);
   }
 
   // Step 2: Transfer from OISY wallet directly to the canister's deposit subaccount

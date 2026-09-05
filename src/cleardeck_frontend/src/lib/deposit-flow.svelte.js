@@ -11,6 +11,7 @@
 
 import { FLOW } from './cashier-steps.js';
 import { DETECT, DETECT_POLL_MS, classifyDetected, shouldAutoClaim } from './deposit-detect.js';
+import { logger } from './logger.js';
 
 const idle = () => ({ phase: FLOW.IDLE, steps: [], current: 0, startedAt: null });
 
@@ -111,7 +112,7 @@ export function createAddressWatch({
       // An emptied address is a new address: the next arrival is a new reading.
       if (balance === 0n) attemptedFor = null;
     } catch (e) {
-      console.error('could not read the deposit address:', e);
+      logger.error('could not read the deposit address:', e);
     }
   }
 
@@ -140,7 +141,7 @@ export function createAddressWatch({
         onFailure(result.Err);
       }
     } catch (e) {
-      console.error('claim_external_deposit failed:', e);
+      logger.error('claim_external_deposit failed:', e);
       flow.fail();
       claimFailed = true;
       // A throw on the reply leg: the sweep may have landed. Said so.
