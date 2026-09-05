@@ -63,7 +63,9 @@
 {/snippet}
 
 {#if showWinner}
-  <div class="winner-display" class:you-won={!!myWinInfo}>
+  <!-- `split`: two or more winners add the split line to the readout; the
+       portrait block keeps that readout out of the lower flank's equity badge. -->
+  <div class="winner-display" class:you-won={!!myWinInfo} class:split={winners.length > 1}>
     <span class="winner-line">
       {#if myWinInfo}
         <span class="winner-text" data-seat={Number(myWinInfo.seat)}>You won {fmt(Number(myWinInfo.amount))} {currencySymbol}</span>
@@ -375,6 +377,21 @@
     .winner-text { font-size: 0.72em; flex: 1 0 100%; text-align: center; }
     .winner-hand-rank, .split-info { font-size: var(--cd-felt-label); }
     .winner-display .phase-indicator { font-size: var(--cd-felt-label); }
+
+    /* A SPLIT POT on the 6-max phone: the readout grew to FOUR rows (the
+       figure; the hand; "Split pot · 2 winners"; the street, each wrapping
+       alone inside 0.58 fw) and its foot painted over the lower flank seat's
+       equity badge, which stands at that plate's inner end at mid-height
+       (measured by the occlusion gate: 10% of "50.00%" under the readout in
+       the closer's full run, table-log mobile). Three rows instead: the split
+       line takes the LAST row by itself (`order`), so the hand and the street
+       share the second row as they do on a single winner; and the split
+       readout sits closer to the board with tighter padding and leading. Net:
+       about 23 px shorter at the foot on a 335 px felt, against a 2-3 px
+       overlap. Single-winner readouts keep their measured geometry. */
+    .winner-display.split { top: calc(100% + var(--fw) * 0.01); }
+    .winner-display.split .winner-line { padding: 0.12em 0.6em; line-height: 1.05; row-gap: 0.05em; }
+    .winner-display.split .split-info { flex: 1 0 100%; order: 1; text-align: center; }
 
     /* Nine seats on a phone: the board sits high, so the readout goes ABOVE
        it, as in landscape; below it ran through the mid-height flank plates. */
