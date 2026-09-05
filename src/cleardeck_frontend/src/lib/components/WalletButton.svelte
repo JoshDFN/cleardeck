@@ -565,10 +565,10 @@
          Dev Login beside Connect Wallet; on a phone the two wrapped the table
          header to a second row (~96 px) and cost a spectator 44 px of felt. So
          on the phone (the media block at the foot of this style) the dev
-         button reads "Connect", its menu opens on Internet Identity first and
+         button reads "Sign in", its menu opens on Internet Identity first and
          the four dev players under it, and the wide Connect Wallet button is
          hidden while the dev container exists. A mainnet build has no dev
-         container, so its one button is Connect Wallet, reading "Connect" on
+         container, so its one button is Sign in, reading "Sign in" on
          the phone. The menu's II row is rendered on every build that has the
          menu and painted only on the phone (`.phone-only`). -->
     <div class="login-buttons">
@@ -579,7 +579,7 @@
               <span class="spinner"></span>
             {:else}
               <span class="label-wide">Dev Login</span>
-              <span class="label-phone">Connect</span>
+              <span class="label-phone">Sign in</span>
             {/if}
           </button>
           {#if showDevMenu}
@@ -593,17 +593,27 @@
           {/if}
         </div>
       {/if}
-      <button class="wallet-btn connect" onclick={handleLogin} disabled={isLoading}>
+      <!-- "Sign in", not "Connect Wallet": what opens is Internet Identity (a
+           passkey or Google), not a wallet chooser. Money arrives later, in the
+           cashier. While the popup is open the button keeps its width and says
+           what is happening, so a blocked popup is not a spinner forever. -->
+      <button
+        class="wallet-btn connect"
+        onclick={handleLogin}
+        disabled={isLoading}
+        title="Sign in with Internet Identity: a passkey or Google. No wallet needed to look around."
+      >
         {#if isLoading}
           <span class="spinner"></span>
+          <span class="label-wide">Opening Internet Identity…</span>
+          <span class="label-phone">Opening…</span>
         {:else}
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="2" y="4" width="20" height="16" rx="2"/>
-            <path d="M2 10h20"/>
-            <circle cx="17" cy="14" r="2"/>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="8" cy="12" r="4"/>
+            <path d="M12 12h9M18 12v3M21 12v2"/>
           </svg>
-          <span class="label-wide">Connect Wallet</span>
-          <span class="label-phone">Connect</span>
+          <span class="label-wide">Sign in</span>
+          <span class="label-phone">Sign in</span>
         {/if}
       </button>
     </div>
@@ -906,14 +916,20 @@
   }
 
   .wallet-btn.connect {
-    background: linear-gradient(135deg, #00d4aa 0%, #00a88a 100%);
+    background: var(--cd-accent);
     border: none;
+    color: var(--cd-accent-ink);
+    font-weight: var(--cd-weight-strong);
   }
 
   .wallet-btn.connect:hover:not(:disabled) {
-    background: linear-gradient(135deg, #00e4ba 0%, #00b89a 100%);
+    background: var(--cd-accent-hi);
     transform: translateY(-1px);
   }
+
+  /* The label stays while the popup is open, so the button does not collapse
+     to a spinner square. */
+  .wallet-btn.connect:disabled { opacity: 0.85; cursor: progress; }
 
   .wallet-btn.dev {
     background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
@@ -1618,7 +1634,7 @@
     .dev-menu .phone-only { display: block; }
     .dev-menu .ii-row { color: var(--cd-accent); font-weight: var(--cd-weight-strong); }
     .dev-login-container + .wallet-btn.connect { display: none; }
-    /* It reads "Connect", so it is painted as the sign-in button, not the
+    /* It reads "Sign in", so it is painted as the sign-in button, not the
        amber developer one. */
     .wallet-btn.dev {
       font-size: var(--cd-text-sm);

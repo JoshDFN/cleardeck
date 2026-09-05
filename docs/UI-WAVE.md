@@ -59,6 +59,30 @@ lost when the handoffs are.
   `document.title` on the certified edge the way probe-decision-loop.mjs
   photographs the echo.
 
+## Lobby, first run and trust (phase 4 follow-ups)
+
+- **Own domain and a branded sign-in.** Internet Identity's dialog still
+  says "Sign in to Internet Identity to continue to <canister>.icp0.io"
+  because auth.js passes no `derivationOrigin` and static/ has no
+  `.well-known/ic-domains` or `ii-alternative-origins`. Register a domain on
+  the asset canister, list the raw origin, pass `derivationOrigin` so
+  principals stay stable. No lobby polish survives that popup until then.
+- **A proof rail in the preview pane.** solvency.js and cycleRunway.js are
+  only mounted in the money dialogs; the preview pane could state
+  "escrow = ledger, runway N days, wasm <hash>" per table for a visitor
+  deciding whether the site is alive. Every figure it would render is money
+  or a duration and needs a chain-agreement site before it ships.
+- **`scripts/dev.sh hygiene` "notices not weakened"** diffs whole lines
+  against ceacc37 and is red on the footer's former copy of the disclaimer
+  (moved, verbatim, into TrustBar.svelte's FULL TERMS overlay) and on the
+  banner paragraph's em-dash. A phrase-level check belongs to the script's
+  owner; the rendered-pixel gate (protected-notices.mjs) is 5/5 everywhere.
+- **The cold-start panel with players seated elsewhere.** It shows only when
+  every table is empty; a lobby with one table waiting for a second player
+  says so on the row ("Waiting for one more") but has no headline nudge.
+- **HowItWorks** still leads with cryptography; the audit wants Money / Fair
+  deal / If something goes wrong tabs and a header entry point.
+
 ## Canister follow-ups (Rust lane, out of the wave's scope)
 
 - **Timeout semantics.** The canister auto-folds on expiry even when a check

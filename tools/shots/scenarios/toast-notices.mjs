@@ -169,11 +169,18 @@ export default {
     // the app's own toast are the same object as far as the layout is concerned.
     const compared = [];
     if (realToast && injected) {
+      // A BOTTOM-ANCHORED TOAST (the phone lobby's snackbar, routes/app-phone
+      // .scss) declares `top: auto`, so its computed `top` is derived from its
+      // own height and two messages of different length never agree on it.
+      // The anchor that IS declared is the bottom edge, so `top` is judged as
+      // the same when both boxes end within 2 px of each other.
+      const sameBottom = Math.abs(realToast.rect.bottom - injected.rect.bottom) <= 2;
       for (const key of ['position', 'zIndex', 'top', 'maxWidth', 'maxHeight', 'overflowY']) {
         const real = realToast.computed[key];
         const fake = injected.computed[key];
-        compared.push({ property: key, real, injected: fake, same: real === fake });
-        if (real !== fake) {
+        const same = real === fake || (key === 'top' && sameBottom);
+        compared.push({ property: key, real, injected: fake, same });
+        if (!same) {
           problems.push(
             `the injected toast and the app's own toast disagree on ${key}: `
             + `real="${real}" injected="${fake}". The central gate in run.mjs is measuring `

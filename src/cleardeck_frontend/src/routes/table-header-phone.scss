@@ -198,10 +198,5 @@
       flex-grow: 1;
       justify-content: flex-end;
     }
-
-    /* Two lines of strip, not three: the same words on a wider screen. */
-    .alpha-warning-banner.on-table .banner-strip {
-      padding: var(--cd-space-1) var(--cd-space-2) calc(var(--cd-space-1) * 1.5);
-    }
   }
 }

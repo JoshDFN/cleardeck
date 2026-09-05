@@ -7,6 +7,8 @@
   import WalletButton from "$lib/components/WalletButton.svelte";
   import HandHistory from "$lib/components/HandHistory.svelte";
   import HowItWorks from "$lib/components/HowItWorks.svelte";
+  import TrustBar from "$lib/components/TrustBar.svelte";
+  import { searchWithTable, tableIdFromSearch } from "$lib/invite-link.js";
   import DepositModal from "$lib/components/DepositModal.svelte";
   import WithdrawModal from "$lib/components/WithdrawModal.svelte";
   import { playSound, setSoundEnabled, isSoundEnabled } from "$lib/sounds.js";
@@ -62,17 +64,11 @@
   let showHowItWorks = $state(false);
   let showVerify = $state(false);
 
-  // PRESENTATION of the four player-protection notices, never their content.
-  //
-  // In portrait ON THE TABLE VIEW the notices render as a compact red strip that
-  // carries the protected words themselves (see `.banner-strip` below), and this
-  // flag opens the full verbatim text over the whole screen in one tap. It is a
-  // full-screen OVERLAY rather than an in-flow expansion on purpose: the table
-  // sizes itself to "the viewport, less everything above me in the flow", so an
-  // in-flow expansion would resize the felt underneath the player mid-hand.
-  //
-  // Everywhere else -- desktop, landscape, and the lobby in portrait -- the full
-  // block renders in the flow exactly as before and this flag does nothing.
+  // PRESENTATION of the five player-protection notices, never their content.
+  // They ride the trust bar (TrustBar.svelte) on every view; this flag opens
+  // the full verbatim text as an opaque OVERLAY (never an in-flow expansion:
+  // the table sizes itself to the space under the bar and must not resize
+  // under a player mid-hand).
   let noticesExpanded = $state(false);
 
   // HOW TALL THE PROTECTED-NOTICE BANNER IS, RIGHT NOW, IN CSS PIXELS.
@@ -391,6 +387,45 @@
 
     view = 'table';
     startPolling();
+    rememberTableInUrl(canisterId);
+  }
+
+  /**
+   * The invite link (lib/invite-link.js): the open table rides the URL so the
+   * page can be shared, and a visit with `?table=<id>` opens that table once
+   * the lobby has listed it. The URL is replaced, never pushed: Back still
+   * leaves the app, as it did before.
+   */
+  function rememberTableInUrl(canisterId) {
+    try {
+      const next = searchWithTable(window.location.search, canisterId);
+      if (next !== window.location.search) {
+        window.history.replaceState(null, '', `${window.location.pathname}${next}`);
+      }
+    } catch (e) {
+      logger.debug('could not update the URL for the open table', e);
+    }
+  }
+
+  let deepLinkConsumed = false;
+
+  function openTableFromUrl() {
+    if (deepLinkConsumed || view !== 'lobby') return;
+    let wanted = null;
+    try { wanted = tableIdFromSearch(window.location.search); } catch { wanted = null; }
+    if (!wanted) return;
+    deepLinkConsumed = true;
+    const match = tables.find((t) => {
+      const p = t.canister_id?.[0];
+      const cid = p ? (p.toText ? p.toText() : String(p)) : null;
+      return cid === wanted;
+    });
+    if (match) {
+      joinTable(match);
+    } else {
+      error = 'That invite link points to a table this lobby does not list. Pick one below instead.';
+      rememberTableInUrl(null);
+    }
   }
 
   // =========================================================================
@@ -965,12 +1000,13 @@
     shuffleProof = null;
     currentTableInfo = null;
     tableActor = null;
+    rememberTableInUrl(null);
     loadTables(); // Refresh tables list
   }
 
   // Load tables on mount and ensure cleanup on unmount
   $effect(() => {
-    loadTables();
+    loadTables().then(openTableFromUrl);
     // Cleanup function ensures all intervals are cleared on component unmount
     return () => {
       stopPolling();
@@ -1007,117 +1043,30 @@
   <div class="bg-effects"></div>
 
   <!--
-    THE FOUR NOTICES RENDER ONCE PER PAGE, NOT TWICE.
+    THE FIVE NOTICES, ONCE PER PAGE, ON EVERY VIEW, AT EVERY VIEWPORT.
 
-    This block and the identical `.footer-disclaimer` block below carry the same
-    four notices word for word: the unaudited-alpha disclaimer, the jurisdiction
-    warning, the 18+ notice, and the no-middleman/no-house statement. Both were
-    rendered on EVERY page, so a phone showed all four twice and spent 268 px --
-    32% of a 390x844 screen -- saying the same thing a second time. That 268 px
-    is why the table could not be given a playing surface: `--cd-avail` is the
-    viewport less everything above the table in the flow, and the banner is
-    above it.
+    `.alpha-warning-banner` is the sticky carrier of the trust bar
+    (TrustBar.svelte): every protected phrase verbatim, FULL TERMS opening the
+    complete text. It is measured here (`--notice-safe-top`, which anchors the
+    toast below it) and it is the element whose scope class the screenshot
+    harness reads to style the toast it injects, so it stays in this file.
 
-    Nothing is deleted and nothing is softened. Both blocks are still here,
-    verbatim, and on a desktop both still render. The de-duplication is a
-    PORTRAIT rule and it lives in `src/index.scss` under "THE FOUR
-    PLAYER-PROTECTION NOTICES RENDER ONCE PER PAGE ON A PHONE", where it is
-    stated in full: in portrait the table view shows the FOOTER copy and every
-    other view shows THIS banner, so a phone always sees all four notices, once.
-
-    The wording, the phrase count in this file, and `make hygiene` are all
-    unchanged. Making either copy MORE prominent is always allowed; making
-    either one shorter, quieter, or conditional on anything else is not.
-
-    WAVE 5: THE PRESENTATION CHANGED IN PORTRAIT ON THE TABLE VIEW. THE WORDS
-    DID NOT.
-
-    `.banner-strip` below is a compact red strip that carries the protected words
-    THEMSELVES, not a summary of them: it states, verbatim, "Unaudited code with
-    known bugs", "your funds are NOT safe", "illegal in many jurisdictions",
-    "18+ only", "No middleman, no house" and "No rake is taken from any pot on any
-    table". Those are the five literal strings BOTH of this repo's notice checks
-    look for -- `FRONTEND_NOTICES` in `scripts/dev.sh` (which greps the source)
-    and `PROTECTED_PHRASES` in `tools/shots/lib/protected-notices.mjs` (which
-    hit-tests the rendered pixels) -- so the strip is not a paraphrase that a
-    reviewer has to adjudicate. A player who never taps has still been told, on
-    screen, every one of them. One tap opens `.banner-content` -- the full text
-    below, unchanged, every word -- over the whole screen.
-
-    The no-rake sentence was added last and budgeted at a line of strip height,
-    i.e. ~2 points of felt area, on the reasoning that a protected notice in the
-    app's own canonical wording is worth that. Measured, it cost NOTHING: the
-    strip is still three lines at `y 6..50` and the felt is still 332.8 x 599.5.
-    What it bought is real -- before it, the table view stated the no-rake
-    property only as "No middleman, no house", and the pixel-level notice gate
-    read 4 of 5 on every mobile table scene for that reason alone.
-
-    It renders ONLY in portrait AND only on the table view. On desktop, in
-    landscape, and on the lobby in portrait the full block renders in the flow
-    exactly as it did before, and the strip is `display: none`.
-
-    WHY THIS IS ALLOWED AND THE WAVE-4 VERSION WAS NOT. Wave 4 hid all four
-    notices on the phone's table view: `make hygiene` was green because it greps
-    the SOURCE, and a player saw NOTHING. This does the opposite of that -- the
-    protected words are on screen on every view at every viewport, and the probe
-    that says so reads the RENDERED page (`elementFromPoint` at the text's own
-    centre, box inside the viewport), not the source.
+    The words are protected by `make hygiene` (source) and by
+    tools/shots/lib/protected-notices.mjs (rendered pixels, hit-tested on every
+    scene at both viewports, with an error toast up). Making them MORE
+    prominent is always allowed; shortening, hiding, or gating them behind a
+    click is not.
   -->
   <div
     class="alpha-warning-banner"
-    class:on-table={view === 'table'}
     class:expanded={noticesExpanded}
     bind:clientHeight={noticeBannerHeight}
   >
-    <!-- Collapsed presentation, portrait + table view only. Every protected
-         phrase is literal, so the on-screen test and `make hygiene` ask about
-         the same words. -->
-    <button
-      class="banner-strip"
-      type="button"
-      aria-expanded={noticesExpanded}
-      title="Open the full player-protection terms"
-      onclick={() => noticesExpanded = true}
-    >
-      <span class="warning-icon">⚠️</span>
-      <span class="strip-text">Unaudited code with known bugs: your funds are NOT safe. Online gambling is illegal in many jurisdictions. 18+ only. No middleman, no house. No rake is taken from any pot on any table.</span>
-      <span class="strip-more">FULL TERMS</span>
-    </button>
-    <div class="banner-content">
-      <p class="banner-warning">
-        <span class="warning-icon">⚠️</span>
-        <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk: your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
-      </p>
-      <!-- WAVE 5 COHERENCE PASS. The canonical no-rake sentence is stated HERE,
-           not only in `.banner-strip`.
-
-           Measured on the rendered page with the repo's own gate
-           (tools/shots/lib/protected-notices.mjs) before this line existed: the
-           strip is `display: none` at every viewport except portrait-on-table,
-           so DESKTOP read 4 of 5 on the lobby signed out, the lobby signed in,
-           the table, the table behind the Deposit modal and the table behind
-           Verify Fair, and PORTRAIT dropped to 4 of 5 the moment a player TAPPED
-           the strip: this very block covers the strip and did not restate the
-           property. The missing phrase was always "No rake is taken from any pot
-           on any table".
-
-           `.banner-content` is now a strict superset of `.banner-strip`, which
-           is what a "FULL TERMS" button has to be. -->
-      <p class="banner-info">
-        No middleman, no house. <strong>No rake is taken from any pot on any table.</strong> Built to demonstrate the power of the Internet Computer: 100% on-chain, with the frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
-      </p>
-      <p class="banner-ai">
-        This entire project was built 100% by AI. <span class="warning-icon">⚠️</span>
-      </p>
-    </div>
-    {#if noticesExpanded}
-      <button
-        class="banner-close"
-        type="button"
-        onclick={() => noticesExpanded = false}
-        aria-label="Close the full player-protection terms"
-      >Close</button>
-    {/if}
+    <TrustBar
+      expanded={noticesExpanded}
+      onExpand={() => { noticesExpanded = true; }}
+      onClose={() => { noticesExpanded = false; }}
+    />
   </div>
 
   <header class:compact={view === 'table'} bind:clientHeight={headerHeight}>
@@ -1299,22 +1248,15 @@
   </main>
 
   <footer>
-    <!-- The other half of the once-per-page rule above. In portrait on the
-         TABLE view this is the copy that renders, and it is the full
-         four-notice text, exactly as written, never a summary of it. -->
-    <div class="footer-disclaimer">
-      <div class="disclaimer-content">
-        <p class="disclaimer-warning">
-          <span class="warning-icon">⚠️</span>
-          <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk: your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
-        </p>
-        <p class="disclaimer-info">
-          No middleman, no house. <strong>No rake is taken from any pot on any table.</strong> Built to demonstrate the power of the Internet Computer: 100% on-chain, with the frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
-        </p>
-        <p class="disclaimer-ai">
-          This entire project was built 100% by AI. <span class="warning-icon">⚠️</span>
-        </p>
-      </div>
+    <!-- Provenance, not a second copy of the notices. The five protected
+         phrases ride the sticky trust bar at the top of every view (TrustBar
+         .svelte), which is on screen at every scroll position, so the footer
+         no longer repeats them; it says who built this and links the terms. -->
+    <div class="footer-provenance">
+      <p>
+        Built with AI, in the open. Every table is a canister you can query while signed out.
+        <button class="footer-link inline" onclick={() => noticesExpanded = true}>Full terms</button>
+      </p>
     </div>
     <div class="footer-bottom">
       <div class="footer-left">
@@ -1584,89 +1526,30 @@
     overflow-x: hidden;
   }
 
-  /* Disclaimer Banner */
-  /* THE TRUST BAR. The words are protected (docs/DESIGN-BAR.md section 7,
-     tools/shots/lib/protected-notices.mjs); the carrier is not. It used to be
-     a full-bleed red gradient, the most saturated element on every screen. It
-     is now a neutral panel with a single amber rule and glyph: the same
-     sentences, read as a notice rather than an alarm, and red is kept for the
-     two things on a poker table that are red. */
+  /* THE TRUST BAR'S CARRIER. The words are protected (docs/DESIGN-BAR.md
+     section 7, tools/shots/lib/protected-notices.mjs); the carrier is not. One
+     neutral bar with a single amber rule, on every view, STICKY so it is on
+     screen at every scroll position of the lobby (which is why the footer no
+     longer repeats it). The content is TrustBar.svelte; this element stays
+     here because it is measured (`--notice-safe-top`) and the screenshot
+     harness reads its scope class to style the toast it injects. */
   .alpha-warning-banner {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    padding: 0;
     background: var(--cd-plate);
     color: var(--cd-ink-1);
-    padding: 12px 24px;
-    position: relative;
-    z-index: 100;
     border-top: 3px solid var(--cd-warn);
     border-bottom: 1px solid var(--cd-line);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
   }
 
-  .banner-content {
-    max-width: 800px;
-    margin: 0 auto;
-  }
-
-  /* ------------------------------------------------------------------------
-     THE COMPACT NOTICE STRIP -- portrait, table view only.
-     ------------------------------------------------------------------------
-     Off everywhere by default, so desktop and landscape are byte-identical to
-     before. The portrait rules that switch it on live in the media query at the
-     bottom of this stylesheet, next to the compact header they pay for.
-     ------------------------------------------------------------------------ */
-  .banner-strip {
-    display: none;
-    width: 100%;
-    text-align: left;
-    background: none;
-    border: 0;
-    padding: 0;
-    margin: 0;
-    color: inherit;
-    font-family: inherit;
-    cursor: pointer;
-  }
-
-  .banner-close {
-    display: none;
-  }
-
-  .banner-content p {
-    margin: 0 0 8px 0;
-    line-height: 1.5;
-    font-size: 12px;
-  }
-
-  .banner-content p:last-child {
-    margin-bottom: 0;
-  }
-
-  p.banner-warning {
-    color: var(--cd-ink);
-    text-align: left;
-  }
-
-  p.banner-warning strong {
-    color: var(--cd-warn);
-    letter-spacing: 0.5px;
-  }
-
-  .banner-content .warning-icon {
-    font-size: 13px;
-  }
-
-  p.banner-info {
-    color: var(--cd-ink-1);
-    text-align: left;
-    padding-left: 20px;
-  }
-
-  p.banner-info strong { color: var(--cd-ink); }
-
-  p.banner-ai {
-    color: var(--cd-ink-2);
-    text-align: left;
-    padding-left: 20px;
-    font-weight: var(--cd-weight-medium);
+  /* Expanded: the overlay is the bar's child, and the bar is a stacking
+     context, so the bar itself rises above every dialog while the terms are
+     open. */
+  .alpha-warning-banner.expanded {
+    z-index: 2000;
   }
 
   .app {
@@ -1897,8 +1780,8 @@
     z-index: 90;
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 14px 20px;
+    gap: var(--cd-space-3);
+    padding: var(--cd-space-3) var(--cd-space-4);
     border-radius: var(--cd-radius-card);
     animation: slideDown var(--cd-base) var(--cd-ease);
     box-sizing: border-box;
@@ -1907,6 +1790,8 @@
     max-height: min(40vh, 320px);
     overflow-y: auto;
     overscroll-behavior: contain;
+    font-size: var(--cd-text-sm);
+    line-height: 1.45;
   }
 
   /* A long message wraps and, if it still does not fit, scrolls inside the
@@ -1914,22 +1799,44 @@
   .toast span {
     min-width: 0;
     overflow-wrap: anywhere;
+    color: var(--cd-ink-1);
   }
 
-  /* Opaque, so it passes 4.5:1 over anything, with a 3 px rule in the one
-     colour that means danger. */
+  /* The glyph sits in a tinted disc; the panel is opaque (4.5:1 over
+     anything) and the colour of the disc is the only thing that says which
+     kind of message this is. Under the trust bar at every viewport: `top`
+     reads the bar's measured height. */
+  .toast svg {
+    flex: 0 0 auto;
+    width: var(--cd-icon-md);
+    height: var(--cd-icon-md);
+    padding: 6px;
+    box-sizing: content-box;
+    border-radius: 50%;
+  }
+
   .toast.error {
-    background: var(--cd-panel);
-    border: 1px solid var(--cd-danger-line);
-    border-left: 3px solid var(--cd-danger);
+    background: var(--cd-sheet);
+    border: 1px solid var(--cd-line-strong);
     color: var(--cd-ink);
     box-shadow: var(--cd-shadow-lift);
   }
 
+  .toast.error svg {
+    background: var(--cd-danger-dim);
+    color: var(--cd-danger-hi);
+  }
+
   .toast.success {
-    background: rgba(0, 212, 170, 0.15);
-    border: 1px solid rgba(0, 212, 170, 0.3);
-    color: #00d4aa;
+    background: var(--cd-sheet);
+    border: 1px solid var(--cd-accent-line);
+    color: var(--cd-ink);
+    box-shadow: var(--cd-shadow-lift);
+  }
+
+  .toast.success svg {
+    background: var(--cd-accent-dim);
+    color: var(--cd-accent);
   }
 
   /* A 44 px dismiss target (the audit measured ~20x24). The negative margins
@@ -1944,15 +1851,19 @@
     margin: calc(-1 * var(--cd-space-2)) calc(-1 * var(--cd-space-3)) calc(-1 * var(--cd-space-2)) 0;
     background: none;
     border: none;
-    color: inherit;
+    border-radius: 50%;
+    color: var(--cd-ink-2);
     font-size: 20px;
+    line-height: 1;
     cursor: pointer;
     padding: 0;
-    opacity: 0.7;
   }
 
-  .toast button:hover {
-    opacity: 1;
+  .toast button:hover,
+  .toast button:focus-visible {
+    color: var(--cd-ink);
+    background: var(--cd-surface-3);
+    outline: none;
   }
 
   @keyframes slideDown {
@@ -2136,12 +2047,10 @@
   /* Footer */
   footer {
     position: relative;
-    /* Above `.toast` (90). `.footer-disclaimer` is the copy of the four notices
-       that a DESKTOP player reads once the banner has scrolled away, so it has
-       to win the same hit test the banner does (docs/DEFECTS.md E-52). It was
-       z-index 10, i.e. under every floating panel in the app. It overlaps
-       nothing else: it is the last thing in the flow, and both money dialogs
-       still cover it from z-index 200. */
+    /* Above `.toast` (90), as it was when it carried a copy of the notices
+       (docs/DEFECTS.md E-52); the trust bar is sticky now and the footer only
+       carries provenance, but the layer is kept so nothing floats over the
+       footer's links. Both money dialogs still cover it from z-index 200. */
     z-index: 95;
     display: flex;
     flex-direction: column;
@@ -2151,54 +2060,23 @@
     font-size: 13px;
   }
 
-  .footer-disclaimer {
-    padding: 20px 32px;
-    background: linear-gradient(180deg, rgba(245, 158, 11, 0.12) 0%, rgba(245, 158, 11, 0.06) 100%);
-    border-bottom: 1px solid rgba(245, 158, 11, 0.2);
+  .footer-provenance {
+    padding: var(--cd-space-4) var(--cd-space-6) 0;
   }
 
-  .disclaimer-content {
+  .footer-provenance p {
     max-width: 800px;
     margin: 0 auto;
+    font-size: var(--cd-text-sm);
+    line-height: 1.5;
+    color: var(--cd-ink-2);
   }
 
-  .disclaimer-content p {
-    margin: 0 0 12px 0;
-    line-height: 1.6;
-  }
-
-  .disclaimer-content p:last-child {
-    margin-bottom: 0;
-  }
-
-  p.disclaimer-warning {
-    color: #f59e0b;
-    font-size: 12px;
-    text-align: left;
-  }
-
-  p.disclaimer-warning strong {
-    color: #fbbf24;
-    letter-spacing: 0.5px;
-  }
-
-  .disclaimer-content .warning-icon {
-    font-size: 13px;
-  }
-
-  p.disclaimer-info {
-    color: #999;
-    font-size: 12px;
-    text-align: left;
-    padding-left: 22px;
-  }
-
-  p.disclaimer-ai {
-    color: #a855f7;
-    font-size: 12px;
-    font-weight: 500;
-    text-align: left;
-    padding-left: 22px;
+  .footer-link.inline {
+    margin-left: var(--cd-space-2);
+    color: var(--cd-accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
   }
 
   .footer-bottom {
@@ -2249,27 +2127,34 @@
 
   /* Responsive */
   @media (max-width: 768px) {
+    /* THE PHONE LOBBY HEADER IS ONE ROW: mark and brand at the left, the
+       sound toggle and Sign in at the right (the table view's own one-row
+       header is table-header-phone.scss). It was a centred logo over a second
+       row of controls, ~120 px; one row is ~64, and every px above the first
+       table card is a px the five-second test pays for. */
     header {
-      padding: 12px 16px;
-      flex-wrap: wrap;
-      gap: 12px;
+      padding: var(--cd-space-2) var(--cd-space-3);
+      flex-wrap: nowrap;
+      gap: var(--cd-space-2);
     }
 
     .header-left, .header-right {
       min-width: auto;
-      flex: 1 1 auto;
+      flex: 0 1 auto;
     }
+
+    header:not(.compact) .header-left { display: none; }
 
     .logo {
-      order: -1;
-      width: 100%;
-      justify-content: center;
-      margin-bottom: 8px;
+      flex: 1 1 auto;
+      min-width: 0;
+      gap: var(--cd-space-2);
     }
 
-    .logo-text {
-      font-size: 18px;
-    }
+    header:not(.compact) .logo-mark { width: 36px; height: 36px; }
+    header:not(.compact) .suit { font-size: 15px; }
+    header:not(.compact) .brand { font-size: 18px; }
+    header:not(.compact) .tagline-text { display: none; }
 
     .tagline {
       font-size: 10px;
@@ -2315,25 +2200,7 @@
       z-index: 96;
     }
 
-    .footer-disclaimer {
-      padding: 16px;
-    }
-
-    .disclaimer-content p {
-      margin-bottom: 10px;
-    }
-
-    p.disclaimer-warning,
-    p.disclaimer-info,
-    p.disclaimer-ai {
-      font-size: 11px;
-      text-align: left;
-    }
-
-    p.disclaimer-info,
-    p.disclaimer-ai {
-      padding-left: 18px;
-    }
+    .footer-provenance { padding: var(--cd-space-3) var(--cd-space-4) 0; }
 
     .footer-bottom {
       flex-direction: column;
@@ -2425,138 +2292,8 @@
      after this one puts the compact header on ONE row there, because in a 390 px
      -tall window a header row costs more than a header column.
      ========================================================================= */
-  /* ------------------------------------------------------------------------
-     THE TRUST BAR ON THE TABLE VIEW, AT EVERY VIEWPORT.
-     ------------------------------------------------------------------------
-     Wave 5 shipped this strip in portrait only. The UI/UX wave makes it the
-     table view's carrier everywhere: one neutral bar, every one of the five
-     protected phrases verbatim (`.strip-text`), FULL TERMS opening the complete
-     text as an opaque overlay. On a desktop this returns ~130 px of chrome to
-     the stage; the felt grows toward its width cap. The lobby and every other
-     view keep the full in-flow block above.
-
-     THE STANDING RULE (index.scss): the strip is a SUBSET of the full text,
-     and the full text is a SUPERSET of the strip. Both are asserted on the
-     rendered pixels by tools/shots/lib/protected-notices.mjs. */
-  .alpha-warning-banner.on-table {
-    padding: 0;
-  }
-
-  .alpha-warning-banner.on-table .banner-strip {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 9px 16px 9px 14px;
-    font-size: var(--cd-text-sm);
-    line-height: 1.35;
-  }
-
-  .alpha-warning-banner.on-table .banner-strip .warning-icon {
-    flex: 0 0 auto;
-    font-size: 14px;
-  }
-
-  .alpha-warning-banner.on-table .strip-text {
-    flex: 1 1 auto;
-    min-width: 0;
-    color: var(--cd-ink);
-    font-weight: var(--cd-weight-medium);
-  }
-
-  /* The affordance: a real 28 px target inside a strip the whole width of
-     which is the button. */
-  .alpha-warning-banner.on-table .strip-more {
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    min-height: 28px;
-    padding: 0 10px;
-    border: 1px solid var(--cd-warn-line);
-    border-radius: var(--cd-radius-pill);
-    background: var(--cd-warn-dim);
-    font-size: var(--cd-text-xs);
-    font-weight: var(--cd-weight-figure);
-    letter-spacing: 0.06em;
-    color: var(--cd-warn);
-    white-space: nowrap;
-  }
-
-  /* Collapsed: the FULL text is one tap away. The words a player must not be
-     able to miss are in `.strip-text` above, on screen, unshortened. */
-  .alpha-warning-banner.on-table:not(.expanded) .banner-content {
-    display: none;
-  }
-
-  /* Expanded: an OVERLAY, not an in-flow expansion, so the felt never resizes
-     under a player's thumb mid-hand. `.alpha-warning-banner` is a stacking
-     context, so the z-index goes on the banner ITSELF while expanded. Fully
-     opaque: a translucent scrim let the felt read through the terms. */
-  .alpha-warning-banner.on-table.expanded {
-    z-index: 2000;
-  }
-
-  .alpha-warning-banner.on-table.expanded .banner-content {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 2000;
-    max-width: none;
-    margin: 0;
-    padding: 28px 24px 96px;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    background: var(--cd-bg);
-  }
-
-  .alpha-warning-banner.on-table.expanded .banner-content p {
-    max-width: 720px;
-    margin: 0 auto 14px;
-    font-size: var(--cd-text-md);
-    line-height: 1.6;
-  }
-
-  .alpha-warning-banner.on-table.expanded .banner-close {
-    display: block;
-    position: fixed;
-    bottom: 22px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 2001;
-    min-height: var(--cd-touch-min);
-    padding: 0 30px;
-    border-radius: var(--cd-radius-pill);
-    border: 1px solid var(--cd-line-strong);
-    background: var(--cd-surface-3);
-    color: var(--cd-ink);
-    font-family: inherit;
-    font-size: var(--cd-text-md);
-    font-weight: var(--cd-weight-strong);
-    cursor: pointer;
-  }
-
-  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
-
-    /* The trust bar on a phone: the same words at 11 px, three lines. */
-    .alpha-warning-banner.on-table .banner-strip {
-      display: block;
-      padding: 5px 9px 5px;
-      font-size: 11px;
-      line-height: 1.25;
-    }
-
-    .alpha-warning-banner.on-table .banner-strip .warning-icon { font-size: 11px; }
-
-    .alpha-warning-banner.on-table .strip-more {
-      display: inline-block;
-      min-height: 0;
-      margin-left: 5px;
-      padding: 1px 6px;
-      font-size: 10px;
-    }
-
-    .alpha-warning-banner.on-table.expanded .banner-content { padding: 20px 18px 84px; }
-    .alpha-warning-banner.on-table.expanded .banner-content p { font-size: 13.5px; }
-  }
+  /* The trust bar's own rules live in TrustBar.svelte; on every view the
+     carrier above is the same sticky bar. */
 
   @include phone.header;
 
@@ -2826,11 +2563,24 @@
     white-space: nowrap;
   }
 
-  /* Louder on mainnet, and only on mainnet: this is the state in which a
-     mistake costs the reader money. */
+  /* Mainnet: the same neutral chip with an amber dot. The audit measured the
+     red pill as the loudest thing beside the wordmark on every view; red is
+     for the two things on a poker table that are red, and the trust bar
+     already carries the money warning in words. */
   .net-chip.mainnet {
-    background: var(--cd-danger);
-    color: var(--cd-danger-ink);
+    background: var(--cd-surface-4);
+    color: var(--cd-ink-1);
+  }
+
+  .net-chip.mainnet::before {
+    content: '';
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 5px;
+    border-radius: 50%;
+    background: var(--cd-warn);
+    vertical-align: 0.5px;
   }
 
   .net-footer {

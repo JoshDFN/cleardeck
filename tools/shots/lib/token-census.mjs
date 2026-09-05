@@ -194,6 +194,21 @@ export const CHAIN_SITES = [
         why: 'what the bet-sizing popover says it will wager',
     },
     {
+        // Before lobby-stakes / lobby-buyin / lobby-preview-fact: the hint is
+        // INSIDE those cells, and the first matching selector wins.
+        id: 'lobby-fiat',
+        selector: '.fiat-num',
+        label: /^lobby (".*"|preview) fiat (sb|bb|min|max) vs /,
+        why: 'the dollar hint under a lobby stakes or buy-in figure: the chain figure '
+            + 'times the quote the harness served (assertFiatHints)',
+    },
+    {
+        id: 'lobby-row-clock',
+        selector: 'tbody tr .clock-value',
+        label: /^lobby ".*" clock (action timeout|time bank)$/,
+        why: "the lobby card's clock cell, seconds against the table config",
+    },
+    {
         id: 'lobby-stakes',
         selector: 'tbody tr .c-stakes, tbody tr .stakes-value, tbody tr td:nth-child(2)',
         label: /^lobby ".*" (small|big) blind/,

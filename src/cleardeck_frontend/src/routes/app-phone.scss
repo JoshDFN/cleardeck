@@ -90,10 +90,8 @@
       min-height: var(--cd-touch-min);
     }
 
-    /* The footer's two text links (the lobby keeps the footer) and the trust
-       bar's FULL TERMS strip (a 41 px button on the sideways phone) at the
-       touch floor. */
+    /* The footer's text links (the lobby keeps the footer) at the touch
+       floor. The trust bar's own touch floor is in TrustBar.svelte. */
     .footer-link { min-height: var(--cd-touch-min); display: inline-flex; align-items: center; }
-    .alpha-warning-banner.on-table .banner-strip { min-height: var(--cd-touch-min); }
   }
 }

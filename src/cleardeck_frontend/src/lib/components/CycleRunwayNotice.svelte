@@ -91,53 +91,59 @@
 
 <style>
   /* NO position, NO z-index, NO transform. See rule 1 in the script block: this
-     element must be incapable of covering the four protected notices, and the
-     cheapest way to guarantee that is to give it nothing to cover them with. */
+     element must be incapable of covering the protected notices, and the
+     cheapest way to guarantee that is to give it nothing to cover them with.
+     The same tokens as the solvency block and the trust bar. */
   .runway-notice {
-    margin: 0.75rem 0;
-    padding: 0.75rem 0.9rem;
-    border-radius: 8px;
+    margin: var(--cd-space-3) 0;
+    padding: var(--cd-space-3) var(--cd-space-4);
+    border-radius: var(--cd-radius-card);
     border: 1px solid;
-    font-size: 0.85rem;
+    border-left-width: 3px;
+    font-size: var(--cd-text-sm);
     line-height: 1.45;
     max-width: 100%;
     overflow-wrap: anywhere;
+    color: var(--cd-ink-1);
   }
 
   .runway-notice.warn {
-    background: rgba(255, 176, 32, 0.08);
-    border-color: rgba(255, 176, 32, 0.55);
-    color: #f5cd7a;
+    background: var(--cd-warn-dim);
+    border-color: var(--cd-warn-line);
+    border-left-color: var(--cd-warn);
   }
 
   .runway-notice.danger {
-    background: rgba(255, 74, 74, 0.10);
-    border-color: rgba(255, 74, 74, 0.6);
-    color: #ffa8a8;
+    background: var(--cd-danger-dim);
+    border-color: var(--cd-danger-line);
+    border-left-color: var(--cd-danger);
   }
 
   .headline {
-    margin: 0 0 0.35rem;
-    font-weight: 700;
+    margin: 0 0 var(--cd-space-1);
+    font-weight: var(--cd-weight-figure);
+    color: var(--cd-warn);
   }
 
+  .runway-notice.danger .headline { color: var(--cd-danger-hi); }
+
   .advice {
-    margin: 0 0 0.35rem;
+    margin: 0 0 var(--cd-space-1);
   }
 
   .detail,
   .topup {
-    margin: 0.3rem 0 0;
-    font-size: 0.78rem;
-    opacity: 0.85;
+    margin: var(--cd-space-1) 0 0;
+    font-size: var(--cd-text-xs);
+    color: var(--cd-ink-2);
   }
 
   code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.75rem;
+    font-family: var(--cd-font-mono);
+    font-size: var(--cd-text-xs);
     padding: 0.1rem 0.3rem;
-    border-radius: 4px;
-    background: rgba(0, 0, 0, 0.3);
-    overflow-wrap: anywhere;
+    border-radius: var(--cd-space-1);
+    background: var(--cd-capsule);
+    color: var(--cd-ink-1);
   }
 </style>

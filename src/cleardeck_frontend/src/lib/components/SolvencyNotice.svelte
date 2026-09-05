@@ -139,94 +139,98 @@
 
 <style>
   /* In flow. No `position: fixed`, no z-index: this block must never be able to
-     paint over the four protected notices (HARD RULE 2). */
+     paint over the five protected notices (HARD RULE 2). The same tokens as
+     the trust bar: amber for a warning, the danger red only for a shortfall. */
   .solvency {
-    margin: 0 0 14px 0;
-    padding: 12px 14px;
-    border-radius: 10px;
-    border: 1px solid rgba(240, 180, 41, 0.35);
-    background: rgba(240, 180, 41, 0.1);
-    font-size: 12.5px;
+    margin: 0 0 var(--cd-space-4);
+    padding: var(--cd-space-3) var(--cd-space-4);
+    border-radius: var(--cd-radius-card);
+    border: 1px solid var(--cd-warn-line);
+    border-left-width: 3px;
+    background: var(--cd-warn-dim);
+    font-size: var(--cd-text-sm);
     line-height: 1.5;
-    color: rgba(255, 255, 255, 0.82);
+    color: var(--cd-ink-1);
   }
 
   .solvency.critical {
-    border-color: rgba(248, 113, 113, 0.55);
-    background: rgba(185, 28, 28, 0.18);
+    border-color: var(--cd-danger-line);
+    border-left-color: var(--cd-danger);
+    background: var(--cd-danger-dim);
   }
 
   .headline {
     display: flex;
-    gap: 8px;
+    gap: var(--cd-space-2);
     align-items: baseline;
-    margin: 0 0 8px 0;
+    margin: 0 0 var(--cd-space-2);
   }
 
   .headline strong {
-    font-size: 13.5px;
-    color: #f0b429;
+    font-size: var(--cd-text-md);
+    color: var(--cd-warn);
   }
 
-  .solvency.critical .headline strong { color: #fca5a5; }
+  .solvency.critical .headline strong { color: var(--cd-danger-hi); }
 
   .mark { flex-shrink: 0; }
 
   .figures {
     display: grid;
-    gap: 4px;
-    margin: 0 0 6px 0;
+    gap: var(--cd-space-1);
+    margin: 0 0 6px;
     font-variant-numeric: tabular-nums;
   }
 
   .figures div {
     display: flex;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--cd-space-3);
   }
 
   .figures dt {
     margin: 0;
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--cd-ink-2);
   }
 
   .figures dd {
     margin: 0;
     text-align: right;
-    color: #fff;
+    color: var(--cd-ink);
   }
 
-  .figures .gap dd { color: #fca5a5; font-weight: 700; }
+  .figures .gap dd { color: var(--cd-danger-hi); font-weight: var(--cd-weight-figure); }
 
   .asof,
   .advice,
   .action {
-    margin: 0 0 6px 0;
+    margin: 0 0 6px;
   }
 
-  .asof { color: rgba(255, 255, 255, 0.55); font-size: 11.5px; }
+  .asof { color: var(--cd-ink-2); font-size: var(--cd-text-xs); }
 
   .action {
     margin-bottom: 0;
-    color: #fff;
-    font-weight: 600;
+    color: var(--cd-ink);
+    font-weight: var(--cd-weight-strong);
   }
 
   .refresh {
-    margin-top: 10px;
+    margin-top: var(--cd-space-3);
     width: 100%;
-    padding: 8px 10px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: rgba(255, 255, 255, 0.06);
-    color: #fff;
+    min-height: var(--cd-control-md);
+    padding: 0 var(--cd-space-3);
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line-strong);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink);
     font: inherit;
-    font-weight: 600;
+    font-weight: var(--cd-weight-strong);
     cursor: pointer;
   }
 
   .refresh:disabled { opacity: 0.6; cursor: default; }
-  .refresh:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+  .refresh:hover:not(:disabled) { background: var(--cd-surface-3); }
 
   /* THE PHONE: the refresh control at the 44 px touch floor. */
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {

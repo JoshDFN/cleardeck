@@ -344,6 +344,15 @@ export function scrapeLobby(page) {
                 nowLabel: txt(tr.querySelector('.now')),
                 livePotText: txt(tr.querySelector('.now-detail')),
                 currencyTag: txt(tr.querySelector('.currency-tag, .tag.currency')),
+                // The card's clock cell ("45s + 30s"): seconds, asserted against
+                // the table config like the preview's Clock fact.
+                clockText: txt(tr.querySelector('.clock-value')),
+                // The fiat hints under the stakes and the buy-in, one span per
+                // figure, each naming which chain figure it converts
+                // (data-fiat-of: sb | bb | min | max).
+                fiat: [...tr.querySelectorAll('.fiat-num')].map((el) => ({
+                    of: el.getAttribute('data-fiat-of'), text: txt(el),
+                })),
             };
         });
 
@@ -377,6 +386,9 @@ export function scrapeLobby(page) {
             facts,
             factByLabel: Object.fromEntries(facts.filter((f) => f.label).map((f) => [f.label, f.value])),
             rakeLineText: txt(document.querySelector('.rake-line')),
+            fiat: [...document.querySelectorAll('aside.preview .facts .fiat-num')].map((el) => ({
+                of: el.getAttribute('data-fiat-of'), text: txt(el),
+            })),
         };
 
         return { rows, rowCount: rows.length, headers, columnMap: col, preview };

@@ -1306,7 +1306,21 @@ export async function assertLobbyAgreement(ctx, page) {
     for (const entry of byName.values()) await readTableSide(entry);
     const potsBefore = new Map([...byName.values()].map((e) => [e.name, e.livePot]));
 
-    const dom = await scrapeLobby(page);
+    let dom = await scrapeLobby(page);
+
+    // THE QUOTE CAN LAND AFTER THE FIRST SCRAPE. The lobby reads the price on
+    // mount (lib/prices.js) and paints its fiat hints when it arrives, so a
+    // scrape a moment after the rows settled can see rows without hints while
+    // a live quote was served. Re-read a few times before calling that a
+    // structural failure; a quote that was never served needs no wait.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+        const quoteNow = servedIcpUsd();
+        const anyFiat = dom.rows.some((r) => r.fiat && r.fiat.length > 0);
+        if (!quoteNow || quoteNow.mode === 'unavailable' || anyFiat) break;
+        await page.waitForTimeout(400);
+        dom = await scrapeLobby(page);
+    }
+    const quote = servedIcpUsd();
 
     // Second read, so a live pot that moved under us is reported as unstable
     // rather than as a lie. Blinds and buy-ins are static and need no bracket.
@@ -1352,6 +1366,22 @@ export async function assertLobbyAgreement(ctx, page) {
             figures.push(checkFigure(`lobby "${row.name}" max buy-in (vs TABLE canister config)`, cfg.maxBuyIn, buyInNums[1], { currency: cur }));
         } else {
             structural.push(`lobby row "${row.name}": could not read a buy-in range out of "${row.buyInText}"`);
+        }
+
+        // The card's clock: seconds, not money, but a promise about how long a
+        // player has to act on money, so it is compared like everything else.
+        const clockNums = (row.clockText || '').match(/\d+/g) || [];
+        if (clockNums.length >= 2 && entry.tableConfig) {
+            figures.push(checkPlainNumber(`lobby "${row.name}" clock action timeout`, entry.tableConfig.actionTimeoutSecs, clockNums[0], { unit: 's' }));
+            figures.push(checkPlainNumber(`lobby "${row.name}" clock time bank`, entry.tableConfig.timeBankSecs, clockNums[1], { unit: 's' }));
+        }
+
+        // The dollar lines under the stakes and the buy-in.
+        assertFiatHints(`lobby "${row.name}"`, row.fiat, cfg, cur, quote, figures, structural);
+        if ((!row.fiat || row.fiat.length === 0) && quote && quote.mode !== 'unavailable') {
+            structural.push(
+                `a live quote (${quote.usd} USD/ICP) was served but lobby row "${row.name}" shows no fiat hint`,
+            );
         }
 
         // THE ROW NAME IS A MONEY FIGURE TOO.
@@ -1514,6 +1544,8 @@ export async function assertLobbyAgreement(ctx, page) {
                 structural.push(`preview fact "Buy-in" has no range: "${fact('Buy-in')}"`);
             }
 
+            assertFiatHints('lobby preview', pv.fiat, cfg, cur, quote, figures, structural);
+
             if (fact('Ante') !== null) {
                 figures.push(checkFigure(label('fact "Ante"'), cfg.ante ?? 0, fact('Ante'), {
                     currency: cur, allowAbsentWhenZero: true,
@@ -1576,17 +1608,63 @@ export async function assertLobbyAgreement(ctx, page) {
     };
 }
 
-/** The USD price the harness actually served this run, or null. */
+/**
+ * The USD price the harness actually served this run, or null. `usd` is the
+ * ICP quote (every caller reads it); `btc` is the bitcoin quote off the same
+ * body, for a sats table's fiat hint, or null when the body had none.
+ */
 function servedIcpUsd() {
     for (const o of thirdPartyObservations().slice().reverse()) {
         if (!o.body) continue;
         try {
             const parsed = JSON.parse(o.body);
             const usd = parsed?.['internet-computer']?.usd;
-            if (typeof usd === 'number') return { usd, mode: o.mode, observedAt: o.observedAt };
+            const btc = parsed?.bitcoin?.usd;
+            if (typeof usd === 'number') {
+                return { usd, btc: typeof btc === 'number' ? btc : null, mode: o.mode, observedAt: o.observedAt };
+            }
         } catch { /* a truncated body is not a quote */ }
     }
     return null;
+}
+
+/**
+ * THE LOBBY'S FIAT HINTS ARE MONEY FIGURES. Each `.fiat-num` names the chain
+ * figure it converts (sb | bb | min | max); the expected dollar value is that
+ * figure times the quote the harness served, and the client's `formatUsd`
+ * rounds to the shown precision, so the half-resolution window of
+ * checkPlainNumber contains the exact product.
+ *
+ * @param {string} where  e.g. `lobby "6-Max"` or `lobby preview`
+ * @param {Array<{of:string, text:string}>} fiat
+ * @param {object} cfg     the TABLE config (smallBlind, bigBlind, minBuyIn, maxBuyIn)
+ * @param {'ICP'|'BTC'} currency
+ * @param {{usd:number, btc:number|null, mode:string}|null} quote
+ */
+function assertFiatHints(where, fiat, cfg, currency, quote, figures, structural) {
+    if (!fiat || fiat.length === 0) return;
+    if (!quote) {
+        structural.push(`${where} shows a fiat figure (${fiat[0].text}) but no price was served this run`);
+        return;
+    }
+    const perToken = currency === 'BTC' ? quote.btc : quote.usd;
+    if (typeof perToken !== 'number') {
+        structural.push(`${where} shows a ${currency} fiat figure but the served quote carries no ${currency} price`);
+        return;
+    }
+    const source = { sb: cfg.smallBlind, bb: cfg.bigBlind, min: cfg.minBuyIn, max: cfg.maxBuyIn };
+    for (const hint of fiat) {
+        const raw = source[hint.of];
+        if (raw === undefined) {
+            structural.push(`${where} fiat hint names an unknown figure "${hint.of}"`);
+            continue;
+        }
+        const expected = (raw / 100_000_000) * perToken;
+        figures.push(checkPlainNumber(
+            `${where} fiat ${hint.of} vs (${raw} x ${perToken} USD, ${quote.mode})`,
+            expected, hint.text, { unit: ' USD' },
+        ));
+    }
 }
 
 /**
