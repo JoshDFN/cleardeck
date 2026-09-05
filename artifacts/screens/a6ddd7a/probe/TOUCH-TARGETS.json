@@ -1,0 +1,2310 @@
+{
+  "touchMinPx": 44,
+  "results": [
+    {
+      "scene": "lobby",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "24 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Unmute sounds\"); document 390x1542 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/a6ddd7a/probe/TOUCH-lobby-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app > div.alpha-warning-banner > button.banner-strip",
+          "text": "Open the full player-protection terms",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 0,
+            "y": 3,
+            "w": 390,
+            "h": 55.3,
+            "right": 390,
+            "bottom": 58.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header > div.header-right > button.sound-toggle-btn",
+          "text": "Unmute sounds",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 242.7,
+            "y": 69.3,
+            "w": 44,
+            "h": 44,
+            "right": 286.7,
+            "bottom": 113.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.login-buttons > div.dev-login-container > button.wallet-btn.dev",
+          "text": "Sign-in options",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 302.7,
+            "y": 69.3,
+            "w": 75.3,
+            "h": 44,
+            "right": 378,
+            "bottom": 113.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.intro-cta > p.cta-hint > button.link-btn.hint-phone",
+          "text": "How it works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 275.7,
+            "y": 177.9,
+            "w": 67.6,
+            "h": 44,
+            "right": 343.3,
+            "bottom": 221.9
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill.on",
+          "text": "All tablesAll",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 252.9,
+            "w": 44,
+            "h": 44,
+            "right": 56,
+            "bottom": 296.9
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Open seats",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 62,
+            "y": 252.9,
+            "w": 89.7,
+            "h": 44,
+            "right": 151.7,
+            "bottom": 296.9
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill.on",
+          "text": "Any stake",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 157.7,
+            "y": 252.9,
+            "w": 80.3,
+            "h": 44,
+            "right": 238,
+            "bottom": 296.9
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Micro: small blind up to 0.02 ICP (about",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 244,
+            "y": 252.9,
+            "w": 54.8,
+            "h": 44,
+            "right": 298.8,
+            "bottom": 296.9
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Low: small blind up to 0.1 ICP (about $0",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 304.8,
+            "y": 252.9,
+            "w": 45.6,
+            "h": 44,
+            "right": 350.4,
+            "bottom": 296.9
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.cold-start > div.cold-actions > button.btn.primary",
+          "text": "Open Heads Up Be the first at Heads Up",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 21,
+            "y": 306.9,
+            "w": 251.4,
+            "h": 44,
+            "right": 272.4,
+            "bottom": 350.9
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.cold-start > div.cold-actions > button.btn.ghost",
+          "text": "Copy invite link Copy invite",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 280.4,
+            "y": 306.9,
+            "w": 88.6,
+            "h": 44,
+            "right": 369,
+            "bottom": 350.9
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr.selected.empty",
+          "text": "Open Heads Up",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 363.9,
+            "w": 366,
+            "h": 201.3,
+            "right": 378,
+            "bottom": 565.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "tr.selected.empty > td.c-go > button.invite",
+          "text": "Copy a link that opens this table",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 312.5,
+            "y": 379.4,
+            "w": 52.5,
+            "h": 44,
+            "right": 365,
+            "bottom": 423.4
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr.empty",
+          "text": "Open 6-Max",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 573.2,
+            "w": 366,
+            "h": 201.3,
+            "right": 378,
+            "bottom": 774.4
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "tr.empty > td.c-go > button.invite",
+          "text": "Copy a link that opens this table",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 312.5,
+            "y": 588.7,
+            "w": 52.5,
+            "h": 44,
+            "right": 365,
+            "bottom": 632.7
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr.empty",
+          "text": "Open 9-Max",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 782.4,
+            "w": 366,
+            "h": 201.3,
+            "right": 378,
+            "bottom": 983.7
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "tr.empty > td.c-go > button.invite",
+          "text": "Copy a link that opens this table",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 312.5,
+            "y": 797.9,
+            "w": 52.5,
+            "h": 44,
+            "right": 365,
+            "bottom": 841.9
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > p.foot-copy > button.linkish.mono",
+          "text": "4qggx…aaaca-cai",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 169.2,
+            "y": 1022.3,
+            "w": 99.3,
+            "h": 44,
+            "right": 268.5,
+            "bottom": 1066.3
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > p.foot-copy > button.link-btn",
+          "text": "How it works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 216.7,
+            "y": 1083.9,
+            "w": 79.9,
+            "h": 44,
+            "right": 296.6,
+            "bottom": 1127.9
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.pane-actions > label.sort-ctl > select",
+          "text": "Sort tables",
+          "tag": "select",
+          "type": null,
+          "box": {
+            "x": 47.5,
+            "y": 1139.9,
+            "w": 126,
+            "h": 44,
+            "right": 173.5,
+            "bottom": 1183.9
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > div.pane-actions > button.btn.ghost",
+          "text": "Refresh tables",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 181.5,
+            "y": 1139.9,
+            "w": 93.1,
+            "h": 44,
+            "right": 274.6,
+            "bottom": 1183.9
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-provenance > p > button.footer-link.inline",
+          "text": "Full terms",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 171.1,
+            "y": 1295.4,
+            "w": 59.9,
+            "h": 44,
+            "right": 231.1,
+            "bottom": 1339.4
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-bottom > div.footer-center > button.footer-link",
+          "text": "How It Works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 153.9,
+            "y": 1378.9,
+            "w": 82.2,
+            "h": 44,
+            "right": 236.1,
+            "bottom": 1422.9
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-bottom > div.footer-center > button.footer-link",
+          "text": "Verify Code",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 153.9,
+            "y": 1458.4,
+            "w": 82.2,
+            "h": 44,
+            "right": 236.1,
+            "bottom": 1502.4
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 1542,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "lobby (toast up)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "1 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Dismiss\"); document 390x1542 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/a6ddd7a/probe/TOUCH-lobby-toast-up-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app > div.toast.error > button.toast-close",
+          "text": "Dismiss",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 333,
+            "y": 731,
+            "w": 44,
+            "h": 44,
+            "right": 377,
+            "bottom": 775
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 1542,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "lobby (dev login menu open)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "5 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Internet Identity\"); document 390x1542 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/a6ddd7a/probe/TOUCH-lobby-dev-login-menu-open-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.dev-login-container > div.dev-menu > button.phone-only.ii-row",
+          "text": "Internet Identity",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 207,
+            "y": 122.3,
+            "w": 166,
+            "h": 44,
+            "right": 373,
+            "bottom": 166.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.dev-login-container > div.dev-menu > button",
+          "text": "Player 1",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 207,
+            "y": 168.3,
+            "w": 166,
+            "h": 44,
+            "right": 373,
+            "bottom": 212.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.dev-login-container > div.dev-menu > button",
+          "text": "Player 2",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 207,
+            "y": 214.3,
+            "w": 166,
+            "h": 44,
+            "right": 373,
+            "bottom": 258.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.dev-login-container > div.dev-menu > button",
+          "text": "Player 3",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 207,
+            "y": 260.3,
+            "w": 166,
+            "h": 44,
+            "right": 373,
+            "bottom": 304.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.dev-login-container > div.dev-menu > button",
+          "text": "Player 4",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 207,
+            "y": 306.3,
+            "w": 166,
+            "h": 44,
+            "right": 373,
+            "bottom": 350.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 1542,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "lobby (signed in, Sit cards)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "24 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Unmute sounds\"); document 390x1455 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/a6ddd7a/probe/TOUCH-lobby-signed-in,-Sit-cards-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app > div.alpha-warning-banner > button.banner-strip",
+          "text": "Open the full player-protection terms",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 0,
+            "y": 3,
+            "w": 390,
+            "h": 55.3,
+            "right": 390,
+            "bottom": 58.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header > div.header-right > button.sound-toggle-btn",
+          "text": "Unmute sounds",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 143.9,
+            "y": 70.3,
+            "w": 44,
+            "h": 44,
+            "right": 187.9,
+            "bottom": 114.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-container > div.wallet-connected > button.wallet-btn.connected",
+          "text": "ShadowDragon71",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 203.9,
+            "y": 69.3,
+            "w": 174.1,
+            "h": 46,
+            "right": 378,
+            "bottom": 115.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.lobby > div.intro-slim > button.link-btn",
+          "text": "How it works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 192.4,
+            "y": 160,
+            "w": 67.6,
+            "h": 44,
+            "right": 260,
+            "bottom": 204
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill.on",
+          "text": "All tablesAll",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 233.3,
+            "w": 44,
+            "h": 44,
+            "right": 56,
+            "bottom": 277.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Open seats",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 62,
+            "y": 233.3,
+            "w": 89.7,
+            "h": 44,
+            "right": 151.7,
+            "bottom": 277.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill.on",
+          "text": "Any stake",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 157.7,
+            "y": 233.3,
+            "w": 80.3,
+            "h": 44,
+            "right": 238,
+            "bottom": 277.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Micro: small blind up to 0.02 ICP (about",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 244,
+            "y": 233.3,
+            "w": 54.8,
+            "h": 44,
+            "right": 298.8,
+            "bottom": 277.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Low: small blind up to 0.1 ICP (about $0",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 304.8,
+            "y": 233.3,
+            "w": 45.6,
+            "h": 44,
+            "right": 350.4,
+            "bottom": 277.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.cold-start > div.cold-actions > button.btn.primary",
+          "text": "Open Heads Up Be the first at Heads Up",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 21,
+            "y": 287.3,
+            "w": 251.4,
+            "h": 44,
+            "right": 272.4,
+            "bottom": 331.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.cold-start > div.cold-actions > button.btn.ghost",
+          "text": "Copy invite link Copy invite",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 280.4,
+            "y": 287.3,
+            "w": 88.6,
+            "h": 44,
+            "right": 369,
+            "bottom": 331.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr.selected.empty",
+          "text": "Open Heads Up",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 344.3,
+            "w": 366,
+            "h": 179,
+            "right": 378,
+            "bottom": 523.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "tr.selected.empty > td.c-go > button.invite",
+          "text": "Copy a link that opens this table",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 312.5,
+            "y": 359.8,
+            "w": 52.5,
+            "h": 44,
+            "right": 365,
+            "bottom": 403.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr.empty",
+          "text": "Open 6-Max",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 531.3,
+            "w": 366,
+            "h": 179,
+            "right": 378,
+            "bottom": 710.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "tr.empty > td.c-go > button.invite",
+          "text": "Copy a link that opens this table",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 312.5,
+            "y": 546.8,
+            "w": 52.5,
+            "h": 44,
+            "right": 365,
+            "bottom": 590.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr.empty",
+          "text": "Open 9-Max",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 718.3,
+            "w": 366,
+            "h": 179,
+            "right": 378,
+            "bottom": 897.3
+          },
+          "inViewport": false,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "tr.empty > td.c-go > button.invite",
+          "text": "Copy a link that opens this table",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 312.5,
+            "y": 733.8,
+            "w": 52.5,
+            "h": 44,
+            "right": 365,
+            "bottom": 777.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > p.foot-copy > button.linkish.mono",
+          "text": "4qggx…aaaca-cai",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 169.2,
+            "y": 935.8,
+            "w": 99.3,
+            "h": 44,
+            "right": 268.5,
+            "bottom": 979.8
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > p.foot-copy > button.link-btn",
+          "text": "How it works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 216.7,
+            "y": 997.4,
+            "w": 79.9,
+            "h": 44,
+            "right": 296.6,
+            "bottom": 1041.4
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.pane-actions > label.sort-ctl > select",
+          "text": "Sort tables",
+          "tag": "select",
+          "type": null,
+          "box": {
+            "x": 47.5,
+            "y": 1053.4,
+            "w": 126,
+            "h": 44,
+            "right": 173.5,
+            "bottom": 1097.4
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > div.pane-actions > button.btn.ghost",
+          "text": "Refresh tables",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 181.5,
+            "y": 1053.4,
+            "w": 93.1,
+            "h": 44,
+            "right": 274.6,
+            "bottom": 1097.4
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-provenance > p > button.footer-link.inline",
+          "text": "Full terms",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 171.1,
+            "y": 1208.9,
+            "w": 59.9,
+            "h": 44,
+            "right": 231.1,
+            "bottom": 1252.9
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-bottom > div.footer-center > button.footer-link",
+          "text": "How It Works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 153.9,
+            "y": 1292.4,
+            "w": 82.2,
+            "h": 44,
+            "right": 236.1,
+            "bottom": 1336.4
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-bottom > div.footer-center > button.footer-link",
+          "text": "Verify Code",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 153.9,
+            "y": 1371.9,
+            "w": 82.2,
+            "h": 44,
+            "right": 236.1,
+            "bottom": 1415.9
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 1455,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "lobby (signed in, wallet menu open)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "7 interactive elements, 0 under the 44 px floor; smallest painted box 20.1 px (\"\"); document 390x1455 in 390x844; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/a6ddd7a/probe/TOUCH-lobby-signed-in,-wallet-menu-open-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.dropdown-section > div.id-row > button.copy-btn.small",
+          "text": "Edit",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 325,
+            "y": 152.8,
+            "w": 44,
+            "h": 44,
+            "right": 369,
+            "bottom": 196.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.avatar-section > div.avatar-row > button.copy-btn.small",
+          "text": "Change",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 312.5,
+            "y": 238.8,
+            "w": 56.5,
+            "h": 44,
+            "right": 369,
+            "bottom": 282.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.dropdown-section > label.pref-row > input",
+          "text": "",
+          "tag": "input",
+          "type": "checkbox",
+          "box": {
+            "x": 21,
+            "y": 342.3,
+            "w": 20.1,
+            "h": 24,
+            "right": 41.1,
+            "bottom": 366.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": false,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.dropdown-section > div.id-row > button.copy-btn.small",
+          "text": "Copy",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 325,
+            "y": 425.8,
+            "w": 44,
+            "h": 44,
+            "right": 369,
+            "bottom": 469.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.dropdown > div.dropdown-section.balances-section > button.refresh-btn",
+          "text": "Refresh",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 33,
+            "y": 574.3,
+            "w": 324,
+            "h": 44,
+            "right": 357,
+            "bottom": 618.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.dropdown-section > div.deposit-item > button.show-address-btn",
+          "text": "Show Address",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 276.7,
+            "y": 699.1,
+            "w": 92.3,
+            "h": 44,
+            "right": 369,
+            "bottom": 743.1
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.wallet-connected > div.dropdown > button.dropdown-btn.logout",
+          "text": "Disconnect",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 21,
+            "y": 797.1,
+            "w": 348,
+            "h": 44,
+            "right": 369,
+            "bottom": 841.1
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 1455,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "lobby",
+      "viewport": "landscape",
+      "ok": true,
+      "notes": "24 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Open the full player-protection terms\"); document 750x1369 in 750x342; type floors met",
+      "problems": [],
+      "file": "artifacts/screens/a6ddd7a/probe/TOUCH-lobby-landscape.png",
+      "coarsePointer": true,
+      "notices": {
+        "onScreen": 5,
+        "total": 5,
+        "off": []
+      },
+      "items": [
+        {
+          "path": "div.app > div.alpha-warning-banner > button.banner-strip",
+          "text": "Open the full player-protection terms",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 0,
+            "y": 3,
+            "w": 750,
+            "h": 44,
+            "right": 750,
+            "bottom": 47
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header > div.header-right > button.sound-toggle-btn",
+          "text": "Unmute sounds",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 602.7,
+            "y": 56,
+            "w": 44,
+            "h": 44,
+            "right": 646.7,
+            "bottom": 100
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.login-buttons > div.dev-login-container > button.wallet-btn.dev",
+          "text": "Sign-in options",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 662.7,
+            "y": 56,
+            "w": 75.3,
+            "h": 44,
+            "right": 738,
+            "bottom": 100
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.intro-cta > p.cta-hint > button.link-btn.hint-phone",
+          "text": "How it works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 583.8,
+            "y": 146.2,
+            "w": 67.6,
+            "h": 44,
+            "right": 651.4,
+            "bottom": 190.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill.on",
+          "text": "All tablesAll",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 221.2,
+            "w": 44,
+            "h": 44,
+            "right": 56,
+            "bottom": 265.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Open seats",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 62,
+            "y": 221.2,
+            "w": 89.7,
+            "h": 44,
+            "right": 151.7,
+            "bottom": 265.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill.on",
+          "text": "Any stake",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 157.7,
+            "y": 221.2,
+            "w": 80.3,
+            "h": 44,
+            "right": 238,
+            "bottom": 265.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Micro: small blind up to 0.02 ICP (about",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 244,
+            "y": 221.2,
+            "w": 54.8,
+            "h": 44,
+            "right": 298.8,
+            "bottom": 265.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "header.pane-bar > div.filters > button.pill",
+          "text": "Low: small blind up to 0.1 ICP (about $0",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 304.8,
+            "y": 221.2,
+            "w": 45.6,
+            "h": 44,
+            "right": 350.4,
+            "bottom": 265.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.cold-start > div.cold-actions > button.btn.primary",
+          "text": "Open Heads Up Be the first at Heads Up",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 21,
+            "y": 275.2,
+            "w": 611.4,
+            "h": 44,
+            "right": 632.4,
+            "bottom": 319.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.cold-start > div.cold-actions > button.btn.ghost",
+          "text": "Copy invite link Copy invite",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 640.4,
+            "y": 275.2,
+            "w": 88.6,
+            "h": 44,
+            "right": 729,
+            "bottom": 319.2
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr.selected.empty",
+          "text": "Open Heads Up",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 332.2,
+            "w": 726,
+            "h": 179,
+            "right": 738,
+            "bottom": 511.2
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "tr.selected.empty > td.c-go > button.invite",
+          "text": "Copy a link that opens this table",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 672.5,
+            "y": 347.7,
+            "w": 52.5,
+            "h": 44,
+            "right": 725,
+            "bottom": 391.7
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr.empty",
+          "text": "Open 6-Max",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 519.2,
+            "w": 726,
+            "h": 179,
+            "right": 738,
+            "bottom": 698.2
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "tr.empty > td.c-go > button.invite",
+          "text": "Copy a link that opens this table",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 672.5,
+            "y": 534.7,
+            "w": 52.5,
+            "h": 44,
+            "right": 725,
+            "bottom": 578.7
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "table.tables-list > tbody > tr.empty",
+          "text": "Open 9-Max",
+          "tag": "tr",
+          "type": null,
+          "box": {
+            "x": 12,
+            "y": 706.2,
+            "w": 726,
+            "h": 179,
+            "right": 738,
+            "bottom": 885.2
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "tr.empty > td.c-go > button.invite",
+          "text": "Copy a link that opens this table",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 672.5,
+            "y": 721.7,
+            "w": 52.5,
+            "h": 44,
+            "right": 725,
+            "bottom": 765.7
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > p.foot-copy > button.linkish.mono",
+          "text": "4qggx…aaaca-cai",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 503,
+            "y": 906.2,
+            "w": 99.3,
+            "h": 44,
+            "right": 602.4,
+            "bottom": 950.2
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > p.foot-copy > button.link-btn",
+          "text": "How it works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 529.8,
+            "y": 950.2,
+            "w": 79.9,
+            "h": 44,
+            "right": 609.7,
+            "bottom": 994.2
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.pane-actions > label.sort-ctl > select",
+          "text": "Sort tables",
+          "tag": "select",
+          "type": null,
+          "box": {
+            "x": 47.5,
+            "y": 1006.2,
+            "w": 126,
+            "h": 44,
+            "right": 173.5,
+            "bottom": 1050.2
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "footer.list-foot > div.pane-actions > button.btn.ghost",
+          "text": "Refresh tables",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 181.5,
+            "y": 1006.2,
+            "w": 93.1,
+            "h": 44,
+            "right": 274.6,
+            "bottom": 1050.2
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-provenance > p > button.footer-link.inline",
+          "text": "Full terms",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 529.3,
+            "y": 1122.7,
+            "w": 59.9,
+            "h": 44,
+            "right": 589.3,
+            "bottom": 1166.7
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-bottom > div.footer-center > button.footer-link",
+          "text": "How It Works",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 333.9,
+            "y": 1206.2,
+            "w": 82.2,
+            "h": 44,
+            "right": 416.1,
+            "bottom": 1250.2
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.footer-bottom > div.footer-center > button.footer-link",
+          "text": "Verify Code",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 333.9,
+            "y": 1285.7,
+            "w": 82.2,
+            "h": 44,
+            "right": 416.1,
+            "bottom": 1329.7
+          },
+          "inViewport": false,
+          "probed": false,
+          "hits": null,
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 750,
+        "h": 1369,
+        "viewport": {
+          "w": 750,
+          "h": 342
+        }
+      }
+    }
+  ]
+}
