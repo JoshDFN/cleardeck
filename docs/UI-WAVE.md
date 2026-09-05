@@ -662,3 +662,71 @@ The post-wave review (2026-09-05) found the items below; each is fixed on
   tools/shots/touch-targets.mjs` 20/20 states clean (the first run found the
   wallet menu's checkboxes shrinking under the new shortcuts sentence, fixed
   with the `.pref-box` 44 px target).
+
+### Round 2 of the review
+
+The verifier read round 1 and found two things left over; both are fixed on
+`feat/ui-ux-wave`, each in its own commit with the test that pins it.
+
+- **The two self-re-enabling money doors waited for nothing.** Round 1 made
+  a throw say "the transfer may have gone through" and made `handleDeposit`
+  and the withdraw sheet await a balance re-read before their button came
+  back, but the address sweep (`lib/deposit-flow.svelte.js claim`, the
+  `claim_external_deposit` door) and the BTC check (`lib/deposit-btc.svelte.js
+  check`) were handed the bare `fail` and cleared `claiming` /
+  `updating` in the same tick they called it, so `primaryDisabled` on those
+  routes released the button with the table balance unread. Both doors now
+  AWAIT `onFailure` (typed `Promise<void>|void`) inside a `try` / `finally`,
+  so a handler that throws still lets go of the flag, and `DepositModal`
+  hands them `failAndRefresh`: the sentence, then on a throw
+  `await refreshAfterThrow()` (the paying wallet, OISY when in use, and the
+  page's table re-read). A canister `Err` still only writes the sentence.
+  `lib/deposit-doors.test.js` pins it: a throwing
+  `tableActor.claim_external_deposit` leaves `claiming` true until the
+  handler's promise resolves (and `claimFailed` true, `thrown: true` handed
+  over), an `Err` is handed over without `thrown`, a handler that throws
+  itself still clears the flag, and the BTC check does the same with
+  `updating`. To compile a `.svelte.js` rune module under vitest,
+  `vitest.config.js` now loads the bare Svelte plugin (`svelte({ configFile:
+  false })`, not kit); in the node environment that is Svelte's server build,
+  where `$state` is a plain variable and `$effect` is a no-op, which is the
+  surface an ordering test wants.
+- **A raise figure above the stack is not "All in".** `isAllInRaise` said
+  "at or above the cap", so on a short stack whose legal floor exceeds its
+  stack (0.25 behind and 0.10 in front, facing 0.30 with a 0.20 minimum
+  raise: floor 0.50, cap 0.35; the canister still offers the raise since
+  `chips > to_call`) the dock initialised the sizer at the floor and the
+  disabled primary button read "All in 0.50" under the problem line "You
+  have 0.35 behind". The word is "All in" only when the figure IS the cap
+  (`toInt(value) === raiseCap(ctx)`); `setRaise`, `snapRaise`, `stepByBlind`
+  and every preset land exactly on the cap, so equality is the right test,
+  and a figure past it keeps "Raise to" beside the problem line as it did
+  before the exact-stack change. `commitRaise` was never affected (it clamps
+  to the cap and the button is disabled). Pinned by "a floor above the cap
+  is not labelled All in" in `bet-sizing.test.js`.
+- **Gates after round 2** (tree `213cdc2`, then `75e3724`): vitest 418 of 418
+  in 39 files; svelte-check 0 errors (4 pre-existing warnings); money-safety
+  `deposit_surface` 13 of 13 and `deposit_trust_root` 7 of 7 (with
+  `POCKET_IC_BIN=~/.cache/dfinity/versions/0.31.0/pocket-ic`); harness in
+  gating mode at `213cdc2`: table-facing-bet, table-waiting, deposit and
+  lobby at desktop and mobile, 8 of 8 verified (`artifacts/screens/213cdc2/`,
+  the facing-bet scene enabling the hotkey preference before it presses A);
+  `tools/shots/touch-targets.mjs` 20 of 20 states clean; `./scripts/dev.sh
+  hygiene` clean; `make test` (the whole fast gate, 22 cargo targets, the
+  fuzzer at its defaults, the settlement oracle, the harness self-tests, the
+  archive analyser, the sealed-dealer spike) green at `75e3724`, exit 0.
+- **The stuck-pot door, and a hygiene step that could not be satisfied**
+  (`75e3724`). The verifier found one more cashier door mapping a THROWN
+  update through the refusal wording: `recoverStuckPot` in
+  `WithdrawModal.svelte` calls `abandon_stuck_hand`, which moves the
+  committed pot into the balance, so its catch now says the transfer may
+  have gone through, re-reads custody before the button comes back, and
+  clears the busy flag in a finally. And `./scripts/dev.sh hygiene` had been
+  red since phase 3 on "notices not weakened since ceacc37": the two
+  DISCLAIMER lines were removed as lines when every sentence in them moved
+  into `src/lib/notices.js`, and the em-dash those lines carried is what the
+  step above forbids, so they could not come back. A removed line now counts
+  as a weakening only when a protected sentence it carried is nowhere in the
+  tree, or the tree mentions the protection keywords fewer times than the
+  baseline did (72 today against 6 at the baseline); the "notices intact"
+  step still asserts every sentence on its own.
