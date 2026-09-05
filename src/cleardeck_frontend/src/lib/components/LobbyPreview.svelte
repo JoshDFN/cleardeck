@@ -12,7 +12,7 @@
   import IcpLogo from './IcpLogo.svelte';
   import {
     fiatPair, formatAmount, formatBlinds, formatBuyIn, shortHash, shortId, stakeTier, tableFormat,
-    unitOf,
+    unitOf, RANGE_WORD,
   } from '../lobby-format.js';
   import {
     PHASE_LABEL, boardOf, canisterIdOf, configDrift, currencyOf, effectiveConfig, isDealing,
@@ -46,7 +46,7 @@
   const contractId = $derived(canisterIdOf(table));
   const nameq = $derived(nameQuote(table, view));
   const stakesFiat = $derived(fiatPair(cfg.small_blind, cfg.big_blind, currency, prices, '/'));
-  const buyInFiat = $derived(fiatPair(cfg.min_buy_in, cfg.max_buy_in, currency, prices, '–'));
+  const buyInFiat = $derived(fiatPair(cfg.min_buy_in, cfg.max_buy_in, currency, prices, RANGE_WORD));
 
   /**
    * Seat coordinates on a ~2:1 stadium, clockwise from the bottom seat
@@ -157,7 +157,7 @@
       <dt>Buy-in</dt>
       <dd>{formatBuyIn(cfg.min_buy_in, cfg.max_buy_in, currency)}</dd>
       {#if buyInFiat}
-        <span class="fiat">≈ <span class="fiat-num" data-fiat-of="min">{buyInFiat.low}</span> – <span class="fiat-num" data-fiat-of="max">{buyInFiat.high}</span></span>
+        <span class="fiat">≈ <span class="fiat-num" data-fiat-of="min">{buyInFiat.low}</span> {buyInFiat.joiner} <span class="fiat-num" data-fiat-of="max">{buyInFiat.high}</span></span>
       {/if}
     </div>
     <div><dt>Clock</dt><dd>{cfg.action_timeout_secs}s + {cfg.time_bank_secs}s</dd></div>

@@ -36,11 +36,13 @@ export function formatAmount(raw, currency) {
 export const formatBlinds = (sb, bb, currency) =>
   `${formatAmount(sb, currency)}/${formatAmount(bb, currency)}`;
 
-// Spaces around the dash matter: the screenshot harness reads two numbers out
-// of this cell (tools/shots/lib/dom-scrape.mjs) and a bare "2.00-10.00" parses
-// the second one as negative.
+// A range is written "2.00 to 10.00": a word, not a dash. The wave's rule is
+// no dashes in copy, and the screenshot harness reads two numbers out of this
+// cell (tools/shots/lib/dom-scrape.mjs, chain-agreement.mjs twoNumbers): a
+// bare "2.00-10.00" would parse the second one as negative, while "to" cannot.
+export const RANGE_WORD = 'to';
 export const formatBuyIn = (min, max, currency) =>
-  `${formatAmount(min, currency)} – ${formatAmount(max, currency)}`;
+  `${formatAmount(min, currency)} ${RANGE_WORD} ${formatAmount(max, currency)}`;
 
 /** Stake tier by small blind, in the table's own unit. */
 export function stakeTier(smallBlind, currency) {
@@ -116,7 +118,7 @@ export function formatUsd(usd) {
 
 /**
  * The muted line under a pair of money figures: "≈ $0.06 / $0.12" for blinds,
- * "≈ $12.00 – $60.00" for a range. Null when either side has no quote, so the
+ * "≈ $12.00 to $60.00" for a range. Null when either side has no quote, so the
  * line is all-or-nothing and never half a hint.
  */
 export function fiatPair(lowRaw, highRaw, currency, prices, joiner = '/') {

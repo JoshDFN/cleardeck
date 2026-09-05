@@ -22,9 +22,12 @@ describe('formatAmount', () => {
     expect(formatAmount(150_000_000, 'BTC')).toBe('1.50 BTC');
   });
 
-  it('formats blinds and a buy-in range with the spaced dash the harness parses', () => {
+  it('formats blinds and a buy-in range with the word "to" (no dash in copy; two numbers for the harness)', () => {
     expect(formatBlinds(ICP(0.05), ICP(0.10), 'ICP')).toBe('0.05/0.10');
-    expect(formatBuyIn(ICP(2), ICP(10), 'ICP')).toBe('2.00 – 10.00');
+    expect(formatBuyIn(ICP(2), ICP(10), 'ICP')).toBe('2.00 to 10.00');
+    expect(formatBuyIn(ICP(2), ICP(10), 'ICP')).not.toMatch(/[–—-]/);
+    // the harness's own number scan reads exactly two figures, the second positive
+    expect(formatBuyIn(ICP(2), ICP(10), 'ICP').match(/-?\d[\d.,]*\s*[KM]?/g).map((t) => t.trim())).toEqual(['2.00', '10.00']);
     expect(unitOf('BTC')).toBe('sats');
     expect(unitOf('ICP')).toBe('ICP');
   });
@@ -87,7 +90,7 @@ describe('fiat', () => {
 
   it('renders a pair all-or-nothing', () => {
     expect(fiatPair(ICP(0.01), ICP(0.02), 'ICP', prices)).toEqual({ low: '$0.06', high: '$0.13', joiner: '/' });
-    expect(fiatPair(ICP(2), ICP(10), 'ICP', prices, '–')).toEqual({ low: '$12.50', high: '$62.50', joiner: '–' });
+    expect(fiatPair(ICP(2), ICP(10), 'ICP', prices, 'to')).toEqual({ low: '$12.50', high: '$62.50', joiner: 'to' });
     expect(fiatPair(ICP(2), ICP(10), 'ICP', null)).toBeNull();
   });
 });

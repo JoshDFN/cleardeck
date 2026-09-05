@@ -9,7 +9,7 @@
   // builds it): the stakes and buy-in from the TABLE contract's own config, the
   // seats from its live view, the fiat hint from the one quote the page read.
   import IcpLogo from './IcpLogo.svelte';
-  import { fiatPair, formatBlinds, formatBuyIn, unitOf } from '../lobby-format.js';
+  import { RANGE_WORD, fiatPair, formatBlinds, formatBuyIn, unitOf } from '../lobby-format.js';
 
   const {
     /** @type {import('../lobby-rows.js').LobbyRow} */
@@ -31,7 +31,7 @@
   const currency = $derived(row.currency);
   const unit = $derived(unitOf(row.currency));
   const stakesFiat = $derived(fiatPair(cfg.small_blind, cfg.big_blind, currency, prices, '/'));
-  const buyInFiat = $derived(fiatPair(cfg.min_buy_in, cfg.max_buy_in, currency, prices, '–'));
+  const buyInFiat = $derived(fiatPair(cfg.min_buy_in, cfg.max_buy_in, currency, prices, RANGE_WORD));
   const empty = $derived(row.filled === 0);
   const action = $derived(row.isFull ? 'Watch' : signedIn ? 'Sit' : 'Watch');
 
@@ -112,7 +112,7 @@
     <span class="num muted buyin-value">{formatBuyIn(cfg.min_buy_in, cfg.max_buy_in, currency)}</span>
     {#if buyInFiat}
       <span class="fiat" title="About, at the quote this page read when it opened">
-        ≈ <span class="fiat-num" data-fiat-of="min">{buyInFiat.low}</span> – <span class="fiat-num" data-fiat-of="max">{buyInFiat.high}</span>
+        ≈ <span class="fiat-num" data-fiat-of="min">{buyInFiat.low}</span> {buyInFiat.joiner} <span class="fiat-num" data-fiat-of="max">{buyInFiat.high}</span>
       </span>
     {/if}
   </td>
