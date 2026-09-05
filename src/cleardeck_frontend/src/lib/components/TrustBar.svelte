@@ -22,6 +22,7 @@
   // screenshot harness reads that element's scope class to style the toast it
   // injects. This component is the bar's content.
 
+  import { tick } from 'svelte';
   import NoticeLine from './NoticeLine.svelte';
   import { NOTICE_LEAD, NOTICE_NO_RAKE, NOTICE_TERMS } from '../notices.js';
 
@@ -31,7 +32,44 @@
     onExpand = () => {},
     onClose = () => {},
   } = $props();
+
+  // A DIALOG THAT TAKES FOCUS AND GIVES IT BACK. The overlay is
+  // role="dialog" aria-modal="true", so on open the Close button takes
+  // focus (a keyboard or screen-reader user lands inside the terms, not on
+  // the strip under an opaque sheet) and on close focus returns to whatever
+  // opened it (the strip, or the footer's Full terms link).
+  let closeEl = $state(null);
+  let restoreTo = null;
+
+  $effect(() => {
+    if (!expanded || typeof document === 'undefined') return undefined;
+    const active = document.activeElement;
+    restoreTo = active && typeof active.focus === 'function' && active !== document.body ? active : null;
+    if (closeEl) closeEl.focus();
+    else tick().then(() => { if (closeEl) closeEl.focus(); });
+    return () => {
+      const target = restoreTo;
+      restoreTo = null;
+      if (target && target.isConnected !== false) target.focus();
+    };
+  });
+
+  // ESCAPE CLOSES THE OVERLAY FIRST. The money sheets listen for Escape on
+  // the window in the bubble phase (DepositModal, WithdrawModal: "one
+  // dismissal contract for every dialog"), so with the terms open OVER a
+  // sheet, Escape used to close the sheet under the terms. This listener is
+  // in the CAPTURE phase on the window: it runs before every bubble-phase
+  // listener on the page, and stopPropagation there ends the event's
+  // path, so nothing under the terms sees the key.
+  function onKeyCapture(event) {
+    if (!expanded || event.key !== 'Escape') return;
+    event.stopPropagation();
+    event.preventDefault();
+    onClose();
+  }
 </script>
+
+<svelte:window onkeydowncapture={onKeyCapture} />
 
 <!-- Collapsed presentation. Every protected phrase is literal, so the
      on-screen test and `make hygiene` ask about the same words. -->
@@ -73,6 +111,7 @@
     <button
       class="banner-close"
       type="button"
+      bind:this={closeEl}
       onclick={onClose}
       aria-label="Close the full player-protection terms"
     >Close</button>
