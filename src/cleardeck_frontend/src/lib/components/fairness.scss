@@ -1,0 +1,158 @@
+// THE FAIRNESS SURFACES' SHARED LANGUAGE: the hand list, the replayer and the
+// shuffle proof. Mixins, included where each component's rules sit (a plain
+// @use would emit them first and lose the cascade; see the phase 1 handoff).
+// Every colour and size is a token from index.scss.
+
+// The phone: portrait, or a short landscape window.
+$phone: '(max-aspect-ratio: 1/1), (max-height: 560px)';
+
+// A resting panel inside a dialog or a sidebar.
+@mixin panel {
+  .panel {
+    background: var(--cd-surface-1);
+    border: 1px solid var(--cd-line-soft);
+    border-radius: var(--cd-radius-card);
+    padding: var(--cd-space-3) var(--cd-space-4);
+    margin-bottom: var(--cd-space-3);
+  }
+
+  .panel-note {
+    margin: var(--cd-space-2) 0 0;
+    font-size: var(--cd-text-sm);
+    line-height: 1.55;
+    color: var(--cd-ink-2);
+  }
+}
+
+// The uppercase eyebrow a panel or a section opens with.
+@mixin eyebrow($selector: '.panel h4') {
+  #{$selector} {
+    margin: 0 0 var(--cd-space-2);
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-figure);
+    text-transform: uppercase;
+    letter-spacing: var(--cd-tracking-label);
+    color: var(--cd-ink-2);
+  }
+}
+
+// A verdict tone on any box: good (teal), partial (amber), bad (red), pending.
+@mixin tones {
+  .good { --tone: var(--cd-accent); --tone-dim: var(--cd-accent-dim); --tone-line: var(--cd-accent-line); }
+  .partial, .warn, .pending { --tone: var(--cd-warn); --tone-dim: var(--cd-warn-dim); --tone-line: var(--cd-warn-line); }
+  .bad { --tone: var(--cd-danger-hi); --tone-dim: var(--cd-danger-dim); --tone-line: var(--cd-danger-line); }
+}
+
+// A <details> whose summary is a quiet row with a chevron, 44 px on the phone.
+@mixin disclosure {
+  details.fold {
+    border-top: 1px solid var(--cd-line-soft);
+  }
+
+  details.fold > summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cd-space-2);
+    min-height: var(--cd-control-md);
+    padding: var(--cd-space-2) 0;
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-strong);
+    color: var(--cd-ink-1);
+  }
+
+  details.fold > summary::-webkit-details-marker { display: none; }
+
+  details.fold > summary::after {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-right: 1.5px solid var(--cd-ink-2);
+    border-bottom: 1.5px solid var(--cd-ink-2);
+    transform: rotate(45deg);
+    transition: transform var(--cd-base) var(--cd-ease);
+    flex: 0 0 auto;
+    margin-right: var(--cd-space-1);
+  }
+
+  details.fold[open] > summary::after { transform: rotate(-135deg); }
+  details.fold > summary:hover { color: var(--cd-ink); }
+  details.fold > .fold-body { padding: 0 0 var(--cd-space-3); }
+
+  @media #{$phone} {
+    details.fold > summary { min-height: var(--cd-touch-min); }
+  }
+}
+
+// A hash in full: mono, breaking anywhere, selectable as one.
+@mixin hashcode {
+  code.hash {
+    display: block;
+    min-width: 0;
+    background: var(--cd-bg-deep);
+    border: 1px solid var(--cd-line-soft);
+    border-radius: var(--cd-radius-chip);
+    padding: var(--cd-space-2) var(--cd-space-3);
+    font-family: var(--cd-font-mono);
+    font-size: var(--cd-text-sm);
+    line-height: 1.5;
+    color: var(--cd-accent);
+    word-break: break-all;
+    user-select: all;
+  }
+
+  code.hash.revealed { color: var(--cd-money); }
+}
+
+// The Copy button beside a hash or a command.
+@mixin copybtn {
+  .copy-btn {
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-3);
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-strong);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background var(--cd-base) var(--cd-ease), color var(--cd-base) var(--cd-ease);
+  }
+
+  .copy-btn:hover { background: var(--cd-surface-3); color: var(--cd-ink); }
+
+  @media #{$phone} {
+    .copy-btn { min-height: var(--cd-touch-min); }
+  }
+}
+
+// A ghost button in a dialog's chrome.
+@mixin ghost {
+  .ghost-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--cd-space-1);
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-3);
+    background: var(--cd-surface-2);
+    border: 1px solid var(--cd-line);
+    color: var(--cd-ink-1);
+    border-radius: var(--cd-radius-chip);
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-strong);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background var(--cd-base) var(--cd-ease), color var(--cd-base) var(--cd-ease);
+  }
+
+  .ghost-btn:hover { background: var(--cd-surface-3); color: var(--cd-ink); }
+  .ghost-btn:disabled { opacity: 0.45; cursor: default; }
+
+  @media #{$phone} {
+    .ghost-btn { min-height: var(--cd-touch-min); }
+  }
+}

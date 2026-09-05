@@ -338,9 +338,22 @@ export const CHAIN_SITES = [
         why: "each hand-history row's pot",
     },
     {
+        id: 'replay-equity',
+        selector: '.replayer .replay-equity',
+        label: /^replay seat \d+ equity/,
+        why: 'the equity percentage on a seat pod in the hand REPLAYER, at the stop on '
+            + 'screen. Shown only when every live hand at that stop is on its face (a '
+            + 'showdown hand; lib/replay-stops.js equityAllowedAt), computed by '
+            + 'lib/equity.js, and recomputed by the handreplay scene with the independent '
+            + 'oracle (lib/equity-oracle.mjs) from the hand record\'s own cards and board. '
+            + 'Never a money figure; listed before the money site because it is inside '
+            + 'the same replayer',
+    },
+    {
         id: 'hand-replay-money',
         selector: '.replayer .replay-money',
-        label: /^replay /,
+        // Every replay figure EXCEPT the equity ones, which the site above owns.
+        label: /^replay (?!seat \d+ equity)/,
         why: 'every amount the hand REPLAYER renders: each blind post, each action\'s '
             + 'amount, the log\'s own sum-vs-pot audit, the final pot, each winner\'s award '
             + 'and each showdown player\'s result. The `handreplay` scene compares every one '

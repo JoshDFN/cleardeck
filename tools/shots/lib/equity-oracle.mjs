@@ -258,6 +258,37 @@ export function heroEquityVsRandom(hero, board, opponents, trials, seed = 0x5eed
 }
 
 /**
+ * MONTE CARLO over KNOWN hands: the showdown case whose exact enumeration is
+ * over the client's budget (a pre-flop all-in heads up is C(48,5) = 1,712,304
+ * runouts). Same independence as heroEquityVsRandom: a different generator,
+ * a different seed, a different trial count; the caller compares inside
+ * MC_TOLERANCE_POINTS.
+ *
+ * @param {{rank:number,suit:number}[][]} hands
+ * @param {{rank:number,suit:number}[]} board
+ * @param {number} trials
+ * @param {number} [seed]
+ * @returns {{ method:'monte-carlo', trials:number, share:number[] }}
+ */
+export function monteCarloEquity(hands, board, trials, seed = 0x5eed2) {
+    const deck = remainingDeck([...hands.flat(), ...board]);
+    const need = 5 - board.length;
+    const rnd = mulberry32(seed);
+    const pool = deck.slice();
+    const share = new Array(hands.length).fill(0);
+    for (let t = 0; t < trials; t += 1) {
+        for (let i = 0; i < need; i += 1) {
+            const j = i + Math.floor(rnd() * (pool.length - i));
+            const tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+        }
+        const full = [...board, ...pool.slice(0, need)];
+        const scores = hands.map((h) => rankSeven([...h, ...full]));
+        splitPot(scores, share);
+    }
+    return { method: 'monte-carlo', trials, share: share.map((s) => s / trials) };
+}
+
+/**
  * Trials for the oracle's Monte Carlo. Smaller than the client's 200,000 because
  * this lineage ranks 21 subsets per hand; the tolerance below accounts for it.
  */

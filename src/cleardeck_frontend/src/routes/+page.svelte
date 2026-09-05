@@ -1303,6 +1303,7 @@
             <ShuffleProof
               proof={shuffleProof}
               handNumber={tableState?.hand_number}
+              tableId={currentTableInfo?.canister_id?.[0]}
               {tableActor}
             />
           </aside>
@@ -1362,6 +1363,7 @@
     tableId={currentTableInfo?.canister_id?.[0]}
     {tableActor}
     handNumber={tableState?.hand_number || 0}
+    tableName={currentTableInfo?.name || 'ClearDeck table'}
     onClose={() => { showHandHistory = false; }}
   />
 {/if}
