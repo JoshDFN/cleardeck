@@ -242,6 +242,17 @@
     ]);
   }
 
+  /**
+   * The failure handler the two door modules are handed (the address sweep
+   * in lib/deposit-flow.svelte.js, the BTC check in lib/deposit-btc.svelte.js).
+   * Both AWAIT it before re-enabling their button, so on a throw the
+   * balances are re-read first; a canister refusal only writes the sentence.
+   */
+  async function failAndRefresh(e, opts = {}) {
+    fail(e, opts);
+    if (opts.thrown === true) await refreshAfterThrow();
+  }
+
   const errorView = $derived(
     error === null ? null : (typeof error === 'string' ? { message: error, detail: null } : error)
   );
@@ -271,7 +282,7 @@
     untrustedReason: () => untrustedReason,
     isAuthenticated: () => authState.isAuthenticated,
     format: formatWithUnit,
-    onFailure: fail,
+    onFailure: failAndRefresh,
     onMinted: wallet.load,
   });
 
@@ -364,7 +375,7 @@
     untrustedReason: () => untrustedReason,
     flow: cashier,
     setError: (message) => { error = message; },
-    onFailure: fail,
+    onFailure: failAndRefresh,
     receiptFor: (arrived, balance) => claimReceipt({
       arrived, fee: TRANSFER_FEE, feeText: feeDisplay, balance, format: formatWithUnit, fiatOf,
     }),

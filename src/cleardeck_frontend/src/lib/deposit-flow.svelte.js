@@ -76,14 +76,16 @@ export function createCashierFlow() {
  *   untrustedReason: () => string|null,
  *   flow: ReturnType<typeof createCashierFlow>,
  *   setError: (message: string|null) => void,
- *   onFailure: (failure: unknown, opts?: {thrown: boolean}) => void,
+ *   onFailure: (failure: unknown, opts?: {thrown: boolean}) => Promise<void>|void,
  *   receiptFor: (arrived: bigint|null, balance: bigint) => object,
  *   onCredited: () => Promise<void>,
  *   fee: bigint,
  *   minExternal: bigint,
  *   pollMs?: number,
  * }} p `setError` shows this sheet's own sentence; `onFailure` maps the
- *   canister's answer; `receiptFor` builds the receipt from the card's last
+ *   canister's answer and is AWAITED before `claiming` clears, so a handler
+ *   that re-reads the balances after a throw finishes before the button
+ *   comes back; `receiptFor` builds the receipt from the card's last
  *   reading and the new balance; `onCredited` runs after a successful sweep.
  * @returns {{
  *   readonly detected: bigint|null,
@@ -138,16 +140,19 @@ export function createAddressWatch({
       } else {
         flow.fail();
         claimFailed = true;
-        onFailure(result.Err);
+        await onFailure(result.Err);
       }
     } catch (e) {
       logger.error('claim_external_deposit failed:', e);
       flow.fail();
       claimFailed = true;
-      // A throw on the reply leg: the sweep may have landed. Said so.
-      onFailure(e, { thrown: true });
+      // A throw on the reply leg: the sweep may have landed. Said so, and
+      // the button stays disabled until the handler's balance re-read is
+      // done (the sheet's onFailure awaits refreshAfterThrow on a throw).
+      await onFailure(e, { thrown: true });
+    } finally {
+      claiming = false;
     }
-    claiming = false;
   }
 
   $effect(() => {

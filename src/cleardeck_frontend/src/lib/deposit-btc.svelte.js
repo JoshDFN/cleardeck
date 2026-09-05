@@ -13,9 +13,11 @@ import { checkBtcDeposits, fetchBtcDepositAddress } from './deposit-btc.js';
  *   untrustedReason: () => string|null,
  *   isAuthenticated: () => boolean,
  *   format: (v: bigint) => string,
- *   onFailure: (failure: unknown, opts?: {thrown: boolean}) => void,
+ *   onFailure: (failure: unknown, opts?: {thrown: boolean}) => Promise<void>|void,
  *   onMinted: () => Promise<void>,
- * }} p `onFailure` receives the canister's answer for the humane sentence
+ * }} p `onFailure` receives the canister's answer for the humane sentence and
+ *   is AWAITED before `updating` clears: after a throw the balances are
+ *   re-read before the check button comes back
  * @returns {{
  *   readonly address: string,
  *   readonly loading: boolean,
@@ -66,14 +68,19 @@ export function createBtcDeposit({
 
     updatingBtcBalance = true;
     btcUpdateResult = null;
-    const outcome = await checkBtcDeposits(tableActor, format);
-    if ('failure' in outcome) {
-      onFailure(outcome.failure, { thrown: outcome.thrown === true });
-    } else {
-      btcUpdateResult = outcome.message;
-      if (outcome.minted) await onMinted();
+    try {
+      const outcome = await checkBtcDeposits(tableActor, format);
+      if ('failure' in outcome) {
+        // A throw (`thrown`) may have minted already: the handler re-reads
+        // the balances and this waits for it before the button comes back.
+        await onFailure(outcome.failure, { thrown: outcome.thrown === true });
+      } else {
+        btcUpdateResult = outcome.message;
+        if (outcome.minted) await onMinted();
+      }
+    } finally {
+      updatingBtcBalance = false;
     }
-    updatingBtcBalance = false;
   }
 
   return {
