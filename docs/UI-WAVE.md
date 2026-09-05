@@ -646,3 +646,19 @@ The post-wave review (2026-09-05) found the items below; each is fixed on
   overlay takes focus, restores it and owns Escape (capture phase); a hand
   the hero folded before showdown reads Lost (`hand-history-records.js
   playersOf`).
+- **Gates after the review's fixes** (tree `0bb18d4`): `npm run check` 0
+  errors, 4 pre-existing warnings; `npx vitest run` 413 tests in 38 files,
+  green; `POCKET_IC_BIN=~/.cache/dfinity/versions/0.31.0/pocket-ic make test`
+  exit 0, all nine steps (the gates' wiring, `cargo test --workspace`, the
+  wasm build, the differential subset, the money-safety subset with the
+  fuzzer, the settlement oracle, the harness self-tests, the archive
+  analyser, the sealed-dealer spike); `deposit_surface` 13/13 and
+  `deposit_trust_root` 7/7; `node tools/shots/run.mjs --scenes
+  table-facing-bet,table-waiting,deposit,lobby --viewports desktop,mobile`
+  8 of 8 verified, exit 0 (`artifacts/screens/0bb18d4/INDEX.md`: chain
+  agreement on every figure, census 0 unaccounted, 0 occluded, 5/5 notices,
+  felt 39.8-41% desktop and 50.9-61.6% phone, the facing-bet hotkey probe
+  arming and disarming with the preference on); `node
+  tools/shots/touch-targets.mjs` 20/20 states clean (the first run found the
+  wallet menu's checkboxes shrinking under the new shortcuts sentence, fixed
+  with the `.pref-box` 44 px target).
