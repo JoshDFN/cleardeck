@@ -91,7 +91,10 @@ export function pinAfter(node, params) {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return {};
   const media = window.matchMedia(PHONE_MEDIA);
   const pinnedClass = params?.pinnedClass ?? 'pinned';
-  const gates = Array.isArray(params?.gates) ? params.gates : [];
+  // A COPY of the caller's list, never an alias: the action reads `gates` on
+  // every frame, and `update` replaces the list with a new array rather
+  // than splicing into whatever the caller handed over.
+  let gates = Array.isArray(params?.gates) ? [...params.gates] : [];
   const scroller = node.closest(params?.scroller ?? '') ?? node.parentElement;
   let frame = 0;
 
@@ -115,7 +118,7 @@ export function pinAfter(node, params) {
 
   return {
     update(next) {
-      if (Array.isArray(next?.gates)) gates.splice(0, gates.length, ...next.gates);
+      if (Array.isArray(next?.gates)) gates = [...next.gates];
       schedule();
     },
     destroy() {
