@@ -13,6 +13,8 @@ import {
   accountIdentifierHex, checkAgainstCanister, depositSubaccount, deriveTrustedDepositAddress,
 } from './depositAddress.js';
 import { readLedgerBalance } from './deposit-icrc2.js';
+import { logger } from './logger.js';
+import { settleBalanceRead } from './wallet-balance-read.js';
 
 /**
  * @param {{
@@ -25,6 +27,7 @@ import { readLedgerBalance } from './deposit-icrc2.js';
  * }} p
  * @returns {{
  *   readonly balance: number|null,
+ *   readonly balanceError: string|null,
  *   readonly loading: boolean,
  *   readonly address: string,
  *   readonly warning: string|null,
@@ -33,7 +36,11 @@ import { readLedgerBalance } from './deposit-icrc2.js';
  * }}
  */
 export function createWalletReader({ auth, tableActor, tableCanisterId, ledgerCanisterId, isBTC, currencySymbol }) {
+  // null is UNREAD (never a stand-in zero: a zero is a claim the ledger did
+  // not make, and the sheet's route and floor checks read it as one).
   let walletBalance = $state(null);
+  // Why the last read gave no figure, or null when it did.
+  let balanceError = $state(null);
   let loadingBalance = $state(true);
   // YOUR table deposit address, derived locally. Empty until it is derived, and
   // deliberately left empty when the canister's own answer disagrees with it.
@@ -71,7 +78,7 @@ export function createWalletReader({ auth, tableActor, tableCanisterId, ledgerCa
         if (!safeToShow) tableDepositAddress = '';
       }
     } catch (e) {
-      console.error('could not cross-check the deposit address:', e);
+      logger.error('could not cross-check the deposit address:', e);
     }
   }
 
@@ -90,10 +97,11 @@ export function createWalletReader({ auth, tableActor, tableCanisterId, ledgerCa
       }
 
       const balance = await readLedgerBalance(agent, ledgerCanisterId, { owner: principal });
-      walletBalance = Number(balance);
+      ({ balance: walletBalance, error: balanceError } = settleBalanceRead({ ok: true, value: balance }));
     } catch (e) {
-      console.error(`Failed to load ${currencySymbol} wallet balance:`, e);
-      walletBalance = 0;
+      logger.error(`Failed to load ${currencySymbol} wallet balance:`, e);
+      // The balance stays UNREAD (null), and the card says the read failed.
+      ({ balance: walletBalance, error: balanceError } = settleBalanceRead({ ok: false, error: e }));
     }
     loadingBalance = false;
   }
@@ -110,6 +118,7 @@ export function createWalletReader({ auth, tableActor, tableCanisterId, ledgerCa
 
   return {
     get balance() { return walletBalance; },
+    get balanceError() { return balanceError; },
     get loading() { return loadingBalance; },
     get address() { return tableDepositAddress; },
     get warning() { return depositAddressWarning; },

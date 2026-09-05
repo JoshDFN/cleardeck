@@ -15,6 +15,8 @@
     loading = false,
     /** Whether the balance covers the minimum plus both ledger fees. */
     hasEnough = true,
+    /** The sentence for a balance that could NOT be read (lib/wallet-balance-read.js), or null. */
+    readFailed = null,
     /** The floor that sentence names, formatted with its unit. */
     minWalletBalanceDisplay = '',
     btc = false,
@@ -40,7 +42,11 @@
       {/if}
     </span>
   </div>
-  {#if !loading && !hasEnough}
+  {#if !loading && readFailed}
+    <!-- An UNREAD balance is not a zero: the figure above is the placeholder,
+         nothing is judged from it, and the player is told the read failed. -->
+    <p class="from-note short read-failed">{readFailed}</p>
+  {:else if !loading && !hasEnough}
     <p class="from-note short">
       Below the {minWalletBalanceDisplay} a deposit from this wallet needs (the minimum plus both network fees).
       {#if btc}Switch to "I have BTC" to deposit real Bitcoin, or get ckBTC from an exchange.{:else}Send to your deposit address instead.{/if}

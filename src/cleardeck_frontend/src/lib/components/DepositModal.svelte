@@ -624,6 +624,7 @@
                 balanceText={formatWithUnit(wallet.balance)}
                 usdText={walletUsd}
                 loading={wallet.loading}
+                readFailed={wallet.balanceError}
                 hasEnough={hasEnoughBalance}
                 {minWalletBalanceDisplay}
                 btc={isBTC}
