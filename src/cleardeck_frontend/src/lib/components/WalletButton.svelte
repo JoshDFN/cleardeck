@@ -737,10 +737,15 @@
             </button>
           </div>
 
-          <!-- Deposit Addresses Section -->
+          <!-- YOUR WALLET'S OWN ADDRESS, NOT A TABLE DEPOSIT. Money sent here
+               lands in this wallet; a table deposit is made from the table
+               page, where the derived per-table address lives. This section
+               used to be headed "Deposit Addresses", which is the coin flip
+               the money-flows audit named: two "deposit address" concepts on
+               one screen, one of which does not reach the table. -->
           <div class="dropdown-section">
-            <span class="section-title">Deposit Addresses</span>
-            <span class="section-hint">Send funds to these addresses to deposit</span>
+            <span class="section-title">Your wallet address</span>
+            <span class="section-hint">This is your Internet Identity wallet, not a table deposit. To deposit to a table, open the table and press Deposit.</span>
 
             <!-- ICP Deposit -->
             <div class="deposit-item">
@@ -796,7 +801,7 @@
                   </button>
                 {/if}
               </div>
-              <span class="btc-note">BTC deposits require 6 confirmations (~1 hour)</span>
+              <span class="btc-note">Bitcoin sent here needs six confirmations, about an hour.</span>
             {/if}
           </div>
 

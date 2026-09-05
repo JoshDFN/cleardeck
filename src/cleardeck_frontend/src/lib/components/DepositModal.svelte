@@ -1,7 +1,25 @@
 <script>
+  // THE DEPOSIT SHEET, BUILT FOR A DEPOSITOR.
+  //
+  // One primary path per state: an amount from the connected wallet when the
+  // wallet can pay the minimum plus both ledger fees, otherwise the derived
+  // deposit address with a QR; the other route is one tap away. The amount,
+  // its fiat hint, the quick chips and the cost of the deposit sit first; the
+  // disclosures (custody, destination, solvency, runway) stand beside them on
+  // a wide screen and between the amount and the button on a phone; the
+  // button names the amount; two chain commits are painted as steps; success
+  // is a receipt with Done.
+  //
+  // NOTHING IN THE VERIFICATION LOGIC CHANGED. The trust root
+  // (lib/trustedTables.js, docs/SECURITY-FINDINGS.md FINDING 42), the derived
+  // deposit address and its cross-check against the canister (FINDING 34 / 40),
+  // the OISY subaccount cross-check, the ledger approval of the amount plus
+  // one network charge and the table's pull are the same calls in the same order with the same
+  // refusals as before; only their presentation moved.
+
   import { auth } from '$lib/auth.js';
   import NoticeLine from './NoticeLine.svelte';
-  import { oisy, formatOisyBalance } from '$lib/oisy.js';
+  import { oisy } from '$lib/oisy.js';
   import { Actor } from '@dfinity/agent';
   import { Principal } from '@dfinity/principal';
   import { onMount } from 'svelte';
@@ -10,7 +28,7 @@
   import { readTableSolvency, refreshTableSolvency } from '$lib/solvency.js';
   import CycleRunwayNotice from './CycleRunwayNotice.svelte';
   import { readCycleRunway } from '$lib/cycleRunway.js';
-  import { IS_MAINNET_BUILD, NETWORK } from '$lib/ic-config.js';
+  import { IS_MAINNET_BUILD } from '$lib/ic-config.js';
   import {
     deriveTrustedDepositAddress,
     checkAgainstCanister,
@@ -21,6 +39,20 @@
   import { scrollLock } from '$lib/scroll-lock.js';
   import QuickAmounts from './QuickAmounts.svelte';
   import { pinAfter } from '$lib/pin-after.js';
+  import { loadPrices } from '$lib/prices.js';
+  import {
+    depositCost, floatToSmallest, formatCashier, formatExact, formatPlain, formatUsd, toSmallest,
+    usdValue,
+  } from '$lib/cashier-format.js';
+  import { FLOW, depositSteps } from '$lib/cashier-steps.js';
+  import { describeCashierFailure } from '$lib/humane-errors.js';
+  import CashierStepper from './CashierStepper.svelte';
+  import CashierSummary from './CashierSummary.svelte';
+  import CashierReceipt from './CashierReceipt.svelte';
+  import CashierDisclosures from './CashierDisclosures.svelte';
+  import DepositAddressCard from './DepositAddressCard.svelte';
+  import BtcNativeDeposit from './BtcNativeDeposit.svelte';
+  import { shortId } from '$lib/lobby-format.js';
 
   const {
     tableActor, tableCanisterId, onClose, onDepositSuccess, currency = 'ICP',
@@ -34,198 +66,28 @@
     minBuyIn = null,
   } = $props();
 
-  // THE QUICK CHIPS (QuickAmounts.svelte): the table's minimum buy-in and
-  // twice it, as the field would be typed in its current unit.
-  const quickAmounts = $derived.by(() => {
-    if (minBuyIn === null || minBuyIn === undefined) return [];
-    let min;
-    try { min = BigInt(minBuyIn); } catch { return []; }
-    if (min <= 0n) return [];
-    const text = (v) => (isBTC && inputUnit === 'sats' ? v.toString() : formatPlain(v));
-    return [
-      { id: 'min', label: 'Min buy-in', text: text(min), hint: 'The table\'s minimum buy-in' },
-      { id: 'double', label: '2x', text: text(min * 2n), hint: 'Twice the table\'s minimum buy-in' },
-    ];
-  });
-
-  // ==========================================================================
-  // IS THIS CANISTER ID ONE THIS BUILD HAS EVER HEARD OF?
-  // ASKED BEFORE ANY ADDRESS IS DERIVED AND BEFORE ANY TRANSFER IS ADDRESSED.
-  // ==========================================================================
-  //
-  // docs/SECURITY-FINDINGS.md FINDING 42. `tableCanisterId` reaches this
-  // component from `routes/+page.svelte`, which took it out of
-  // `lobby.get_tables()` -- an ordinary QUERY. One replica answers a query out
-  // of its own memory and signs nothing this client verifies, so those bytes are
-  // attacker-controllable with no canister bug, no majority and no key.
-  //
-  // Everything below that touches money is a function of this id:
-  //
-  //   * the deposit ADDRESS is account_identifier(THIS ID, sha256(...||you)),
-  //   * the OISY transfer is addressed to Account { owner: THIS ID, ... },
-  //   * the ICRC-2 approval names THIS ID as the spender of your ledger balance.
-  //
-  // Substitute it and all three move to a canister the attacker controls, whose
-  // controller can pay its whole ledger balance to itself with one install_code
-  // (FINDING 23 did exactly that for 39.99990000 ICP). The cross-check further
-  // down cannot see it: it asks the canister the substituted id names, and a
-  // substituted canister answers consistently about itself. Reproduced on
-  // rendered pixels by `node tools/shots/repro-finding42.mjs` -- address
-  // published, no warning, every check on the screen green.
-  //
-  // The trust root is `$lib/trustedTables.js`: the ids this build was PUBLISHED
-  // with. A wire-supplied id is fine for DISPLAYING a table; it is never allowed
-  // to be the first argument of a deposit address.
-  const tableIsTrusted = $derived(isTrustedTableId(tableCanisterId));
-  const untrustedReason = $derived(
-    tableIsTrusted ? null : untrustedTableMessage(tableCanisterId)
-  );
-
-  // ==========================================================================
-  // CAN THIS TABLE PAY BACK WHAT IT ALREADY HOLDS? ASKED BEFORE, NOT AFTER.
-  // ==========================================================================
-  //
-  // docs/SECURITY-FINDINGS.md FINDING 35 / docs/DEFECTS.md E-70. Mainnet table_1
-  // is 2.00 ICP short of its own books and no surface of the canister says so, so
-  // this screen -- the one screen a player commits real money from -- showed
-  // nothing at all. It now asks, and renders every answer except "covered".
-  //
-  // The read is a QUERY, so it costs nothing and still answers while the update
-  // path is refusing. It runs on mount rather than on submit: a warning that
-  // appears after the button is pressed is a receipt, not a warning.
-  let solvency = $state(null);
-  let solvencyRefreshing = $state(false);
-
-  async function loadSolvency() {
-    solvency = await readTableSolvency(tableActor);
-  }
-
-  async function refreshSolvency() {
-    solvencyRefreshing = true;
-    try {
-      solvency = await refreshTableSolvency(tableActor);
-    } finally {
-      solvencyRefreshing = false;
-    }
-  }
-
-
-  // ==========================================================================
-  // HOW LONG CAN THIS TABLE KEEP HONOURING WITHDRAWALS? ASKED HERE, NOT LATER.
-  // ==========================================================================
-  //
-  // docs/DEFECTS.md E-55. A canister below its freezing threshold rejects EVERY
-  // update call at once -- `deposit`, `withdraw`, `cash_out`, `player_action`,
-  // `abandon_stuck_hand` -- so every player at the table loses access to their
-  // own money at the same instant, with no attacker and no in-application
-  // remedy. Nothing in this project tops a canister up.
-  //
-  // THERE IS NO BURN FIGURE IN THIS COMMENT. It carried one, hand-copied, and it
-  // was wrong the same way five other copies of it were wrong: it priced an open
-  // browser tab as a 10-second heartbeat stream and left out the 500 ms
-  // `check_timeouts` UPDATE poll, which was the larger term by more than an order
-  // of magnitude (docs/DEFECTS.md E-92). The numbers live in ONE measured file
-  // now, `tools/cycles/burn-table.json`. What this modal READS was never affected:
-  // the canister's own sliding window measures real burn and always included those
-  // calls even while no document did.
-  //
-  // The shape of the problem is unchanged: the reassuring runway figure is the
-  // figure for a table NOBODY IS USING.
-  //
-  // Read on mount, before any amount is typed: a warning that appears after the
-  // button is pressed is a receipt, not a warning.
-  let runway = $state(null);
-
-  async function loadRunway() {
-    runway = await readCycleRunway(tableActor);
-  }
-
-  // Subscribe to auth state to check if user is authenticated
-  let authState = $state({ isAuthenticated: false });
-  $effect(() => {
-    const unsub = auth.subscribe(s => { authState = s; });
-    return unsub;
-  });
-
-  // Subscribe to OISY wallet state
-  let oisyState = $state({ isConnected: false, isConnecting: false, icpBalance: null, ckbtcBalance: null });
-  $effect(() => {
-    const unsub = oisy.subscribe(s => { oisyState = s; });
-    return unsub;
-  });
-
-  // Opens on the shortfall a Sit tap found, when there is one: e8s to ICP for
-  // an ICP table (trailing zeros dropped), sats as they are for a BTC table
-  // (the BTC input starts in sats). Otherwise empty, as before.
-  const openingAmount = (() => {
-    const n = initialAmount === null || initialAmount === undefined ? null : Number(initialAmount);
-    if (n === null || !Number.isFinite(n) || n <= 0) return '';
-    if (currency === 'BTC') return String(Math.ceil(n));
-    return (n / 1e8).toFixed(8).replace(/\.?0+$/, '');
-  })();
-  let depositAmount = $state(openingAmount);
-  let processing = $state(false);
-  let error = $state(null);
-  let success = $state(null);
-  let statusMessage = $state('');
-  let walletBalance = $state(null);
-  let loadingBalance = $state(true);
-  let copied = $state(false);
-  // YOUR table deposit address, derived locally. Empty until it is derived, and
-  // deliberately left empty when the canister's own answer disagrees with it: at
-  // that point this client cannot tell which of the two was tampered with, and
-  // showing either one would be guessing with the player's money.
-  let tableDepositAddress = $state('');
-  let depositAddressWarning = $state(null);
-  let claiming = $state(false);
-  let copiedAddress = $state(false);
-
-  // Wallet source: 'ii' (Internet Identity) or 'oisy' (OISY Wallet)
-  let walletSource = $state('ii');
-
-  // BTC-specific state
-  let btcDepositAddress = $state('');
-  let loadingBtcAddress = $state(false);
-  let btcAddressError = $state(null);
-  let updatingBtcBalance = $state(false);
-  let btcUpdateResult = $state(null);
-  let depositMethod = $state('ckbtc'); // 'ckbtc' or 'btc' for BTC tables
-  let inputUnit = $state('sats'); // 'sats' or 'btc' for BTC input mode
+  // Currency-specific settings
+  const isBTC = currency === 'BTC';
+  const currencySymbol = isBTC ? 'BTC' : 'ICP';
 
   // Ledger canister IDs
   const ICP_LEDGER_CANISTER = 'ryjl3-tyaaa-aaaaa-aaaba-cai';
   const CKBTC_LEDGER_CANISTER = 'mxzaz-hqaaa-aaaar-qaada-cai';
-
-  // Price state (fetched from CoinGecko)
-  let icpPriceUsd = $state(null);
-  let btcPriceUsd = $state(null);
-  let priceLoading = $state(false);
-  let priceError = $state(null);
-
-  // Get the correct ledger based on currency
-  const ledgerCanisterId = currency === 'BTC' ? CKBTC_LEDGER_CANISTER : ICP_LEDGER_CANISTER;
-
-  // Currency-specific settings
-  const isBTC = currency === 'BTC';
-  const currencySymbol = isBTC ? 'BTC' : 'ICP';
-  const unitName = isBTC ? 'sats' : 'e8s';
+  const ledgerCanisterId = isBTC ? CKBTC_LEDGER_CANISTER : ICP_LEDGER_CANISTER;
 
   // >>> MIRRORED-LIMITS-BEGIN  (tests/money_safety/tests/ui_limits.rs reads this fence)
   // ===========================================================================
   // MIRRORED CANISTER LIMITS -- THE ONLY NUMBERS IN THIS FILE (docs/DEFECTS.md T-26)
   // ===========================================================================
   //
-  // The deposit floor is the one limit in this app the copy already agreed with, and
-  // the point of this block is that it stays that way by construction rather than by
-  // luck. Every stated figure below is interpolated from these constants.
+  // Every stated figure below is interpolated from these constants, so the copy
+  // agrees with the canister by construction rather than by luck.
   //
   // WHAT THE FLOOR NOW PROMISES (docs/SECURITY-FINDINGS.md FINDING 27). Agreeing
   // with the deposit door was never enough: the canister accepted this amount and
-  // its WITHDRAWAL floor then refused to return it, so a player who deposited
-  // exactly the figure this modal advertises could not get it back out. The two
-  // floors are now one number per currency, and lib.rs asserts at compile time
-  // that the withdrawal floor can never rise above this one again. The number
-  // below is therefore a promise in both directions.
+  // its WITHDRAWAL floor then refused to return it. The two floors are now one
+  // number per currency, asserted at compile time in lib.rs, so the number below
+  // is a promise in both directions.
   //
   // src/table_canister/src/lib.rs -- MIRRORED, keep in step:
   //   :36 ICP_TRANSFER_FEE       10_000  (0.0001 ICP)
@@ -249,63 +111,25 @@
   const transferFee = TRANSFER_FEE;
   const minDeposit = MIN_DEPOSIT;
 
-  /** Exact, never rounded: a limit rendered with `toFixed` is a limit that lies. */
-  function formatExact(smallestUnit) {
-    const v = BigInt(smallestUnit);
-    if (isBTC) return `${v.toLocaleString('en-US')} sats`;
-    const whole = v / 100_000_000n;
-    const frac = (v % 100_000_000n).toString().padStart(8, '0').replace(/0+$/, '');
-    return frac ? `${whole}.${frac} ICP` : `${whole} ICP`;
-  }
-
-  /**
-   * A wallet balance as a BigInt of smallest units. Balances reach this component as
-   * `Number(...)` from three different places (the II ledger query, `oisy.js`, and a
-   * Candid `Nat`), and `BigInt()` throws on a non-integer Number.
-   */
-  function toSmallest(value) {
-    if (typeof value === 'bigint') return value;
-    const n = Number(value);
-    return Number.isFinite(n) && n > 0 ? BigInt(Math.floor(n)) : 0n;
-  }
-
-  /** The same value as a bare decimal, for an input's `min` attribute. */
-  function formatPlain(smallestUnit) {
-    const v = BigInt(smallestUnit);
-    const whole = v / 100_000_000n;
-    const frac = (v % 100_000_000n).toString().padStart(8, '0').replace(/0+$/, '');
-    return frac ? `${whole}.${frac}` : `${whole}`;
-  }
-
-  const minDepositDisplay = formatExact(MIN_DEPOSIT);
-  const minExternalDepositDisplay = formatExact(MIN_EXTERNAL_DEPOSIT);
-  const feeDisplay = formatExact(TRANSFER_FEE);
+  const minDepositDisplay = formatExact(MIN_DEPOSIT, currencySymbol);
+  const minExternalDepositDisplay = formatExact(MIN_EXTERNAL_DEPOSIT, currencySymbol);
+  const feeDisplay = formatExact(TRANSFER_FEE, currencySymbol);
   // The floor the LEDGER imposes, which is the floor that actually matters. An
   // ICRC-2 deposit costs the depositor TWO ledger fees, not one: one for
   // `icrc2_approve` and one for the canister's `icrc2_transfer_from`, both charged
   // to the depositor's account. So a wallet holding exactly the minimum cannot make
-  // the minimum deposit, and the old `balance > minDeposit` test understated the
-  // requirement by both fees -- it showed the deposit form to a wallet whose every
-  // possible deposit the ledger would refuse.
+  // the minimum deposit.
   const DEPOSIT_LEDGER_FEES = TRANSFER_FEE * 2n;
   const minWalletBalance = MIN_DEPOSIT + DEPOSIT_LEDGER_FEES;
-  const minWalletBalanceDisplay = formatExact(minWalletBalance);
-
-  // The input's own floor, in whichever unit the player is typing, so the browser's
-  // validation agrees with the canister instead of with a hardcoded string.
-  const inputMinAttr = $derived(
-    isBTC && inputUnit === 'sats' ? MIN_DEPOSIT.toString() : formatPlain(MIN_DEPOSIT)
-  );
+  const minWalletBalanceDisplay = formatExact(minWalletBalance, currencySymbol);
+  const ledgerFeesDisplay = formatExact(DEPOSIT_LEDGER_FEES, currencySymbol);
 
   // NOT ClearDeck limits, and NOT enforced by anything in this repository.
   //
   // The native-BTC path hands the player an address owned by the ckBTC MINTER and
-  // the thresholds below are the minter's, not the table canister's. There is no
-  // constant in this tree for ui_limits.rs to check them against, which is itself
-  // worth knowing: these two figures are the only limits this app states that
-  // nothing here can verify. They are named once, here, so that at least they
-  // cannot drift between the four places the native-BTC flow mentions them -- which
-  // is what made the withdrawal floor in T-26 wrong on three surfaces at once.
+  // the thresholds below are the minter's, not the table canister's. They are
+  // named once, here, so they cannot drift between the places the native-BTC
+  // flow mentions them.
   const BTC_NATIVE_MIN_SATS = 10_000n;
   const BTC_NATIVE_MINTER_FEE_SATS = 2_000n;
   const btcNativeMinDisplay = `${BTC_NATIVE_MIN_SATS.toLocaleString('en-US')} sats`;
@@ -313,63 +137,173 @@
   const btcNativeMinterFeeDisplay = `${BTC_NATIVE_MINTER_FEE_SATS.toLocaleString('en-US')} sats`;
   // <<< MIRRORED-LIMITS-END
 
-  // THE DEPOSIT ADDRESS IS DERIVED HERE, NOT FETCHED.
-  //
-  // docs/SECURITY-FINDINGS.md FINDING 40. `get_deposit_address()` is an ordinary
-  // query: one replica answers it and signs nothing this client checks, so a
-  // dishonest replica can hand the player another player's address and the player
-  // pays it. `$lib/depositAddress.js` computes the address from the table canister
-  // id and the signed-in principal with no network call at all, which is what
-  // removes the substitution rather than detecting it.
-  //
-  // 340 lines of hand-rolled SHA-224 and CRC-32 used to live here, computing the
-  // player's OWN WALLET account under the heading "Your Deposit Address". Money
-  // sent there does not reach the table; it reaches the wallet, and a second step
-  // nobody was told about was still required. One derivation, in one module,
-  // gated against the canister by
-  // tests/money_safety/tests/deposit_surface.rs::
-  // the_frontends_own_derivation_agrees_with_the_canister_for_every_principal.
+  // THE QUICK CHIPS (QuickAmounts.svelte): the table's minimum buy-in and
+  // twice it, as the field would be typed in its current unit.
+  const quickAmounts = $derived.by(() => {
+    if (minBuyIn === null || minBuyIn === undefined) return [];
+    let buyIn;
+    try { buyIn = BigInt(minBuyIn); } catch { return []; }
+    if (buyIn <= 0n) return [];
+    const text = (v) => (isBTC && inputUnit === 'sats' ? v.toString() : formatPlain(v));
+    return [
+      { id: 'min', label: 'Min buy-in', text: text(buyIn), hint: 'The table\'s minimum buy-in' },
+      { id: 'double', label: '2x', text: text(buyIn * 2n), hint: 'Twice the table\'s minimum buy-in' },
+    ];
+  });
 
-  // Convert user input to smallest unit (sats or e8s)
+  // ==========================================================================
+  // IS THIS CANISTER ID ONE THIS BUILD HAS EVER HEARD OF?
+  // ASKED BEFORE ANY ADDRESS IS DERIVED AND BEFORE ANY TRANSFER IS ADDRESSED.
+  // ==========================================================================
+  //
+  // docs/SECURITY-FINDINGS.md FINDING 42. `tableCanisterId` reaches this
+  // component from `routes/+page.svelte`, which took it out of
+  // `lobby.get_tables()` -- an ordinary QUERY one replica answers out of its own
+  // memory. Everything below that touches money is a function of this id (the
+  // deposit ADDRESS, the OISY transfer's destination, the ICRC-2 approval's
+  // spender), and a substituted id moves all three to a canister the attacker
+  // controls. The trust root is `$lib/trustedTables.js`: the ids this build was
+  // PUBLISHED with. A wire-supplied id may name a table on screen; it may never
+  // be the first argument of a deposit address.
+  const tableIsTrusted = $derived(isTrustedTableId(tableCanisterId));
+  const untrustedReason = $derived(
+    tableIsTrusted ? null : untrustedTableMessage(tableCanisterId)
+  );
+
+  // CAN THIS TABLE PAY BACK WHAT IT ALREADY HOLDS? ASKED BEFORE, NOT AFTER
+  // (docs/SECURITY-FINDINGS.md FINDING 35 / docs/DEFECTS.md E-70). A query, run
+  // on mount: a warning that appears after the button is pressed is a receipt.
+  let solvency = $state(null);
+  let solvencyRefreshing = $state(false);
+
+  async function loadSolvency() {
+    solvency = await readTableSolvency(tableActor);
+  }
+
+  async function refreshSolvency() {
+    solvencyRefreshing = true;
+    try {
+      solvency = await refreshTableSolvency(tableActor);
+    } finally {
+      solvencyRefreshing = false;
+    }
+  }
+
+  // HOW LONG CAN THIS TABLE KEEP HONOURING WITHDRAWALS? (docs/DEFECTS.md E-55).
+  // A canister below its freezing threshold rejects EVERY update call at once.
+  // The figures live in tools/cycles/burn-table.json; the canister's own
+  // sliding window is what this reads.
+  let runway = $state(null);
+
+  async function loadRunway() {
+    runway = await readCycleRunway(tableActor);
+  }
+
+  let authState = $state({ isAuthenticated: false, principal: null });
+  $effect(() => {
+    const unsub = auth.subscribe(s => { authState = s; });
+    return unsub;
+  });
+
+  let oisyState = $state({ isConnected: false, isConnecting: false, icpBalance: null, ckbtcBalance: null, principal: null });
+  $effect(() => {
+    const unsub = oisy.subscribe(s => { oisyState = s; });
+    return unsub;
+  });
+
+  // Opens on the shortfall a Sit tap found, when there is one: e8s to ICP for
+  // an ICP table (trailing zeros dropped), sats as they are for a BTC table.
+  const openingAmount = (() => {
+    const n = initialAmount === null || initialAmount === undefined ? null : Number(initialAmount);
+    if (n === null || !Number.isFinite(n) || n <= 0) return '';
+    if (currency === 'BTC') return String(Math.ceil(n));
+    return (n / 1e8).toFixed(8).replace(/\.?0+$/, '');
+  })();
+  let depositAmount = $state(openingAmount);
+  let processing = $state(false);
+  // A string is this component's own refusal, shown as written; an object is a
+  // canister's or the ledger's answer, already turned into a sentence.
+  let error = $state(null);
+  let walletBalance = $state(null);
+  let loadingBalance = $state(true);
+  // YOUR table deposit address, derived locally. Empty until it is derived, and
+  // deliberately left empty when the canister's own answer disagrees with it.
+  let tableDepositAddress = $state('');
+  let depositAddressWarning = $state(null);
+  let claiming = $state(false);
+
+  // Wallet source: 'ii' (Internet Identity) or 'oisy' (OISY Wallet). OISY
+  // signs on mainnet only, so the toggle renders on a mainnet build only.
+  let walletSource = $state('ii');
+
+  // The route: 'wallet' (approve + pull from the connected wallet) or
+  // 'address' (send to the derived address, then claim). Null follows the
+  // balance: the wallet route when it can pay, the address otherwise.
+  let route = $state(null);
+
+  // BTC-specific state
+  let btcDepositAddress = $state('');
+  let loadingBtcAddress = $state(false);
+  let btcAddressError = $state(null);
+  let updatingBtcBalance = $state(false);
+  let btcUpdateResult = $state(null);
+  let depositMethod = $state('ckbtc'); // 'ckbtc' or 'btc' for BTC tables
+  let inputUnit = $state('sats'); // 'sats' or 'btc' for BTC input mode
+
+  // The one quote for the page (lib/prices.js): null renders no fiat hint.
+  let prices = $state(null);
+
+  // THE FLOW: which step of the deposit is running, since when.
+  let flow = $state({ phase: FLOW.IDLE, steps: [], current: 0, startedAt: null });
+  // THE RECEIPT: what moved, shown until Done.
+  let receipt = $state(null);
+
+  function beginFlow(steps) {
+    flow = { phase: FLOW.RUNNING, steps, current: 0, startedAt: Date.now() };
+  }
+  function advanceFlow() {
+    flow = { ...flow, current: Math.min(flow.current + 1, flow.steps.length - 1), startedAt: Date.now() };
+  }
+  function finishFlow() {
+    flow = { ...flow, phase: FLOW.DONE };
+  }
+  function failFlow() {
+    flow = { ...flow, phase: FLOW.FAILED };
+  }
+  function resetFlow() {
+    flow = { phase: FLOW.IDLE, steps: [], current: 0, startedAt: null };
+  }
+
+  /** A canister's or the ledger's refusal, as a sentence with the raw text kept. */
+  function fail(e) {
+    error = describeCashierFailure(e);
+  }
+
+  const errorView = $derived(
+    error === null ? null : (typeof error === 'string' ? { message: error, detail: null } : error)
+  );
+
+  // The input's own floor, in whichever unit the player is typing.
+  const inputMinAttr = $derived(
+    isBTC && inputUnit === 'sats' ? MIN_DEPOSIT.toString() : formatPlain(MIN_DEPOSIT)
+  );
+
+  // Convert user input to smallest unit (sats or e8s): the float floor the
+  // deposit always used (lib/cashier-format.js floatToSmallest).
   function inputToSmallestUnit(amount) {
-    if (isBTC) {
-      // For BTC, check the input unit mode
-      if (inputUnit === 'sats') {
-        return BigInt(Math.floor(Number(amount)));
-      }
-      return BigInt(Math.floor(Number(amount) * 100_000_000));
+    if (isBTC && inputUnit === 'sats') {
+      const n = Math.floor(Number(amount));
+      return Number.isFinite(n) && n > 0 ? BigInt(n) : 0n;
     }
-    return BigInt(Math.floor(Number(amount) * 100_000_000));
+    return floatToSmallest(amount);
   }
 
-  // Format balance for display
-  function formatBalance(smallestUnit) {
-    if (smallestUnit === null || smallestUnit === undefined) return '...';
-    const num = Number(smallestUnit);
-    if (isBTC) {
-      const btc = num / 100_000_000;
-      if (btc >= 1) return `${btc.toFixed(4)} BTC`;
-      if (num >= 1000) return `${(num / 1000).toFixed(1)}K sats`;
-      return `${num} sats`;
-    }
-    return (num / 100_000_000).toFixed(4);
-  }
+  const formatWithUnit = (smallestUnit) => formatCashier(smallestUnit, currencySymbol, { placeholder: '...' });
 
-  // Format for display with unit
-  function formatWithUnit(smallestUnit) {
-    if (smallestUnit === null || smallestUnit === undefined) return '...';
-    const formatted = formatBalance(smallestUnit);
-    if (!formatted.includes('BTC') && !formatted.includes('sats') && !formatted.includes('ICP')) {
-      return `${formatted} ${currencySymbol}`;
-    }
-    return formatted;
-  }
+  const perTokenUsd = $derived(prices ? (isBTC ? prices.btcUsd : prices.icpUsd) : null);
 
   // Derive YOUR deposit address locally, then ask the canister and compare.
-  //
-  // The comparison NEVER prefers the canister's answer. Its only job is to catch
-  // a substituted reply or a drift between this build's derivation and the
-  // canister's, and in either case the honest thing to show is no address at all.
+  // The comparison NEVER prefers the canister's answer.
   async function deriveAndVerifyDepositAddress(principal) {
     depositAddressWarning = null;
     tableDepositAddress = '';
@@ -379,9 +313,7 @@
     }
     let derived;
     try {
-      // THE TRUST ROOT IS CHECKED INSIDE THIS CALL, NOT HERE (FINDING 42): the
-      // id came off the wire and `deriveTrustedDepositAddress` refuses to hash
-      // an id this build was not published with.
+      // THE TRUST ROOT IS CHECKED INSIDE THIS CALL, NOT HERE (FINDING 42).
       derived = deriveTrustedDepositAddress(tableCanisterId, principal).address;
     } catch (e) {
       depositAddressWarning = e.message || 'Could not derive your deposit address.';
@@ -396,11 +328,8 @@
       const { agrees, safeToShow, reason } = checkAgainstCanister(derived, reported, shared);
       if (!agrees) {
         depositAddressWarning = reason;
-        // `safeToShow` is the whole judgement: a canister running the pre-FINDING-34
-        // build reports its shared account, and the address derived here is still
-        // the one its sweep reaches, so it is shown with the reason. Any OTHER
-        // disagreement means the derivations themselves differ and the address
-        // might be unreachable -- show nothing.
+        // `safeToShow` is the whole judgement: any disagreement other than the
+        // pre-FINDING-34 shared account means the derivations differ, so show nothing.
         if (!safeToShow) tableDepositAddress = '';
       }
     } catch (e) {
@@ -410,27 +339,36 @@
 
   // Sweep whatever is at YOUR deposit address into your table balance.
   async function claimExternalDeposit() {
-    // Nothing at an unpinned canister is yours to sweep, and the button that
-    // calls this is only reachable beside an address this build derived.
+    // Nothing at an unpinned canister is yours to sweep.
     if (!tableIsTrusted) {
       error = untrustedReason;
       return;
     }
     claiming = true;
     error = null;
-    success = null;
+    beginFlow([
+      { id: 'claim', title: 'Claiming what arrived at your deposit address', hint: 'The table sweeps it into your balance', expectedMs: 1750 },
+      { id: 'credited', title: 'Credited to your table balance', hint: '', expectedMs: null },
+    ]);
     try {
       const result = await tableActor.claim_external_deposit();
       if ('Ok' in result) {
-        success = `Claimed ${formatWithUnit(result.Ok)} into your table balance.`;
+        finishFlow();
+        receipt = {
+          title: 'Deposit claimed',
+          lead: 'What had arrived at your deposit address is in your table balance now.',
+          rows: [{ id: 'balance', label: 'Table balance now', value: formatWithUnit(result.Ok), strong: true }],
+        };
         await loadWalletBalance();
         onDepositSuccess?.();
       } else {
-        error = result.Err;
+        failFlow();
+        fail(result.Err);
       }
     } catch (e) {
       console.error('claim_external_deposit failed:', e);
-      error = e.message || 'Could not claim your deposit.';
+      failFlow();
+      fail(e);
     }
     claiming = false;
   }
@@ -481,21 +419,14 @@
   async function loadBtcDepositAddress() {
     if (!isBTC || !tableActor) return;
 
-    // THE FOURTH MONEY DOOR (docs/SECURITY-FINDINGS.md FINDING 45). Wave 14 closed
-    // three doors in this component against an unpinned table -- the derived ICP
-    // address, the OISY transfer and the ICRC-2 approval -- and left this one, which
-    // is worse than all three: the BTC address is not DERIVED from the canister id,
-    // it is FETCHED from the canister, so a substituted `get_tables()` naming a
-    // hostile canister with `currency = variant { BTC }` puts an address that
-    // attacker owns on screen under "Your Bitcoin Deposit Address" with a Copy
-    // button. Bitcoin sent there is unrecoverable. The attacker picks this branch
-    // too: `currency` comes off the same uncertified reply.
+    // THE FOURTH MONEY DOOR (docs/SECURITY-FINDINGS.md FINDING 45): the BTC
+    // address is FETCHED, not derived, so a substituted table id would put an
+    // attacker's address on screen. Refused for an unpinned table.
     if (!tableIsTrusted) {
       btcAddressError = untrustedReason;
       return;
     }
 
-    // Check if user is authenticated - ckBTC minter requires non-anonymous principal
     if (!authState.isAuthenticated) {
       btcAddressError = 'Please log in with Internet Identity to get a BTC deposit address';
       return;
@@ -531,12 +462,10 @@
       const result = await tableActor.update_btc_balance();
       if ('Ok' in result) {
         const statuses = result.Ok;
-        // Check if any were minted
         const minted = statuses.filter(s => 'Minted' in s);
         if (minted.length > 0) {
           const totalMinted = minted.reduce((sum, s) => sum + Number(s.Minted.minted_amount), 0);
-          btcUpdateResult = `Success! ${formatBalance(totalMinted)} minted to your wallet.`;
-          // Refresh wallet balance
+          btcUpdateResult = `Success! ${formatWithUnit(totalMinted)} minted to your wallet.`;
           await loadWalletBalance();
         } else if (statuses.some(s => 'Checked' in s)) {
           btcUpdateResult = 'UTXOs found and being processed. Please wait and try again.';
@@ -544,61 +473,14 @@
           btcUpdateResult = 'No new deposits found yet.';
         }
       } else if ('Err' in result) {
-        error = result.Err;
+        fail(result.Err);
       }
     } catch (e) {
       console.error('Failed to update BTC balance:', e);
-      error = e.message || 'Failed to update balance';
+      fail(e);
     }
 
     updatingBtcBalance = false;
-  }
-
-  // Fetch exchange rates from CoinGecko (free, no auth required)
-  async function loadPrices() {
-    priceLoading = true;
-    priceError = null;
-
-    try {
-      // CoinGecko simple price API - free tier, no API key needed
-      const response = await fetch(
-        'https://api.coingecko.com/api/v3/simple/price?ids=internet-computer,bitcoin&vs_currencies=usd'
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data['internet-computer']?.usd) {
-          icpPriceUsd = data['internet-computer'].usd;
-        }
-        if (data['bitcoin']?.usd) {
-          btcPriceUsd = data['bitcoin'].usd;
-        }
-      } else {
-        throw new Error('CoinGecko API error');
-      }
-    } catch (e) {
-      console.error('Failed to fetch prices:', e);
-      priceError = 'Failed to fetch prices';
-    }
-
-    priceLoading = false;
-  }
-
-  // Calculate USD value
-  function getUsdValue(sats) {
-    if (isBTC && btcPriceUsd) {
-      return (sats / 100_000_000) * btcPriceUsd;
-    } else if (!isBTC && icpPriceUsd) {
-      return (sats / 100_000_000) * icpPriceUsd;
-    }
-    return null;
-  }
-
-  // Format USD
-  function formatUsd(value) {
-    if (value === null || value === undefined) return '';
-    if (value < 0.01) return `~$${value.toFixed(4)}`;
-    return `~$${value.toFixed(2)}`;
   }
 
   // Connect to OISY wallet
@@ -615,13 +497,11 @@
     }
   }
 
-  // Disconnect OISY wallet
   async function disconnectOisyWallet() {
     await oisy.disconnect();
     walletSource = 'ii';
   }
 
-  // Get the effective wallet balance based on source
   const effectiveWalletBalance = $derived.by(() => {
     if (walletSource === 'oisy') {
       return isBTC ? oisyState.ckbtcBalance : oisyState.icpBalance;
@@ -639,14 +519,76 @@
   const effectiveHasEnoughBalance = $derived.by(() => {
     const bal = effectiveWalletBalance;
     // `>= minWalletBalance`, not `> minDeposit`: the deposit costs the minimum
-    // PLUS both ledger fees, so this is the balance at which a deposit can actually
-    // succeed. See the note on DEPOSIT_LEDGER_FEES.
+    // PLUS both ledger fees, so this is the balance at which a deposit can
+    // actually succeed.
     return bal !== null && toSmallest(bal) >= minWalletBalance;
+  });
+
+  const hasEnoughBalance = $derived(effectiveHasEnoughBalance);
+
+  const walletUsd = $derived(
+    walletBalance && !isBTC ? usdValue(walletBalance, perTokenUsd) : null
+  );
+  const oisyUsd = $derived(
+    walletSource === 'oisy' && effectiveWalletBalance ? usdValue(effectiveWalletBalance, perTokenUsd) : null
+  );
+
+  // The route in force: the player's choice, else what the balance allows.
+  const showsWalletRoute = $derived(!isBTC || depositMethod === 'ckbtc');
+  const effectiveRoute = $derived.by(() => {
+    if (!showsWalletRoute) return 'btc';
+    if (route) return route;
+    if (isBTC) return 'wallet';
+    if (effectiveLoadingBalance) return 'wallet';
+    return hasEnoughBalance ? 'wallet' : 'address';
+  });
+
+  const walletCanPay = $derived(
+    effectiveRoute === 'wallet' && hasEnoughBalance && (walletSource === 'ii' || oisyState.isConnected)
+  );
+
+  // THE AMOUNT TYPED, AND WHAT IT COSTS. Every figure comes from the mirrored
+  // fee and the typed amount; the harness recomputes the same rows from the
+  // ledger's own fee (chain-agreement.mjs cost-summary).
+  const typedSmallest = $derived.by(() => {
+    if (!depositAmount || !(Number(depositAmount) > 0)) return 0n;
+    return inputToSmallestUnit(depositAmount);
+  });
+
+  const typedUsd = $derived(typedSmallest > 0n ? usdValue(typedSmallest, perTokenUsd) : null);
+
+  const cost = $derived(
+    typedSmallest > 0n
+      ? depositCost({ amount: typedSmallest, fee: TRANSFER_FEE })
+      : null,
+  );
+
+  const summaryRows = $derived.by(() => {
+    if (!cost) return [];
+    return [
+      { id: 'send', label: 'You send', value: formatWithUnit(cost.amount) },
+      { id: 'fees', label: 'Ledger fees', note: 'charged twice: the approval and the pull', value: formatWithUnit(cost.fees), tone: 'muted' },
+      { id: 'total', label: 'Total from your wallet', value: formatWithUnit(cost.total), strong: true },
+      { id: 'credited', label: 'The table credits', value: formatWithUnit(cost.credited), tone: 'money' },
+    ];
+  });
+
+  const primaryLabel = $derived.by(() => {
+    if (effectiveRoute === 'btc') return updatingBtcBalance ? 'Checking…' : 'Check for deposit';
+    if (effectiveRoute === 'address') return claiming ? 'Claiming…' : 'Claim deposit';
+    if (processing) return 'Working…';
+    return typedSmallest > 0n ? `Deposit ${formatWithUnit(typedSmallest)}` : `Deposit ${currencySymbol}`;
+  });
+
+  const primaryDisabled = $derived.by(() => {
+    if (effectiveRoute === 'btc') return updatingBtcBalance || !btcDepositAddress || !tableIsTrusted;
+    if (effectiveRoute === 'address') return claiming || !tableIsTrusted || !tableDepositAddress;
+    return processing || !tableIsTrusted || !walletCanPay || typedSmallest <= 0n;
   });
 
   onMount(() => {
     loadWalletBalance();
-    loadPrices();
+    loadPrices().then((p) => { prices = p; }).catch(() => { prices = null; });
     loadSolvency();
     loadRunway();
     if (isBTC) {
@@ -654,19 +596,17 @@
     }
   });
 
-  function copyDepositAddress() {
-    navigator.clipboard.writeText(tableCanisterId);
-    copied = true;
-    setTimeout(() => copied = false, 2000);
+  async function handlePrimary() {
+    if (effectiveRoute === 'btc') return handleUpdateBtcBalance();
+    if (effectiveRoute === 'address') return claimExternalDeposit();
+    return handleDeposit();
   }
 
   async function handleDeposit() {
-    // FINDING 42, THE OTHER TWO DOORS. The address panel is not the only place
-    // this canister id spends money: below, the ICRC-2 branch names it as the
+    // FINDING 42, THE OTHER TWO DOORS: the ICRC-2 branch names this id as the
     // SPENDER of an approval over the player's ledger balance, and the OISY
-    // branch addresses a transfer to `owner: tableCanisterId`. Both are as
-    // final as paying the address, so both refuse here, before anything is
-    // signed. See the note beside `tableIsTrusted`.
+    // branch addresses a transfer to it. Both refuse here, before anything is
+    // signed.
     if (!tableIsTrusted) {
       error = untrustedReason;
       return;
@@ -696,38 +636,25 @@
 
     processing = true;
     error = null;
+    receipt = null;
 
     const approveAmount = amountSmallest + transferFee;
+    const amountText = formatWithUnit(amountSmallest);
 
     try {
-      // Handle OISY wallet deposits via secure subaccount-based deposit
       if (walletSource === 'oisy') {
+        beginFlow(depositSteps({ source: 'oisy', amountText }));
         try {
-          // Step 1: DERIVE the destination. Never fetch it.
-          //
-          // docs/SECURITY-FINDINGS.md FINDING 40. This branch used to read
-          //   `const depositSubaccount = await tableActor.get_deposit_subaccount();`
-          // and pay whatever came back. That is the SAME uncertified query the
-          // address panel forty lines above stopped trusting, in its 32-byte
-          // spelling: one replica answers it, signs nothing this client checks,
-          // and a substituted reply sends the player's OISY transfer to ANOTHER
-          // PLAYER'S deposit account -- who then sweeps it with an ordinary
-          // `claim_external_deposit()`. The ledger totals are right, the canister
-          // holds every e8, and no invariant in the project can see it, because
-          // nothing about the arithmetic is wrong. Only the recipient is.
-          //
-          // The subaccount is a pure function of the SESSION principal -- the one
-          // that will call `claim_external_deposit()` below and be credited, which
-          // is NOT the OISY wallet principal paying for it -- so it is computed
-          // here with no network call at all.
-          statusMessage = 'Deriving your deposit address...';
+          // Step 1: DERIVE the destination. Never fetch it (FINDING 40). The
+          // subaccount is a pure function of the SESSION principal -- the one
+          // that will call `claim_external_deposit()` and be credited, which is
+          // NOT the OISY wallet principal paying for it.
           const sessionPrincipal = await (await auth.getAgent()).getPrincipal();
           const depositSubaccountBytes = depositSubaccount(sessionPrincipal);
 
           // The canister is asked ONLY to catch a drift between the two
-          // derivations, and its answer is never preferred. A disagreement here
-          // is not a warning to render: the very next statement moves real money,
-          // so it aborts.
+          // derivations, and its answer is never preferred. A disagreement
+          // aborts: the very next statement moves real money.
           try {
             const reportedSub = await tableActor.get_deposit_subaccount();
             const reportedHex = Array.from(reportedSub ?? [], b => b.toString(16).padStart(2, '0')).join('');
@@ -737,8 +664,8 @@
                 'Refusing to send: this table reported a different deposit subaccount from the ' +
                 'one derived from your principal, so one of the two answers is wrong and paying ' +
                 'either would be guessing with your money. Nothing has been sent.';
+              failFlow();
               processing = false;
-              statusMessage = '';
               return;
             }
           } catch (checkError) {
@@ -746,31 +673,28 @@
           }
 
           // Step 2: Transfer from OISY wallet directly to the canister's deposit subaccount
-          statusMessage = 'Approve the transfer in the OISY popup...';
+          advanceFlow();
 
           const wallet = oisy.getWallet();
 
           if (!wallet) {
             error = 'OISY wallet not connected';
+            failFlow();
             processing = false;
-            statusMessage = '';
             return;
           }
 
-          // Convert canister ID to Principal for transfer destination
           const canisterPrincipal = typeof tableCanisterId === 'string'
             ? Principal.fromText(tableCanisterId)
             : tableCanisterId;
 
-          // Verify OISY wallet supports transfers
           if (!wallet.transfer) {
             error = `OISY wallet does not support direct transfers. Please transfer ${currencySymbol} to your Internet Identity wallet first, then deposit from there.`;
+            failFlow();
             processing = false;
-            statusMessage = '';
             return;
           }
 
-          // Transfer to the deposit subaccount (ckBTC uses params, ICP uses request)
           const destination = {
             to: { owner: canisterPrincipal, subaccount: [depositSubaccountBytes] },
             amount: amountSmallest,
@@ -784,32 +708,36 @@
           });
 
           // Step 3: Claim the deposit (sweeps from subaccount to main balance)
-          statusMessage = `Claiming ${currencySymbol} deposit...`;
+          advanceFlow();
           const claimResult = await tableActor.claim_external_deposit();
 
           if ('Ok' in claimResult) {
-            const newBalance = formatWithUnit(claimResult.Ok);
-            success = `Deposited ${depositAmount} ${currencySymbol} from OISY! Table balance: ${newBalance}`;
+            finishFlow();
+            receipt = {
+              title: 'Deposited from OISY',
+              lead: `Paid by OISY ${shortId(oisyState.principal ?? '')}, credited to your signed-in identity ${shortId(authState.principal ?? '')}.`,
+              rows: [
+                { id: 'sent', label: 'Deposited', value: amountText },
+                { id: 'balance', label: 'Table balance now', value: formatWithUnit(claimResult.Ok), strong: true },
+              ],
+            };
             await oisy.refreshBalances();
-            await oisy.disconnect();
-            setTimeout(() => {
-              onDepositSuccess?.();
-              onClose();
-            }, 2000);
+            onDepositSuccess?.();
           } else if ('Err' in claimResult) {
-            error = claimResult.Err;
+            failFlow();
+            fail(claimResult.Err);
           }
         } catch (oisyError) {
           console.error('OISY deposit failed:', oisyError);
-          error = `OISY deposit failed: ${oisyError.message || oisyError}`;
+          failFlow();
+          fail(oisyError);
         }
 
         processing = false;
-        statusMessage = '';
         return;
       } else {
         // Handle Internet Identity wallet deposits (existing flow)
-        statusMessage = 'Requesting approval from your wallet...';
+        beginFlow(depositSteps({ source: 'ii', amountText }));
 
         const agent = await auth.getAgent();
 
@@ -876,36 +804,43 @@
             const balanceDisplay = formatWithUnit(errVal.balance);
             error = `Insufficient funds. You have ${balanceDisplay} but need ${depositAmount} ${currencySymbol} plus the ${feeDisplay} ledger fee.`;
           } else if (errKey === 'GenericError') {
-            error = errVal.message;
+            fail(errVal.message);
           } else {
-            error = `Approval failed: ${errKey}`;
+            fail(`Approval failed: ${errKey}`);
           }
+          failFlow();
           processing = false;
           return;
         }
 
-        statusMessage = `Transferring ${currencySymbol} to poker table...`;
+        advanceFlow();
 
         const depositResult = await tableActor.deposit(amountSmallest);
 
         if ('Ok' in depositResult) {
-          const newBalance = formatWithUnit(depositResult.Ok);
-          success = `Deposited ${depositAmount} ${currencySymbol}! Table balance: ${newBalance}`;
+          finishFlow();
+          receipt = {
+            title: 'Deposited',
+            lead: `${amountText} moved from your Internet Identity wallet to your balance at this table.`,
+            rows: [
+              { id: 'sent', label: 'Deposited', value: amountText },
+              { id: 'fees', label: 'Ledger fees, from your wallet', value: ledgerFeesDisplay },
+              { id: 'balance', label: 'Table balance now', value: formatWithUnit(depositResult.Ok), strong: true },
+            ],
+          };
           loadWalletBalance();
-          setTimeout(() => {
-            onDepositSuccess?.();
-            onClose();
-          }, 2000);
+          onDepositSuccess?.();
         } else if ('Err' in depositResult) {
-          error = depositResult.Err;
+          failFlow();
+          fail(depositResult.Err);
         }
       }
     } catch (e) {
       console.error('Deposit error:', e);
-      error = e.message || 'Deposit failed';
+      failFlow();
+      fail(e);
     }
     processing = false;
-    statusMessage = '';
   }
 
   function setMaxAmount() {
@@ -913,23 +848,22 @@
     if (bal === null) return;
     const balance = toSmallest(bal);
     if (balance < minWalletBalance) return;
-    // Hold back both ledger fees, derived from the constant rather than written out
-    // as 20 / 20000, and FLOOR rather than round: `toFixed(4)` on an ICP balance
-    // rounds up half the time, which is how a MAX button produces an amount its own
-    // wallet cannot cover.
+    // Hold back both ledger fees, derived from the constant, and FLOOR rather
+    // than round: toFixed on a balance rounds up half the time, which is how a
+    // MAX button produces an amount its own wallet cannot cover.
     const maxSmallest = balance - DEPOSIT_LEDGER_FEES;
     depositAmount = isBTC && inputUnit === 'sats'
       ? maxSmallest.toString()
       : formatPlain(maxSmallest);
   }
 
-  // Use effective balance (from II or OISY depending on walletSource)
-  const hasEnoughBalance = $derived(effectiveHasEnoughBalance);
+  function finishAndClose() {
+    receipt = null;
+    resetFlow();
+    onClose();
+  }
 
   // ONE dismissal contract for every dialog in this app (docs/DEFECTS.md T-13).
-  // The old handler sat on a `tabindex="-1"` backdrop that nothing ever focuses,
-  // so Escape could not close this modal, measured: Escape left the backdrop up
-  // and a following click on any header button was swallowed by it.
   function onWindowKeydown(e) {
     if (e.key === 'Escape') onClose();
   }
@@ -945,718 +879,339 @@
   role="dialog"
   aria-labelledby="deposit-modal-title"
   data-table-trust={tableIsTrusted ? 'pinned' : 'refused'}
+  data-route={effectiveRoute}
   use:scrollLock
 >
   <div class="modal-header">
     <h2 id="deposit-modal-title">
       {#if isBTC}
-        <svg width="20" height="20" viewBox="0 0 64 64">
-          <path fill="#f7931a" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
-          <path fill="#fff" d="M46.11 27.441c.636-4.258-2.606-6.547-7.039-8.074l1.438-5.768-3.51-.875-1.4 5.616c-.924-.23-1.872-.447-2.814-.662l1.41-5.653-3.509-.875-1.439 5.766c-.764-.174-1.514-.346-2.242-.527l.004-.018-4.842-1.209-.934 3.75s2.605.597 2.55.634c1.422.355 1.68 1.296 1.636 2.042l-1.638 6.571c.098.025.225.061.365.117l-.37-.092-2.297 9.205c-.174.432-.615 1.08-1.609.834.035.051-2.552-.637-2.552-.637l-1.743 4.019 4.57 1.139c.85.213 1.682.436 2.502.646l-1.453 5.834 3.507.875 1.44-5.772c.957.26 1.887.5 2.797.726l-1.434 5.745 3.511.875 1.453-5.823c5.987 1.133 10.49.676 12.384-4.739 1.527-4.36-.076-6.875-3.226-8.515 2.294-.529 4.022-2.038 4.483-5.155zM38.086 38.69c-1.085 4.36-8.426 2.003-10.806 1.412l1.928-7.729c2.38.594 10.012 1.77 8.878 6.317zm1.086-11.312c-.99 3.966-7.1 1.951-9.082 1.457l1.748-7.01c1.982.494 8.365 1.416 7.334 5.553z"/>
+        <svg width="22" height="22" viewBox="0 0 64 64" aria-hidden="true">
+          <path fill="var(--cd-btc)" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
+          <path fill="var(--cd-card-face)" d="M46.11 27.441c.636-4.258-2.606-6.547-7.039-8.074l1.438-5.768-3.51-.875-1.4 5.616c-.924-.23-1.872-.447-2.814-.662l1.41-5.653-3.509-.875-1.439 5.766c-.764-.174-1.514-.346-2.242-.527l.004-.018-4.842-1.209-.934 3.75s2.605.597 2.55.634c1.422.355 1.68 1.296 1.636 2.042l-1.638 6.571c.098.025.225.061.365.117l-.37-.092-2.297 9.205c-.174.432-.615 1.08-1.609.834.035.051-2.552-.637-2.552-.637l-1.743 4.019 4.57 1.139c.85.213 1.682.436 2.502.646l-1.453 5.834 3.507.875 1.44-5.772c.957.26 1.887.5 2.797.726l-1.434 5.745 3.511.875 1.453-5.823c5.987 1.133 10.49.676 12.384-4.739 1.527-4.36-.076-6.875-3.226-8.515 2.294-.529 4.022-2.038 4.483-5.155zM38.086 38.69c-1.085 4.36-8.426 2.003-10.806 1.412l1.928-7.729c2.38.594 10.012 1.77 8.878 6.317zm1.086-11.312c-.99 3.966-7.1 1.951-9.082 1.457l1.748-7.01c1.982.494 8.365 1.416 7.334 5.553z"/>
         </svg>
       {:else}
-        <IcpLogo size={20} />
+        <IcpLogo size={22} />
       {/if}
-      Deposit {currencySymbol} to Table
+      <span>
+        Deposit {currencySymbol}
+        <span class="title-sub">Into your balance at this table</span>
+      </span>
     </h2>
     <button class="close-btn" onclick={onClose} aria-label="Close deposit modal">×</button>
   </div>
 
   <div class="modal-body">
-    <!-- THE FOUR PROTECTED NOTICES, INSIDE THE DIALOG (HARD RULE 2, docs/DEFECTS.md T-31).
-         Measured, not assumed: with either money modal open, all four notices in
-         the page banner are behind `.modal-backdrop` -- `rgba(0,0,0,0.7)` plus
-         `backdrop-filter: blur(4px)` at z-index 200 -- so `elementFromPoint` at the
-         centre of each returns the backdrop and not the text. 0 of 4 unobstructed,
-         at 1440x900 AND at 390x844, and identical on `fe72d46`, so the scrim is not
-         new. It is still a player who cannot read the warning on the one screen
-         where they are about to move real money.
-         Raising the banner above the backdrop is not this file's to do (the banner
-         lives in routes/+page.svelte and src/index.scss). Restating the notices
-         INSIDE the dialog is: more prominent is always allowed, it needs nothing
-         outside these two components, and it holds whatever any backdrop does. -->
-    <!-- WAVE 5 COHERENCE PASS: ONE SENTENCE ADDED, NOTHING CHANGED.
-         The last clause states the no-rake property as "No middleman, no house,
-         0% rake", which is the property in different words. Measured with the
-         repo's own gate (tools/shots/lib/protected-notices.mjs), this dialog
-         therefore read 4 of 5 at both viewports: the fifth protected phrase, the
-         app's own canonical sentence, was left outside the dialog behind the very
-         scrim this notice exists to escape. It is stated verbatim now, on its own
-         line, with every existing word left where it was. -->
-    <p class="player-notice"><NoticeLine /></p>
-
-    <!-- WHO CAN TAKE THIS MONEY, ON THE SCREEN IT LEAVES FROM.
-         docs/SECURITY-FINDINGS.md FINDING 23. The README sold "fully decentralized"
-         and "fair play without requiring trust" and disclosed only that a
-         controller can destroy the HAND HISTORY. It never said that a controller
-         can destroy your BALANCE -- which an auditor then did, with one
-         `install_code --mode reinstall`, the same wasm and no code change, for 5
-         ICP of her own money, while the ledger still held it at the canister's
-         address and every player-callable recovery told her she had nothing.
-         Reproduced at 40.00000000 ICP by
-         tests/money_safety/tests/controller_custody.rs.
-
-         PLACED AFTER the four protected notices and BEFORE every control that can
-         move money. After, because HARD RULE 2 says nothing may cover them and
-         nothing may push them off the screen -- this block is not allowed to be
-         the reason a player stops seeing "your funds are NOT safe". Before the
-         controls, because a disclosure a player reads after pressing the button is
-         a receipt.
-
-         It is deliberately NOT one of the protected phrases and deliberately does
-         not restate them: it is an ADDITION. Its own visibility is asserted by
-         tools/shots/lib/protected-notices.mjs only insofar as the four above must
-         still measure unobstructed with this here.
-
-         WAVE 12 CORRECTION, AND IT IS THE WHOLE POINT OF THIS BLOCK.
-         The first version of this paragraph promised a depositor that the money
-         was unreachable by the operator too, and named the worst case as
-         destruction rather than theft. That was FALSE, and false in the direction
-         that flatters the operator: it understated a fund-THEFT capability, on the
-         one screen where a player decides to hand over money. The reasoning behind
-         it was "there is no ClearDeck method that pays a controller", which is
-         true of this code and irrelevant to a controller, because a controller
-         replaces the code. A 500-byte module that is not ClearDeck, installed with
-         the SAME command as the wipe, moved 39.99990000 ICP of player deposits
-         into a wallet the operator owns
-         (tests/money_safety/tests/controller_custody.rs, the `finding23c_` test).
-         A disclosure that is wrong in the operator's favour is worse than no
-         disclosure, because a player who reads it deposits with a false floor
-         under them. `./scripts/dev.sh hygiene` now fails if either retracted
-         sentence comes back (RETRACTED_CUSTODY_CLAIMS in scripts/dev.sh). -->
-    <p class="custody-notice">
-      <strong>One key can zero this balance, and the same key can take it.</strong>
-      Every ClearDeck canister has a single controller principal. That key can erase
-      every player's balance with one ordinary management call
-      (<code>install_code --mode reinstall</code> or <code>uninstall_code</code>), and
-      because the same call installs any code it is handed, it can also pay this
-      canister's whole ledger balance into a wallet the operator owns. Both have been
-      done on a test replica. No bug in ClearDeck is needed, there is no warning and
-      there is no restore path. Depositing means trusting one key with the whole balance.
-      The shuffle needs no trust. Custody does.
+    <!-- THE FIVE PROTECTED NOTICES, INSIDE THE DIALOG (HARD RULE 2, docs/DEFECTS.md T-31).
+         The page's trust bar is behind this dialog's scrim, so the same words
+         are restated here, first, as the trust bar's neutral strip. -->
+    <p class="player-notice">
+      <span class="notice-glyph" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round">
+          <path d="M12 3.5 2.5 20h19L12 3.5z"/>
+          <path d="M12 9.5v4.5" stroke-linecap="round"/>
+          <circle cx="12" cy="17" r="0.8" fill="currentColor" stroke="none"/>
+        </svg>
+      </span>
+      <span class="notice-text"><NoticeLine /></span>
     </p>
 
-    <!-- WHERE THE MONEY IS ACTUALLY GOING, ON THE SCREEN IT LEAVES FROM.
-         Compiled in at build time (ic-config.js NETWORK), from the same constant
-         that chooses the gateway and the canister ids, so this line and the
-         destination can never disagree. -->
-    <p class="network-line" class:mainnet={IS_MAINNET_BUILD} data-network={NETWORK}>
-      {#if IS_MAINNET_BUILD}
-        <strong>Internet Computer mainnet.</strong> This moves REAL {currencySymbol}
-        to canister <code>{tableCanisterId ?? 'unknown'}</code>, and it is not reversible.
-      {:else}
-        <strong>{NETWORK} build.</strong> This moves test {currencySymbol} on your own
-        replica, to canister <code>{tableCanisterId ?? 'unknown'}</code>. No real funds
-        can be reached from this bundle.
-      {/if}
-    </p>
-
-    <!-- IS THIS EVEN A CLEARDECK TABLE? docs/SECURITY-FINDINGS.md FINDING 42.
-         In flow (no position, no z-index: it cannot cover the protected
-         notices), directly under the line that names the destination canister,
-         and above every control that can move money -- a refusal a player reads
-         after pressing the button is a receipt. When this block is showing,
-         `deriveTrustedDepositAddress` has already refused to compute an address
-         and `handleDeposit` refuses before it signs anything, so this paragraph
-         and the behaviour cannot drift apart. -->
-    {#if !tableIsTrusted}
-      <p class="untrusted-table" data-untrusted-table={tableCanisterId ?? 'none'}>
-        <strong>This is not one of this build's tables. Nothing can be sent here.</strong>
-        {untrustedReason}
-      </p>
-    {/if}
-
-    <!-- WHETHER THIS TABLE HOLDS WHAT IT OWES, BEFORE ANY AMOUNT IS TYPED.
-         In flow, directly under the notices it must never cover, and above every
-         control that can move money. docs/SECURITY-FINDINGS.md FINDING 35. -->
-    <SolvencyNotice
-      {solvency}
-      {currency}
-      context="deposit"
-      onRefresh={refreshSolvency}
-      refreshing={solvencyRefreshing}
-    />
-
-    <!-- AND HOW LONG IT CAN KEEP PAYING ANYBODY AT ALL. docs/DEFECTS.md E-55.
-         Solvency asks "does it hold what it owes"; this asks "will it still be
-         accepting the withdrawal call at all". They are different failures and
-         they are both reasons not to deposit. In flow, below the four protected
-         notices and above every control that can move money, with no position
-         and no z-index of its own so it cannot cover anything. -->
-    <CycleRunwayNotice {runway} context="deposit" canisterId={tableCanisterId} />
-
-    <!-- BTC Deposit Method Toggle -->
-    {#if isBTC}
-      <div class="deposit-method-toggle">
-        <button
-          class:active={depositMethod === 'ckbtc'}
-          onclick={() => depositMethod = 'ckbtc'}
-        >
-          <span class="method-icon">⚡</span>
-          I have ckBTC
-          <span class="method-hint">Instant</span>
-        </button>
-        <button
-          class:active={depositMethod === 'btc'}
-          onclick={() => depositMethod = 'btc'}
-        >
-          <svg width="16" height="16" viewBox="0 0 64 64">
-            <path fill="currentColor" d="M63.04 39.741c-4.275 17.143-21.638 27.576-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/>
-          </svg>
-          I have BTC
-          <span class="method-hint">~1 hour</span>
-        </button>
-      </div>
-    {/if}
-
-    <!-- Wallet Source Toggle (II vs OISY) -->
-    {#if (!isBTC || depositMethod === 'ckbtc')}
-      <div class="wallet-source-toggle">
-        <button
-          class:active={walletSource === 'ii'}
-          onclick={() => walletSource = 'ii'}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-            <circle cx="12" cy="7" r="4"/>
-          </svg>
-          <span class="source-label">Internet Identity</span>
-          <span class="source-hint">Your II wallet</span>
-        </button>
-        <button
-          class:active={walletSource === 'oisy'}
-          onclick={() => walletSource = 'oisy'}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="2" y="4" width="20" height="16" rx="2"/>
-            <path d="M6 8h.01M6 12h.01M6 16h.01M10 8h8M10 12h8M10 16h8"/>
-          </svg>
-          <span class="source-label">OISY Wallet</span>
-          <span class="source-hint">Top up directly</span>
-        </button>
-      </div>
-    {/if}
-
-    <!-- OISY Wallet Connection Section -->
-    {#if walletSource === 'oisy' && (!isBTC || depositMethod === 'ckbtc')}
-      {#if !oisyState.isConnected}
-        <div class="oisy-connect-section" class:btc={isBTC}>
-          <div class="oisy-icon">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <rect x="2" y="4" width="20" height="16" rx="2"/>
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M2 10h4M18 10h4M2 14h4M18 14h4"/>
-            </svg>
-          </div>
-          <h3>Connect OISY Wallet</h3>
-          <p>Top up your poker balance directly from OISY without transferring tokens first.</p>
-          <button
-            class="btn-connect-oisy"
-            class:btc={isBTC}
-            onclick={connectOisyWallet}
-            disabled={oisyState.isConnecting}
-          >
-            {#if oisyState.isConnecting}
-              <span class="spinner"></span>
-              Connecting...
-            {:else}
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M13.8 12H3"/>
-              </svg>
-              Connect OISY Wallet
-            {/if}
-          </button>
-          {#if oisyState.error}
-            <div class="oisy-error">{oisyState.error}</div>
-          {/if}
-        </div>
-      {:else}
-        <!-- OISY Connected - Show Balance -->
-        <div class="balance-section oisy" class:btc={isBTC}>
-          <div class="oisy-connected-header">
-            <span class="connected-badge">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-              OISY Connected
-            </span>
-            <button class="disconnect-btn" onclick={disconnectOisyWallet}>Disconnect</button>
-          </div>
-          <div class="oisy-popup-note">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="12" y1="16" x2="12" y2="12"/>
-              <line x1="12" y1="8" x2="12.01" y2="8"/>
-            </svg>
-            <span>Keep the OISY popup open. It will prompt you when you click Deposit.</span>
-          </div>
-          <div class="balance-row">
-            <span class="balance-label">Your OISY {isBTC ? 'ckBTC' : 'ICP'} Balance</span>
-            <span class="balance-value oisy" class:loading={oisyState.loadingBalances} class:btc={isBTC}>
-              {#if oisyState.loadingBalances}
-                <span class="mini-spinner" class:btc={isBTC}></span>
-              {:else}
-                <span class="balance-crypto">{formatWithUnit(effectiveWalletBalance)}</span>
-                {#if effectiveWalletBalance && !priceLoading}
-                  <span class="usd-value">({formatUsd(getUsdValue(effectiveWalletBalance))})</span>
-                {/if}
-              {/if}
-            </span>
-          </div>
-          {#if !oisyState.loadingBalances && !hasEnoughBalance}
-            <div class="no-balance-warning oisy" class:btc={isBTC}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="8" x2="12" y2="12"/>
-                <line x1="12" y1="16" x2="12.01" y2="16"/>
-              </svg>
-              <div class="warning-content">
-                <strong>No {isBTC ? 'ckBTC' : 'ICP'} in OISY wallet</strong>
-                <p>Add funds to your OISY wallet first, or switch to Internet Identity.</p>
-              </div>
-            </div>
-          {/if}
-        </div>
-      {/if}
-    {/if}
-
-    <!-- Wallet Balance Display (for ckBTC/ICP flow) - Only show for II -->
-    {#if walletSource === 'ii' && (!isBTC || depositMethod === 'ckbtc')}
-      <div class="balance-section" class:btc={isBTC}>
-        <div class="balance-row">
-          <span class="balance-label">Your {isBTC ? 'ckBTC' : 'ICP'} Wallet Balance</span>
-          <span class="balance-value" class:loading={loadingBalance} class:btc={isBTC}>
-            {#if loadingBalance}
-              <span class="mini-spinner" class:btc={isBTC}></span>
-            {:else}
-              <span class="balance-crypto">{formatWithUnit(walletBalance)}</span>
-              {#if walletBalance && !priceLoading}
-                <span class="usd-value">({formatUsd(getUsdValue(walletBalance))})</span>
-              {/if}
-            {/if}
-          </span>
-        </div>
-        {#if !loadingBalance && !hasEnoughBalance}
-          <div class="no-balance-warning" class:btc={isBTC}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="12" y1="8" x2="12" y2="12"/>
-              <line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
-            <div class="warning-content">
-              <strong>No {isBTC ? 'ckBTC' : 'ICP'} in wallet</strong>
-              {#if isBTC}
-                <p>Switch to "I have BTC" tab to deposit real Bitcoin, or get ckBTC from an exchange.</p>
-              {:else}
-                <p>Transfer ICP from an exchange or another wallet to your II account first.</p>
-              {/if}
-            </div>
-          </div>
-        {/if}
-      </div>
-    {/if}
-
-    <!-- Deposit Form - Shown for both II and OISY when user has balance -->
-    {#if (!isBTC || depositMethod === 'ckbtc') && effectiveHasEnoughBalance && (walletSource === 'ii' || oisyState.isConnected)}
-        <div class="form-section">
-          <div class="label-row">
-            <label for="deposit-amount">Deposit Amount</label>
-            {#if isBTC}
-              <div class="unit-toggle">
-                <button
-                  class:active={inputUnit === 'sats'}
-                  onclick={() => { inputUnit = 'sats'; depositAmount = ''; }}
-                >sats</button>
-                <button
-                  class:active={inputUnit === 'btc'}
-                  onclick={() => { inputUnit = 'btc'; depositAmount = ''; }}
-                >BTC</button>
-              </div>
-            {/if}
-          </div>
-          <div class="input-row">
-            <input
-              id="deposit-amount"
-              type="number"
-              inputmode="decimal"
-              step={isBTC && inputUnit === 'sats' ? "1" : "0.00000001"}
-              min={inputMinAttr}
-              placeholder={inputMinAttr}
-              bind:value={depositAmount}
-              disabled={processing}
-            />
-            <span class="input-suffix" class:btc={isBTC}>{isBTC ? inputUnit : 'ICP'}</span>
-            <button class="max-btn" class:btc={isBTC} onclick={setMaxAmount} disabled={processing}>
-              MAX
-            </button>
-          </div>
-          <!-- One tap to the table's buy-in (QuickAmounts.svelte). The figures
-               come from the table canister's config (minBuyIn); MAX above is
-               the wallet's. -->
-          <QuickAmounts
-            chips={quickAmounts}
-            selected={depositAmount}
-            btc={isBTC}
-            disabled={processing}
-            onPick={(text) => { depositAmount = text; }}
-          />
-          {#if depositAmount && Number(depositAmount) > 0}
-            <div class="conversion-preview">
-              <div class="conversion-row">
-                {#if isBTC}
-                  {#if inputUnit === 'sats'}
-                    <span class="crypto-equiv">= {(Number(depositAmount) / 100_000_000).toFixed(8)} BTC</span>
-                  {:else}
-                    <span class="crypto-equiv">= {Math.floor(Number(depositAmount) * 100_000_000).toLocaleString()} sats</span>
-                  {/if}
-                {/if}
-                {#if !priceLoading}
-                  {@const amountSats = isBTC
-                    ? (inputUnit === 'sats' ? Number(depositAmount) : Number(depositAmount) * 100_000_000)
-                    : Number(depositAmount) * 100_000_000}
-                  {@const usdVal = getUsdValue(amountSats)}
-                  {#if usdVal !== null}
-                    <span class="usd-preview">
-                      <span class="usd-amount">{formatUsd(usdVal)}</span>
-                    </span>
-                  {/if}
-                {/if}
-              </div>
-            </div>
-          {/if}
-          <div class="minimum-notice" class:btc={isBTC}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="12" y1="16" x2="12" y2="12"/>
-              <line x1="12" y1="8" x2="12.01" y2="8"/>
-            </svg>
-            <!-- Interpolated, never literal: docs/DEFECTS.md T-26 is what a
-                 literal here becomes, and ui_limits.rs fails if one comes back.
-                 THE FIGURES FIRST, THE REASONS ONE TAP AWAY (the mobile phase).
-                 The four figures a depositor acts on (the address minimum, the
-                 wallet-route minimum, the fee, the wallet balance the minimum
-                 needs) stay on screen in two sentences; the paragraph that
-                 explains sweeping and what happens under the fee is verbatim
-                 inside the Why disclosure. Measured before: 13 lines, ~280 px
-                 of a 390 px phone between the chips and the wallet toggle.
-                 tools/shots/lib/chain-agreement.mjs reads the whole notice's
-                 textContent, so every one of its six labelled claims still
-                 matches, four of them on the visible sentences. -->
-            <div class="min-copy">
-              <strong>Minimum to this address: {minExternalDepositDisplay}</strong>; from a
-              connected wallet the lower minimum of {minDepositDisplay} applies.
-              <strong>At or below {feeDisplay} nothing can move it</strong> (network fee
-              {feeDisplay}, charged twice by the ledger, so you need {minWalletBalanceDisplay}
-              in your wallet to deposit the minimum).
-              <details class="min-why-more">
-                <summary>Why</summary>
-                <span class="min-why">Sweeping pays the network fee out of what you send, so
-                anything less would arrive too small to withdraw again. Sending from a
-                connected wallet instead has a lower minimum of {minDepositDisplay}.</span>
-                <!-- WHAT HAPPENS IF YOU SEND LESS, SAID BEFORE YOU SEND IT.
-                     docs/SECURITY-FINDINGS.md FINDING 31 / FINDING 11. The line above
-                     states the minimum; this one states the consequence of missing it,
-                     which is the half a player can only act on beforehand. Both figures
-                     are interpolated: a literal here is docs/DEFECTS.md T-26. -->
-                <span class="min-why">Send less and it is not swept and it is not lost: above
-                the {feeDisplay} network fee you can ask for it back to your own wallet at any
-                time, less that one fee. <strong>At or below {feeDisplay} nothing can move
-                it</strong>: a transfer costs more than the amount, so it cannot be swept,
-                refunded or withdrawn by anyone. Top the same address up to the minimum and
-                the whole balance comes out together.</span>
-              </details>
-            </div>
-          </div>
-        </div>
-
-        {#if error}
-          <div class="alert error">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="12" y1="8" x2="12" y2="12"/>
-              <line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
-            {error}
-          </div>
-        {/if}
-
-        {#if success}
-          <div class="alert success">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-              <polyline points="22 4 12 14.01 9 11.01"/>
-            </svg>
-            {success}
-          </div>
-        {/if}
-
-        {#if statusMessage}
-          <div class="status-message">
-            <span class="spinner"></span>
-            {statusMessage}
-          </div>
-        {/if}
-
-        <!-- THE DEPOSIT ROW ON A PHONE pins to the sheet's foot only once the
-             solvency block and the runway panel have scrolled above it
-             (lib/pin-after.js; the phone block of this style). Before that it
-             is in flow under the disclosures it must follow. -->
-        <div class="actions" use:pinAfter={{ gates: ['.solvency', '.runway-notice'], scroller: '.modal-body' }}>
-          <button class="btn-secondary" onclick={onClose} disabled={processing}>
-            Cancel
-          </button>
-          <button
-            class="btn-primary"
-            class:btc={isBTC}
-            onclick={handleDeposit}
-            disabled={processing || !tableIsTrusted || !depositAmount || Number(depositAmount) <= 0}
-          >
-            {#if processing}
-              <span class="spinner"></span>
-              Processing...
-            {:else}
-              Deposit to Table
-            {/if}
-          </button>
-        </div>
-
-        <div class="info-box" class:btc={isBTC}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/>
-            <line x1="12" y1="16" x2="12" y2="12"/>
-            <line x1="12" y1="8" x2="12.01" y2="8"/>
-          </svg>
-          <p>
-            This transfers {isBTC ? 'ckBTC' : 'ICP'} from your {walletSource === 'oisy' ? 'OISY' : 'Internet Identity'} wallet to your poker table balance.
-            You can withdraw back to your wallet at any time.
-          </p>
-        </div>
-    {/if}
-
-    <!-- No balance help - only for II users without balance -->
-    {#if walletSource === 'ii' && (!isBTC || depositMethod === 'ckbtc') && !effectiveLoadingBalance && !effectiveHasEnoughBalance}
-        <!-- No ckBTC balance - show help -->
-        <div class="deposit-info-section" class:btc={isBTC}>
-          <h3>How to Get {isBTC ? 'ckBTC' : 'ICP'}</h3>
+    {#if receipt}
+      <CashierReceipt
+        title={receipt.title}
+        lead={receipt.lead}
+        rows={receipt.rows}
+        btc={isBTC}
+        onDone={finishAndClose}
+      />
+    {:else}
+      <div class="cashier-grid">
+        <!-- THE MONEY COLUMN: which wallet, how much, what it costs. -->
+        <div class="cashier-col main">
           {#if isBTC}
-            <p class="info-text">ckBTC is Bitcoin on ICP. You can get it by converting real BTC or buying on exchanges.</p>
-            <div class="funding-options">
-              <div class="option">
-                <strong>Switch to BTC tab above</strong>
-                <p>Deposit real Bitcoin directly - it will be converted to ckBTC automatically.</p>
+            <div class="deposit-method-toggle" role="tablist" aria-label="Deposit method">
+              <button type="button" role="tab" aria-selected={depositMethod === 'ckbtc'} class:active={depositMethod === 'ckbtc'} onclick={() => { depositMethod = 'ckbtc'; }}>
+                <span class="method-label">I have ckBTC</span>
+                <span class="method-hint">Instant</span>
+              </button>
+              <button type="button" role="tab" aria-selected={depositMethod === 'btc'} class:active={depositMethod === 'btc'} onclick={() => { depositMethod = 'btc'; }}>
+                <span class="method-label">I have BTC</span>
+                <span class="method-hint">About an hour</span>
+              </button>
+            </div>
+          {/if}
+
+          {#if showsWalletRoute}
+            <!-- THE ROUTE: from the connected wallet, or from anywhere via
+                 the derived address. The default follows what the wallet can
+                 pay; both are always one tap away. -->
+            {#if !isBTC}
+              <div class="deposit-route" role="tablist" aria-label="Deposit route">
+                <button type="button" role="tab" aria-selected={effectiveRoute === 'wallet'} class:active={effectiveRoute === 'wallet'} onclick={() => { route = 'wallet'; }}>
+                  From this wallet
+                </button>
+                <button type="button" role="tab" aria-selected={effectiveRoute === 'address'} class:active={effectiveRoute === 'address'} onclick={() => { route = 'address'; }}>
+                  From an exchange or another wallet
+                </button>
               </div>
-              <div class="option">
-                <strong>Or buy ckBTC</strong>
-                <p>Purchase ckBTC on ICP DEXs like ICPSwap or Sonic.</p>
+            {/if}
+
+            <!-- Wallet Source Toggle (II vs OISY): a mainnet build only, where
+                 OISY can sign. -->
+            {#if IS_MAINNET_BUILD && effectiveRoute === 'wallet'}
+              <div class="wallet-source-toggle" role="tablist" aria-label="Wallet">
+                <button type="button" role="tab" aria-selected={walletSource === 'ii'} class:active={walletSource === 'ii'} onclick={() => { walletSource = 'ii'; }}>
+                  <span class="source-label">Internet Identity</span>
+                  <span class="source-hint">Your signed-in wallet</span>
+                </button>
+                <button type="button" role="tab" aria-selected={walletSource === 'oisy'} class:active={walletSource === 'oisy'} onclick={() => { walletSource = 'oisy'; }}>
+                  <span class="source-label">OISY Wallet</span>
+                  <span class="source-hint">Pay from OISY</span>
+                </button>
+              </div>
+            {/if}
+
+            <!-- FROM: the paying wallet and what it holds. The II balance row
+                 is always rendered on the ICP path: it is the figure the
+                 screenshot harness compares with the ledger. -->
+            {#if walletSource === 'oisy' && effectiveRoute === 'wallet'}
+              {#if !oisyState.isConnected}
+                <div class="from-card oisy" class:btc={isBTC}>
+                  <div class="section-label"><span>From</span><span class="label-aside">OISY Wallet</span></div>
+                  <p class="from-note">Top up your table balance straight from OISY. Keep the OISY popup open: it asks you to approve the transfer when you press Deposit.</p>
+                  <button type="button" class="btn-connect-oisy" class:btc={isBTC} onclick={connectOisyWallet} disabled={oisyState.isConnecting}>
+                    {#if oisyState.isConnecting}<span class="spinner"></span> Connecting…{:else}Connect OISY Wallet{/if}
+                  </button>
+                  {#if oisyState.error}<p class="from-note short">{oisyState.error}</p>{/if}
+                </div>
+              {:else}
+                <div class="from-card oisy" class:btc={isBTC}>
+                  <div class="section-label">
+                    <span>From</span>
+                    <button type="button" class="path-link" onclick={disconnectOisyWallet}>Disconnect OISY</button>
+                  </div>
+                  <div class="balance-row">
+                    <span class="balance-label">OISY {isBTC ? 'ckBTC' : 'ICP'} balance</span>
+                    <span class="balance-value oisy" class:loading={oisyState.loadingBalances} class:btc={isBTC}>
+                      {#if oisyState.loadingBalances}
+                        <span class="mini-spinner" class:btc={isBTC}></span>
+                      {:else}
+                        <span class="balance-crypto">{formatWithUnit(effectiveWalletBalance)}</span>
+                        {#if oisyUsd !== null}<span class="usd-value">{formatUsd(oisyUsd)}</span>{/if}
+                      {/if}
+                    </span>
+                  </div>
+                  <p class="from-note">
+                    Paid by OISY <code>{shortId(oisyState.principal ?? '')}</code>, credited to your
+                    signed-in identity <code>{shortId(authState.principal ?? '')}</code>. Keep the OISY
+                    popup open; it asks you to approve when you press Deposit.
+                  </p>
+                  {#if !oisyState.loadingBalances && !hasEnoughBalance}
+                    <p class="from-note short">Not enough {isBTC ? 'ckBTC' : 'ICP'} in OISY for the minimum plus both network fees ({minWalletBalanceDisplay}). Add funds to OISY, or switch to Internet Identity.</p>
+                  {/if}
+                </div>
+              {/if}
+            {:else}
+              <div class="from-card" class:btc={isBTC}>
+                <div class="section-label">
+                  <span>{effectiveRoute === 'address' ? 'Your wallet here' : 'From'}</span>
+                  <button type="button" class="path-link" onclick={loadWalletBalance} disabled={loadingBalance}>Re-read</button>
+                </div>
+                <div class="balance-row">
+                  <span class="balance-label">Internet Identity {isBTC ? 'ckBTC' : 'ICP'} balance</span>
+                  <span class="balance-value" class:loading={loadingBalance} class:btc={isBTC}>
+                    {#if loadingBalance}
+                      <span class="mini-spinner" class:btc={isBTC}></span>
+                    {:else}
+                      <span class="balance-crypto">{formatWithUnit(walletBalance)}</span>
+                      {#if walletUsd !== null}<span class="usd-value">{formatUsd(walletUsd)}</span>{/if}
+                    {/if}
+                  </span>
+                </div>
+                {#if !loadingBalance && !hasEnoughBalance}
+                  <p class="from-note short">
+                    Below the {minWalletBalanceDisplay} a deposit from this wallet needs (the minimum plus both network fees).
+                    {#if isBTC}Switch to "I have BTC" to deposit real Bitcoin, or get ckBTC from an exchange.{:else}Send to your deposit address instead.{/if}
+                  </p>
+                {/if}
+              </div>
+            {/if}
+
+            {#if effectiveRoute === 'wallet'}
+              <!-- THE AMOUNT. -->
+              <div class="form-section">
+                <div class="section-label">
+                  <label for="deposit-amount">Amount</label>
+                  {#if isBTC}
+                    <div class="unit-toggle">
+                      <button type="button" class:active={inputUnit === 'sats'} onclick={() => { inputUnit = 'sats'; depositAmount = ''; }}>sats</button>
+                      <button type="button" class:active={inputUnit === 'btc'} onclick={() => { inputUnit = 'btc'; depositAmount = ''; }}>BTC</button>
+                    </div>
+                  {/if}
+                </div>
+                <div class="input-row">
+                  <div class="amount-field" class:btc={isBTC}>
+                    <input
+                      id="deposit-amount"
+                      type="number"
+                      inputmode="decimal"
+                      step={isBTC && inputUnit === 'sats' ? "1" : "0.00000001"}
+                      min={inputMinAttr}
+                      placeholder={inputMinAttr}
+                      bind:value={depositAmount}
+                      disabled={processing || !walletCanPay}
+                    />
+                    <span class="input-suffix" class:btc={isBTC}>{isBTC ? inputUnit : 'ICP'}</span>
+                  </div>
+                  <button type="button" class="max-btn" class:btc={isBTC} onclick={setMaxAmount} disabled={processing || !walletCanPay}>MAX</button>
+                </div>
+                <!-- One tap to the table's buy-in (QuickAmounts.svelte); the
+                     figures come from the table canister's config. -->
+                <QuickAmounts
+                  chips={quickAmounts}
+                  selected={depositAmount}
+                  btc={isBTC}
+                  disabled={processing || !walletCanPay}
+                  onPick={(text) => { depositAmount = text; }}
+                />
+                {#if typedSmallest > 0n}
+                  <p class="conversion-preview">
+                    {#if isBTC}
+                      <span class="crypto-equiv">= {inputUnit === 'sats' ? `${formatPlain(typedSmallest)} BTC` : `${typedSmallest.toLocaleString('en-US')} sats`}</span>
+                    {:else}
+                      <span class="crypto-equiv">{formatWithUnit(typedSmallest)}</span>
+                    {/if}
+                    {#if typedUsd !== null}
+                      <span class="usd-preview"><span class="usd-amount">{formatUsd(typedUsd)}</span></span>
+                    {/if}
+                  </p>
+                {/if}
+              </div>
+
+              <CashierSummary caption="What this costs" rows={summaryRows} btc={isBTC} />
+            {:else}
+              <DepositAddressCard
+                address={tableDepositAddress}
+                warning={depositAddressWarning}
+                deriving={loadingBalance}
+              />
+            {/if}
+
+            <!-- THE LIMITS: figures first, the reasons one tap away. Every
+                 figure is interpolated (docs/DEFECTS.md T-26) and every
+                 labelled claim is what tools/shots/lib/chain-agreement.mjs
+                 reads, so the sentences keep their words. -->
+            <div class="minimum-notice" class:btc={isBTC}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+              <div class="min-copy">
+                <strong>Minimum to this address: {minExternalDepositDisplay}</strong>; from a
+                connected wallet the lower minimum of {minDepositDisplay} applies.
+                <strong>At or below {feeDisplay} nothing can move it</strong> (network fee
+                {feeDisplay}, charged twice by the ledger, so you need {minWalletBalanceDisplay}
+                in your wallet to deposit the minimum).
+                <details class="min-why-more">
+                  <summary>Why</summary>
+                  <span class="min-why">Sweeping pays the network fee out of what you send, so
+                  anything less would arrive too small to withdraw again. Sending from a
+                  connected wallet instead has a lower minimum of {minDepositDisplay}.</span>
+                  <span class="min-why">Send less and it is not swept and it is not lost: above
+                  the {feeDisplay} network fee you can ask for it back to your own wallet at any
+                  time, less that one fee. <strong>At or below {feeDisplay} nothing can move
+                  it</strong>: a transfer costs more than the amount, so it cannot be swept,
+                  refunded or withdrawn by anyone. Top the same address up to the minimum and
+                  the whole balance comes out together.</span>
+                </details>
               </div>
             </div>
           {:else}
-            <p class="info-text">Transfer ICP from an exchange or another wallet to your II account.</p>
+            <BtcNativeDeposit
+              address={tableIsTrusted ? btcDepositAddress : ''}
+              loading={loadingBtcAddress}
+              addressError={btcAddressError}
+              minDisplay={btcNativeMinDisplay}
+              minBtcDisplay={btcNativeMinBtcDisplay}
+              minterFeeDisplay={btcNativeMinterFeeDisplay}
+              result={btcUpdateResult}
+            />
           {/if}
         </div>
-        <div class="actions">
-          <button class="btn-secondary" onclick={onClose}>
-            Close
-          </button>
-          <button class="btn-primary" class:btc={isBTC} onclick={loadWalletBalance}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-            </svg>
-            Refresh Balance
-          </button>
-        </div>
-    {/if}
 
-    <!-- Native BTC Deposit Flow -->
-    {#if isBTC && depositMethod === 'btc'}
-      <div class="btc-deposit-section">
-        <div class="btc-deposit-header">
-          <h3>Deposit Bitcoin</h3>
-          <p>Send BTC to this address. After 6 confirmations (~1 hour), click "Check for Deposit" to mint ckBTC.</p>
-        </div>
-
-        {#if loadingBtcAddress}
-          <div class="loading-address">
-            <span class="spinner btc"></span>
-            Getting your Bitcoin deposit address...
-          </div>
-        {:else if btcAddressError}
-          <div class="alert error">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="12" y1="8" x2="12" y2="12"/>
-              <line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
-            {btcAddressError}
-          </div>
-        {:else if btcDepositAddress && tableIsTrusted}
-          <!-- `tableIsTrusted` is asserted HERE as well as in loadBtcDepositAddress()
-               because this string is not derived by this build from anything it
-               pinned: it is whatever the table canister replied. The guard that
-               matters is the one next to the pixels a player copies from. -->
-          <div class="btc-address-box">
-            <label>Your Bitcoin Deposit Address</label>
-            <div class="address-display">
-              <span class="address-text">{btcDepositAddress}</span>
-            </div>
-            <button
-              class="copy-btn"
-              onclick={() => {
-                navigator.clipboard.writeText(btcDepositAddress);
-                copiedAddress = true;
-                setTimeout(() => copiedAddress = false, 2000);
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-              </svg>
-              {copiedAddress ? 'Copied!' : 'Copy Address'}
-            </button>
-          </div>
-
-          <div class="btc-minimum-warning">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-              <line x1="12" y1="9" x2="12" y2="13"/>
-              <line x1="12" y1="17" x2="12.01" y2="17"/>
-            </svg>
-            <div>
-              <strong>Minimum: {btcNativeMinDisplay}</strong>
-              <span>
-                Smaller amounts may not be processed. This floor and its
-                roughly {btcNativeMinterFeeDisplay} cost belong to the ckBTC minter,
-                not to this table, and nothing in ClearDeck enforces them.
-              </span>
-            </div>
-          </div>
-
-          <div class="btc-steps">
-            <div class="step">
-              <span class="step-num">1</span>
-              <span>Send BTC to the address above (at least {btcNativeMinDisplay})</span>
-            </div>
-            <div class="step">
-              <span class="step-num">2</span>
-              <span>Wait for 6 confirmations (~1 hour)</span>
-            </div>
-            <div class="step">
-              <span class="step-num">3</span>
-              <span>Click "Check for Deposit" below</span>
-            </div>
-          </div>
-
-          {#if error}
-            <div class="alert error">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="8" x2="12" y2="12"/>
-                <line x1="12" y1="16" x2="12.01" y2="16"/>
-              </svg>
-              {error}
-            </div>
-          {/if}
-
-          {#if btcUpdateResult}
-            <div class="alert success">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                <polyline points="22 4 12 14.01 9 11.01"/>
-              </svg>
-              {btcUpdateResult}
-            </div>
-          {/if}
-
-          <div class="actions">
-            <button class="btn-secondary" onclick={onClose}>
-              Close
-            </button>
-            <button
-              class="btn-primary btc"
-              onclick={handleUpdateBtcBalance}
-              disabled={updatingBtcBalance}
-            >
-              {#if updatingBtcBalance}
-                <span class="spinner"></span>
-                Checking...
-              {:else}
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-                </svg>
-                Check for Deposit
-              {/if}
-            </button>
-          </div>
-
-          <div class="info-box btc">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="12" y1="16" x2="12" y2="12"/>
-              <line x1="12" y1="8" x2="12.01" y2="8"/>
-            </svg>
-            <p>
-              <strong>Minimum deposit:</strong> {btcNativeMinBtcDisplay} BTC ({btcNativeMinDisplay})<br/>
-              Your BTC will be converted to ckBTC at a 1:1 rate. ckBTC can be converted back to BTC anytime.
-            </p>
-          </div>
-        {/if}
-      </div>
-    {/if}
-
-    <!-- ICP funding instructions when no balance -->
-    {#if !isBTC && !loadingBalance && !hasEnoughBalance}
-      <div class="deposit-address-section">
-        <h3>Your Deposit Address</h3>
-        {#if depositAddressWarning && !tableDepositAddress}
-          <p class="address-mismatch">
-            No address is shown, on purpose: {depositAddressWarning}
-          </p>
-        {:else if tableDepositAddress}
-          {#if depositAddressWarning}
-            <p class="address-mismatch">Heads up: {depositAddressWarning}</p>
-          {/if}
-          <p class="address-hint">
-            Yours alone, at this table. Send ICP here from any wallet or exchange, then Claim:
-          </p>
-          <div class="address-box">
-            <span class="address-value">{tableDepositAddress}</span>
-          </div>
-          <button
-            class="copy-address-btn"
-            onclick={() => {
-              navigator.clipboard.writeText(tableDepositAddress);
-              copiedAddress = true;
-              setTimeout(() => copiedAddress = false, 2000);
-            }}
+        <!-- THE DISCLOSURES: beside the money on a wide screen, between the
+             amount and the button on a phone. Each is in flow and above the
+             button row (docs/SECURITY-FINDINGS.md FINDING 23 / 35 / 42). -->
+        <div class="cashier-col aside">
+          <CashierDisclosures
+            context="deposit"
+            {currencySymbol}
+            {tableCanisterId}
+            {tableIsTrusted}
+            {untrustedReason}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-            </svg>
-            {copiedAddress ? 'Copied!' : 'Copy Address'}
-          </button>
-        {:else}
-          <p class="address-hint">Deriving your address...</p>
-        {/if}
+            <SolvencyNotice
+              {solvency}
+              {currency}
+              context="deposit"
+              onRefresh={refreshSolvency}
+              refreshing={solvencyRefreshing}
+            />
+            <CycleRunwayNotice {runway} context="deposit" canisterId={tableCanisterId} />
+          </CashierDisclosures>
+        </div>
       </div>
 
-      <div class="how-to-fund">
-        <h3>How to fund:</h3>
-        <ol>
-          <li>Copy your deposit address above</li>
-          <li>Send ICP to it from an exchange or another wallet</li>
-          <li>Wait for the transfer to confirm, then click Claim Deposit</li>
-        </ol>
-      </div>
-      <div class="actions">
-        <button class="btn-secondary" onclick={onClose}>
-          Close
-        </button>
-        <button class="btn-primary" onclick={claimExternalDeposit} disabled={claiming || !tableIsTrusted || !tableDepositAddress}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+      {#if flow.phase !== FLOW.IDLE}
+        <CashierStepper
+          steps={flow.steps}
+          current={flow.current}
+          phase={flow.phase}
+          startedAt={flow.startedAt}
+          failure={flow.phase === FLOW.FAILED ? 'Stopped here.' : null}
+        />
+      {/if}
+
+      {#if errorView}
+        <div class="alert error" role="alert">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
           </svg>
-          {claiming ? 'Claiming...' : 'Claim Deposit'}
+          <span class="alert-text">
+            {errorView.message}
+            {#if errorView.detail}<span class="alert-detail">{errorView.detail}</span>{/if}
+          </span>
+        </div>
+      {/if}
+
+      <p class="cashier-note">
+        {#if effectiveRoute === 'btc'}
+          Bitcoin sent to the address above becomes ckBTC in your wallet; deposit it to the table from the ckBTC tab.
+        {:else if effectiveRoute === 'address'}
+          Claim sweeps whatever has arrived at your deposit address into your balance at this table. You can withdraw back to your wallet at any time.
+        {:else}
+          This moves {isBTC ? 'ckBTC' : 'ICP'} from your {walletSource === 'oisy' ? 'OISY' : 'Internet Identity'} wallet to your balance at this table. You can withdraw back to your wallet at any time.
+        {/if}
+      </p>
+
+      <!-- THE BUTTON ROW. On a phone it pins to the sheet's foot only once the
+           solvency block and the runway panel have scrolled above it
+           (lib/pin-after.js); before that it is in flow under them. -->
+      <div class="actions" use:pinAfter={{ gates: ['.solvency', '.runway-notice'], scroller: '.modal-body' }}>
+        <button type="button" class="btn-secondary" onclick={onClose} disabled={processing || claiming}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="btn-primary"
+          class:btc={isBTC}
+          onclick={handlePrimary}
+          disabled={primaryDisabled}
+        >
+          {#if processing || claiming || updatingBtcBalance}<span class="spinner"></span>{/if}
+          {primaryLabel}
         </button>
       </div>
     {/if}
@@ -1664,1251 +1219,112 @@
 </div>
 
 <style lang="scss">
-  /* The phone sheet's rules, shared with WithdrawModal (a mixin, included in
-     the phone block at the end of this style). */
-  @use './money-sheet-phone' as sheet;
+  @use './cashier' as cashier;
 
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.7);
-    backdrop-filter: blur(4px);
-    z-index: 200;
-  }
+  @include cashier.shell;
+  @include cashier.columns;
+  @include cashier.money;
+  @include cashier.feedback;
 
-  .modal-content {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 90%;
-    max-width: 520px;
-    background: linear-gradient(145deg, rgba(25, 25, 40, 0.98), rgba(15, 15, 25, 0.98));
-    border-radius: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5);
-    z-index: 201;
-    max-height: 90vh;
-    overflow-y: auto;
-  }
+  .modal-content { --cashier-w: 960px; }
 
-  .modal-content.btc-modal {
-    border-color: var(--cd-btc-line);
-  }
-
-  .modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 20px 24px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  }
-
-  .modal-header h2 {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin: 0;
-    font-size: 18px;
-    color: #fff;
-  }
-
-  .close-btn {
-    background: none;
-    border: none;
-    color: #888;
-    font-size: 28px;
-    cursor: pointer;
-    padding: 0;
-    width: 32px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 8px;
-    transition: all 0.2s;
-  }
-
-  .close-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
-  }
-
-  .modal-body {
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }
-
-  /* Deposit Method Toggle */
+  /* Segmented controls: the route, the wallet source, the BTC method. */
+  .deposit-route,
+  .wallet-source-toggle,
   .deposit-method-toggle {
     display: flex;
-    gap: 8px;
-    background: rgba(0, 0, 0, 0.3);
-    padding: 6px;
-    border-radius: 12px;
+    gap: var(--cd-space-1);
+    padding: var(--cd-space-1);
+    border-radius: var(--cd-radius-card);
+    background: var(--cd-surface-2);
   }
 
+  .deposit-route button,
+  .wallet-source-toggle button,
   .deposit-method-toggle button {
-    flex: 1;
+    flex: 1 1 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
-    padding: 12px 16px;
-    background: transparent;
-    border: none;
-    border-radius: 8px;
-    color: #888;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .deposit-method-toggle button .method-icon {
-    font-size: 18px;
-  }
-
-  .deposit-method-toggle button .method-hint {
-    font-size: 10px;
-    font-weight: 400;
-    opacity: 0.7;
-  }
-
-  .deposit-method-toggle button.active {
-    background: var(--cd-btc-tint);
-    color: #f7931a;
-  }
-
-  .deposit-method-toggle button:hover:not(.active) {
-    background: rgba(255, 255, 255, 0.05);
-    color: #ccc;
-  }
-
-  .balance-section {
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 12px;
-    padding: 16px;
-  }
-
-  .balance-section.btc {
-    background: linear-gradient(135deg, var(--cd-btc-dim), rgba(180, 100, 20, 0.05));
-    border: 1px solid var(--cd-btc-tint);
-  }
-
-  .balance-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .balance-label {
-    color: #888;
-    font-size: 13px;
-  }
-
-  .balance-value {
-    color: #00d4aa;
-    font-size: 20px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .balance-value.btc {
-    color: #f7931a;
-  }
-
-  .balance-value.loading {
-    color: #666;
-  }
-
-  .mini-spinner {
-    width: 14px;
-    height: 14px;
-    border: 2px solid rgba(0, 212, 170, 0.3);
-    border-top-color: #00d4aa;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  .mini-spinner.btc {
-    border-color: var(--cd-btc-line);
-    border-top-color: #f7931a;
-  }
-
-  .no-balance-warning {
-    display: flex;
-    gap: 12px;
-    margin-top: 16px;
-    padding: 14px;
-    background: rgba(245, 158, 11, 0.1);
-    border: 1px solid rgba(245, 158, 11, 0.3);
-    border-radius: 8px;
-    color: #f59e0b;
-  }
-
-  .no-balance-warning svg {
-    flex-shrink: 0;
-    margin-top: 2px;
-  }
-
-  .warning-content strong {
-    display: block;
-    margin-bottom: 4px;
-  }
-
-  .warning-content p {
-    margin: 0;
-    font-size: 12px;
-    line-height: 1.5;
-    color: #c9a227;
-  }
-
-  .form-section {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .label-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  label {
-    color: #888;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    font-weight: 600;
-  }
-
-  .unit-toggle {
-    display: flex;
+    justify-content: center;
     gap: 2px;
-    background: rgba(0, 0, 0, 0.3);
-    border-radius: 6px;
-    padding: 2px;
-  }
-
-  .unit-toggle button {
-    padding: 4px 10px;
-    font-size: 11px;
-    font-weight: 600;
-    background: transparent;
-    border: none;
-    color: #666;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .unit-toggle button.active {
-    background: var(--cd-btc-line);
-    color: #f7931a;
-  }
-
-  .unit-toggle button:hover:not(.active) {
-    color: #999;
-  }
-
-  .input-row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-
-
-  .input-suffix {
-    font-size: 14px;
-    font-weight: 600;
-    color: #666;
-    min-width: 40px;
-  }
-
-  .input-suffix.btc {
-    color: #f7931a;
-  }
-
-  .conversion-preview {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 13px;
-    color: #888;
-    padding: 10px 14px;
-    background: rgba(0, 0, 0, 0.25);
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-  }
-
-  .conversion-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .crypto-equiv {
-    color: #aaa;
-  }
-
-  .usd-preview {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .usd-amount {
-    color: #4ade80;
-    font-weight: 600;
-    font-size: 14px;
-  }
-
-  .usd-value {
-    font-size: 12px;
-    color: #4ade80;
-    margin-left: 6px;
-    font-weight: 500;
-    opacity: 0.9;
-  }
-
-  .balance-crypto {
-    font-weight: 600;
-  }
-
-  input {
-    flex: 1;
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 14px;
-    color: white;
-    font-size: 18px;
-    transition: all 0.2s;
-  }
-
-  input:focus {
-    outline: none;
-    border-color: rgba(0, 212, 170, 0.5);
-    background: rgba(0, 0, 0, 0.4);
-  }
-
-  input:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .max-btn {
-    background: rgba(0, 212, 170, 0.1);
-    border: 1px solid rgba(0, 212, 170, 0.3);
-    color: #00d4aa;
-    padding: 14px 16px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .max-btn.btc {
-    background: var(--cd-btc-dim);
-    border-color: var(--cd-btc-line);
-    color: #f7931a;
-  }
-
-  .max-btn:hover:not(:disabled) {
-    background: rgba(0, 212, 170, 0.2);
-  }
-
-  .max-btn.btc:hover:not(:disabled) {
-    background: var(--cd-btc-tint);
-  }
-
-  .max-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .minimum-notice {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 12px;
-    background: rgba(99, 102, 241, 0.1);
-    border: 1px solid rgba(99, 102, 241, 0.3);
-    border-radius: 8px;
-    color: #a5b4fc;
-    font-size: 12px;
-  }
-
-  .minimum-notice.btc {
-    background: var(--cd-btc-dim);
-    border-color: var(--cd-btc-line);
-    color: #fbbf24;
-  }
-
-  .minimum-notice svg {
-    flex-shrink: 0;
-    color: #6366f1;
-  }
-
-  .minimum-notice.btc svg {
-    color: #f7931a;
-  }
-
-  .minimum-notice strong {
-    color: #c7d2fe;
-  }
-
-  .min-copy { min-width: 0; }
-
-  /* The Why disclosure: a real control (44 px on the phone, below), the
-     verbatim paragraph under it in the notice's own colour. */
-  .min-why-more { margin-top: var(--cd-space-1); }
-
-  .min-why-more summary {
-    display: inline-flex;
-    align-items: center;
     min-height: var(--cd-control-md);
-    padding: 0 var(--cd-space-2);
-    margin-left: calc(-1 * var(--cd-space-2));
+    padding: var(--cd-space-2) var(--cd-space-3);
+    border: 1px solid transparent;
     border-radius: var(--cd-radius-chip);
-    cursor: pointer;
-    font-weight: var(--cd-weight-strong);
-    color: #c7d2fe;
-    list-style: none;
-  }
-
-  .min-why-more summary::-webkit-details-marker { display: none; }
-  .min-why-more summary::after { content: ' \25BE'; }
-  .min-why-more[open] summary::after { content: ' \25B4'; }
-  .min-why-more summary:hover { background: var(--cd-surface-3); }
-  .min-why-more .min-why { display: block; margin-top: var(--cd-space-1); }
-  .minimum-notice.btc .min-why-more summary { color: #fcd34d; }
-
-  .minimum-notice.btc strong {
-    color: #fcd34d;
-  }
-
-  .alert {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 12px;
-    border-radius: 8px;
-    font-size: 13px;
-  }
-
-  .alert.error {
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    color: #ef4444;
-  }
-
-  .alert.success {
-    background: rgba(0, 212, 170, 0.15);
-    border: 1px solid rgba(0, 212, 170, 0.3);
-    color: #00d4aa;
-  }
-
-  .status-message {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 12px;
-    background: rgba(100, 100, 200, 0.1);
-    border: 1px solid rgba(100, 100, 200, 0.2);
-    border-radius: 8px;
-    color: #aab;
-    font-size: 13px;
-  }
-
-  .actions {
-    display: flex;
-    gap: 12px;
-  }
-
-  .btn-primary, .btn-secondary {
-    flex: 1;
-    padding: 14px 20px;
-    border-radius: 8px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    border: none;
-  }
-
-  .btn-primary {
-    background: linear-gradient(135deg, #00d4aa 0%, #00a88a 100%);
-    color: white;
-  }
-
-  .btn-primary.btc {
-    background: linear-gradient(135deg, #f7931a 0%, #c77700 100%);
-  }
-
-  .btn-primary:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 15px rgba(0, 212, 170, 0.3);
-  }
-
-  .btn-primary.btc:hover:not(:disabled) {
-    box-shadow: 0 4px 15px var(--cd-btc-line);
-  }
-
-  .btn-secondary {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #888;
-  }
-
-  .btn-secondary:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.1);
-    color: white;
-  }
-
-  .btn-primary:disabled, .btn-secondary:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .info-box {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 12px;
-    background: rgba(100, 100, 120, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 8px;
-    color: #888;
-  }
-
-  .info-box.btc {
-    background: color-mix(in srgb, var(--cd-btc) 5%, transparent);
-    border-color: var(--cd-btc-dim);
-  }
-
-  .info-box svg {
-    flex-shrink: 0;
-    margin-top: 2px;
-  }
-
-  .info-box p {
-    margin: 0;
-    font-size: 12px;
-    line-height: 1.5;
-  }
-
-  /* BTC Deposit Section */
-  .btc-deposit-section {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .btc-deposit-header h3 {
-    margin: 0 0 8px 0;
-    font-size: 16px;
-    color: #f7931a;
-  }
-
-  .btc-deposit-header p {
-    margin: 0;
-    font-size: 13px;
-    color: #888;
-    line-height: 1.5;
-  }
-
-  .loading-address {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 20px;
-    background: var(--cd-btc-dim);
-    border-radius: 12px;
-    color: #f7931a;
-    font-size: 14px;
-  }
-
-  .btc-address-box {
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid var(--cd-btc-line);
-    border-radius: 12px;
-    padding: 16px;
-  }
-
-  .btc-address-box label {
-    display: block;
-    margin-bottom: 8px;
-    color: #888;
-  }
-
-  .address-display {
-    background: rgba(0, 0, 0, 0.4);
-    border-radius: 8px;
-    padding: 12px;
-    margin-bottom: 12px;
-  }
-
-  .address-text {
-    font-family: monospace;
-    font-size: 12px;
-    color: #f7931a;
-    word-break: break-all;
-    line-height: 1.5;
-  }
-
-  .copy-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 10px 16px;
-    background: color-mix(in srgb, var(--cd-btc) 15%, transparent);
-    border: 1px solid var(--cd-btc-line);
-    color: #f7931a;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .copy-btn:hover {
-    background: color-mix(in srgb, var(--cd-btc) 25%, transparent);
-  }
-
-  .btc-minimum-warning {
-    display: flex;
-    gap: 12px;
-    align-items: flex-start;
-    padding: 12px 14px;
-    background: rgba(234, 179, 8, 0.1);
-    border: 1px solid rgba(234, 179, 8, 0.3);
-    border-radius: 8px;
-    margin-bottom: 12px;
-  }
-
-  .btc-minimum-warning svg {
-    flex-shrink: 0;
-    color: #eab308;
-    margin-top: 2px;
-  }
-
-  .btc-minimum-warning div {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .btc-minimum-warning strong {
-    color: #eab308;
-    font-size: 13px;
-  }
-
-  .btc-minimum-warning span {
-    color: #a3a3a3;
-    font-size: 12px;
-  }
-
-  .btc-steps {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .step {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 14px;
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 8px;
-    font-size: 13px;
-    color: #ccc;
-  }
-
-  .step-num {
-    width: 24px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--cd-btc-tint);
-    color: #f7931a;
-    border-radius: 50%;
-    font-size: 12px;
-    font-weight: 700;
-  }
-
-  /* ICP deposit address section */
-  .address-mismatch {
-    color: #ff9f43;
-    font-size: 13px;
-    line-height: 1.5;
-    margin: 0;
-    text-align: left;
-  }
-
-  .deposit-address-section {
-    background: linear-gradient(135deg, rgba(0, 212, 170, 0.1) 0%, rgba(0, 100, 80, 0.1) 100%);
-    border: 1px solid rgba(0, 212, 170, 0.3);
-    border-radius: 12px;
-    padding: 20px;
-    text-align: center;
-  }
-
-  .deposit-address-section h3 {
-    margin: 0 0 8px 0;
-    font-size: 14px;
-    color: #00d4aa;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .address-hint {
-    margin: 0 0 12px 0;
-    font-size: 12px;
-    color: #888;
-  }
-
-  .address-box {
-    background: rgba(0, 0, 0, 0.4);
-    border-radius: 8px;
-    padding: 12px;
-    margin-bottom: 12px;
-  }
-
-  .address-value {
-    font-family: monospace;
-    font-size: 11px;
-    color: #fff;
-    word-break: break-all;
-    line-height: 1.5;
-  }
-
-  .copy-address-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 10px 20px;
-    background: rgba(0, 212, 170, 0.2);
-    border: 1px solid rgba(0, 212, 170, 0.4);
-    color: #00d4aa;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .copy-address-btn:hover {
-    background: rgba(0, 212, 170, 0.3);
-    transform: translateY(-1px);
-  }
-
-  .how-to-fund {
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 12px;
-    padding: 16px;
-  }
-
-  .how-to-fund h3 {
-    margin: 0 0 12px 0;
-    font-size: 13px;
-    color: #888;
-  }
-
-  .how-to-fund ol {
-    margin: 0;
-    padding-left: 20px;
-    color: #666;
-    font-size: 12px;
-    line-height: 1.6;
-  }
-
-  .how-to-fund li {
-    margin-bottom: 6px;
-  }
-
-  .how-to-fund li:last-child {
-    margin-bottom: 0;
-  }
-
-  .deposit-info-section {
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 12px;
-    padding: 20px;
-  }
-
-  .deposit-info-section.btc {
-    background: linear-gradient(135deg, var(--cd-btc-dim) 0%, rgba(180, 100, 20, 0.05) 100%);
-    border: 1px solid var(--cd-btc-line);
-  }
-
-  .deposit-info-section h3 {
-    margin: 0 0 12px 0;
-    font-size: 14px;
-    color: #f7931a;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .deposit-info-section .info-text {
-    margin: 0 0 16px 0;
-    font-size: 13px;
-    color: #999;
-    line-height: 1.5;
-  }
-
-  .funding-options {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .funding-options .option {
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 8px;
-    padding: 14px;
-  }
-
-  .funding-options .option strong {
-    display: block;
-    margin-bottom: 6px;
-    font-size: 13px;
-    color: #fbbf24;
-  }
-
-  .funding-options .option p {
-    margin: 0;
-    font-size: 12px;
-    color: #888;
-    line-height: 1.4;
-  }
-
-  .spinner {
-    width: 14px;
-    height: 14px;
-    border: 2px solid rgba(255, 255, 255, 0.3);
-    border-top-color: white;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  .spinner.btc {
-    border-color: var(--cd-btc-line);
-    border-top-color: #f7931a;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  /* Wallet Source Toggle */
-  .wallet-source-toggle {
-    display: flex;
-    gap: 8px;
-    background: rgba(0, 0, 0, 0.3);
-    padding: 6px;
-    border-radius: 12px;
-  }
-
-  .wallet-source-toggle button {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 12px 16px;
     background: transparent;
-    border: none;
-    border-radius: 8px;
-    color: #888;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .wallet-source-toggle button svg {
-    opacity: 0.7;
-  }
-
-  .wallet-source-toggle .source-label {
-    font-weight: 600;
-  }
-
-  .wallet-source-toggle .source-hint {
-    font-size: 10px;
-    font-weight: 400;
-    opacity: 0.7;
-  }
-
-  .wallet-source-toggle button.active {
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.2));
-    color: #a5b4fc;
-    border: 1px solid rgba(99, 102, 241, 0.3);
-  }
-
-  .wallet-source-toggle button.active svg {
-    opacity: 1;
-    color: #a5b4fc;
-  }
-
-  .wallet-source-toggle button:hover:not(.active) {
-    background: rgba(255, 255, 255, 0.05);
-    color: #ccc;
-  }
-
-  /* OISY Connect Section */
-  .oisy-connect-section {
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.05));
-    border: 1px solid rgba(99, 102, 241, 0.2);
-    border-radius: 12px;
-    padding: 24px;
+    color: var(--cd-ink-2);
+    font-family: inherit;
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-strong);
+    line-height: 1.25;
     text-align: center;
+    cursor: pointer;
+    transition: background var(--cd-fast) var(--cd-ease), color var(--cd-fast) var(--cd-ease);
   }
 
-  .oisy-connect-section.btc {
-    background: linear-gradient(135deg, var(--cd-btc-dim), rgba(180, 100, 20, 0.05));
-    border-color: var(--cd-btc-tint);
+  .deposit-route button.active,
+  .wallet-source-toggle button.active {
+    background: var(--cd-surface-4);
+    border-color: var(--cd-line-strong);
+    color: var(--cd-ink);
   }
 
-  .oisy-icon {
-    margin-bottom: 12px;
-    color: #a5b4fc;
-  }
+  .deposit-method-toggle button.active { background: var(--cd-btc-dim); border-color: var(--cd-btc-line); color: var(--cd-btc); }
 
-  .oisy-connect-section.btc .oisy-icon {
-    color: #f7931a;
-  }
+  .deposit-route button:hover:not(.active),
+  .wallet-source-toggle button:hover:not(.active),
+  .deposit-method-toggle button:hover:not(.active) { background: var(--cd-surface-3); color: var(--cd-ink-1); }
 
-  .oisy-connect-section h3 {
-    margin: 0 0 8px 0;
-    font-size: 16px;
-    color: #fff;
-  }
+  .source-hint, .method-hint { font-size: var(--cd-text-xs); font-weight: var(--cd-weight-body); color: var(--cd-ink-2); }
 
-  .oisy-connect-section p {
-    margin: 0 0 16px 0;
-    font-size: 13px;
-    color: #888;
-    line-height: 1.5;
-  }
+  .from-card.oisy { border-color: var(--cd-accent-line); }
 
   .btn-connect-oisy {
+    align-self: flex-start;
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 12px 24px;
-    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-    border: none;
-    border-radius: 8px;
-    color: white;
-    font-size: 14px;
-    font-weight: 600;
+    gap: var(--cd-space-2);
+    min-height: var(--cd-control-md);
+    padding: 0 var(--cd-space-4);
+    border: 0;
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-accent);
+    color: var(--cd-accent-ink);
+    font-family: inherit;
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-figure);
     cursor: pointer;
-    transition: all 0.2s;
+    box-shadow: var(--cd-gloss);
   }
 
-  .btn-connect-oisy.btc {
-    background: linear-gradient(135deg, #f7931a 0%, #c77700 100%);
-  }
-
-  .btn-connect-oisy:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
-  }
-
-  .btn-connect-oisy.btc:hover:not(:disabled) {
-    box-shadow: 0 4px 15px var(--cd-btc-line);
-  }
-
-  .btn-connect-oisy:disabled {
-    opacity: 0.7;
-    cursor: not-allowed;
-  }
-
-  .oisy-error {
-    margin-top: 12px;
-    padding: 10px;
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    border-radius: 8px;
-    color: #ef4444;
-    font-size: 13px;
-  }
-
-  /* OISY Connected State */
-  .balance-section.oisy {
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.05));
-    border: 1px solid rgba(99, 102, 241, 0.2);
-  }
-
-  .balance-section.oisy.btc {
-    background: linear-gradient(135deg, var(--cd-btc-dim), rgba(180, 100, 20, 0.05));
-    border-color: var(--cd-btc-tint);
-  }
-
-  .oisy-connected-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-  }
-
-  .oisy-popup-note {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background: rgba(99, 102, 241, 0.1);
-    border-radius: 6px;
-    margin-bottom: 12px;
-    font-size: 11px;
-    color: #a5b4fc;
-  }
-
-  .oisy-popup-note svg {
-    flex-shrink: 0;
-    opacity: 0.7;
-  }
-
-  .connected-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    background: rgba(34, 197, 94, 0.15);
-    border: 1px solid rgba(34, 197, 94, 0.3);
-    border-radius: 20px;
-    color: #22c55e;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .disconnect-btn {
-    padding: 4px 10px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
-    color: #888;
-    font-size: 11px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .disconnect-btn:hover {
-    background: rgba(239, 68, 68, 0.15);
-    border-color: rgba(239, 68, 68, 0.3);
-    color: #ef4444;
-  }
-
-  .balance-value.oisy {
-    color: #a5b4fc;
-  }
-
-  .balance-value.oisy.btc {
-    color: #f7931a;
-  }
-
-  .no-balance-warning.oisy {
-    background: rgba(99, 102, 241, 0.1);
-    border-color: rgba(99, 102, 241, 0.3);
-    color: #a5b4fc;
-  }
-
-  .no-balance-warning.oisy.btc {
-    background: var(--cd-btc-dim);
-    border-color: var(--cd-btc-line);
-    color: #f7931a;
-  }
-
-  .no-balance-warning.oisy .warning-content p {
-    color: #818cf8;
-  }
-
-  .no-balance-warning.oisy.btc .warning-content p {
-    color: #d97706;
-  }
-
-  /* The protected notices, restated inside the dialog. Deliberately NOT dimmed:
-     it is the one block in this modal that must not read as fine print. */
-  .player-notice {
-    margin: 0;
-    padding: 10px 12px;
-    border-radius: 8px;
-    background: rgba(239, 68, 68, 0.12);
-    border: 1px solid rgba(239, 68, 68, 0.35);
-    color: #fca5a5;
-    font-size: 12px;
-    line-height: 1.5;
-  }
-
-  .player-notice :global(strong) {
-    color: #fecaca;
-  }
-
-  /* In flow, directly beneath the notices. No z-index and no fixed position:
-     nothing added to this dialog may become one more thing that can cover the
-     four protected phrases (HARD RULE 2). */
-  /* THE CUSTODY DISCLOSURE (docs/SECURITY-FINDINGS.md FINDING 23).
-     Amber rather than red so it reads as a SECOND, different warning next to the
-     red alpha notice above it, instead of looking like more of the same sentence
-     and being skipped. Same 12px/1.5 as its neighbours: this is a notice, not a
-     decoration, and it has to survive the same 390x844 as they do. */
-  /* FINDING 42. Louder than the custody notice on purpose: this one says the
-     destination itself is wrong, and it must not read as one more caveat.
-     Position is static and there is no z-index, so it cannot cover the four
-     protected notices above it (HARD RULE 2). */
-  .untrusted-table {
-    margin: 10px 0 0 0;
-    padding: 12px 14px;
-    border-radius: 8px;
-    background: rgba(239, 68, 68, 0.16);
-    border: 2px solid rgba(239, 68, 68, 0.75);
-    color: #fecaca;
-    font-size: 12px;
-    line-height: 1.55;
-  }
-
-  .untrusted-table strong {
-    display: block;
-    margin-bottom: 4px;
-    color: #fee2e2;
-    font-size: 13px;
-  }
-
-  .custody-notice {
-    margin: 10px 0 0 0;
-    padding: 10px 12px;
-    border-radius: 8px;
-    background: rgba(245, 158, 11, 0.12);
-    border: 1px solid rgba(245, 158, 11, 0.4);
-    color: #fcd34d;
-    font-size: 12px;
-    line-height: 1.5;
-  }
-
-  .custody-notice strong {
-    display: block;
-    margin-bottom: 3px;
-    color: #fde68a;
-  }
-
-  .custody-notice code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 11px;
-    padding: 1px 4px;
-    border-radius: 4px;
-    background: rgba(0, 0, 0, 0.3);
-    color: #fde68a;
-    white-space: nowrap;
-  }
-
-  .network-line {
-    margin: 10px 0 0 0;
-    padding: 8px 12px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    background: rgba(255, 255, 255, 0.04);
-    color: rgba(255, 255, 255, 0.72);
-    font-size: 12px;
-    line-height: 1.5;
-  }
-
-  .network-line.mainnet {
-    border-color: rgba(248, 113, 113, 0.5);
-    background: rgba(185, 28, 28, 0.16);
-    color: #fecaca;
-  }
-
-  .network-line strong { color: #fff; }
-  .network-line.mainnet strong { color: #fca5a5; }
-
-  .network-line code {
-    font-family: 'Monaco', 'Menlo', monospace;
-    font-size: 11px;
-    word-break: break-all;
-  }
+  .btn-connect-oisy.btc { background: var(--cd-btc); color: var(--cd-ink-on-light); }
+  .btn-connect-oisy:disabled { opacity: 0.6; cursor: not-allowed; }
 
   /* =========================================================================
-     THE PHONE: A FULL-HEIGHT SHEET (money-sheet-phone.scss), AND THE FIRST
-     SCREEN IS THE AMOUNT.
-     The DOM order is unchanged (the desktop dialog and every harness scrape
-     read it as before); on the phone the body's flex order puts the five
-     protected phrases first as a compact strip, then the amount field with
-     its quick chips and preview, then the wallet balance and its source.
-     The custody, network, solvency and runway disclosures keep their place
-     BETWEEN the amount and the Deposit button: docs/SECURITY-FINDINGS.md
-     FINDING 23 / 35 / 42 put each of them "before every control that can
-     move money", and the amount field moves nothing. A player types the
-     figure on the first screen and reads what custody means on the way to
-     the button. Measured before: the field landed around y 900 on an 844 px
-     screen, under four paragraphs.
+     THE PHONE: A FULL-HEIGHT SHEET, AND THE FIRST SCREEN IS THE AMOUNT.
+     The DOM order is the phone order (the money column first, the
+     disclosures after it, the button row last), so no flex reordering is
+     needed. The disclosures stand BETWEEN the amount and the Deposit button
+     (docs/SECURITY-FINDINGS.md FINDING 23 / 35 / 42: each before every
+     control that can move money) and the row pins to the foot only after
+     they have been scrolled past.
      ========================================================================= */
-  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
-    @include sheet.sheet;
+  @media #{cashier.$phone} {
+    @include cashier.phone;
 
-    .player-notice { order: -3; }
-    .form-section { order: -2; }
-    .balance-section,
-    .wallet-source-toggle,
-    .deposit-method-toggle,
-    .oisy-connect-section { order: -1; }
+    .deposit-route button,
+    .wallet-source-toggle button,
+    .deposit-method-toggle button { min-height: var(--cd-touch-min); }
 
-    .custody-notice, .network-line {
-      font-size: var(--cd-text-sm);
-      line-height: 1.45;
-      padding: var(--cd-space-2) var(--cd-space-3);
-    }
-
-    .deposit-method-toggle button,
-    .wallet-source-toggle button { min-height: var(--cd-touch-min); }
-
-    .unit-toggle button { min-height: var(--cd-control-md); min-width: var(--cd-touch-min); }
-
-    .min-why-more summary { min-height: var(--cd-touch-min); }
-
-    /* A money figure never splits at its unit: "0.0006 ICP" stays one token
-       and the fiat figure wraps under it; the label stands over the value
-       (the row's two halves no longer fight for 358 px). */
-    .balance-row {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: var(--cd-space-1);
-    }
-    .balance-value { flex-wrap: wrap; row-gap: 0; }
-    .balance-crypto { white-space: nowrap; }
+    .btn-connect-oisy { min-height: var(--cd-touch-min); }
 
     /* THE DEPOSIT ROW PINS TO THE FOOT OF THE SHEET, BUT ONLY AFTER THE
-       WARNINGS. It is the LAST flex item (order 10, after the disclosures it
-       must follow: docs/SECURITY-FINDINGS.md FINDING 23 / 35 / 42). A row
-       pinned from the first screen put the button on screen with the
-       solvency verdict off it, which tools/shots/scenarios/deposit.mjs
-       measures as the FINDING 35 failure it is (the first sticky attempt,
-       and this round's first run). So lib/pin-after.js adds `pinned` only
-       once the solvency block and the runway panel have their bottom edges
-       above the line the row's top would sit on; from then on the row rides
-       the foot under any alert or status line and never stands over a
-       figure it was meant to follow. Opaque (--cd-sheet, the alpha-1 ground
-       BetSizer's phone sheet paints over money) with a hairline; the body's
-       own bottom padding is cancelled so the pinned row sits flush.
-       tools/shots/touch-targets.mjs measures the row at rest and at the end
-       of the scroll (stickyCover: no money figure under a sticky element). */
+       WARNINGS: lib/pin-after.js adds `pinned` once the solvency block and
+       the runway panel have their bottom edges above the line the row's top
+       would sit on. Opaque, with a hairline; the body's bottom padding is
+       cancelled so the pinned row sits flush. tools/shots/touch-targets.mjs
+       measures the row at rest and at the end of the scroll. */
     .actions {
       order: 10;
       z-index: 2;

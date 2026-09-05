@@ -275,6 +275,20 @@ export const CHAIN_SITES = [
         why: 'the fiat conversion of that balance',
     },
     {
+        id: 'deposit-cost-summary',
+        selector: '.cost-summary dd',
+        label: /^deposit modal cost row "/,
+        why: 'the cost of the typed deposit, row by row (you send / ledger fees / total from '
+            + 'your wallet / the table credits), each recomputed from the field\'s value and the '
+            + 'ledger\'s own icrc1_fee(); rendered only once an amount is typed',
+    },
+    {
+        id: 'deposit-button-amount',
+        selector: '.modal-content .actions .btn-primary',
+        label: /^deposit modal button amount vs/,
+        why: 'the amount the Deposit button names, which is the typed amount',
+    },
+    {
         id: 'solvency-figures',
         selector: '.solvency .figures dd, .solvency .advice',
         label: /^solvency /,

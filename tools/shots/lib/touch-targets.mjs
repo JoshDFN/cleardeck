@@ -67,9 +67,29 @@ export function measureTouchTargets(page, opts = {}) {
         right: +r.right.toFixed(1), bottom: +r.bottom.toFixed(1),
       };
     };
+    // A CONTROL SCROLLED OUT OF ITS OWN SCROLLER IS NOT A TARGET. The cashier
+    // sheet's body is the scroller under a fixed header; with the body
+    // scrolled to its end the amount field sits above the body's top edge,
+    // clipped away, and checkVisibility() still says visible (it knows
+    // nothing about overflow clipping). A probe there hits the header and
+    // the field was reported "covered by a neighbour" (the cashier wave's
+    // first touch run). So an element whose box no longer intersects an
+    // overflow-clipping ancestor's box is not painted.
+    const clippedAway = (el) => {
+      const r = el.getBoundingClientRect();
+      for (let n = el.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+        const o = getComputedStyle(n);
+        const clips = (v) => v === 'hidden' || v === 'auto' || v === 'scroll' || v === 'clip';
+        if (!clips(o.overflowX) && !clips(o.overflowY)) continue;
+        const c = n.getBoundingClientRect();
+        if (r.bottom <= c.top + 0.5 || r.top >= c.bottom - 0.5 || r.right <= c.left + 0.5 || r.left >= c.right - 0.5) return true;
+      }
+      return false;
+    };
     const painted = (el) => {
       const r = el.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) return false;
+      if (clippedAway(el)) return false;
       if (typeof el.checkVisibility === 'function') {
         return el.checkVisibility({ visibilityProperty: true, opacityProperty: true });
       }

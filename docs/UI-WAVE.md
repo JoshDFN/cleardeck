@@ -50,6 +50,20 @@ lost when the handoffs are.
   figure-bearing sentences with a Why disclosure holding the rest verbatim.
   The custody paragraph is the remaining height between the amount and the
   button; a shorter custody paragraph is a security-copy call, not a UI one.
+  THE CASHIER WAVE (phase 5) kept that order and reshaped the sheets: the
+  money column (route, paying wallet with its balance and fiat, amount with
+  quick chips and MAX, a cost summary of you send / ledger fees / total from
+  your wallet / the table credits, the limits line) and the disclosures
+  column (custody headline with How, destination, solvency with the
+  canister's sentence under a disclosure, runway) side by side on a wide
+  screen and in that order on a phone, the button row under both; two chain
+  commits painted as steps (lib/cashier-steps.js, CashierStepper.svelte);
+  success a receipt with Done (CashierReceipt.svelte); the derived deposit
+  address a card with a QR (DepositAddressCard.svelte). The withdraw sheet
+  shows the destination account id derived from the signed-in principal, the
+  net rows, a receipt with the ledger block and the cooldown counting down.
+  `tools/shots/probe-cashier.mjs` moves real money through both and checks
+  every figure on the summary and the receipt against the ledger.
 - **Sound for an anonymous spectator on a phone table.** The phone's table
   header has no slot for the sound toggle; it rides the dock beside Log,
   which renders for everyone, signed in or not. If the dock ever drops for

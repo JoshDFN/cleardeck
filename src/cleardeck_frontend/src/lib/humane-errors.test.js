@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DETAIL_MAX_CHARS, LOBBY_RETRY_MAX_MS, LOBBY_RETRY_MS, describeLobbyFailure, detailOf,
-  isTransportFailure, rawMessageOf, retryDelayMs,
+  describeCashierFailure, isTransportFailure, rawMessageOf, retryDelayMs,
 } from './humane-errors.js';
 
 const AGENT_TEXT =
@@ -94,5 +94,45 @@ describe('retryDelayMs', () => {
   it('feeds the sentence on screen', () => {
     const { message } = describeLobbyFailure(new Error('Failed to fetch'), { retryMs: retryDelayMs(1) });
     expect(message).toBe('Could not reach the tables. Retrying in 24 s.');
+  });
+});
+
+describe('describeCashierFailure', () => {
+  it('turns the withdraw cooldown into a sentence with the seconds and keeps the raw line', () => {
+    const r = describeCashierFailure('Please wait 47 seconds before withdrawing again');
+    expect(r.message).toBe('You withdrew less than a minute ago. Try again in 47 s. Nothing moved.');
+    expect(r.detail).toBe('Please wait 47 seconds before withdrawing again');
+    expect(r.transport).toBe(false);
+  });
+
+  it('maps the ledger\'s InsufficientFunds and the table\'s insufficient balance apart', () => {
+    expect(describeCashierFailure('Approval failed: InsufficientFunds').message).toMatch(/wallet does not cover/);
+    expect(describeCashierFailure(new Error('Insufficient balance')).message).toMatch(/table balance does not cover/);
+  });
+
+  it('keeps a sentence that names a limit as it is', () => {
+    const raw = 'Minimum withdrawal is 0.0002 ICP. Your whole remaining balance can always be withdrawn in one call.';
+    const r = describeCashierFailure(raw);
+    expect(r.message).toBe(raw);
+    expect(r.detail).toBeNull();
+  });
+
+  it('names a dead transport and says nothing moved', () => {
+    const r = describeCashierFailure(new Error('Failed to fetch HTTP request: tcp connect error (os error 61)'));
+    expect(r.transport).toBe(true);
+    expect(r.message).toMatch(/Could not reach the table\. Nothing moved/);
+    expect(r.detail).toMatch(/os error 61/);
+  });
+
+  it('anonymous, rate limit and a pending withdrawal each get their own sentence', () => {
+    expect(describeCashierFailure('Anonymous callers cannot withdraw').message).toMatch(/Sign in first/);
+    expect(describeCashierFailure('Rate limit exceeded. Please wait before trying again.').message).toMatch(/Too many attempts/);
+    expect(describeCashierFailure('A withdrawal is already in progress').message).toMatch(/still settling/);
+  });
+
+  it('an unknown message gets the generic sentence with the raw text as detail', () => {
+    const r = describeCashierFailure('Something odd: code 42');
+    expect(r.message).toBe('That did not go through. Nothing moved.');
+    expect(r.detail).toBe('Something odd: code 42');
   });
 });

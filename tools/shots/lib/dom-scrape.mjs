@@ -445,6 +445,19 @@ export function scrapeDeposit(page) {
             priceError: txt(document.querySelector('.price-error')),
             sourceButtons: [...document.querySelectorAll('.wallet-source-toggle button')]
                 .map((b) => txt(b)).filter(Boolean),
+            // THE TYPED AMOUNT AND EVERYTHING DERIVED FROM IT (the cashier
+            // wave). The field's value, the cost summary's rows by `data-row`,
+            // the amount's own fiat hint and the button that names the
+            // amount. Empty on a resting still; asserted by
+            // chain-agreement.mjs whenever they are on screen.
+            inputValue: (() => {
+                const input = document.querySelector('#deposit-amount');
+                return input ? String(input.value ?? '') : null;
+            })(),
+            costRows: [...document.querySelectorAll('.modal-content .cost-summary [data-row]')]
+                .map((row) => ({ id: row.getAttribute('data-row'), text: txt(row.querySelector('dd')) })),
+            amountFiat: [...document.querySelectorAll('.modal-content .usd-amount')].map((e) => txt(e)),
+            buttonText: txt(document.querySelector('.modal-content .actions .btn-primary')),
         };
     });
 }

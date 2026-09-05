@@ -96,7 +96,7 @@
      The same tokens as the solvency block and the trust bar. */
   .runway-notice {
     margin: var(--cd-space-3) 0;
-    padding: var(--cd-space-3) var(--cd-space-4);
+    padding: var(--cd-space-2) var(--cd-space-3);
     border-radius: var(--cd-radius-card);
     border: 1px solid;
     border-left-width: 3px;

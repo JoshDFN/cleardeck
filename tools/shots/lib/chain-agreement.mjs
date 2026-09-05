@@ -1814,6 +1814,65 @@ export async function assertDepositAgreement(ctx, page, opts) {
         }
     }
 
+    // THE TYPED AMOUNT, WHAT IT COSTS, AND THE BUTTON THAT NAMES IT (the
+    // cashier wave). None of these render until an amount is in the field, so
+    // a resting still carries none of them; when they are on screen every one
+    // is recomputed here from the field's own value and the LEDGER's fee, by
+    // `data-row`, never by position (docs/DEFECTS.md E-86 is what position
+    // does). The amount is the player's input, so it is not a chain figure;
+    // the fee is, and the arithmetic on it is the claim being checked: two
+    // fees leave the wallet, the amount whole reaches the table.
+    const typed = dom.inputValue && Number(dom.inputValue) > 0
+        ? (truth.currency === 'BTC'
+            ? Math.floor(Number(dom.inputValue))
+            : Math.floor(Number(dom.inputValue) * 100_000_000))
+        : null;
+    if (dom.costRows.length || dom.amountFiat.length) {
+        if (typed === null) {
+            structural.push(
+                'the deposit modal shows a cost summary or an amount fiat hint with no amount in the field',
+            );
+        } else {
+            const fee = Number(await ledgerTransferFee());
+            const expectedByRow = {
+                send: typed,
+                fees: 2 * fee,
+                total: typed + 2 * fee,
+                credited: typed,
+            };
+            for (const row of dom.costRows) {
+                const expected = expectedByRow[row.id];
+                if (expected === undefined) {
+                    structural.push(`the deposit cost summary shows a row "${row.id}" this check does not know`);
+                    continue;
+                }
+                figures.push(checkFigure(
+                    `deposit modal cost row "${row.id}" vs the typed amount and 2 x icrc1_fee()`,
+                    expected, row.text, { currency: truth.currency },
+                ));
+            }
+            if (dom.buttonText && /\d/.test(dom.buttonText)) {
+                figures.push(checkFigure(
+                    'deposit modal button amount vs the typed amount',
+                    typed, dom.buttonText, { currency: truth.currency },
+                ));
+            }
+            const quoteNow = servedIcpUsd();
+            for (const text of dom.amountFiat) {
+                if (!quoteNow) {
+                    structural.push(`the modal shows an amount fiat hint (${text}) but no price was served this run`);
+                    continue;
+                }
+                figures.push(checkPlainNumber(
+                    `deposit modal fiat value vs (amount x ${quoteNow.usd} USD/ICP, ${quoteNow.mode})`,
+                    (typed / 100_000_000) * quoteNow.usd, text, { unit: ' USD' },
+                ));
+            }
+        }
+    } else if (dom.buttonText && /\d/.test(dom.buttonText)) {
+        structural.push(`the deposit button names a figure (${dom.buttonText}) with no cost summary on screen`);
+    }
+
     // Re-read after the settle loop: a quote can land between the two.
     const quote = servedIcpUsd();
     if (dom.usdValues.length === 0) {

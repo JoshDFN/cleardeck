@@ -77,3 +77,85 @@ export function describeLobbyFailure(e, { retryMs = LOBBY_RETRY_MS } = {}) {
   const next = retryMs == null ? 'Try again in a moment.' : `Retrying in ${Math.round(retryMs / 1000)} s.`;
   return { message: `${what} ${next}`, detail: detailOf(e), transport };
 }
+
+// ---------------------------------------------------------------------------
+// THE CASHIER'S FAILURES, IN PLAIN ENGLISH.
+// ---------------------------------------------------------------------------
+//
+// The canister and the ledger answer a refused deposit or withdrawal with a
+// sentence written for a log ("Please wait 47 seconds before withdrawing
+// again", "InsufficientFunds", "Anonymous callers cannot withdraw"). The player
+// needs what happened and whether anything moved. The raw text is kept as the
+// detail line; a sentence that already names a figure the player must act on
+// (a minimum, a maximum, a refusal to send) is shown as it is, because the
+// figure is the point.
+
+const CASHIER_PATTERNS = [
+  {
+    re: /please wait (\d+) seconds? before withdrawing again/i,
+    message: (m) => `You withdrew less than a minute ago. Try again in ${m[1]} s. Nothing moved.`,
+  },
+  {
+    re: /withdrawal is already in progress/i,
+    message: () => 'A withdrawal of yours is still settling. Wait for it to finish, then try again.',
+  },
+  {
+    re: /insufficient balance/i,
+    message: () => 'Your table balance does not cover that amount. Nothing moved.',
+  },
+  {
+    re: /insufficient ?funds/i,
+    message: () => 'Your wallet does not cover the amount plus the network fees. Nothing moved.',
+  },
+  {
+    re: /anonymous/i,
+    message: () => 'Sign in first: money moves only for a signed-in identity.',
+  },
+  {
+    re: /rate limit|too many/i,
+    message: () => 'Too many attempts in a row. Wait a minute, then try again. Nothing moved.',
+  },
+  {
+    re: /out of cycles|frozen|freezing/i,
+    message: () => 'This table is not accepting calls right now. Nothing moved; your balance is not lost.',
+  },
+];
+
+/** Sentences the canister writes for the player, with a figure in them: kept whole. */
+const VERBATIM_PATTERNS = [
+  /^minimum (deposit|withdrawal) is/i,
+  /^maximum withdrawal/i,
+  /^no withdrawal of any size/i,
+  /^refusing to send/i,
+  /^this is not one of this build's tables/i,
+];
+
+/**
+ * The message for a failed deposit or withdrawal.
+ *
+ * @param {unknown} e what the call threw or the Err it returned
+ * @returns {{ message: string, detail: string | null, transport: boolean }}
+ */
+export function describeCashierFailure(e) {
+  const raw = rawMessageOf(e);
+  const transport = isTransportFailure(e);
+  if (transport) {
+    return {
+      message: 'Could not reach the table. Nothing moved. Check your connection and try again.',
+      detail: detailOf(e),
+      transport,
+    };
+  }
+  if (VERBATIM_PATTERNS.some((re) => re.test(raw))) {
+    return { message: raw, detail: null, transport };
+  }
+  for (const p of CASHIER_PATTERNS) {
+    const m = p.re.exec(raw);
+    if (m) return { message: p.message(m), detail: detailOf(e), transport };
+  }
+  return {
+    message: raw ? 'That did not go through. Nothing moved.' : 'That did not go through. Nothing moved.',
+    detail: detailOf(e),
+    transport,
+  };
+}

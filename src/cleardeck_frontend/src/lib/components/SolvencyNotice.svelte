@@ -123,11 +123,19 @@
       <p class="asof">Ledger reading {age}.</p>
     {/if}
 
-    {#if solvency?.advice}
-      <p class="advice">{solvency.advice}</p>
-    {/if}
-
     <p class="action">{action}</p>
+
+    <!-- The canister's own sentence, verbatim, under a disclosure: the
+         headline, the figures and the action above are the summary a player
+         reads; this is the detail. Its figures are still read by
+         tools/shots/lib/chain-agreement.mjs (textContent, open or closed) and
+         asserted against get_solvency(). -->
+    {#if solvency?.advice}
+      <details class="more">
+        <summary>What the table said</summary>
+        <p class="advice">{solvency.advice}</p>
+      </details>
+    {/if}
 
     {#if onRefresh && solvency?.canRefresh}
       <button class="refresh" onclick={onRefresh} disabled={refreshing}>
@@ -143,7 +151,7 @@
      the trust bar: amber for a warning, the danger red only for a shortfall. */
   .solvency {
     margin: 0 0 var(--cd-space-4);
-    padding: var(--cd-space-3) var(--cd-space-4);
+    padding: var(--cd-space-2) var(--cd-space-3);
     border-radius: var(--cd-radius-card);
     border: 1px solid var(--cd-warn-line);
     border-left-width: 3px;
@@ -167,7 +175,7 @@
   }
 
   .headline strong {
-    font-size: var(--cd-text-md);
+    font-size: var(--cd-text-sm);
     color: var(--cd-warn);
   }
 
@@ -177,8 +185,8 @@
 
   .figures {
     display: grid;
-    gap: var(--cd-space-1);
-    margin: 0 0 6px;
+    gap: 2px;
+    margin: 0 0 var(--cd-space-1);
     font-variant-numeric: tabular-nums;
   }
 
@@ -204,7 +212,7 @@
   .asof,
   .advice,
   .action {
-    margin: 0 0 6px;
+    margin: 0 0 var(--cd-space-1);
   }
 
   .asof { color: var(--cd-ink-2); font-size: var(--cd-text-xs); }
@@ -215,10 +223,33 @@
     font-weight: var(--cd-weight-strong);
   }
 
+  .more { margin-top: 0; }
+
+  .more summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-2);
+    margin-left: calc(-1 * var(--cd-space-2));
+    border-radius: var(--cd-radius-chip);
+    color: var(--cd-warn);
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-strong);
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .solvency.critical .more summary { color: var(--cd-danger-hi); }
+  .more summary::-webkit-details-marker { display: none; }
+  .more summary::after { content: ' \25BE'; }
+  .more[open] summary::after { content: ' \25B4'; }
+  .more summary:hover { background: var(--cd-surface-2); }
+  .more .advice { margin: var(--cd-space-1) 0 0; color: var(--cd-ink-1); }
+
   .refresh {
-    margin-top: var(--cd-space-3);
+    margin-top: var(--cd-space-2);
     width: 100%;
-    min-height: var(--cd-control-md);
+    min-height: var(--cd-control-sm);
     padding: 0 var(--cd-space-3);
     border-radius: var(--cd-radius-chip);
     border: 1px solid var(--cd-line-strong);
@@ -235,5 +266,6 @@
   /* THE PHONE: the refresh control at the 44 px touch floor. */
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {
     .refresh { min-height: var(--cd-touch-min); }
+    .more summary { min-height: var(--cd-touch-min); }
   }
 </style>
