@@ -86,7 +86,7 @@
       <button class="hand-row" class:dim={!participatedIn(hand, myPrincipal)} onclick={() => onOpen(hand)}>
         <span class="row-result {result}">
           <span class="result-word">{RESULT_WORD[result]}</span>
-          <span class="result-street">to the {reachedStreet(hand.community.length)}{#if hand.showdown.length}<span class="sep"> · </span>showdown{/if}</span>
+          <span class="result-street">to the {reachedStreet(hand.community.length)}{#if hand.showdown.length}<span class="sep">{'\u00a0·\u00a0'}</span>showdown{/if}</span>
         </span>
         <span class="row-cards" aria-label="your cards">
           {#if mine}
