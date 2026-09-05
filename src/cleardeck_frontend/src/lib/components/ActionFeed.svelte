@@ -253,8 +253,15 @@
 
   .feed-close:hover { background: var(--cd-surface-3); color: var(--cd-ink); }
 
+  /* THE PHONE SHEET'S HEADER IS ONE ROW: "ACTION LOG  Hand #1 ...... [x]".
+     The sheet between the stage and the dock is ~200 px tall; a two-row
+     header and the links row left it a sliver of log (measured: the seal chip
+     cut in half, no action line in view). */
   @media (max-aspect-ratio: 1/1) {
     .feed-close { width: var(--cd-touch-min); height: var(--cd-touch-min); }
+    .feed-header { flex-direction: row; align-items: center; gap: var(--cd-space-2); padding: var(--cd-space-1) var(--cd-space-2) var(--cd-space-1) var(--cd-space-3); }
+    .feed-header-top { flex: 1 1 auto; min-width: 0; }
+    .feed-subtitle { order: -1; flex: 0 0 auto; }
   }
   .toggle-btn.active { background: var(--cd-accent-dim); border-color: var(--cd-accent-line); color: var(--cd-accent); }
 
@@ -378,8 +385,10 @@
   .hash-value { font-size: var(--cd-text-xs); font-family: var(--cd-font-mono); color: var(--cd-accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* Responsive */
+  /* The feed is sized by its container (a column beside the stage, a sheet
+     between the stage and the dock); a fixed width here made the phone's
+     sheet a 180 px strip. */
   @media (max-width: 1200px) {
-    .action-feed { width: 180px; max-height: 350px; }
     .feed-item { padding: var(--cd-space-1) var(--cd-space-2); }
     .action-content { font-size: var(--cd-text-xs); }
   }

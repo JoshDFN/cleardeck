@@ -509,8 +509,17 @@
     to { opacity: 1; transform: scale(1); }
   }
 
+  /* A wide screen: the scene sits in a ~800 px column, so the pod type is
+     capped at the table's own cell size and the rail is trimmed so the felt
+     keeps its ~2.1 aspect at that width. */
+  @media (min-width: 900px) and (min-aspect-ratio: 1/1) {
+    .scene { aspect-ratio: 1.8; --pod-font: clamp(var(--cd-text-xs), 1.7cqw, var(--cd-text-sm)); --avatar: max(4.4cqw, 26px); }
+    .rail { top: 16%; bottom: 16%; }
+    .felt { top: 20%; bottom: 20%; }
+  }
+
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {
-    .scene { aspect-ratio: 1.25; --board-card: 9.5cqw; --plate-w: max(36cqw, 128px); }
+    .scene { aspect-ratio: 1.25; --board-card: 9.5cqw; --plate-w: max(34cqw, 128px); }
     .rail { left: 5%; right: 5%; top: 17%; bottom: 17%; }
     .felt { left: 8%; right: 8%; top: 20%; bottom: 20%; }
   }

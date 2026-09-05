@@ -1,22 +1,30 @@
 <script>
   /**
-   * The deck on the table: a small stack of card backs at the near rail's
-   * corner (where a shuffler sits on a broadcast table), carrying the seal
+   * The deck on the table: a small stack of card backs carrying the seal
    * glyph of this hand's commitment. It reads SEALED while the hand runs,
    * REVEALED when the seed is published, and CHECKED once THIS browser has
    * hashed the revealed seed and found the commitment (lib/deck-seal.js, the
    * same state machine the action log's chip uses). A click opens the proof.
    *
+   * Two corners, one object: the near rail's right corner in landscape
+   * (where a shuffler sits on a broadcast table); the far rail's left corner
+   * in portrait, where the phone's stadium is empty (the near corner is the
+   * hero's award chip's spot on a phone).
+   *
    * Nothing money-shaped and no digits: the fingerprint is the hover title.
    * The layers are plain divs, not <Card>, so no card scraper counts them.
+   * The button RELEASES FOCUS after it opens the proof: a focused button
+   * outside the dock mutes the action hotkeys ($lib/hotkeys.js focusKindOf),
+   * and this one is pressed mid-hand.
    *
-   * Harness: `.deck-seal[data-seal=sealed|revealed|checked|mismatch]`.
+   * Harness: `.deck-seal[data-seal=sealed|revealed|checked|mismatch]` with the
+   * state word in `.deck-state`.
    */
   import HashSeal from './HashSeal.svelte';
   import { hashFingerprint } from '$lib/hash-seal.js';
   import { SEAL_HINT, SEAL_WORD, checkSeal, revealedSeedOf, sealKey, sealStateFor } from '$lib/deck-seal.js';
 
-  const { shuffleProof = null, onShowProof = null } = $props();
+  const { shuffleProof = null, onShowProof = null, portrait = false } = $props();
 
   let checkedKey = $state(null);
   let checkResult = $state(null);
@@ -40,15 +48,23 @@
     return () => { cancelled = true; };
   });
 
-  const tone = $derived(state === 'checked' ? 'accent' : state === 'mismatch' ? 'muted' : 'accent');
+  const tone = $derived(state === 'mismatch' ? 'muted' : 'accent');
+
+  function open(event) {
+    onShowProof?.();
+    // Let go of the keyboard: the proof panel is the thing to read now, and a
+    // held focus here would silently mute F / C / R / A on the dock.
+    event.currentTarget?.blur?.();
+  }
 </script>
 
 {#if state}
   <button
     type="button"
     class="deck-seal state-{state}"
+    class:portrait
     data-seal={state}
-    onclick={() => onShowProof?.()}
+    onclick={open}
     title="{SEAL_HINT[state]} Commitment {hashFingerprint(seedHash)}."
     aria-label="Deck seal: {SEAL_WORD[state]}. Open the fairness proof"
   >
@@ -69,9 +85,9 @@
 {/if}
 
 <style>
+  /* the near rail's RIGHT corner: outside every seat ring, under no figure,
+     and clear of the log, which is a column at the LEFT of the stage */
   .deck-seal {
-    /* the near rail's RIGHT corner: outside every seat ring, under no figure,
-       and never behind the LOG drawer, which opens at the left */
     --deck-w: max(calc(var(--fw) * 0.038), 30px);
     position: absolute;
     right: 1.5%;
@@ -80,10 +96,10 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 3px;
+    gap: var(--cd-space-1);
     min-width: var(--cd-touch-min);
     min-height: var(--cd-touch-min);
-    padding: 4px 6px;
+    padding: var(--cd-space-1) calc(var(--cd-space-1) * 1.5);
     background: transparent;
     border: 0;
     border-radius: var(--cd-radius-chip);
@@ -91,6 +107,14 @@
     cursor: pointer;
     font: inherit;
     transition: transform var(--cd-fast) var(--cd-ease);
+  }
+
+  /* the phone: the far rail's LEFT corner, above every pod of the stadium */
+  .deck-seal.portrait {
+    right: auto;
+    bottom: auto;
+    left: 1.5%;
+    top: 1%;
   }
 
   .deck-seal:hover { transform: translateY(-1px); }
@@ -115,12 +139,13 @@
     justify-content: center;
   }
 
-  .deck-layer.l3 { transform: translate(3px, 4px); }
-  .deck-layer.l2 { transform: translate(1.5px, 2px); }
+  /* the stack's two lower cards peek out by a tenth of the deck's width */
+  .deck-layer.l3 { transform: translate(calc(var(--deck-w) * 0.1), calc(var(--deck-w) * 0.13)); }
+  .deck-layer.l2 { transform: translate(calc(var(--deck-w) * 0.05), calc(var(--deck-w) * 0.065)); }
 
   .deck-glyph {
     display: inline-flex;
-    border-radius: 3px;
+    border-radius: calc(var(--deck-w) * 0.1);
     transition: transform var(--cd-flip) var(--cd-ease);
   }
 

@@ -20,6 +20,7 @@
   import ReplayTransport from './ReplayTransport.svelte';
   import ReplayLog from './ReplayLog.svelte';
   import ReplayVerdict from './ReplayVerdict.svelte';
+  import ReplayEquityLine from './ReplayEquityLine.svelte';
   import { safeStringify } from '$lib/utils.js';
   import logger from '$lib/logger.js';
   import { blindsForHand, logGroupsFor, potAudit } from '$lib/hand-record.js';
@@ -28,9 +29,11 @@
   } from '$lib/replay-stops.js';
   import { codeOf, principalForSeat, rankName, seatCardChecks, seatNameFor, seatOfPrincipal } from '$lib/hand-history-records.js';
   import { computeEquity } from '$lib/equity.js';
+  import { equityLineRows } from '$lib/replay-equity-line.js';
   import { verdictForPasted } from '$lib/commitment-witness.js';
   import { handToText } from '$lib/hand-text-export.js';
   import { copiedState, copyStateTtlMs, copyText, copyWord } from '$lib/copy-text.js';
+  import { phoneMedia } from '$lib/phone-media.svelte.js';
 
   const {
     hand,
@@ -67,7 +70,11 @@
   const stop = $derived(stops[stopAt] || null);
   const currentStreet = $derived(streetOfStop(stops, stop?.index ?? 0));
   const heroSeat = $derived(seatOfPrincipal(hand, myPrincipal));
-  const spots = $derived(seatSpots({ seats: hand.seats, heroSeat, maxPlayers, rx: 0.37, ry: 0.42 }));
+  // The ring's radius: on a phone the flank plates come in (0.32 of the
+  // scene's width, from 0.37), or a 128 px plate centred 13% in overhangs the
+  // screen's edge by 4 px (measured by tools/shots/probe-nine-max.mjs).
+  const phone = phoneMedia();
+  const spots = $derived(seatSpots({ seats: hand.seats, heroSeat, maxPlayers, rx: phone.matches ? 0.32 : 0.37, ry: 0.42 }));
   const boardChecks = $derived((hand.verification?.checks || []).filter((c) => c.kind === 'board'));
   const seatChecks = $derived(hand.verification?.seatCards || seatCardChecks(hand.verification, hand));
   const showdownSeats = $derived(hand.showdown.filter((p) => p.cards).map((p) => p.seat));
@@ -87,25 +94,30 @@
   /** The lit line: the stop's own, or at the paid stop the last one played. */
   const activeLine = $derived(stop?.line ?? (stop?.paid ? playedThrough : null));
 
-  // ---- equity at the current stop, cached per (board, live seats) -----------
+  // ---- equity at a stop, cached per (board, live seats) ----------------------
+  // One cache feeds the pods (the current stop) and the 4-point line under the
+  // table (the deal and each street's reveal), so the two never disagree.
   const equityCache = new Map();
-  const equity = $derived.by(() => {
-    if (!stop || !equityAllowedAt(stop, hand.seats, showdownSeats)) return null;
-    const live = liveSeatsAt(stop, hand.seats);
-    const key = `${stop.board}|${live.join(',')}`;
+  function equityAt(at) {
+    if (!at || !equityAllowedAt(at, hand.seats, showdownSeats)) return null;
+    const live = liveSeatsAt(at, hand.seats);
+    const key = `${at.board}|${live.join(',')}`;
     if (equityCache.has(key)) return equityCache.get(key);
     const revealed = hand.showdown.filter((p) => p.cards && live.includes(p.seat))
       .map((p) => ({ seat: p.seat, cards: [p.cards[0], p.cards[1]] }));
     const hero = revealed.find((r) => r.seat === heroSeat) || null;
     let result = null;
     try {
-      result = computeEquity({ revealed, liveCount: live.length, hero, board: hand.community.slice(0, stop.board) });
+      result = computeEquity({ revealed, liveCount: live.length, hero, board: hand.community.slice(0, at.board) });
     } catch (e) {
       logger.debug('replay equity unavailable', e);
     }
     equityCache.set(key, result);
     return result;
-  });
+  }
+  const equity = $derived(equityAt(stop));
+  const equityLine = $derived(equityLineRows({ stops, seats: hand.seats, equityAt }));
+  const wonBySeat = $derived(new Set(hand.winners.map((w) => w.seat)));
 
   // ---- transport --------------------------------------------------------------
   function seek(index) {
@@ -147,12 +159,13 @@
   const principalOf = (seat) => principalForSeat(hand, seat);
   const seatLabel = (seat) => (seat === null || seat === undefined ? 'Seat not recorded' : `Seat ${seat + 1}`);
 
-  /** "Seat 2 (Nakamoto) · you", every part of it justified. */
+  const isMe = (seat) => !!myPrincipal && principalOf(seat) === myPrincipal;
+  /** "Seat 1 · You", "Seat 2 · Nakamoto": the pods' own wording, so the log and the table name a seat once. */
+  const who = (seat) => (isMe(seat) ? 'You' : seatName(seat));
   function actorLabel(seat) {
     if (seat === null || seat === undefined) return 'Seat not recorded';
-    const name = seatName(seat);
-    const mine = !!myPrincipal && principalOf(seat) === myPrincipal;
-    return `${seatLabel(seat)}${name ? ` (${name})` : ''}${mine ? ' · you' : ''}`;
+    const name = who(seat);
+    return `${seatLabel(seat)}${name ? ` · ${name}` : ''}`;
   }
 
   function formatTimestamp(ns) {
@@ -192,7 +205,7 @@
   function copyAsText() {
     const text = handToText({
       hand, blinds, logGroups, money: (v) => figure(v), currency, tableName,
-      nameOf: (seat) => actorLabel(seat),
+      nameOf: (seat) => who(seat) || seatLabel(seat),
       playedAt: hand.timestamp ? new Date(Number(hand.timestamp) / 1_000_000) : null,
     });
     copyToClipboard(text, 'text');
@@ -275,23 +288,25 @@
 
 <div class="replayer">
   <div class="replay-top">
-    <button class="ghost-btn back-to-list" onclick={onBack}>
+    <button class="ghost-btn back-to-list" onclick={onBack} aria-label="All hands" title="All hands">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15,18 9,12 15,6"/></svg>
-      All hands
+      <span class="back-word">All hands</span>
     </button>
     <div class="replay-title">
       <span class="title-row">
         <strong class="hand-number">Hand #{hand.handNumber}</strong>
         {#if handId}
           <span class="hand-id mono" title="This hand's id on this table">{handId}</span>
-          <button class="ghost-btn copy-link" class:failed={copied === 'failed:link'} onclick={copyLink} title="Copy the id and a link that opens this replay">
-            {copyWord(copied, 'link', 'Copy link')}
-          </button>
         {/if}
+        <span class="timestamp" title={formatTimestamp(hand.timestamp)}>{formatTimestamp(hand.timestamp)}</span>
       </span>
-      <span class="timestamp">{formatTimestamp(hand.timestamp)}</span>
     </div>
     <div class="replay-actions">
+      {#if handId}
+        <button class="ghost-btn copy-link" class:failed={copied === 'failed:link'} onclick={copyLink} title="Copy the id and a link that opens this replay">
+          {copyWord(copied, 'link', 'Copy link')}
+        </button>
+      {/if}
       <button
         class="ghost-btn positions-toggle"
         class:on={showPositions}
@@ -299,12 +314,12 @@
         onclick={() => { showPositions = !showPositions; }}
         title="Show where in the re-derived deck each card came from (also on every card's hover title)"
       >
-        Deck positions
+        <span class="label-long">Deck positions</span><span class="label-short">Positions</span>
       </button>
-      <button class="ghost-btn" class:failed={copied === 'failed:text'} onclick={copyAsText} title="Copy this hand as PokerStars-format text, with the seed hash and the revealed seed as trailing comment lines">
+      <button class="ghost-btn copy-text" class:failed={copied === 'failed:text'} onclick={copyAsText} title="Copy this hand as PokerStars-format text, with the seed hash and the revealed seed as trailing comment lines">
         {copyWord(copied, 'text', 'Copy as text')}
       </button>
-      <button class="ghost-btn" onclick={downloadHand}>Download</button>
+      <button class="ghost-btn download" onclick={downloadHand} title="Download this hand's record and proof as JSON">Download</button>
     </div>
   </div>
 
@@ -317,6 +332,10 @@
       <ReplayTransport
         {streets} {currentStreet} index={stop?.index ?? 0} count={stops.length} {playing}
         onSeek={seek} onStep={step} onToggle={togglePlay}
+      />
+      <ReplayEquityLine
+        line={equityLine} activeStreet={currentStreet?.label ?? null}
+        label={seatLabel} {who} {isMe} won={(seat) => !!stop?.paid && wonBySeat.has(seat)}
       />
       <ReplayVerdict
         {hand} {sighting} {sightingVerdict} bind:pasted {pastedVerdict} {copied}
@@ -348,8 +367,11 @@
     margin-bottom: var(--cd-space-2);
   }
 
+  .back-to-list { display: inline-flex; align-items: center; gap: var(--cd-space-1); }
+
   .replay-title { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 0; }
   .title-row { display: flex; align-items: center; gap: var(--cd-space-2); flex-wrap: wrap; justify-content: center; }
+  .label-short { display: none; }
   .replay-title strong { color: var(--cd-ink); font-size: var(--cd-text-figure); }
   .replay-title .timestamp { color: var(--cd-ink-2); font-size: var(--cd-text-xs); white-space: nowrap; }
   .hand-id {
@@ -370,20 +392,44 @@
      table, the transport, the verdict and the log are all in one frame. */
   .replay-cols { display: flex; flex-direction: column; }
 
+  /* THE BROADCAST PICTURE on a wide screen: the table takes ~64% of the
+     dialog (a ~600 px felt with ~60 px board cards in a 1280 px dialog), the
+     log scrolls beside it. */
   @media (min-width: 900px) {
     .replay-cols {
       display: grid;
-      grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr);
       gap: 0 var(--cd-space-4);
       align-items: start;
     }
   }
 
+  /* THE PHONE: one row of chrome, then the felt. The back chevron is a 44 px
+     square, the title row carries the id and Copy link, the three actions are
+     one 44 px row under it, so the felt starts ~100 px higher than a stacked
+     title / date / back / actions column did. */
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {
     .replayer { padding: var(--cd-space-2) var(--cd-space-3) var(--cd-space-4); }
-    .replay-top { flex-wrap: wrap; }
-    .replay-title { order: -1; flex-basis: 100%; align-items: flex-start; }
-    .title-row { justify-content: flex-start; }
-    .replay-actions { justify-content: flex-start; }
+    .replay-top {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      grid-template-areas: 'back title' 'actions actions';
+      align-items: center;
+      gap: var(--cd-space-2) var(--cd-space-2);
+    }
+    .back-to-list { grid-area: back; width: var(--cd-touch-min); min-height: var(--cd-touch-min); padding: 0; justify-content: center; }
+    .back-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .replay-title { grid-area: title; align-items: flex-start; }
+    .title-row { justify-content: flex-start; min-width: 0; row-gap: 0; }
+    .title-row .hand-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .replay-actions {
+      grid-area: actions;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: var(--cd-space-1);
+    }
+    .replay-actions .ghost-btn { min-height: var(--cd-touch-min); justify-content: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 var(--cd-space-1); font-size: var(--cd-text-xs); }
+    .label-long { display: none; }
+    .label-short { display: inline; }
   }
 </style>

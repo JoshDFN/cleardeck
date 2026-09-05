@@ -486,7 +486,7 @@
   .close-btn:hover { background: var(--cd-danger-dim); border-color: var(--cd-danger-line); color: var(--cd-danger-hi); }
 
   @media (min-width: 900px) {
-    .modal-content.wide { max-width: 1160px; max-height: 92vh; }
+    .modal-content.wide { max-width: 1280px; max-height: 92vh; }
   }
 
   .state-block {
@@ -561,5 +561,10 @@
        at 390x844. Under the header nothing ever stands on them. */
     .modal-header { order: -2; }
     .legal { order: -1; padding: var(--cd-space-2) var(--cd-space-3); border-top: 0; border-bottom: 1px solid var(--cd-line-soft); }
+    /* the two paragraphs flow as one compact block on a phone: every word
+       stays, the block is ~90 px instead of ~125 and the felt starts sooner */
+    .legal p { display: inline; line-height: 1.4; }
+    .legal p + p { margin: 0; }
+    .legal p + p::before { content: ' '; }
   }
 </style>

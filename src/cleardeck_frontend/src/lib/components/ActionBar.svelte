@@ -93,7 +93,10 @@
     const decision = resolveHotkey(event.key, {
       live,
       modifier: event.metaKey || event.ctrlKey || event.altKey,
-      focusKind: focusKindOf(document.activeElement, dockEl),
+      // The DOCK is the whole `.action-dock` (Log, Sound, the deck seal, Sit
+      // out, Deposit...), not only the action row: a player who has just
+      // clicked Log and presses F means fold. Letters never activate a button.
+      focusKind: focusKindOf(document.activeElement, dockEl?.closest('.action-dock') || dockEl),
       dialogOpen: dialogIsOpen(document),
       canCheck, canRaise, raiseDisabled, allInArmed, compact, sizerOpen,
       presets,

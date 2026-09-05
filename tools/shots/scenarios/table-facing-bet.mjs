@@ -32,6 +32,45 @@ import {
 import { doAct, phaseOf, playUntil, startHand, view } from '../lib/table-driver.mjs';
 import { prepareTable, tableDisplayName } from './_shared.mjs';
 
+/**
+ * THE HOTKEYS WITH THE ACTION LOG OPEN. Round 2 of the fairness wave made the
+ * LOG drawer an ARIA dialog and $lib/hotkeys.js muted every key while it was
+ * in the document; no scene played the hero's turn with the log open, so
+ * nothing saw it. This opens the log ON THE HERO'S TURN, presses A once
+ * (which ARMS the all-in and sends nothing; a second press would), reads the
+ * armed state off the button, presses Escape to disarm, and closes the log
+ * again before the still. Real money is on the clock, so exactly one press.
+ */
+async function hotkeysWithLogOpen(page) {
+  const toggle = page.locator('.action-dock .log-toggle').first();
+  await toggle.click();
+  await page.waitForSelector('[data-surface="log"] .action-feed', { timeout: 8_000 });
+  await settle(page);
+  const surface = await page.evaluate(() => {
+    const el = document.querySelector('.feed-container');
+    return { role: el?.getAttribute('role') ?? null, modal: el?.getAttribute('aria-modal') ?? null };
+  });
+  const armedBefore = await page.locator('.action-btn.danger.armed').count();
+  await page.keyboard.press('a');
+  await settle(page, { extraFrames: 1 });
+  const armed = await page.locator('.action-btn.danger.armed').count();
+  await page.keyboard.press('Escape');
+  await settle(page, { extraFrames: 1 });
+  const armedAfterEscape = await page.locator('.action-btn.danger.armed').count();
+  await toggle.click();
+  await page.waitForSelector('[data-surface="log"]', { state: 'detached', timeout: 8_000 });
+  await settle(page);
+  const ok = surface.role !== 'dialog' && surface.modal !== 'true' && armedBefore === 0 && armed === 1 && armedAfterEscape === 0;
+  return {
+    ok,
+    surface,
+    armedBefore, armedOnA: armed, armedAfterEscape,
+    note: ok
+      ? 'with the log open, A armed the all-in and Escape disarmed it; the log is not a dialog'
+      : `HOTKEYS WITH THE LOG OPEN: role=${surface.role} aria-modal=${surface.modal}; armed ${armedBefore} -> ${armed} on A -> ${armedAfterEscape} on Escape`,
+  };
+}
+
 const TABLE = 'table_2'; // 6-max
 const HERO_SEAT = 0;
 const OPP = 2;
@@ -123,9 +162,11 @@ export default {
     const callButton = buttons.map((b) => b.trim()).find((b) => /^call/i.test(b)) ?? null;
     const potOddsOnScreen = (await page.locator('.pot-odds-display').count()) > 0;
 
-    // The presets are read FIRST, while the popover can be opened and closed
+    // The hotkeys are tried with the log open FIRST (one arming press, no
+    // send), then the presets, while the popover can be opened and closed
     // before the still is taken; assertChainAgreement then photographs the
     // resting screen.
+    const hotkeys = await hotkeysWithLogOpen(page);
     const presets = await assertBetPresetsAgree(ctx, page, {
       table: TABLE, asPlayer: HERO_PLAYER,
     });
@@ -135,8 +176,9 @@ export default {
     });
 
     return withAgreement({
-      verified: Boolean(callButton),
+      verified: Boolean(callButton) && hotkeys.ok,
       checks: {
+        hotkeysWithLogOpen: hotkeys,
         actionButtons: buttons.map((b) => b.trim()).filter(Boolean),
         callButton,
         potOddsStripRendered: potOddsOnScreen,
@@ -144,7 +186,7 @@ export default {
           ? 'the client renders a pot-odds ratio; it is asserted against get_pot()/call_amount'
           : 'NO pot-odds strip rendered even though the hero owes a call',
       },
-      notes: `facing a call: button "${callButton}"`,
+      notes: `facing a call: button "${callButton}"; ${hotkeys.note}`,
     }, agreement, named('betPresets', presets));
   },
 };

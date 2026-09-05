@@ -305,7 +305,7 @@ function scrapeReplayer(page) {
       playedLines: document.querySelectorAll('.log-panel .log-line.played').length,
       auditLit: !!document.querySelector('.log-panel .audit.lit'),
       handId: t(document.querySelector('.replay-title .hand-id')),
-      copyLinkText: t(document.querySelector('.replay-title .copy-link')),
+      copyLinkText: t(document.querySelector('.replayer .copy-link')),
       // The seat pods on the mini table. A seat that folded is on the table but
       // not a showdown row, so it is not compared with `showdown_players`.
       players: [...document.querySelectorAll('.player-row:not(.folded)')].map((el) => ({
@@ -324,6 +324,16 @@ function scrapeReplayer(page) {
       tablePot: t(document.querySelector('.hand-history-modal .pot-panel .pot-total strong')),
       tableBets: [...document.querySelectorAll('.hand-history-modal .replay-bet .bet-figure')].map(t),
       equityMethodText: t(document.querySelector('.replay-equity-method')),
+      // the 4-point equity line under the transport: every cell is a
+      // percentage the oracle recomputes at that street's board
+      equityLine: [...document.querySelectorAll('.equity-line .replay-equity')].map((el) => ({
+        seat: Number(el.getAttribute('data-seat')),
+        method: el.getAttribute('data-method'),
+        street: el.getAttribute('data-street'),
+        text: t(el),
+      })),
+      equityLineStreets: [...document.querySelectorAll('.equity-line .eq-col')].map(t),
+      equityLineNote: t(document.querySelector('.equity-line .eq-method')),
       // the fairness claims
       // Svelte appends its own scoped class, so the tone has to be read as a
       // class MEMBERSHIP rather than sliced out of `className`.
@@ -686,10 +696,10 @@ export default {
     checks.handIdExpected = expectedId;
     if (dom.handId !== expectedId) problems.push(`the replay title's id reads "${dom.handId}", expected "${expectedId}"`);
     await armClipboardRecorder(page);
-    await page.locator('.replay-title .copy-link').click();
+    await page.locator('.replayer .copy-link').click();
     await settle(page, { extraFrames: 1 });
     checks.copiedLink = await readCopied(page);
-    checks.copyLinkAfter = (await page.locator('.replay-title .copy-link').textContent())?.trim() ?? null;
+    checks.copyLinkAfter = (await page.locator('.replayer .copy-link').textContent())?.trim() ?? null;
     const expectedLinkTail = `?table=${tableId}&hand=${chain.handNumber}`;
     if (!checks.copiedLink || !checks.copiedLink.startsWith(`${expectedId} `) || !checks.copiedLink.endsWith(expectedLinkTail)) {
       problems.push(`Copy link handed the clipboard ${JSON.stringify(checks.copiedLink)}, expected "${expectedId} <origin>/${expectedLinkTail}"`);
@@ -819,6 +829,70 @@ export default {
     if (dom.equityMethodText && !/^Equity\b/i.test(dom.equityMethodText)) {
       problems.push(`the equity caption reads "${dom.equityMethodText}" without the word Equity`);
     }
+    // ---- 2d. THE EQUITY LINE, cell by cell against the oracle -------------
+    // One row per seat, one cell per street the hand reached; each cell is
+    // recomputed from the record's own cards and the board at that street,
+    // exact where the cell says exact, Monte Carlo inside the tolerance where
+    // it says Monte Carlo. The census site `replay-equity` covers the cells.
+    checks.equityLine = dom.equityLine;
+    checks.equityLineStreets = dom.equityLineStreets;
+    checks.equityLineNote = dom.equityLineNote;
+    {
+      const hands = chain.showdown.map((p) => p.raw);
+      const allKnown = hands.length >= 2 && hands.every((h) => h.length === 2 && h.every(Boolean));
+      if (allKnown) {
+        const expectStreets = ['Pre-flop', 'Flop', 'Turn', 'River'];
+        if (String(dom.equityLineStreets) !== String(expectStreets)) {
+          problems.push(`the equity line's columns are ${JSON.stringify(dom.equityLineStreets)}, expected ${JSON.stringify(expectStreets)}`);
+        }
+        const expectCells = expectStreets.length * chain.showdown.length;
+        if (dom.equityLine.length !== expectCells) {
+          problems.push(`the equity line carries ${dom.equityLine.length} cell(s) for ${chain.showdown.length} revealed hand(s) over ${expectStreets.length} streets, expected ${expectCells}`);
+        }
+        if (!/^Pre-flop/.test(dom.equityLineNote || '')) problems.push(`the equity line's method note reads "${dom.equityLineNote}"`);
+        const oracles = new Map();
+        for (const cell of dom.equityLine) {
+          const want = BOARD_BY_STOP[cell.street];
+          if (want === undefined) { problems.push(`an equity line cell names the street "${cell.street}"`); continue; }
+          const at = chain.showdown.findIndex((p) => p.seat === cell.seat);
+          if (at < 0) { problems.push(`the equity line shows seat ${cell.seat + 1} at ${cell.street} but it showed no cards`); continue; }
+          const key = `${cell.street}|${cell.method}`;
+          if (!oracles.has(key)) {
+            const board = chain.communityRaw.slice(0, want);
+            oracles.set(key, cell.method === 'exact' ? exactEquity(hands, board) : monteCarloEquity(hands, board, ORACLE_TRIALS));
+          }
+          const oracle = oracles.get(key);
+          const oraclePct = Math.round(oracle.share[at] * 10000) / 100;
+          if (cell.method === 'exact') {
+            figures.push(checkPlainNumber(
+              `replay seat ${cell.seat} equity line at ${cell.street} vs independent exact enumeration (${oracle.trials} runouts)`,
+              oraclePct, cell.text, { unit: '%' },
+            ));
+          } else {
+            const screenPct = Number(String(cell.text).replace(/[^\d.]/g, ''));
+            const delta = Math.abs(screenPct - oraclePct);
+            const ok = Number.isFinite(screenPct) && delta <= MC_TOLERANCE_POINTS;
+            figures.push({
+              label: `replay seat ${cell.seat} equity line at ${cell.street} vs independent Monte Carlo (${oracle.trials} trials)`,
+              chain: oraclePct, domText: cell.text, agrees: ok, discriminates2x: true, ok,
+              detail: ok
+                ? `line ${screenPct}% vs independent ${oraclePct.toFixed(2)}% (|d| ${delta.toFixed(3)} <= ${MC_TOLERANCE_POINTS.toFixed(3)} points)`
+                : `DISAGREES: line ${screenPct}% vs independent ${oraclePct.toFixed(2)}% (tolerance ${MC_TOLERANCE_POINTS.toFixed(3)} points)`,
+            });
+          }
+        }
+        // the line and the pod agree at the showdown (one engine, one cache)
+        for (const pod of dom.players) {
+          const cell = dom.equityLine.find((c) => c.street === 'River' && c.seat === Number(pod.equitySeat));
+          if (pod.equity && cell && cell.text !== pod.equity) {
+            problems.push(`seat ${Number(pod.equitySeat) + 1}: the pod reads ${pod.equity} at the showdown but the line's River cell reads ${cell.text}`);
+          }
+        }
+      } else if (dom.equityLine.length) {
+        problems.push(`an equity line is shown but the record reveals ${hands.length} hand(s)`);
+      }
+    }
+
     // the sync, visible at the end: the last line stays lit and the audit lights
     checks.activeLinesAtEnd = dom.activeLines;
     checks.playedLinesAtEnd = dom.playedLines;

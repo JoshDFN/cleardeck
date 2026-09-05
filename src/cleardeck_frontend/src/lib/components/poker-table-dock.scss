@@ -416,7 +416,26 @@
        viewport-fit=cover) keeps Fold out of the gesture area. */
     .action-dock { padding-bottom: var(--cd-safe-bottom); }
 
-    .feed-container.left { width: min(230px, 62cqw); max-height: 60cqh; }
+    /* THE LOG AS A SHADE UNDER THE HEADER (portrait): fixed, full width,
+       --cd-log-sheet-h tall, over the far seats. The stage keeps its size, so
+       the hero's cards, the pot, the board and the dock stay exactly where
+       they were, at full type; the felt stays above its floor. (A sheet the
+       stage yielded to was tried first: at 24dvh the felt fell to 27% and
+       every pod's type went under the phone's floors.) */
+    .poker-table.log-open { display: flex; }
+    .feed-container.left {
+      position: fixed;
+      left: 0;
+      right: 0;
+      top: calc(var(--notice-safe-top, 0px) + var(--header-h, 0px));
+      height: var(--cd-log-sheet-h);
+      z-index: 32;
+      padding: 0 var(--cd-space-2);
+    }
+    .feed-container.left :global(.action-feed) {
+      border-radius: 0 0 var(--cd-radius-panel) var(--cd-radius-panel);
+      box-shadow: var(--cd-shadow-lift);
+    }
   }
 
   /* Very short landscape (phone held sideways): trim the dock, keep the felt. */

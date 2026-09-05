@@ -34,10 +34,15 @@
   const STREET_TOTAL_NOTE = 'the total this street was raised to';
 
   // Keep the lit line in view inside the dialog's one scroller, without yanking
-  // the whole page: `nearest` scrolls only as far as it must.
+  // the whole page: `nearest` scrolls only as far as it must. NOT on a phone:
+  // there the log sits UNDER the table in the same scroller, and following the
+  // line scrolled the felt off the screen at every step (measured by
+  // tools/shots/probe-nine-max.mjs: the scene at y = -714 after one tap).
+  const PHONE = '(max-aspect-ratio: 1/1), (max-height: 560px)';
+  const onPhone = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(PHONE).matches;
   function keepInView(node, active) {
     const run = (on) => {
-      if (on && typeof node.scrollIntoView === 'function') {
+      if (on && !onPhone() && typeof node.scrollIntoView === 'function') {
         node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       }
     };
@@ -154,7 +159,7 @@
 
   .log-line {
     display: grid;
-    /* The actor column is WIDE and NOWRAP on purpose: "Seat 2 (Nakamoto) · you"
+    /* The actor column is WIDE and NOWRAP on purpose: "Seat 2 · Nakamoto"
        wrapping doubled the height of every row and pushed the audit line
        below the dialog. */
     grid-template-columns: 24px 58px 168px 1fr;

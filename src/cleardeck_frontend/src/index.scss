@@ -238,11 +238,23 @@
      wide screen, larger and alone on its row on a phone. */
   --cd-qr-size: 112px;
   --cd-qr-size-lg: 132px;
+  /* The action log on the table (PokerTable.svelte): a column the felt yields
+     to in landscape, a shade under the header over the far seats in portrait
+     (26dvh: clear of the winner readout and the board on the 6-max phone). */
+  --cd-log-col-w: 200px;
+  --cd-log-sheet-h: 26dvh;
 
   /* Glyphs inside controls: a 44 px square carries an 18-20 px glyph, a
      44 px chip a 28 px avatar. */
   --cd-icon-sm: 18px;
   --cd-icon-md: 20px;
+  /* Card glyphs in a list row (MiniCard.svelte `--mini-card-w`): the board
+     beside the hero's pair on a desktop row, the pair and the board on a phone
+     row. */
+  --cd-mini-card-sm: 18px;
+  --cd-mini-card-md: 21px;
+  --cd-mini-card-lg: 24px;
+  --cd-mini-card-xl: 28px;
   --cd-icon-lg: 24px;
   --cd-icon-xl: 28px;
   /* The phone's home-indicator and notch insets (0 everywhere else). Needs

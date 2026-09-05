@@ -237,12 +237,14 @@ export const ALLOWLIST = [
     // ---- how a computed figure was computed ----------------------------------
     {
         id: 'equity-method-counts',
-        selector: '.equity-method, .replay-equity-method',
+        selector: '.equity-method, .replay-equity-method, .equity-line .eq-method',
         tokens: '^\\d{1,3}(?:,\\d{3})*$',
         why: 'the sample size behind the equity badge ("Monte Carlo · 200,000 trials", '
             + '"exact · 990 runouts") and the count of random opponents in the modelled '
             + 'case ("vs 2 random"); `.replay-equity-method` is the same caption under the '
-            + 'hand replayer\'s board (ReplayTable.svelte), the same non-money shape. '
+            + 'hand replayer\'s board (ReplayTable.svelte), and `.equity-line .eq-method` the '
+            + 'same note under the replayer\'s 4-point equity line (ReplayEquityLine.svelte), '
+            + 'the same non-money shape. '
             + 'Trial counts and player counts, never chips — and '
             + 'deliberately NOT money-shaped, so a decimal landing in this element could '
             + 'not be excused by this rule. The PERCENTAGE these describe is not '

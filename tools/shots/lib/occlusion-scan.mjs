@@ -201,7 +201,13 @@ export function scanInPage(cfg) {
     while (node && node !== document.body && node !== document.documentElement) {
       const s = cs(node);
       const role = node.getAttribute?.('role');
-      if (role === 'dialog' || role === 'alertdialog' || node.getAttribute?.('aria-modal') === 'true') {
+      // `data-overlay` is a surface that is a LAYER on purpose without being a
+      // dialog (the phone's action-log shade over the far seats: a dialog would
+      // mute the dock's hotkeys, lib/hotkeys.js). The scene that opens it says
+      // which figures must stay clear of it; the rest are reported here as
+      // behind-an-overlay, never excused silently.
+      if (role === 'dialog' || role === 'alertdialog' || node.getAttribute?.('aria-modal') === 'true'
+        || node.hasAttribute?.('data-overlay')) {
         root = node;
       } else if (s.position === 'fixed') {
         const r = node.getBoundingClientRect();

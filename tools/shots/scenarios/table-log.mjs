@@ -109,6 +109,43 @@ function scrapeDrawer(page) {
       deckWord: t(deck?.querySelector('.deck-state')),
       deckTitle: deck?.getAttribute('title') ?? null,
       feedTitle: t(document.querySelector('.feed-container .feed-title')),
+      surfaceRole: document.querySelector('.feed-container')?.getAttribute('role') ?? null,
+      surfaceOverlay: document.querySelector('.feed-container')?.getAttribute('data-overlay') ?? null,
+      // WHAT SITS UNDER THE LOG. Every leaf on the table that carries a money
+      // figure, a percentage or a card's rank / pip is measured against the log
+      // surface's box. On a wide screen the table yields to the log and the
+      // answer must be nothing (round 2's drawer covered 4 figures there). On a
+      // phone the log is a shade over the FAR seats (data-overlay), and what
+      // must stay clear is what the player acts on: the hero's own seat, the
+      // board, the pot and the dock (`critical`); the far seats' figures are
+      // listed, not failed.
+      underSurface: (() => {
+        const surf = document.querySelector('[data-surface="log"]');
+        if (!surf) return null;
+        const s = surf.getBoundingClientRect();
+        const money = /\d[\d,]*\.\d/;
+        const pct = /\d(?:[.,]\d+)?\s*%/;
+        const hits = [];
+        for (const el of document.querySelectorAll('.poker-table *')) {
+          if (surf.contains(el) || el.children.length) continue;
+          const text = (el.textContent || '').trim();
+          const card = el.classList.contains('rank') || el.classList.contains('pip');
+          if (!card && !money.test(text) && !pct.test(text)) continue;
+          const r = el.getBoundingClientRect();
+          if (!r.width || !r.height) continue;
+          const ix = Math.min(r.right, s.right) - Math.max(r.left, s.left);
+          const iy = Math.min(r.bottom, s.bottom) - Math.max(r.top, s.top);
+          if (ix > 0.5 && iy > 0.5) {
+            const critical = !!el.closest('.board-cluster, .community-cards, .action-dock, .seat:has(.highlight-me), .winner-display');
+            hits.push({ text, cls: String(el.className).replace(/svelte-\S+/g, '').trim(), critical });
+          }
+        }
+        return hits;
+      })(),
+      feltBox: (() => {
+        const f = document.querySelector('.felt')?.getBoundingClientRect();
+        return f ? { x: +f.x.toFixed(1), y: +f.y.toFixed(1), w: +f.width.toFixed(1), h: +f.height.toFixed(1), pct: +((f.width * f.height) / (window.innerWidth * window.innerHeight) * 100).toFixed(1) } : null;
+      })(),
       lines: [...document.querySelectorAll('.feed-container .feed-item')].map((el) => ({
         cls: [...el.classList].find((c) => c.startsWith('action-')) || null,
         seat: t(el.querySelector('.player-name, .winner-name')),
@@ -206,6 +243,21 @@ export default {
       problems.push('the deck\'s hover title does not carry the commitment\'s fingerprint');
     }
     if (dom.drawerOpen !== 1) problems.push(`${dom.drawerOpen} drawer(s) open, expected 1`);
+    checks.surfaceRole = dom.surfaceRole;
+    checks.figuresUnderLog = dom.underSurface;
+    checks.feltWithLogOpen = dom.feltBox;
+    if (dom.surfaceRole === 'dialog') problems.push('the log is marked role="dialog", which mutes every dock hotkey while it is open');
+    checks.surfaceOverlay = dom.surfaceOverlay;
+    if (dom.underSurface === null) problems.push('no [data-surface="log"] element on the page');
+    else if (dom.surfaceOverlay) {
+      // the phone's shade: the hero, the board, the pot and the dock stay clear
+      const critical = dom.underSurface.filter((h) => h.critical);
+      if (critical.length) {
+        problems.push(`${critical.length} figure(s) the player acts on sit under the log shade: ${critical.slice(0, 4).map((h) => `"${h.text}" (${h.cls})`).join(', ')}`);
+      }
+    } else if (dom.underSurface.length) {
+      problems.push(`${dom.underSurface.length} figure(s) sit under the log surface: ${dom.underSurface.slice(0, 4).map((h) => `"${h.text}" (${h.cls})`).join(', ')}`);
+    }
     if (dom.feedTitle !== `Hand #${chain.handNumber}`) problems.push(`the drawer is titled "${dom.feedTitle}", not Hand #${chain.handNumber}`);
 
     // ---- 2. every figure in the log, matched to the record ---------------
@@ -284,7 +336,10 @@ export default {
       checks,
       notes: verified
         ? `deck seal sealed mid-hand then checked; chip fingerprint = the canister's seed_hash; `
-          + `${dom.lines.length} log lines, ${folded.checked} amounts matched to the record`
+          + `${dom.lines.length} log lines, ${folded.checked} amounts matched to the record; `
+          + (dom.surfaceOverlay
+            ? `the log a shade over the far seats (${dom.underSurface.length} far-seat figure(s) under it, 0 the player acts on; role=${dom.surfaceRole})`
+            : `0 figures under the log (role=${dom.surfaceRole}), felt ${dom.feltBox?.pct ?? '?'}% with it open`)
         : `LOG NOT VERIFIED (${problems.length} problem(s)): ${problems.slice(0, 6).join(' | ')}`
           + (folded.ok ? '' : ` || money: ${folded.mismatches.slice(0, 3).join(' | ')}`),
     }, tableAgreement);

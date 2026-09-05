@@ -1461,7 +1461,7 @@
   style:--cd-avail="{availPx}px"
   style:--cd-slack="{parentSlack}px"
 >
-  <div class="poker-table">
+  <div class="poker-table" class:log-open={logOpen}>
     <!-- ===================== the stage: a lit room ===================== -->
     <div class="stage">
       <div
@@ -1485,8 +1485,13 @@
           </div>
         </div>
 
-        <!-- the deck, sealed: the commitment made visible on the table -->
-        <DeckSeal {shuffleProof} {onShowProof} />
+        <!-- the deck, sealed: the commitment made visible on the table. At
+             the near rail's right corner in landscape; at the FAR rail's left
+             corner in portrait, where the phone's stadium has nothing (the
+             near corner is where the hero's award chip lands: measured 5 px
+             from the seal on the 6-max ring). A dock-row variant was tried and
+             cost the phone felt 0.9 points and the balance a corner of rail. -->
+        <DeckSeal {shuffleProof} {onShowProof} {portrait} />
 
         <!-- board + pot cluster, dead centre -->
         <div class="board-cluster">
@@ -1643,37 +1648,44 @@
           </div>
         {/if}
 
-        <!-- action log: a drawer over the surround (PokerNow LOG / WPT HANDS) -->
-        {#if logOpen}
-          <!-- A DIALOG, in the ARIA sense: a panel the player opens over the
-               table and dismisses (the dock's Log toggle or its own Close).
-               It paints over whatever seat sits under it, which is the nature
-               of a drawer; the occlusion gate reports the figures behind an
-               open dialog as layering rather than as a defect (lib/occlusion.mjs),
-               and the `table-log` scene measures them on every run. -->
-          <div class="feed-container left" role="dialog" aria-label="Action log">
-            <ActionFeed
-              actions={actionFeed}
-              previousActions={previousActionFeed}
-              mySeat={mySeat}
-              handNumber={handNumber}
-              previousHandNumber={previousHandNumber}
-              {shuffleProof}
-              {onShowProof}
-              format={fmt}
-              {onHowItWorks}
-              {onVerifyCode}
-              onClose={() => { logOpen = false; }}
-            />
-          </div>
-        {/if}
       </div>
     </div>
+
+    <!-- action log. On a wide screen a COLUMN the table yields to (the felt
+         gives up ~12% of its width, stays above the 28% floor, and nothing
+         sits under the log). On a phone a SHADE under the header over the far
+         seats: a sheet the stage yielded to was measured (touch-targets.mjs)
+         to push every pod's type under the phone's floors, and a shade over
+         the near seat would cover the hero's own cards, the pot and the dock;
+         the far seats' stacks are the figures a reader of the log needs
+         least, and `data-overlay` tells the occlusion gate that layer is on
+         purpose (the hero, the board, the pot and the dock are asserted clear
+         by the table-log scene). It is a REGION either way, not a dialog: the
+         player keeps playing with it open, so the dock's hotkeys must keep
+         firing ($lib/hotkeys.js DIALOG_SELECTOR mutes them for any
+         role="dialog", which is what a round-2 drawer did by accident). -->
+    {#if logOpen}
+      <div class="feed-container left" role="region" aria-label="Action log" data-surface="log" data-overlay={portrait ? 'shade' : null}>
+        <ActionFeed
+          actions={actionFeed}
+          previousActions={previousActionFeed}
+          mySeat={mySeat}
+          handNumber={handNumber}
+          previousHandNumber={previousHandNumber}
+          {shuffleProof}
+          {onShowProof}
+          format={fmt}
+          {onHowItWorks}
+          {onVerifyCode}
+          onClose={() => { logOpen = false; }}
+        />
+      </div>
+    {/if}
 
     <!-- ===================== the dock ===================== -->
     <div class="action-dock">
       <div class="dock-aux dock-left">
-        <button class="log-toggle" class:active={logOpen} onclick={() => logOpen = !logOpen}>
+        <button class="log-toggle" class:active={logOpen} aria-pressed={logOpen} onclick={() => logOpen = !logOpen}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M4 6h16M4 12h16M4 18h10"/>
           </svg>
@@ -2179,14 +2191,29 @@
     cursor: pointer;
   }
 
+  /* THE LOG AS A COLUMN THE FELT YIELDS TO (landscape). The table becomes a
+     two-column grid: the log on the left at --cd-log-col-w, the stage beside
+     it, the dock under both. The stage is a size container, so --fw follows
+     its narrower box by itself. Measured at 1440x900 on the 6-max ring: the
+     felt goes from 31.7% of the frame to ~30% (floor 28%); on a 9-max ring
+     the same. Nothing is painted over anything. */
+  .poker-table.log-open {
+    display: grid;
+    grid-template-columns: var(--cd-log-col-w) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    column-gap: var(--cd-space-2);
+  }
+
+  .poker-table.log-open > .stage { grid-column: 2; grid-row: 1; }
+  .poker-table.log-open > .action-dock { grid-column: 1 / -1; grid-row: 2; }
+
   .feed-container.left {
-    position: absolute;
-    left: 0;
-    bottom: 0;
-    z-index: 32;
-    width: min(240px, 24cqw);
-    max-height: 74cqh;
+    position: relative;
+    grid-column: 1;
+    grid-row: 1;
     display: flex;
+    min-height: 0;
+    min-width: 0;
   }
 
   @include dock.dock;

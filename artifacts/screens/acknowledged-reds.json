@@ -62,61 +62,7 @@
     "        docs/DEFECTS.md E-71; tools/shots/test-hand-identity.mjs holds it with no replica."
   ],
   "recorded_run": "the wave-14 COHERENCE PASS full sweep at eb819a8 (dirty): 24 shots, 19 verified, 5 red, all 5 acknowledged here. Re-run after the coherence pass's own edits to DepositModal.svelte and clockNudge.js, to confirm they added no new red.",
-  "reds": [
-    {
-      "scene": "table-preflop",
-      "viewport": "desktop",
-      "defect": [
-        "E-76",
-        "E-85"
-      ],
-      "covers": [
-        "the playing surface is 27.8% of the 1440x900 frame",
-        "a dock button is NOT fully inside the 1440x900 frame"
-      ],
-      "note": "TWO distinct failures, and until wave 12 only the first was written down. E-76: felt at 27.8% against a 28% floor, marginal by 0.2 points and real. E-85: the Leave-table control renders at x=1396 with its right edge at 1446 in a 1440 px frame, documentElement.scrollWidth 1440 and body overflow-x hidden, so its tail is off screen and cannot be scrolled to. Found by lib/table-in-frame.mjs; invisible to occlusion.mjs, which compares elements against each other and never against the frame."
-    },
-    {
-      "scene": "table-facing-bet",
-      "viewport": "desktop",
-      "defect": [
-        "E-76",
-        "E-85"
-      ],
-      "covers": [
-        "the playing surface is 27.8% of the 1440x900 frame",
-        "a dock button is NOT fully inside the 1440x900 frame"
-      ],
-      "note": "same two failures, same layout, same cause. The dock button is at x=1396, right edge 1447.2."
-    },
-    {
-      "scene": "table-allin",
-      "viewport": "mobile",
-      "defect": "E-76",
-      "covers": [
-        "the playing surface is 42.9% of the 390x844 frame"
-      ],
-      "note": "FELT: 42.9% of the 390x844 frame (280x504.5), floor 45%, in the ring-crowded 9-pod layout. docs/DESIGN-BAR.md 11.3 shows this is at its GEOMETRIC ceiling minus the dock: the 9-max felt is width-capped at 78cqw = 304.2 px, so no vertical budget can move it and the honest options are to take furniture out of the dock or to set the floor per ring density. The occlusion gate on this shot is green (81 pixel pairs, 0 occluded)."
-    },
-    {
-      "scene": "deposit",
-      "viewport": "desktop",
-      "defect": "E-101",
-      "covers": [
-        "TOKEN CENSUS FAILED"
-      ],
-      "note": "TOKEN CENSUS: the money figures the solvency notice renders (the owed ICP figure, the same figure in e8s, the account count, and the figure repeated inside p.advice) have no assertion site, so the census cannot tie any of them to a canister reading. The exact numerals move with the fixture's balance between sweeps; what is stable is that all of them sit inside section.solvency.warning and none of them is in the deposit modal's own money block, which is green against the ledger and the served quote. REFILED FROM E-96 BY THE WAVE-14 COHERENCE PASS: E-96 is the SILENCE defect (money the table cannot attribute renders NOTHING), and this is its opposite -- figures that DO render and are asserted by nothing. One id cannot carry both, and a reader who followed the old pointer was told the screen shows nothing. The work left is a site in tools/shots/lib/chain-agreement.mjs. Everything else on this shot is green, including 5/5 protected notices and the deposit modal's own money figures against the ledger."
-    },
-    {
-      "scene": "deposit",
-      "viewport": "mobile",
-      "defect": "E-101",
-      "covers": [
-        "TOKEN CENSUS FAILED"
-      ],
-      "note": "TOKEN CENSUS: the money figures the solvency notice renders (the owed ICP figure, the same figure in e8s, the account count, and the figure repeated inside p.advice) have no assertion site, so the census cannot tie any of them to a canister reading. The exact numerals move with the fixture's balance between sweeps; what is stable is that all of them sit inside section.solvency.warning and none of them is in the deposit modal's own money block, which is green against the ledger and the served quote. REFILED FROM E-96 BY THE WAVE-14 COHERENCE PASS: E-96 is the SILENCE defect (money the table cannot attribute renders NOTHING), and this is its opposite -- figures that DO render and are asserted by nothing. One id cannot carry both, and a reader who followed the old pointer was told the screen shows nothing. The work left is a site in tools/shots/lib/chain-agreement.mjs. Everything else on this shot is green, including 5/5 protected notices and the deposit modal's own money figures against the ledger. Mobile carries the same figures at 390x844."
-    }
-  ],
+  "reds": [],
   "went_green_2026_08_09_wave_14": [
     "  E-65  lobby/desktop, lobby/mobile, toast-notices/desktop and toast-notices/mobile. All four",
     "        were red with 'LOBBY CHAIN DISAGREEMENT': every lobby row's NAME quoted 0.01/0.02",
@@ -133,5 +79,19 @@
     "  pots, a hand replay walking five street stops against the canister's own community cards,",
     "  and a shuffle proof re-derived in the browser. Hands are still dealt, so AutoDealReady is",
     "  still reaching a client."
+  ],
+  "went_green_2026_09_04_ui_ux_wave": [
+    "  E-76 / E-85  table-preflop/desktop and table-facing-bet/desktop: the felt at 27.8% and the",
+    "        Leave control 6-7 px outside the frame. The phase-1 table geometry (docs/DESIGN-BAR.md)",
+    "        measured 31.7% on the 6-max ring and the dock inside the frame; every table scene",
+    "        verified in the phase-6 sweeps (148e9e9) with felt-area and table-in-frame green.",
+    "  E-76  table-allin/mobile: the 9-max phone felt at 42.9%. The portrait ring-crowded felt",
+    "        (poker-table-tokens.scss, 78cqw / 52cqh) measured above the 45% floor in the phase-1",
+    "        and phase-3 sweeps; the shot verified.",
+    "  E-101 deposit/desktop and deposit/mobile: the solvency figures with no assertion site. Phase 5",
+    "        gave them one (chain-agreement.mjs solvency row + exact e8s, census site); both shots",
+    "        verified in the phase-5 sweeps (a0632a0) with census 0 unaccounted.",
+    "  All five entries were STALE (verdict-gate.mjs: an acknowledgement that is no longer red fails",
+    "  the gate until it is deleted), so they are deleted here."
   ]
 }

@@ -10,8 +10,12 @@
  *  - Nothing fires while a dialog, modal, or the expanded terms overlay is open.
  *  - Nothing fires while a text field has focus.
  *  - Nothing fires while a button OUTSIDE the dock has focus (a modal's Close,
- *    the header's wallet). A focused button INSIDE the dock is fine for letter
- *    keys, because letters do not activate buttons natively.
+ *    the header's wallet). A focused button INSIDE the dock (the action row,
+ *    the Log toggle, the deck seal, Sit out) is fine for letter keys, because
+ *    letters do not activate buttons natively. ActionBar passes the whole
+ *    `.action-dock` as the dock.
+ *  - A REGION beside the table (the action log, role="region") is not a
+ *    dialog: the player keeps playing with it open.
  *
  * Nothing here mutates its inputs.
  */

@@ -24,6 +24,7 @@
   const atEnd = $derived(index >= count - 1);
 </script>
 
+<div class="transport-shell">
 <div class="scrubber" role="tablist" aria-label="Streets">
   {#each streets as s}
     <button
@@ -62,6 +63,7 @@
     aria-label="Action timeline"
     oninput={(e) => onSeek(Number(e.currentTarget.value))}
   />
+</div>
 </div>
 
 <style>
@@ -136,6 +138,16 @@
     height: var(--cd-control-sm);
     accent-color: var(--cd-accent);
     cursor: pointer;
+  }
+
+  /* A wide screen: the transport and the scrubber share one row, so the
+     picture, the row and the equity line fit one frame. */
+  @media (min-width: 900px) and (min-aspect-ratio: 1/1) {
+    .transport-shell { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--cd-space-3); align-items: center; margin-bottom: var(--cd-space-3); }
+    .scrubber { order: 2; margin-bottom: 0; }
+    .transport { order: 1; margin-bottom: 0; }
+    .timeline { min-width: 140px; }
+    .transport-label { min-width: 0; }
   }
 
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {

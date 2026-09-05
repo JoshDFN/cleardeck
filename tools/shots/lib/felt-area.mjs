@@ -92,7 +92,11 @@ export function measureFelt(page) {
       // of frame behind the modal), so on those shots the geometry is RECORDED and
       // not asserted. Every plain table view is asserted.
       obstructedBy: (() => {
-        const sels = ['.modal-backdrop', '.modal-content', '[role="dialog"]', '.shuffle-proof'];
+        // `[data-surface="log"]` is the action log as a surface the table YIELDS
+        // to (a column beside the stage in landscape, a sheet between the stage
+        // and the dock on a phone): the player opened it, the felt scaled down
+        // for it, and the geometry is what a reader compares, not a floor.
+        const sels = ['.modal-backdrop', '.modal-content', '[role="dialog"]', '.shuffle-proof', '[data-surface="log"]'];
         for (const sel of sels) {
           for (const el of document.querySelectorAll(sel)) {
             const b = el.getBoundingClientRect();
