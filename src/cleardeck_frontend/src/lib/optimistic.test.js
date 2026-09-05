@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   beginPending, echoFor, echoedPlayer, humaneActionError, pendingExpired, pendingStatus,
-  projectPending, sentLabel,
+  projectPending, sentLabel, settlePendingReply,
 } from './optimistic.js';
 
 describe('humaneActionError', () => {
@@ -165,6 +165,34 @@ describe('pendingStatus: a check that changes no hero figure', () => {
     const legacy = { ...pending, street: undefined };
     expect(pendingStatus(legacy, preflop)).toBe('open');
     expect(pendingStatus(legacy, viewWith(hero, { is_my_turn: false }))).toBe('absorbed');
+  });
+});
+
+describe('settlePendingReply: the echo after the update call returns', () => {
+  const pending = beginPending('call', null, viewWith(), 1000);
+
+  it('a canister Err drops the echo: nothing was sent', () => {
+    expect(settlePendingReply(pending, 'err')).toBeNull();
+  });
+
+  it('an Ok keeps the echo for the certified view to absorb', () => {
+    expect(settlePendingReply(pending, 'ok')).toBe(pending);
+  });
+
+  it('a THROW keeps the echo: the update may have landed, and the dock must stay sent', () => {
+    const kept = settlePendingReply(pending, 'throw');
+    expect(kept).toBe(pending);
+    // while kept, the certified pre-click view is still projected as not my turn
+    expect(projectPending(viewWith(), kept).is_my_turn).toBe(false);
+    // and it closes the way every echo closes: absorbed by a moved-on view...
+    expect(pendingStatus(kept, viewWith({}, { action_on: 1 }))).toBe('absorbed');
+    // ...or by the TTL, with the TTL's own message applying
+    expect(pendingExpired(kept, 1000 + 12_001)).toBe(true);
+    expect(pendingExpired(kept, 1000 + 5_000)).toBe(false);
+  });
+
+  it('nothing pending is nothing, whatever the reply', () => {
+    for (const reply of ['ok', 'err', 'throw']) expect(settlePendingReply(null, reply)).toBeNull();
   });
 });
 

@@ -45,7 +45,9 @@
   import { ClockNudgePolicy, CLOCK_NUDGE } from "$lib/clockNudge.js";
   import { HttpAgent } from '@dfinity/agent';
   import { Principal } from '@dfinity/principal';
-  import { beginPending, humaneActionError, pendingExpired, pendingStatus, projectPending } from '$lib/optimistic.js';
+  import {
+    beginPending, humaneActionError, pendingExpired, pendingStatus, projectPending, settlePendingReply,
+  } from '$lib/optimistic.js';
   // The audit's critical mobile finding: an anonymous "Sit" tap reached the
   // canister and came back as a red balance error over the phone header. The
   // decision (sign in / top up / join) is a pure module; this file only acts.
@@ -909,13 +911,19 @@
     try {
       result = await tableActor.player_action(variant(amount));
     } catch (e) {
-      pendingAction = null;
+      // A throw is not a refusal: the update may have landed, so the echo is
+      // KEPT (lib/optimistic.js settlePendingReply) and closes only when a
+      // certified view absorbs it or the TTL expires. The strip's "Do not
+      // act again until it does" stays true because the dock stays sent.
+      pendingAction = settlePendingReply(pendingAction, 'throw');
       throw e;
     }
     if ('Err' in result) {
-      pendingAction = null;
+      pendingAction = settlePendingReply(pendingAction, 'err');
       showActionError(result.Err);
       playSound('error');
+    } else {
+      pendingAction = settlePendingReply(pendingAction, 'ok');
     }
     return result;
   }
@@ -1067,9 +1075,12 @@
       await loadTableState();
     } catch (e) {
       logger.error(`Action ${action} failed:`, e);
-      pendingAction = null;
+      // The pending record is NOT cleared here: sendPlayerAction kept it on
+      // the throw, and loadTableState closes it (absorbed or expired).
       // Check if this is a signature verification error (expired II delegation)
       if (isSignatureError(e)) {
+        // The session is gone and polling stops: nothing will ever absorb it.
+        pendingAction = null;
         showError('Session expired. Please log in again.');
         stopPolling();
         await auth.logout();

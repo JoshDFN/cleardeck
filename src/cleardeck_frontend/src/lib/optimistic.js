@@ -193,6 +193,29 @@ export function pendingStatus(pending, view) {
   return 'open';
 }
 
+/**
+ * What becomes of the pending record once `player_action` comes back.
+ *
+ *   'ok'    the update landed: KEEP the echo until a certified view absorbs it.
+ *   'err'   the canister refused: nothing was sent, DROP the echo now, so the
+ *           certified figures are back on the next paint.
+ *   'throw' the call threw: the update may have landed (a reply-leg failure),
+ *           and the strip says "Do not act again until it does". So the echo
+ *           is KEPT, `projectPending` holds is_my_turn false, and the record
+ *           closes only when a certified view absorbs it or the TTL expires
+ *           (with the TTL's own message). Dropping it here re-enabled the
+ *           dock and the hotkeys on the very next poll, under a strip that
+ *           said not to act (review, 2026-09-05).
+ *
+ * @param {object|null} pending
+ * @param {'ok'|'err'|'throw'} reply
+ * @returns {object|null} the record to hold, unchanged, or null
+ */
+export function settlePendingReply(pending, reply) {
+  if (!pending) return null;
+  return reply === 'err' ? null : pending;
+}
+
 /** A send older than this is treated as lost and rolled back with a message. */
 export const PENDING_TTL_MS = 12_000;
 
