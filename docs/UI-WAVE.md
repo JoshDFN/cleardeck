@@ -417,28 +417,21 @@ Static gates, same tree:
   was measured there; the poll is 500 ms again) and `test-dock-overflow.mjs`
   (it read the component's style block as CSS and the block is Sass with
   mixins now; it compiles it). `node tools/shots/selftest.mjs`: every
-  self-test green. RED, and still red: three of the 22 money-safety targets,
-  all of them gates that READ FRONTEND SOURCE for a money door by file name:
+  self-test green. Three of the 22 money-safety targets were RED at the
+  wave's close, all of them gates that READ FRONTEND SOURCE for a money door
+  by file name:
   `deposit_surface::the_oisy_transfer_destination_is_derived_locally_and_not_fetched`,
   `deposit_trust_root::the_deposit_modal_derives_only_through_the_trust_root`
   and `deposit_trust_root::every_money_door_in_the_modal_refuses_an_unpinned_table`.
-  They look in `DepositModal.svelte` for the OISY transfer's `subaccount:
-  [X]` with `const X = depositSubaccount(`, for `deriveTrustedDepositAddress(`,
-  and for `loadBtcDepositAddress()` with its `!tableIsTrusted` return before
-  `get_btc_deposit_address`. The cashier phase moved those doors, statement
-  for statement, into `lib/deposit-flow.js` (`depositViaOisy`, lines 40-90:
-  `depositSubaccount(sessionPrincipal)` then `subaccount:
-  [depositSubaccountBytes]`), `lib/deposit-wallet.svelte.js` (line 55,
-  `deriveTrustedDepositAddress(tableCanisterId, principal)`) and
-  `lib/deposit-btc.svelte.js` (line 45, `if (!isTrusted()) { ... return }`
-  before the fetch), and DepositModal's own `handleDeposit()` still refuses
-  an untrusted table with a `return` before `submitDeposit`. So the doors
-  are guarded and the gates are blind to the files they moved to, which is
-  the gates working, not the doors failing. The two honest fixes are the
-  money-safety owner's call: point the three assertions at the module files
-  (about twenty lines in `tests/money_safety/tests/`), or veto the split and
-  move the three doors back into the modal (about 160 lines, over the
-  800-line cap). The UI wave edited neither the tests nor the doors.
+  They looked in `DepositModal.svelte` for doors the cashier phase had moved,
+  statement for statement, into `lib/deposit-flow.js`,
+  `lib/deposit-wallet.svelte.js` and `lib/deposit-btc.svelte.js`: the doors
+  were guarded and the gates were blind to the files they moved to. The
+  gates were re-pointed after the wave (section 8, "the three source-reading
+  gates"): each reads the module that owns its door, asserts the guard there
+  in the same strict form as before, follows the import chain back to the
+  modal, and asserts the modal holds no unguarded copy of any door. All 22
+  targets are green with `POCKET_IC_BIN` set (section 8 has the lines).
   `ui_limits` (the fourth source-reading gate, `.wallet-committed`) was red
   for the same reason and is green again (the closer's `cfefe95`).
 - `git diff --stat main..feat/ui-ux-wave` outside `src/cleardeck_frontend`,
@@ -504,13 +497,9 @@ The load-bearing ones; every phase's own list is in the HANDOFF.
 
 ## 6. What the next wave should do
 
-First, the one thing that is red today and needs an owner: **the three
-money-safety gates that read `DepositModal.svelte` by file name** (section
-4). Either re-point them at `lib/deposit-flow.js`, `lib/deposit-wallet.svelte.js`
-and `lib/deposit-btc.svelte.js`, or move those three doors back into the
-modal. Until one of the two is done, `make test` is red on
-`deposit_surface` and `deposit_trust_root` while every door they exist to
-watch is guarded.
+The one thing that was red at the wave's close, the three money-safety
+gates that read `DepositModal.svelte` by file name, is green now (section 8);
+`make test` with `POCKET_IC_BIN` is the whole fast gate again.
 
 Then, in order of what a player would feel first:
 
@@ -612,3 +601,48 @@ The post-wave review (2026-09-05) found the items below; each is fixed on
   preference on through the same localStorage key (plus a `storage` event
   the rune listens for) before its one arming press and off again before the
   still, so the photographed legend is the default state.
+- **The three source-reading money-safety gates are green, and stricter.**
+  `deposit_surface::the_oisy_transfer_destination_is_derived_locally_and_not_fetched`
+  reads `lib/deposit-flow.js` now: every `subaccount: [X]` destination must be
+  `const X = depositSubaccount(` and never reassigned from an `await`, the
+  fetched `reportedSub` may never be handed to the wallet, the cross-check
+  and its "Refusing to send" must be there; then it follows the chain
+  (`deposit-submit.js` presses `depositViaOisy`, the modal presses
+  `submitDeposit`) and asserts the modal, comments stripped, holds no
+  `wallet.transfer`, `icrc1_transfer`, `get_deposit_subaccount`,
+  `depositSubaccount(` or transfer destination of its own.
+  `deposit_trust_root::the_deposit_modal_derives_only_through_the_trust_root`
+  reads `lib/deposit-wallet.svelte.js`: `deriveTrustedDepositAddress(` present,
+  no line with the arithmetic-only `deriveDepositAddress(`, the
+  `checkAgainstCanister` cross-check kept; the modal creates that reader and
+  holds no derivation of its own (neither entry point, no import of
+  `depositAddress.js`, no `accountIdentifierHex(`).
+  `deposit_trust_root::every_money_door_in_the_modal_refuses_an_unpinned_table`
+  keeps the modal's `handleDeposit()` refusal (the `!tableIsTrusted` block
+  RETURNS, before `submitDeposit(`), asserts the sweep's guard in
+  `lib/deposit-flow.svelte.js claim()` and the BTC guard in
+  `lib/deposit-btc.svelte.js loadAddress()` (each `!isTrusted()` block
+  returning before the money call), asserts both modules are handed the
+  modal's own `isTrusted: () => tableIsTrusted`, that every `btc.address`
+  render sits beside `tableIsTrusted`, that the refusal sentence reaches
+  `CashierDisclosures.svelte`'s `.untrusted-table`, that every route of
+  `primaryDisabled` names `!tableIsTrusted`, and that the modal holds no
+  `icrc2_approve`, `approveSpender(`, `wallet.transfer`, `icrc1_transfer`,
+  `get_btc_deposit_address`, `fetchBtcDepositAddress(` or
+  `claim_external_deposit(` of its own. Each gate was mutation-checked red
+  (the BTC guard's `return` deleted; the OISY destination fetched; the raw
+  derivation in the reader) before the sources were restored. Run:
+  `cd tests/money_safety && POCKET_IC_BIN=~/.cache/dfinity/versions/0.31.0/pocket-ic cargo test --test deposit_surface --test deposit_trust_root`.
+- **The rest of the review's items**, each in its own commit with a test:
+  the all-in figure is the exact stack (`bet-sizing.js snapRaise`,
+  `formatExact`, `primaryRaiseLabel`; the button reads "All in 1.33456789"
+  and sends 133,456,789 e8s); a thrown cashier call never says "Nothing
+  moved" (`humane-errors.js describeCashierFailure(e, { thrown })`, both
+  sheets re-read every balance before the button comes back); a thrown
+  send keeps its pending record (`optimistic.js settlePendingReply`);
+  `pin-after.js` copies the caller's gates; a failed wallet read stays
+  unread (`wallet-balance-read.js`); the cashier modules log through
+  `$lib/logger.js`; the buy-in range reads "2.00 to 10.00"; the FULL TERMS
+  overlay takes focus, restores it and owns Escape (capture phase); a hand
+  the hero folded before showdown reads Lost (`hand-history-records.js
+  playersOf`).

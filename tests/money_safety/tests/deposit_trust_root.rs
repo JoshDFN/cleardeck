@@ -118,6 +118,23 @@ fn read(rel: &str) -> String {
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
 }
 
+/// A Svelte component with its `//`, `/* */` and `<!-- -->` comments removed:
+/// COMMENTS ARE NOT CODE, and the modal's prose names the money calls it no
+/// longer makes (the explanation of what the fees pay for). A forbidden-token
+/// scan must read the code, or the next author deletes the explanation to keep
+/// the gate green, which is the wrong trade every time.
+fn strip_svelte_comments(src: &str) -> String {
+    let mut out = strip_js_comments(src);
+    while let Some(open) = out.find("<!--") {
+        let Some(close) = out[open..].find("-->").map(|c| open + c + 3) else {
+            out.truncate(open);
+            break;
+        };
+        out.replace_range(open..close, "");
+    }
+    out
+}
+
 /// A canister id that is real, well-formed, and NOT one this build was published
 /// with. It is the id the reproducer's hostile table was created at.
 const UNPINNED_ID: &str = "55icz-et777-77775-aaafq-cai";
@@ -308,45 +325,105 @@ fn the_trust_root_module_cannot_ask_anybody_anything() {
 ///
 /// This is the FINDING-41 lesson applied one level up: the two derivation gates
 /// in `deposit_surface.rs` proved the arithmetic and could not see that the OISY
-/// branch fetched its destination. So this one follows the id: the deposit modal
-/// must reach the derivation only through the trusted entry point, and must
-/// never call the arithmetic-only one.
+/// branch fetched its destination. So this one follows the id. The address door
+/// lives in `lib/deposit-wallet.svelte.js` (`createWalletReader`,
+/// `deriveAndVerifyDepositAddress`) since the cashier phase moved it out of the
+/// modal statement for statement (docs/UI-WAVE.md section 4); the modal renders
+/// what the reader publishes. So: the reader must reach the derivation only
+/// through the trusted entry point and never call the arithmetic-only one; the
+/// modal must press THAT reader; and the modal must hold NO derivation of its own
+/// (neither entry point, no import of the derivation module), because an
+/// unguarded copy in the component is invisible to a gate pointed at the module.
 #[test]
 fn the_deposit_modal_derives_only_through_the_trust_root() {
-    let src = read("src/cleardeck_frontend/src/lib/components/DepositModal.svelte");
+    let reader = read("src/cleardeck_frontend/src/lib/deposit-wallet.svelte.js");
 
     assert!(
-        src.contains("deriveTrustedDepositAddress("),
-        "DepositModal.svelte does not call deriveTrustedDepositAddress(). The address it \
+        reader.contains("deriveTrustedDepositAddress("),
+        "deposit-wallet.svelte.js does not call deriveTrustedDepositAddress(). The address it \
          publishes is therefore derived from whatever canister id reached it -- and that id \
          comes from `lobby.get_tables()`, an uncertified query. FINDING 42."
     );
-    // The arithmetic-only entry point must not appear in the component at all.
-    let uses_raw = src
+    // The arithmetic-only entry point must not appear in the reader at all.
+    let uses_raw = |src: &str| {
+        src.lines()
+            .enumerate()
+            .filter(|(_, l)| {
+                l.contains("deriveDepositAddress(") && !l.contains("deriveTrustedDepositAddress(")
+            })
+            .map(|(i, l)| format!("  line {}: {}", i + 1, l.trim()))
+            .collect::<Vec<_>>()
+    };
+    let raw_in_reader = uses_raw(&reader);
+    assert!(
+        raw_in_reader.is_empty(),
+        "deposit-wallet.svelte.js calls the ARITHMETIC-ONLY derivation, which asks no questions \
+         about where the canister id came from:\n{}\n\
+         Use deriveTrustedDepositAddress(). docs/SECURITY-FINDINGS.md FINDING 42.",
+        raw_in_reader.join("\n")
+    );
+    // And the reader never prefers the canister's answer over the derived one.
+    assert!(
+        reader.contains("checkAgainstCanister(") && reader.contains("get_deposit_address()"),
+        "deposit-wallet.svelte.js no longer cross-checks the derived address against the \
+         canister's (FINDING 34 / 40): the comparison is what catches a drift, and it must \
+         never replace the derived address with the reply."
+    );
+
+    // FOLLOW THE ID TO THE MODAL: the component presses THIS reader ...
+    let modal = strip_svelte_comments(&read(
+        "src/cleardeck_frontend/src/lib/components/DepositModal.svelte",
+    ));
+    assert!(
+        modal.contains("from '$lib/deposit-wallet.svelte.js'") && modal.contains("createWalletReader("),
+        "DepositModal.svelte does not create its wallet reader from lib/deposit-wallet.svelte.js: \
+         the guarded derivation is not the one the modal publishes (the FINDING-41 lesson)."
+    );
+    // ... and holds NO derivation of its own: neither entry point, no import of
+    // the derivation module. Any address the modal shows is the reader's.
+    let derivations_in_modal = modal
         .lines()
         .enumerate()
         .filter(|(_, l)| {
-            l.contains("deriveDepositAddress(") && !l.contains("deriveTrustedDepositAddress(")
+            l.contains("deriveDepositAddress(")
+                || l.contains("deriveTrustedDepositAddress(")
+                || l.contains("depositAddress.js")
+                || l.contains("accountIdentifierHex(")
         })
         .map(|(i, l)| format!("  line {}: {}", i + 1, l.trim()))
         .collect::<Vec<_>>();
     assert!(
-        uses_raw.is_empty(),
-        "DepositModal.svelte calls the ARITHMETIC-ONLY derivation, which asks no questions \
-         about where the canister id came from:\n{}\n\
-         Use deriveTrustedDepositAddress(). docs/SECURITY-FINDINGS.md FINDING 42.",
-        uses_raw.join("\n")
+        derivations_in_modal.is_empty(),
+        "DepositModal.svelte derives a deposit address on its own, outside the reader this \
+         gate reads:\n{}\nThe modal must render only what lib/deposit-wallet.svelte.js \
+         publishes. FINDING 42.",
+        derivations_in_modal.join("\n")
     );
 }
 
-/// Every door in the modal that moves money is a function of the same
-/// wire-supplied canister id: the ADDRESS panel, the OISY transfer's `owner`,
-/// and the ICRC-2 approval's `spender`. Closing one and leaving the others is
-/// precisely how FINDING 40 shipped half closed and had to be reopened as
-/// FINDING 41.
+/// Every door that moves money is a function of the same wire-supplied canister
+/// id: the ADDRESS panel, the OISY transfer's `owner`, the ICRC-2 approval's
+/// `spender`, the sweep, and the BTC address FETCHED from the canister. Closing
+/// one and leaving the others is precisely how FINDING 40 shipped half closed
+/// and had to be reopened as FINDING 41.
+///
+/// The doors are in the modules that own them now (docs/UI-WAVE.md section 4):
+/// the ICRC-2 and OISY doors behind `submitDeposit()` (`lib/deposit-submit.js`
+/// -> `lib/deposit-flow.js`), refused in the modal's `handleDeposit()` before
+/// they are pressed; the sweep in `lib/deposit-flow.svelte.js` `claim()`; the
+/// BTC fetch in `lib/deposit-btc.svelte.js` `loadAddress()`. Each guard is
+/// asserted in the module that owns the door, in the same strict form as before
+/// (the check BEFORE the money call, and the guard's OWN block returning), the
+/// trust decision the modules are handed is asserted to be the modal's
+/// `tableIsTrusted`, and the modal is asserted to hold NO unguarded copy of any
+/// door.
 #[test]
 fn every_money_door_in_the_modal_refuses_an_unpinned_table() {
-    let src = read("src/cleardeck_frontend/src/lib/components/DepositModal.svelte");
+    // The CODE of the modal: its comments explain fees and findings by naming
+    // calls the modal no longer makes, and this gate scans for those names.
+    let src = strip_svelte_comments(&read(
+        "src/cleardeck_frontend/src/lib/components/DepositModal.svelte",
+    ));
 
     // The trust decision exists and is made from the trust root, not from a reply.
     assert!(
@@ -354,8 +431,9 @@ fn every_money_door_in_the_modal_refuses_an_unpinned_table() {
         "DepositModal.svelte never asks whether `tableCanisterId` is a table this build names."
     );
 
-    // handleDeposit() drives BOTH the ICRC-2 approve+deposit path and the OISY
-    // transfer, so the refusal has to be before either can start.
+    // DOOR 1 + 2: handleDeposit() drives BOTH the ICRC-2 approve+deposit path
+    // and the OISY transfer through submitDeposit(), so the refusal has to be
+    // before that call can start.
     let handle = src
         .split_once("async function handleDeposit()")
         .map(|(_, rest)| rest)
@@ -363,87 +441,204 @@ fn every_money_door_in_the_modal_refuses_an_unpinned_table() {
     let guard_at = handle
         .find("!tableIsTrusted")
         .expect(
-            "handleDeposit() does not refuse an untrusted table. It approves \
-             `spender: tableCanisterId` over the player's ledger balance and transfers to \
-             `owner: tableCanisterId` -- both are as final as paying the address. FINDING 42.",
+            "handleDeposit() does not refuse an untrusted table. Through submitDeposit() it \
+             approves `spender: tableCanisterId` over the player's ledger balance and transfers \
+             to `owner: tableCanisterId` -- both are as final as paying the address. FINDING 42.",
         );
-    let approve_at = handle.find("icrc2_approve").unwrap_or(usize::MAX);
-    let transfer_at = handle.find("wallet.transfer").unwrap_or(usize::MAX);
+    let submit_at = handle
+        .find("submitDeposit(")
+        .expect("handleDeposit() no longer presses submitDeposit(): the money call moved and this gate must follow it");
     assert!(
-        guard_at < approve_at && guard_at < transfer_at,
-        "the trust check in handleDeposit() is at byte {guard_at}, AFTER the approval \
-         ({approve_at}) or the transfer ({transfer_at}). A refusal that happens after the \
-         signature is a receipt, not a refusal."
+        guard_at < submit_at,
+        "the trust check in handleDeposit() is at byte {guard_at}, AFTER submitDeposit() \
+         ({submit_at}). A refusal that happens after the signature is a receipt, not a refusal."
     );
 
-    // A GUARD THAT DOES NOT RETURN IS NOT A GUARD. The three assertions above find
-    // the byte OFFSET of the check and compare it with the offset of the money call,
-    // which is satisfied by an `if (!tableIsTrusted) { error = ... }` that then falls
-    // through and signs anyway. Wave 14's coherence pass measured this: deleting the
-    // single token `return;` from that block left all seven tests green AND left
-    // `node tools/shots/repro-finding42.mjs` exiting 0 printing "REFUSED", while
-    // handleDeposit() ran on to icrc2_approve against the substituted canister.
-    // The window has to be the guard's OWN block. The coherence pass wrote this
-    // assertion first as "a `return` appears between the check and the approval",
-    // re-ran the same one-token mutation, and it stayed GREEN -- because the next
-    // `return` belongs to the `if (!depositAmount ...)` validation immediately
-    // below. An instrument that can be satisfied by the neighbouring statement is
-    // the same defect it was written to catch, one level up.
+    // A GUARD THAT DOES NOT RETURN IS NOT A GUARD. The assertion above finds
+    // the byte OFFSET of the check and compares it with the offset of the money
+    // call, which is satisfied by an `if (!tableIsTrusted) { error = ... }` that
+    // then falls through and signs anyway. Wave 14's coherence pass measured this:
+    // deleting the single token `return;` from that block left all seven tests
+    // green AND left `node tools/shots/repro-finding42.mjs` exiting 0 printing
+    // "REFUSED", while handleDeposit() ran on to icrc2_approve against the
+    // substituted canister. The window has to be the guard's OWN block. The
+    // coherence pass wrote this assertion first as "a `return` appears between
+    // the check and the approval", re-ran the same one-token mutation, and it
+    // stayed GREEN -- because the next `return` belongs to the `if
+    // (!depositAmount ...)` validation immediately below. An instrument that can
+    // be satisfied by the neighbouring statement is the same defect it was
+    // written to catch, one level up.
     assert!(
         guard_block(handle, guard_at).contains("return"),
         "handleDeposit()'s `!tableIsTrusted` block does not RETURN. Ordering is not refusal: a \
-         guard that sets an error message and falls through still reaches \
-         `icrc2_approve({{ spender: tableCanisterId }})` and `wallet.transfer`, and both are as \
-         final as paying the address.\n\nThe block is:\n{}",
+         guard that sets an error message and falls through still reaches submitDeposit(), \
+         i.e. `icrc2_approve({{ spender: tableCanisterId }})` and `wallet.transfer`, and both \
+         are as final as paying the address.\n\nThe block is:\n{}",
         guard_block(handle, guard_at)
     );
-
-    // THE FOURTH MONEY DOOR (docs/SECURITY-FINDINGS.md FINDING 45). The BTC address
-    // is not derived from the pinned id at all -- it is FETCHED from whatever
-    // canister `get_tables()` named, and rendered with a Copy button. It is FINDING
-    // 40 unfixed for a chain whose transfers cannot be reversed, and the attacker
-    // also picks the branch, because `currency` comes off the same uncertified reply.
-    let btc = src
-        .split_once("async function loadBtcDepositAddress()")
-        .map(|(_, rest)| rest)
-        .expect("DepositModal.svelte no longer has loadBtcDepositAddress()");
-    let btc_guard = btc.find("!tableIsTrusted").unwrap_or(usize::MAX);
-    let btc_fetch = btc.find("get_btc_deposit_address").unwrap_or(usize::MAX);
+    // The two money calls behind submitDeposit() are in the modules, and the
+    // modal holds NO copy of either (a copy would bypass the guard above).
+    let flow = read("src/cleardeck_frontend/src/lib/deposit-flow.js");
     assert!(
-        btc_guard < btc_fetch && guard_block(btc, btc_guard).contains("return"),
-        "loadBtcDepositAddress() asks an unpinned canister for a Bitcoin address (guard at \
-         {btc_guard}, fetch at {btc_fetch}) and the modal renders the reply under \"Your Bitcoin \
-         Deposit Address\" with a Copy button. Bitcoin sent to it is unrecoverable."
+        flow.contains("approveSpender(") && flow.contains("wallet.transfer("),
+        "lib/deposit-flow.js no longer holds the ICRC-2 approval and the OISY transfer: the \
+         money calls moved again and this gate must follow them."
+    );
+    for forbidden in ["icrc2_approve", "approveSpender(", "wallet.transfer", "icrc1_transfer"] {
+        assert!(
+            !src.contains(forbidden),
+            "DepositModal.svelte contains `{forbidden}`: a money call outside the modules this \
+             gate reads, reachable without handleDeposit()'s refusal."
+        );
+    }
+
+    // DOOR 3: THE SWEEP (lib/deposit-flow.svelte.js claim()). Nothing at an
+    // unpinned canister is the player's to sweep, and the modal's own
+    // `tableIsTrusted` is the decision it is handed.
+    let watch = read("src/cleardeck_frontend/src/lib/deposit-flow.svelte.js");
+    let claim = watch
+        .split_once("async function claim()")
+        .map(|(_, rest)| rest)
+        .expect("deposit-flow.svelte.js no longer has claim()");
+    let claim_guard = claim.find("!isTrusted()").unwrap_or(usize::MAX);
+    let claim_call = claim.find("claim_external_deposit").unwrap_or(usize::MAX);
+    assert!(
+        claim_guard < claim_call && guard_block(claim, claim_guard).contains("return"),
+        "claim() in deposit-flow.svelte.js sweeps at an unpinned canister (guard at \
+         {claim_guard}, call at {claim_call}, or the guard's block does not return)."
+    );
+    let watch_wiring = src
+        .split_once("createAddressWatch({")
+        .map(|(_, rest)| rest)
+        .expect("DepositModal.svelte no longer creates its address watch");
+    assert!(
+        watch_wiring[..watch_wiring.find("});").unwrap_or(watch_wiring.len())]
+            .contains("isTrusted: () => tableIsTrusted"),
+        "the address watch is not handed the modal's own trust decision \
+         (`isTrusted: () => tableIsTrusted`): its guard is deciding on something else."
     );
     assert!(
-        src.contains("btcDepositAddress && tableIsTrusted"),
-        "the BTC address renders without asking whether the table is pinned. The fetch guard is \
-         not enough on its own: this string is not derived by this build from anything it \
-         pinned, so the assertion has to sit next to the pixels a player copies from."
+        !src.contains("claim_external_deposit("),
+        "DepositModal.svelte calls claim_external_deposit itself, outside the guarded claim()."
+    );
+
+    // DOOR 4 (docs/SECURITY-FINDINGS.md FINDING 45). The BTC address is not
+    // derived from the pinned id at all -- it is FETCHED from whatever canister
+    // `get_tables()` named, and rendered with a Copy button. It is FINDING 40
+    // unfixed for a chain whose transfers cannot be reversed, and the attacker
+    // also picks the branch, because `currency` comes off the same uncertified
+    // reply. The fetch lives in lib/deposit-btc.js (`fetchBtcDepositAddress`),
+    // pressed only by lib/deposit-btc.svelte.js loadAddress() behind the guard.
+    let btc_calls = read("src/cleardeck_frontend/src/lib/deposit-btc.js");
+    assert!(
+        btc_calls.contains("get_btc_deposit_address()"),
+        "lib/deposit-btc.js no longer fetches get_btc_deposit_address: the door moved and \
+         this gate must follow it."
+    );
+    let btc_state = read("src/cleardeck_frontend/src/lib/deposit-btc.svelte.js");
+    let btc = btc_state
+        .split_once("async function loadAddress()")
+        .map(|(_, rest)| rest)
+        .expect("deposit-btc.svelte.js no longer has loadAddress()");
+    let btc_guard = btc.find("!isTrusted()").unwrap_or(usize::MAX);
+    let btc_fetch = btc.find("fetchBtcDepositAddress(").unwrap_or(usize::MAX);
+    assert!(
+        btc_guard < btc_fetch && guard_block(btc, btc_guard).contains("return"),
+        "loadAddress() in deposit-btc.svelte.js asks an unpinned canister for a Bitcoin address \
+         (guard at {btc_guard}, fetch at {btc_fetch}, or the guard's block does not return) and \
+         the modal renders the reply under \"Your Bitcoin Deposit Address\" with a Copy button. \
+         Bitcoin sent to it is unrecoverable."
+    );
+    let btc_wiring = src
+        .split_once("createBtcDeposit({")
+        .map(|(_, rest)| rest)
+        .expect("DepositModal.svelte no longer creates its BTC path");
+    assert!(
+        btc_wiring[..btc_wiring.find("});").unwrap_or(btc_wiring.len())]
+            .contains("isTrusted: () => tableIsTrusted"),
+        "the BTC path is not handed the modal's own trust decision \
+         (`isTrusted: () => tableIsTrusted`): its guard is deciding on something else."
+    );
+    for forbidden in ["get_btc_deposit_address", "fetchBtcDepositAddress("] {
+        assert!(
+            !src.contains(forbidden),
+            "DepositModal.svelte contains `{forbidden}`: a copy of the BTC door outside the \
+             guarded loadAddress() this gate reads."
+        );
+    }
+    // The render: every use of the fetched string in the modal sits beside the
+    // trust decision. The fetch guard is not enough on its own: this string is
+    // not derived by this build from anything it pinned, so the assertion has
+    // to sit next to the pixels a player copies from.
+    let unguarded_renders = src
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains("btc.address") && !l.contains("tableIsTrusted"))
+        .map(|(i, l)| format!("  line {}: {}", i + 1, l.trim()))
+        .collect::<Vec<_>>();
+    assert!(
+        src.contains("tableIsTrusted ? btc.address : ''") && unguarded_renders.is_empty(),
+        "the BTC address renders without asking whether the table is pinned:\n{}",
+        unguarded_renders.join("\n")
     );
 
     // And the screen has to say so: a disabled button with no sentence beside it
-    // is a bug report from the user's point of view.
+    // is a bug report from the user's point of view. The sentence is the trust
+    // root's own (`untrustedTableMessage`), handed to the disclosures panel the
+    // sheet renders (CashierDisclosures.svelte), which paints it as
+    // `.untrusted-table` whenever the decision is "not pinned".
     assert!(
-        src.contains("untrustedTableMessage(") && src.contains("class=\"untrusted-table\""),
+        src.contains("untrustedTableMessage("),
+        "the modal no longer asks the trust root for the refusal's sentence."
+    );
+    let disclosures_wiring = src
+        .split_once("<CashierDisclosures")
+        .map(|(_, rest)| rest)
+        .expect("DepositModal.svelte no longer renders CashierDisclosures");
+    let disclosures_open = &disclosures_wiring[..disclosures_wiring.find('>').unwrap_or(disclosures_wiring.len())];
+    assert!(
+        disclosures_open.contains("{tableIsTrusted}") && disclosures_open.contains("{untrustedReason}"),
+        "the disclosures panel is not handed the modal's trust decision and its sentence \
+         (`{{tableIsTrusted}}` and `{{untrustedReason}}` on <CashierDisclosures>)."
+    );
+    let disclosures = strip_svelte_comments(&read(
+        "src/cleardeck_frontend/src/lib/components/CashierDisclosures.svelte",
+    ));
+    let untrusted_block = disclosures
+        .split_once("{#if !tableIsTrusted}")
+        .map(|(_, rest)| rest)
+        .expect("CashierDisclosures.svelte no longer branches on !tableIsTrusted");
+    let untrusted_block = &untrusted_block[..untrusted_block.find("{/if}").unwrap_or(untrusted_block.len())];
+    assert!(
+        untrusted_block.contains("class=\"untrusted-table\"") && untrusted_block.contains("{untrustedReason}"),
         "the modal disables the controls without telling the player why. The refusal has to be \
-         rendered, in the player's words, on the screen the money would have left from."
+         rendered, in the player's words, on the screen the money would have left from \
+         (CashierDisclosures.svelte, `.untrusted-table` with the trust root's sentence)."
     );
 
     // The disabled bindings were asserted by nothing, so removing `!tableIsTrusted`
-    // from the Deposit button was a one-token edit no gate could see.
-    let disabled_with_trust = src
-        .match_indices("disabled={")
-        .filter(|(at, _)| {
-            let rest = &src[*at..];
-            rest.find('}')
-                .is_some_and(|end| rest[..end].contains("tableIsTrusted"))
-        })
-        .count();
+    // from the Deposit button was a one-token edit no gate could see. The one
+    // primary button (Deposit / Claim / Check, by route) is disabled through
+    // `primaryDisabled`, whose every route names the trust decision.
     assert!(
-        disabled_with_trust >= 2,
-        "only {disabled_with_trust} control(s) in DepositModal.svelte are disabled on an \
-         unpinned table; the Deposit button and the Claim button both have to be."
+        src.contains("disabled={primaryDisabled}"),
+        "the primary button in DepositModal.svelte is no longer disabled through `primaryDisabled`."
+    );
+    let primary = src
+        .split_once("const primaryDisabled = $derived.by(() => {")
+        .map(|(_, rest)| rest)
+        .expect("DepositModal.svelte no longer derives primaryDisabled");
+    let primary_body = &primary[..primary.find("});").unwrap_or(primary.len())];
+    let routes_guarded = primary_body
+        .lines()
+        .filter(|l| l.contains("return "))
+        .filter(|l| l.contains("!tableIsTrusted"))
+        .count();
+    let routes_total = primary_body.lines().filter(|l| l.contains("return ")).count();
+    assert!(
+        routes_total >= 3 && routes_guarded == routes_total,
+        "only {routes_guarded} of {routes_total} route(s) of `primaryDisabled` in DepositModal.svelte \
+         are disabled on an unpinned table; the Deposit, Claim and BTC check buttons all have to be."
     );
 }
 
