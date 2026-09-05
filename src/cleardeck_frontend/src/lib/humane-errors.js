@@ -131,31 +131,64 @@ const VERBATIM_PATTERNS = [
 ];
 
 /**
+ * The sentence for a call that THREW, as opposed to one the canister refused.
+ *
+ * A throw is not a refusal. `withdraw`, `deposit` and `claim_external_deposit`
+ * are update calls: the request can land, the ledger can move the money, and
+ * the REPLY can still fail to reach this client (a dropped connection, a
+ * timed-out poll for the certified reply, a wallet popup closing). Nothing on
+ * this side can tell that apart from a request that never arrived. So a throw
+ * may never say "Nothing moved": it says the transfer may have gone through
+ * and sends the player to the balance or the receipt BEFORE they try again,
+ * because a retry on top of a landed transfer moves the money twice.
+ */
+export const THROWN_CASHIER_MESSAGE =
+  'That did not get an answer, and the transfer may still have gone through. '
+  + 'Check your balance or the receipt before trying again.';
+
+export const THROWN_TRANSPORT_MESSAGE =
+  'Could not reach the table, and the transfer may still have gone through. '
+  + 'Check your balance or the receipt before trying again.';
+
+/**
  * The message for a failed deposit or withdrawal.
  *
+ * ONLY A CANISTER `Err` MAY SAY NOTHING MOVED. A refusal is the canister's own
+ * statement that it did nothing; a throw is the absence of a statement, and
+ * the money may already have moved (see THROWN_CASHIER_MESSAGE). Callers pass
+ * `thrown: true` from a catch path and leave it false for an `Err`.
+ *
  * @param {unknown} e what the call threw or the Err it returned
- * @returns {{ message: string, detail: string | null, transport: boolean }}
+ * @param {{ thrown?: boolean }} [opts] whether `e` was THROWN (a catch) rather than returned as Err
+ * @returns {{ message: string, detail: string | null, transport: boolean, thrown: boolean, moved: 'none' | 'unknown' }}
+ *   `moved` is what the sentence promises: 'none' for a refusal, 'unknown' for a throw
  */
-export function describeCashierFailure(e) {
+export function describeCashierFailure(e, { thrown = false } = {}) {
   const raw = rawMessageOf(e);
   const transport = isTransportFailure(e);
-  if (transport) {
+  if (thrown === true) {
     return {
-      message: 'Could not reach the table. Nothing moved. Check your connection and try again.',
+      message: transport ? THROWN_TRANSPORT_MESSAGE : THROWN_CASHIER_MESSAGE,
       detail: detailOf(e),
       transport,
+      thrown: true,
+      moved: 'unknown',
     };
   }
   if (VERBATIM_PATTERNS.some((re) => re.test(raw))) {
-    return { message: raw, detail: null, transport };
+    return { message: raw, detail: null, transport, thrown: false, moved: 'none' };
   }
   for (const p of CASHIER_PATTERNS) {
     const m = p.re.exec(raw);
-    if (m) return { message: p.message(m), detail: detailOf(e), transport };
+    if (m) return { message: p.message(m), detail: detailOf(e), transport, thrown: false, moved: 'none' };
   }
   return {
-    message: raw ? 'That did not go through. Nothing moved.' : 'That did not go through. Nothing moved.',
+    message: transport
+      ? 'The table could not complete that. Nothing moved. Check your connection and try again.'
+      : 'That did not go through. Nothing moved.',
     detail: detailOf(e),
     transport,
+    thrown: false,
+    moved: 'none',
   };
 }

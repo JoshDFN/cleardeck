@@ -75,7 +75,7 @@ export function createCashierFlow() {
  *   untrustedReason: () => string|null,
  *   flow: ReturnType<typeof createCashierFlow>,
  *   setError: (message: string|null) => void,
- *   onFailure: (failure: unknown) => void,
+ *   onFailure: (failure: unknown, opts?: {thrown: boolean}) => void,
  *   receiptFor: (arrived: bigint|null, balance: bigint) => object,
  *   onCredited: () => Promise<void>,
  *   fee: bigint,
@@ -143,7 +143,8 @@ export function createAddressWatch({
       console.error('claim_external_deposit failed:', e);
       flow.fail();
       claimFailed = true;
-      onFailure(e);
+      // A throw on the reply leg: the sweep may have landed. Said so.
+      onFailure(e, { thrown: true });
     }
     claiming = false;
   }

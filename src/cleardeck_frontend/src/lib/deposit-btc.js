@@ -4,6 +4,8 @@
 // outside the trust root (docs/SECURITY-FINDINGS.md FINDING 45) before this
 // module is reached. Outcome objects, never component state.
 
+import { logger } from './logger.js';
+
 /**
  * @param {any} tableActor
  * @returns {Promise<{address: string} | {error: string}>}
@@ -14,7 +16,7 @@ export async function fetchBtcDepositAddress(tableActor) {
     if ('Ok' in result) return { address: result.Ok };
     return { error: result.Err };
   } catch (e) {
-    console.error('Failed to get BTC deposit address:', e);
+    logger.error('Failed to get BTC deposit address:', e);
     return { error: e?.message || 'Failed to get deposit address' };
   }
 }
@@ -42,7 +44,8 @@ export async function checkBtcDeposits(tableActor, formatWithUnit) {
     }
     return { message: 'No new deposits found yet.', minted: false };
   } catch (e) {
-    console.error('Failed to update BTC balance:', e);
-    return { failure: e };
+    logger.error('Failed to update BTC balance:', e);
+    // A throw, not an Err: the minter may have credited the wallet anyway.
+    return { failure: e, thrown: true };
   }
 }

@@ -44,6 +44,9 @@
     currentBalance,
     onClose,
     onWithdrawSuccess,
+    // Called (and awaited) after `withdraw` THREW: the transfer may have
+    // landed, so the balances are re-read before the button is enabled again.
+    onMoneyUnclear = null,
     currency = 'ICP',
   } = $props();
 
@@ -158,8 +161,8 @@
     cooldownRemainingSecs({ lastAt: lastWithdrawalAt, now, cooldownSecs: WITHDRAWAL_COOLDOWN_SECS })
   );
 
-  function fail(e) {
-    error = describeCashierFailure(e);
+  function fail(e, { thrown = false } = {}) {
+    error = describeCashierFailure(e, { thrown });
   }
 
   const errorView = $derived(
@@ -307,7 +310,11 @@
       }
     } catch (e) {
       flow = { ...flow, phase: FLOW.FAILED };
-      fail(e);
+      // A throw on the reply leg: the ledger transfer may have landed. The
+      // sentence says the money may have moved, and the table balance is
+      // re-read before the button comes back.
+      fail(e, { thrown: true });
+      if (onMoneyUnclear) await onMoneyUnclear();
     }
     processing = false;
   }

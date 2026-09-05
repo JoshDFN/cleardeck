@@ -1394,6 +1394,7 @@
     minBuyIn={tableState?.config?.min_buy_in ?? null}
     onClose={() => { showDepositModal = false; depositPrefill = null; }}
     onDepositSuccess={() => { refreshAllBalances(); loadTableState(); }}
+    onMoneyUnclear={async () => { await Promise.allSettled([refreshAllBalances(), loadTableState()]); }}
   />
 {/if}
 
@@ -1405,6 +1406,7 @@
     currency={getTableCurrency(currentTableInfo)}
     onClose={() => { showWithdrawModal = false; }}
     onWithdrawSuccess={() => { refreshAllBalances(); loadTableState(); }}
+    onMoneyUnclear={async () => { await Promise.allSettled([refreshAllBalances(), loadTableState()]); }}
   />
 {/if}
 

@@ -14,9 +14,11 @@ import { oisyReceipt, walletReceipt } from './deposit-receipts.js';
 /**
  * @typedef {{ok: true, receipt: object, source: 'ii'|'oisy'}
  *   | {ok: false, error: string}
- *   | {ok: false, failure: unknown}} SubmitOutcome
+ *   | {ok: false, failure: unknown, thrown?: boolean}} SubmitOutcome
  *   `error` is this sheet's own sentence, shown as written; `failure` is the
- *   canister's or the ledger's answer, for describeCashierFailure.
+ *   canister's or the ledger's answer, for describeCashierFailure; `thrown`
+ *   marks a failure that was THROWN by the wallet or the agent rather than
+ *   returned as an Err, so the sheet can say the money may have moved.
  */
 
 /**
@@ -82,7 +84,8 @@ export async function submitDeposit({
     } catch (oisyError) {
       console.error('OISY deposit failed:', oisyError);
       flow.fail();
-      return { ok: false, failure: oisyError };
+      // A throw, not an Err: the transfer or the claim may have landed.
+      return { ok: false, failure: oisyError, thrown: true };
     }
   }
 

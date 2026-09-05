@@ -17,6 +17,7 @@
   // refusals that name a limit, the routing and the markup.
 
   import { auth } from '$lib/auth.js';
+  import { logger } from '$lib/logger.js';
   import { oisy } from '$lib/oisy.js';
   import { onMount } from 'svelte';
   import IcpLogo from './IcpLogo.svelte';
@@ -61,6 +62,9 @@
 
   const {
     tableActor, tableCanisterId, onClose, onDepositSuccess, currency = 'ICP',
+    // Called (and awaited) after a call THREW: the transfer may have landed,
+    // so every balance is re-read before the button is enabled again.
+    onMoneyUnclear = null,
     // The figure the dialog opens with, in the smallest unit (e8s or sats), or
     // null. A Sit tap on a seat the player cannot yet afford hands the
     // shortfall here (lib/join-gate.js) so the cashier is one tap from the seat.
@@ -216,9 +220,26 @@
   // svelte-ignore state_referenced_locally
   const wallet = createWalletReader({ auth, tableActor, tableCanisterId, ledgerCanisterId, isBTC, currencySymbol });
 
-  /** A canister's or the ledger's refusal, as a sentence with the raw text kept. */
-  function fail(e) {
-    error = describeCashierFailure(e);
+  /**
+   * A canister's or the ledger's refusal, as a sentence with the raw text
+   * kept. `thrown: true` is a catch path: the sentence then says the money
+   * may have moved (lib/humane-errors.js), never "Nothing moved".
+   */
+  function fail(e, { thrown = false } = {}) {
+    error = describeCashierFailure(e, { thrown });
+  }
+
+  /**
+   * After a THROW the balances are stale in the one direction that matters:
+   * the transfer may have gone through. Re-read the paying wallet and the
+   * table (the page's handler) before the button can be pressed again.
+   */
+  async function refreshAfterThrow() {
+    await Promise.allSettled([
+      wallet.load(),
+      walletSource === 'oisy' ? oisy.refreshBalances() : Promise.resolve(),
+      onMoneyUnclear ? onMoneyUnclear() : Promise.resolve(),
+    ]);
   }
 
   const errorView = $derived(
@@ -469,12 +490,17 @@
       } else if (outcome.error) {
         error = outcome.error;
       } else {
-        fail(outcome.failure);
+        fail(outcome.failure, { thrown: outcome.thrown === true });
+        if (outcome.thrown === true) await refreshAfterThrow();
       }
     } catch (e) {
-      console.error('Deposit error:', e);
+      logger.error('Deposit error:', e);
       cashier.fail();
-      fail(e);
+      // A throw on the reply leg: the approval, the pull or the claim may
+      // have landed. The sentence says so, and the balances are re-read
+      // before the button comes back.
+      fail(e, { thrown: true });
+      await refreshAfterThrow();
     }
     processing = false;
   }

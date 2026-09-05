@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DETAIL_MAX_CHARS, LOBBY_RETRY_MAX_MS, LOBBY_RETRY_MS, describeLobbyFailure, detailOf,
   describeCashierFailure, isTransportFailure, rawMessageOf, retryDelayMs,
+  THROWN_CASHIER_MESSAGE, THROWN_TRANSPORT_MESSAGE,
 } from './humane-errors.js';
 
 const AGENT_TEXT =
@@ -117,10 +118,12 @@ describe('describeCashierFailure', () => {
     expect(r.detail).toBeNull();
   });
 
-  it('names a dead transport and says nothing moved', () => {
+  it('a dead transport RETURNED as an Err is a refusal: nothing moved', () => {
     const r = describeCashierFailure(new Error('Failed to fetch HTTP request: tcp connect error (os error 61)'));
     expect(r.transport).toBe(true);
-    expect(r.message).toMatch(/Could not reach the table\. Nothing moved/);
+    expect(r.thrown).toBe(false);
+    expect(r.moved).toBe('none');
+    expect(r.message).toMatch(/Nothing moved/);
     expect(r.detail).toMatch(/os error 61/);
   });
 
@@ -134,5 +137,48 @@ describe('describeCashierFailure', () => {
     const r = describeCashierFailure('Something odd: code 42');
     expect(r.message).toBe('That did not go through. Nothing moved.');
     expect(r.detail).toBe('Something odd: code 42');
+  });
+});
+
+describe('describeCashierFailure: a THROW may never say nothing moved', () => {
+  it('a thrown transport failure says the transfer may have gone through and to check first', () => {
+    const r = describeCashierFailure(
+      new Error('Failed to fetch HTTP request: tcp connect error (os error 61)'),
+      { thrown: true },
+    );
+    expect(r.thrown).toBe(true);
+    expect(r.transport).toBe(true);
+    expect(r.moved).toBe('unknown');
+    expect(r.message).not.toMatch(/Nothing moved/i);
+    expect(r.message).toMatch(/may still have gone through/);
+    expect(r.message).toMatch(/Check your balance or the receipt before trying again/);
+    expect(r.detail).toMatch(/os error 61/);
+  });
+
+  it('an unknown throw gets the same promise, with the raw text as detail', () => {
+    const r = describeCashierFailure(new Error('Something odd: code 42'), { thrown: true });
+    expect(r.thrown).toBe(true);
+    expect(r.moved).toBe('unknown');
+    expect(r.message).not.toMatch(/Nothing moved/i);
+    expect(r.message).toMatch(/may still have gone through/);
+    expect(r.detail).toBe('Something odd: code 42');
+  });
+
+  it('a throw whose text matches a refusal pattern is still a throw', () => {
+    // The wallet may throw a ledger error AFTER the transfer request left it.
+    const r = describeCashierFailure(new Error('InsufficientFunds'), { thrown: true });
+    expect(r.moved).toBe('unknown');
+    expect(r.message).not.toMatch(/Nothing moved/i);
+  });
+
+  it('only a canister Err says nothing moved', () => {
+    for (const err of ['Something odd: code 42', 'Insufficient balance', 'Rate limit exceeded']) {
+      const r = describeCashierFailure(err);
+      expect(r.thrown).toBe(false);
+      expect(r.moved).toBe('none');
+      expect(r.message).toMatch(/Nothing moved/);
+    }
+    expect(THROWN_CASHIER_MESSAGE).not.toMatch(/Nothing moved/i);
+    expect(THROWN_TRANSPORT_MESSAGE).not.toMatch(/Nothing moved/i);
   });
 });

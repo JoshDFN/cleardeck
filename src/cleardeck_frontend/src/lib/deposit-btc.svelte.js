@@ -13,7 +13,7 @@ import { checkBtcDeposits, fetchBtcDepositAddress } from './deposit-btc.js';
  *   untrustedReason: () => string|null,
  *   isAuthenticated: () => boolean,
  *   format: (v: bigint) => string,
- *   onFailure: (failure: unknown) => void,
+ *   onFailure: (failure: unknown, opts?: {thrown: boolean}) => void,
  *   onMinted: () => Promise<void>,
  * }} p `onFailure` receives the canister's answer for the humane sentence
  * @returns {{
@@ -68,7 +68,7 @@ export function createBtcDeposit({
     btcUpdateResult = null;
     const outcome = await checkBtcDeposits(tableActor, format);
     if ('failure' in outcome) {
-      onFailure(outcome.failure);
+      onFailure(outcome.failure, { thrown: outcome.thrown === true });
     } else {
       btcUpdateResult = outcome.message;
       if (outcome.minted) await onMinted();
