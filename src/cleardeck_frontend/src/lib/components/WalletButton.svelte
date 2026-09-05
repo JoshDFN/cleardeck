@@ -692,15 +692,19 @@
           <!-- Table alerts -->
           <div class="dropdown-section">
             <span class="section-title">Table alerts</span>
+            <!-- `.pref-box` is the checkbox's own hit area (44 px on a phone,
+                 tools/shots/touch-targets.mjs probes 21 px around the box):
+                 the native input stays 24 px and never shrinks under a long
+                 sentence. -->
             <label class="pref-row">
-              <input type="checkbox" checked={turnAlert} onchange={toggleTurnAlert} />
+              <span class="pref-box"><input type="checkbox" checked={turnAlert} onchange={toggleTurnAlert} /></span>
               <span>Your-turn alert: a chime, a vibration on touch, and the tab title</span>
             </label>
             <!-- OFF BY DEFAULT ($lib/hotkeys-pref.js): the keys send real
                  money, so the player opts in. The legend under the action
                  row points here while they are off. -->
             <label class="pref-row">
-              <input type="checkbox" checked={hotkeysPref.enabled} onchange={() => hotkeysPref.toggle()} />
+              <span class="pref-box"><input type="checkbox" checked={hotkeysPref.enabled} onchange={() => hotkeysPref.toggle()} /></span>
               <span>Keyboard shortcuts at the table: F fold, C check or call, R raise, A twice for all in, the number keys for sizes</span>
             </label>
           </div>
@@ -1269,7 +1273,15 @@
     cursor: pointer;
   }
 
-  .pref-row input { margin-top: 2px; cursor: pointer; }
+  .pref-box {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    margin-top: 2px;
+  }
+
+  .pref-row input { flex: 0 0 auto; margin: 0; cursor: pointer; }
 
   .dropdown-btn {
     width: 100%;
@@ -1681,7 +1693,13 @@
       margin-left: calc(-1 * var(--cd-space-3));
       padding-left: var(--cd-space-3);
     }
-    .pref-row input { width: var(--cd-icon-lg); height: var(--cd-icon-lg); margin: 0 var(--cd-space-1) 0 0; }
+    /* The box is the 44 px target; the input inside it stays 24 px. */
+    .pref-box {
+      width: var(--cd-touch-min);
+      height: var(--cd-touch-min);
+      margin: 0;
+    }
+    .pref-row input { width: var(--cd-icon-lg); height: var(--cd-icon-lg); }
     .refresh-btn, .show-address-btn { min-height: var(--cd-touch-min); }
   }
 </style>
