@@ -109,9 +109,17 @@ export function snapRaise(value, floor, cap, quantum = 1) {
   return clampRaise(quantise(v, quantum), floor, hi);
 }
 
-/** Whether a raise-to figure is the player's whole stack. */
+/**
+ * Whether a raise-to figure IS the player's whole stack: equality with the
+ * cap, not "at or above it". setRaise, snapRaise, stepByBlind and the presets
+ * all land exactly on the cap, so equality is the test; a figure ABOVE the
+ * cap is not all in, it is illegal (raiseProblem says "You have X behind"),
+ * and the case where that happens is a short stack whose legal floor exceeds
+ * its stack, where the button must not read "All in 0.50" over "You have
+ * 0.35 behind".
+ */
 export function isAllInRaise(value, ctx) {
-  return toInt(value) >= raiseCap(ctx);
+  return toInt(value) === raiseCap(ctx);
 }
 
 const MIN = Object.freeze({ id: 'min', label: 'Min', hint: 'The minimum raise' });

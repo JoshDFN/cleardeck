@@ -226,6 +226,27 @@ describe('the all-in figure is the EXACT stack, never the display grid', () => {
     expect(Number(sats.figure.replace(/,/g, ''))).toBe(raiseCap(satsStack));
   });
 
+  it('a floor above the cap is not labelled All in', () => {
+    // A short stack: 0.25 behind with 0.10 in front, facing 0.30 with a
+    // 0.20 minimum raise. The legal floor (0.50) exceeds the stack (0.35);
+    // the canister still shows the raise button (chips > to_call), the dock
+    // initialises the sizer at the floor and the button is disabled by the
+    // problem line. The words must agree with that line, so not "All in".
+    const short = { ...facing, currentBet: e8(0.30), minRaise: e8(0.20), myChips: e8(0.25), myCurrentBet: e8(0.10) };
+    const floor = raiseFloor(short);
+    const cap = raiseCap(short);
+    expect(floor).toBe(e8(0.50));
+    expect(cap).toBe(e8(0.35));
+    expect(floor).toBeGreaterThan(cap);
+    expect(isAllInRaise(floor, short)).toBe(false);
+    expect(isAllInRaise(cap, short)).toBe(true);
+    const label = primaryRaiseLabel(floor, short, { decimals: 2 });
+    expect(label).toEqual({ word: 'Raise to', figure: '0.50', text: 'Raise to 0.50', allIn: false });
+    expect(raiseProblem(floor, short, (v) => (v / ICP).toFixed(2))).toBe('You have 0.35 behind');
+    // and any figure past the cap, not only the floor, keeps the raise word
+    expect(primaryRaiseLabel(cap + 1, short, { decimals: 2 }).allIn).toBe(false);
+  });
+
   it('below the cap the label is Raise to / Bet on the display grid', () => {
     expect(primaryRaiseLabel(e8(0.62), facing, { decimals: 2 })).toEqual({ word: 'Raise to', figure: '0.62', text: 'Raise to 0.62', allIn: false });
     expect(primaryRaiseLabel(e8(0.30), open, { decimals: 2 }).text).toBe('Bet 0.30');
