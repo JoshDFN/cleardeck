@@ -587,7 +587,7 @@
     return seat === null || seat === undefined ? 'Seat not recorded' : `Seat ${seat + 1}`;
   }
 
-  /** "Seat 2 (Nakamoto) · you" — every part of it justified above. */
+  /** "Seat 2 (Nakamoto) · you", every part of it justified above. */
   function actorLabel(hand, seat) {
     if (seat === null || seat === undefined) return 'Seat not recorded';
     const name = seatName(hand, seat);
@@ -709,8 +709,8 @@
   }
   // ONE dismissal contract for every dialog in this app: Escape closes it from
   // anywhere, a backdrop click closes it, the close button closes it. The
-  // `onkeydown` that used to sit on the backdrop could never fire — the backdrop
-  // is `tabindex="-1"` and nothing ever focuses it — so Escape worked in
+  // `onkeydown` that used to sit on the backdrop could never fire, the backdrop
+  // is `tabindex="-1"` and nothing ever focuses it, so Escape worked in
   // HowItWorks and silently did nothing here, in DepositModal and in
   // WithdrawModal. docs/DEFECTS.md T-13.
   function onWindowKeydown(e) {
@@ -785,7 +785,7 @@
              the same fact, and the one a player opens to review a hand they lost
              is the worse one to over-claim on. What the browser actually did is
              stated instead, and the ordering is carried beside it as the open
-             question — with the panel that settles it directly underneath. -->
+             question, with the panel that settles it directly underneath. -->
         {#if selected.verification?.ok}
           <div class="proof-banner good">
             <span class="banner-mark">✓</span>
@@ -880,7 +880,7 @@
             <p class="panel-note" data-witness="none">
               This browser has no sighting of this hand's commitment from while it was running, so it
               cannot vouch for the order. It notes one automatically whenever this panel is open during
-              a live hand — open it once mid-hand and the check above appears for that hand by itself.
+              a live hand, open it once mid-hand and the check above appears for that hand by itself.
             </p>
           {/if}
 
@@ -945,7 +945,7 @@
                       #{slot.check.positions[0]} {slot.check.match ? '✓' : '✗'}
                     </span>
                   {:else}
-                    <span class="deck-pos mono">—</span>
+                    <span class="deck-pos mono">·</span>
                   {/if}
                 </div>
               {/each}
@@ -977,7 +977,7 @@
                 </div>
                 <span class="player-rank">{stop?.reveal ? (rankName(player.rank) || '') : ''}</span>
                 <span class="player-result">
-                  {#if player.won > 0}<span class="won-amt replay-money">+{money(player.won)}</span>{:else}<span class="lost-amt">—</span>{/if}
+                  {#if player.won > 0}<span class="won-amt replay-money">+{money(player.won)}</span>{:else}<span class="lost-amt">·</span>{/if}
                 </span>
               </div>
             {/each}
@@ -1012,7 +1012,7 @@
                 {#each group.lines as line}
                   <div class="log-line kind-{String(line.kind).toLowerCase()}" class:reconstructed={line.reconstructed}>
                     <span class="log-index mono">#{line.index}</span>
-                    <span class="log-time timestamp">{line.timestamp ? formatLogClock(line.timestamp) : '—'}</span>
+                    <span class="log-time timestamp">{line.timestamp ? formatLogClock(line.timestamp) : '·'}</span>
                     <span class="log-seat seat-label">{actorLabel(selected, line.seat)}</span>
                     <span class="log-what">
                       <span class="log-verb">{line.word}</span>{#if line.amount}{' '}<span class="log-amount replay-money">{money(line.amount)}</span>{/if}
@@ -1193,7 +1193,7 @@
         <div class="list-foot">
           <!-- COUNTED, NOT ASSERTED. This line used to read "Every hand above was
                re-derived in this browser from its own revealed seed", which is
-               false for any hand still awaiting its seed — and one of those is
+               false for any hand still awaiting its seed, and one of those is
                listed here whenever a hand is in play. -->
           {rederivedCount} of {hands.length} hand(s) above were re-derived in this browser from their
           own revealed seed. Nothing here was verified by a canister. Open one to step through it.
@@ -1217,7 +1217,7 @@
          whether anything is painted on top of it. -->
     <div class="legal">
       <p class="legal-warning">
-        <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk—your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
+        <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk: your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
       </p>
       <p class="legal-norake">
         <strong class="norake">No rake is taken from any pot on any table.</strong> Every amount in
@@ -1815,7 +1815,7 @@
     .player-row { grid-template-columns: 1fr; gap: 6px; }
     /* WHO ACTED IS NOT THE COLUMN TO DROP. This used to be
        `grid-template-columns: 54px 1fr` plus `.log-seat { display: none }`,
-       which on a phone rendered the whole log as "05:46:19 AM calls" — every
+       which on a phone rendered the whole log as "05:46:19 AM calls", every
        line anonymous, so the log could not answer the one question it exists
        to answer. The TIME column is the one with slack: it is monospace, fixed
        width and the least load-bearing thing on the line. The INDEX column goes

@@ -325,7 +325,7 @@
         // `withdraw` returns the LEDGER BLOCK INDEX, not an amount
         // (src/table_canister/src/lib.rs:1894 `-> Result<u64, String>`, `Ok(block)`
         // at :1991). This line used to run it through formatWithUnit and print it
-        // as ICP, so the confirmation stated a wrong amount of money — a block
+        // as ICP, so the confirmation stated a wrong amount of money, a block
         // index of 4,000 renders as "0.0000 ICP sent to your wallet". docs/DEFECTS.md T-18.
         //
         // What actually happens: `transfer_tokens` sends `amount - fee`

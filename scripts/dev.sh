@@ -1577,6 +1577,25 @@ cmd_hygiene() {
     ok "README.md does not claim \"fully decentralized\""
   fi
 
+  # THE TYPOGRAPHIC RULE, AS A GATE. No em-dash anywhere in the frontend
+  # source: on-screen copy, aria labels, placeholders or comments (the UI
+  # wave's rule; the lobby's "Open, no one seated" and the replay's "risk:
+  # your funds" used to carry them). The one legitimate code point is the
+  # regex character class in lib/utils.js that STRIPS a dash-suffixed name,
+  # which is excused by its own pattern, not by file.
+  step "no em-dash in the frontend source"
+  local dashes
+  dashes="$(grep -rn $'\xe2\x80\x94' src/cleardeck_frontend/src \
+             --include='*.svelte' --include='*.js' --include='*.scss' \
+             | grep -vF '[-' || true)"
+  if [ -n "$dashes" ]; then
+    warn "em-dash in the frontend source (write a colon, a comma or a period):"
+    printf '%s\n' "$dashes" | sed 's/^/      /'
+    bad=1
+  else
+    ok "no em-dash in src/cleardeck_frontend/src"
+  fi
+
   step "notices not weakened since $BASELINE_COMMIT"
   local removed
   removed="$(git diff "$BASELINE_COMMIT" -- README.md src/cleardeck_frontend/src \

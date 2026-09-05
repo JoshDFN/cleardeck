@@ -128,6 +128,9 @@
   --cd-warn-dim: rgba(245, 158, 11, 0.12);
   --cd-warn-line: rgba(245, 158, 11, 0.35);
   --cd-btc: #f7931a;                        /* Bitcoin brand orange */
+  --cd-btc-dim: rgba(247, 147, 26, 0.1);    /* a BTC chip or panel at rest */
+  --cd-btc-tint: rgba(247, 147, 26, 0.2);   /* a BTC control hovered, a BTC spinner track */
+  --cd-btc-line: rgba(247, 147, 26, 0.3);   /* the 1px stroke on anything BTC */
 
   /* --- The felt ----------------------------------------------------------
      Darker and less saturated than the old #1f6b45 so white cards and gold

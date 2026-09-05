@@ -25,7 +25,7 @@
 //
 // docs/DEFECTS.md T-01: the bundle used to decide "am I local?" purely by
 // sniffing window.location.hostname, while the canister ids it talked to came
-// from a fallback chain that ended at the repo-root .env — which holds the
+// from a fallback chain that ended at the repo-root .env, which holds the
 // MAINNET ids. A local dev build therefore pointed a dev UI at the live
 // fund-holding canisters.
 //
@@ -112,7 +112,7 @@ export function isLocal() {
  * but this project's managed network is pinned to 8077 in icp.yaml (8000 belongs
  * to another project on the same machine), so an unmodified local build pointed
  * its agent at a port nothing was listening on. It now comes from the build
- * environment — the same place the canister ids come from.
+ * environment, the same place the canister ids come from.
  */
 export const LOCAL_GATEWAY_PORT =
   Number(buildValue(() => import.meta.env.VITE_LOCAL_GATEWAY_PORT)) || 4943;
@@ -136,12 +136,12 @@ export function agentHost() {
 }
 
 // ---------------------------------------------------------------------------
-// Mainnet canister ids — DISPLAY ONLY
+// Mainnet canister ids, DISPLAY ONLY
 // ---------------------------------------------------------------------------
 //
 // These are the live, fund-holding ClearDeck canisters. They are listed here so
 // the "Verify the Code" panel can show a user which canisters to audit on
-// mainnet — that display is legitimate and deliberately kept.
+// mainnet, that display is legitimate and deliberately kept.
 //
 // They are NEVER used to wire an actor. canisters.js resolves its ids from the
 // build environment and treats any of these values as a build error on a local

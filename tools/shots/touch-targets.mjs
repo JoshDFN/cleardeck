@@ -13,8 +13,10 @@
 // behind an open dialog, and the sideways-phone rotate prompt.
 //
 // Extra states the resting scenes do not photograph: on table-preflop the
-// phone's bet sizer is opened (the caret) and its sheet measured; on the lobby
-// the developer login menu is opened and measured.
+// phone's bet sizer is opened (the caret) and its sheet measured, then the Log
+// drawer with its two page links; on the lobby the developer login menu is
+// opened and measured; on deposit the sheet is scrolled to its end, where the
+// sticky Deposit row must be in flow and clear of every money figure.
 //
 // Exit 1 on any violation. Writes TOUCH-TARGETS.json and a PNG per scene, with
 // every violation outlined in red, under artifacts/screens/<sha>/probe/.
@@ -113,6 +115,44 @@ const EXTRA_STATES = {
       async close(page) {
         const close = page.locator('.raise-slider-panel .close-slider');
         if (await close.count()) await close.first().click().catch(() => {});
+      },
+    },
+    {
+      // THE LOG DRAWER ON THE PHONE: the footer's two links (How it works,
+      // Verify code) ride it (ActionFeed.svelte `.feed-links`) since the
+      // table view lost its footer; both at the touch floor, measured here.
+      label: 'log drawer open',
+      scope: '.feed-container',
+      async open(page) {
+        const toggle = page.locator('.action-dock .log-toggle');
+        if (!(await toggle.count())) return false;
+        await toggle.first().click();
+        await page.waitForSelector('.feed-container .feed-links .feed-link', { timeout: 5000 });
+        await settle(page);
+        return true;
+      },
+      async close(page) {
+        await page.locator('.action-dock .log-toggle').first().click().catch(() => {});
+      },
+    },
+  ],
+  deposit: [
+    {
+      // THE END OF THE SHEET: the sticky Deposit row is in flow here, under
+      // the runway panel, and lib/touch-targets.mjs's stickyCover measures
+      // that no solvency figure sits under it; the Why disclosure's summary
+      // and every control at the foot are measured at the floor.
+      label: 'scrolled to end',
+      scope: null,
+      async open(page) {
+        const body = page.locator('.modal-content .modal-body');
+        if (!(await body.count())) return false;
+        await body.first().evaluate((el) => { el.scrollTop = el.scrollHeight; });
+        await settle(page);
+        return true;
+      },
+      async close(page) {
+        await page.locator('.modal-content .modal-body').first().evaluate((el) => { el.scrollTop = 0; }).catch(() => {});
       },
     },
   ],

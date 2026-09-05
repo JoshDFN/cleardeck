@@ -3,8 +3,8 @@
   //
   // This used to call `tableActor.verify_shuffle(seed_hash, revealed_seed)` and
   // print "Cryptographically verified shuffle" when it came back true. That is
-  // the house checking its own homework: the query runs on the table canister —
-  // the exact party the player is supposed to distrust — and all it does is
+  // the house checking its own homework: the query runs on the table canister,
+  // the exact party the player is supposed to distrust, and all it does is
   // recompute a SHA-256 (docs/FINDING-02, item 4).
   //
   // Now the verification runs HERE, in the player's browser, from
@@ -232,8 +232,8 @@
   }
 
   /**
-   * Asks the table canister its own commitment check. This proves NOTHING —
-   * it is the accused re-hashing its own evidence — and is shown only so the
+   * Asks the table canister its own commitment check. This proves NOTHING,
+   * it is the accused re-hashing its own evidence, and is shown only so the
    * player can see the difference between that and the check above.
    *
    * It is asked TWICE, once with the two values in the fields named for them
@@ -421,7 +421,7 @@
       <p>The fairness proof appears as soon as cards are dealt.</p>
     </div>
   {:else}
-    <!-- STEP 1 — the commitment. Deliberately NOT "published before the deal":
+    <!-- STEP 1, the commitment. Deliberately NOT "published before the deal":
          start_new_hand commits and deals in one message, so no outsider can
          watch the commitment appear before cards exist. What IS provable is
          that the whole 52-card order was fixed before the board was shown, and
@@ -450,7 +450,7 @@
         </div>
       </li>
 
-      <!-- STEP 2 — the reveal -->
+      <!-- STEP 2, the reveal -->
       <li class="rung" class:done={!!revealedSeed}>
         <div class="rung-mark">2</div>
         <div class="rung-body">
@@ -478,7 +478,7 @@
       </li>
 
       {#if revealedSeed}
-        <!-- STEP 3 — the browser hashes it -->
+        <!-- STEP 3, the browser hashes it -->
         <li class="rung" class:done={report?.commitment?.match} class:bad={report && !report.commitment.match}>
           <div class="rung-mark">3</div>
           <div class="rung-body">
@@ -511,7 +511,7 @@
           </div>
         </li>
 
-        <!-- STEP 4 — the cards, re-derived locally -->
+        <!-- STEP 4, the cards, re-derived locally -->
         <li class="rung" class:done={report?.ok} class:bad={phase === 'failed'}>
           <div class="rung-mark">4</div>
           <div class="rung-body">
@@ -744,9 +744,9 @@
               <div class="echo-row">
                 <span class="echo-label">seed_hash = hash, revealed_seed = seed</span>
                 {#if houseEcho?.state === 'answered'}
-                  <span class="echo-value">{houseEcho.straight} — proves only that the canister can hash</span>
+                  <span class="echo-value">{houseEcho.straight}: proves only that the canister can hash</span>
                 {:else if houseEcho?.state === 'unreachable'}
-                  <span class="echo-value muted">unreachable — and the check above still passed without it</span>
+                  <span class="echo-value muted">unreachable, and the check above still passed without it</span>
                 {:else if houseEcho?.state === 'asking'}
                   <span class="echo-value muted">asking…</span>
                 {:else}
@@ -756,9 +756,9 @@
               <div class="echo-row">
                 <span class="echo-label">the two values transposed</span>
                 {#if houseEcho?.state === 'answered'}
-                  <span class="echo-value">{houseEcho.swapped} — the same proof, and it says so</span>
+                  <span class="echo-value">{houseEcho.swapped}: the same proof, and it says so</span>
                 {:else}
-                  <span class="echo-value muted">—</span>
+                  <span class="echo-value muted">·</span>
                 {/if}
               </div>
               <p class="work-note echo-history">
@@ -803,7 +803,7 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="8"/>
             </svg>
-            <span>Set the tool's <strong>input encoding to “Hex”</strong> — the seed is bytes, not text.</span>
+            <span>Set the tool's <strong>input encoding to “Hex”</strong>: the seed is bytes, not text.</span>
           </div>
           <div class="expected-result">
             <span class="expected-label">It must print</span>
@@ -877,7 +877,7 @@
               <code>{formatTimestamp(proof.timestamp)}</code> off the table canister; it did not watch the
               order of events. Everything above stays true even if that clock is wrong.
               <strong>You can witness it yourself:</strong> copy the commitment from step 1 while a hand is
-              still running — it is on screen from the moment cards are dealt — and check it against the one
+              still running, it is on screen from the moment cards are dealt, and check it against the one
               shown here after the seed is revealed. Then the "before" is something you saw, not something
               we told you.</p>
           </div>

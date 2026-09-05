@@ -1,10 +1,10 @@
 /**
- * ClearDeck equity engine — runs entirely in the player's browser.
+ * ClearDeck equity engine, runs entirely in the player's browser.
  *
  * WHY THIS FILE EXISTS, AND WHAT IT IS ALLOWED TO KNOW
  * =====================================================
  * docs/DESIGN-BAR.md bar 15: the reference clients dramatise all-in with
- * INFORMATION, not fireworks — PokerStars shows `0%` / `100%` beside the two
+ * INFORMATION, not fireworks, PokerStars shows `0%` / `100%` beside the two
  * players, GGPoker shows `100.00%` plus a named hand-strength phrase. ClearDeck
  * showed neither, and the wave-3 critic scored the all-in moment a loss for it.
  *
@@ -13,9 +13,9 @@
  * What changed is that equity is now COMPUTED here, from cards the viewer can
  * already see on their own screen, and every figure states its own method.
  *
- * THE INFORMATION RULE — the important part.
+ * THE INFORMATION RULE, the important part.
  * `get_table_view` sets `hole_cards: None` for every player the caller may not
- * see (src/table_canister/src/lib.rs:5152-5164 — self, or showdown-and-not-
+ * see (src/table_canister/src/lib.rs:5152-5164, self, or showdown-and-not-
  * folded, or a voluntary show). So this module CANNOT leak an opponent's hand:
  * the bytes are not in the response. It computes in exactly two modes, and the
  * caller must say which one it is in:
@@ -29,7 +29,7 @@
  *   HERO      only the viewer's own two cards are known. There is no honest
  *             per-opponent equity to show and none is produced. What is produced
  *             is the viewer's equity against N hands drawn UNIFORMLY AT RANDOM
- *             from the remaining deck — a stated model, labelled as one on
+ *             from the remaining deck, a stated model, labelled as one on
  *             screen ("vs 2 random"), never called plain "equity". It is a
  *             function of the viewer's own two cards, the board, and the number
  *             of live opponents: three things already on their screen.
@@ -114,7 +114,7 @@ export function cardCode(card) {
 
 /**
  * A list of Candid cards as codes. Returns `null` if ANY entry fails to decode
- * or if the list contains a duplicate — both mean the caller's picture of the
+ * or if the list contains a duplicate, both mean the caller's picture of the
  * table is wrong, and a wrong picture must not produce a confident percentage.
  *
  * @param {any[]} cards
@@ -134,7 +134,7 @@ export function cardCodes(cards) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Hand scoring — order-identical to poker_core::hand::HandRank's derived Ord
+// 2. Hand scoring, order-identical to poker_core::hand::HandRank's derived Ord
 // ---------------------------------------------------------------------------
 
 /**
@@ -155,7 +155,7 @@ export const CATEGORY_NAME = [
  * Packs a category plus up to five tiebreak ranks into one comparable number.
  *
  * Six base-16 digits: `cat t1 t2 t3 t4 t5`. Every tiebreak is a rank 0..14, so
- * 16 is enough and the whole thing stays under 2^24 — an exact double, safely
+ * 16 is enough and the whole thing stays under 2^24, an exact double, safely
  * comparable with `<`.
  */
 function pack(cat, t1 = 0, t2 = 0, t3 = 0, t4 = 0, t5 = 0) {
@@ -469,7 +469,7 @@ function award(scores, share, live) {
  * "Equity" here is the standard definition and the one the pot actually pays:
  * the share of runouts a player wins, plus a chopped share of the runouts they
  * tie. With a complete board there is exactly one runout, so the answer is
- * 100 / 0 — which is the `100.00%` GGPoker prints at an all-in showdown.
+ * 100 / 0, which is the `100.00%` GGPoker prints at an all-in showdown.
  *
  * @param {number[][]} hands one two-card array per live player
  * @param {number[]} board 0, 3, 4 or 5 board cards
@@ -533,7 +533,7 @@ export function exactEquity(hands, board) {
 /**
  * MONTE CARLO equity for a set of KNOWN hands.
  *
- * Used only when an exact enumeration would not fit in a frame — in Hold'em that
+ * Used only when an exact enumeration would not fit in a frame, in Hold'em that
  * is the pre-flop all-in, where C(48,5) = 1,712,304 runouts. The trial count is
  * reported alongside the figure so nobody reads an estimate as exact.
  *
@@ -577,7 +577,7 @@ export function monteCarloEquity(hands, board, trials, seed) {
 /**
  * HERO-ONLY equity against opponents drawn uniformly at random.
  *
- * THE MODEL IS THE POINT, AND IT IS STATED. This is not "the hero's equity" —
+ * THE MODEL IS THE POINT, AND IT IS STATED. This is not "the hero's equity",
  * it is the hero's equity if every live opponent's two cards were a uniform draw
  * from the cards the hero cannot see. It uses ONLY the hero's own two cards, the
  * board, and the number of live opponents, so it cannot leak a hand the canister
@@ -659,7 +659,7 @@ export const MC_TRIALS = 200_000;
  * @param {object} input
  * @param {{seat:number, cards:any[]}[]} input.revealed live players whose cards
  *   the ENGINE has already revealed to this viewer. Pass every live player, or
- *   none — a partial reveal is not a showdown.
+ *   none, a partial reveal is not a showdown.
  * @param {number} input.liveCount how many players are still in the hand
  * @param {{seat:number, cards:any[]}|null} input.hero the viewer's own seat
  * @param {any[]} input.board community cards
@@ -749,7 +749,7 @@ export function computeEquity({ revealed, liveCount, hero, board }) {
  *
  * Two decimals for an exact enumeration, because it IS exact to two decimals
  * (and because `100.00%` is the reference figure, bar 15). ONE decimal for a
- * Monte Carlo run at 40,000 trials, whose standard error is ~0.25 points —
+ * Monte Carlo run at 40,000 trials, whose standard error is ~0.25 points,
  * printing more digits than that would be a lie about precision.
  *
  * @param {number} share 0..1

@@ -39,8 +39,16 @@
     currencySymbol = 'ICP',
     fmt = (v) => String(v),
     seatLabel = (i) => `Seat ${Number(i) + 1}`,
+    /** The seat's display name, or null when the table does not know one. */
+    seatName = () => null,
     handRankWords = () => ''
   } = $props();
+
+  /** "Nakamoto wins", the way the plate names the seat; "Seat 2 wins" only
+   *  when no name is known. The seat index rides `data-seat` for the harness
+   *  (tools/shots/lib/dom-scrape.mjs reads it; the amount is the number after
+   *  "wins"). */
+  const winnerName = (seat) => seatName(seat) || seatLabel(seat);
 
   const showWinner = $derived(isHandComplete && winners.length > 0);
   const breakdown = $derived(liveBets > 0 ? `${fmt(collectedPot)} collected + ${fmt(liveBets)} betting` : '');
@@ -58,13 +66,13 @@
   <div class="winner-display" class:you-won={!!myWinInfo}>
     <span class="winner-line">
       {#if myWinInfo}
-        <span class="winner-text">You won {fmt(Number(myWinInfo.amount))} {currencySymbol}</span>
+        <span class="winner-text" data-seat={Number(myWinInfo.seat)}>You won {fmt(Number(myWinInfo.amount))} {currencySymbol}</span>
         {#if handRankWords(myWinInfo.hand_rank)}
           <span class="winner-hand-rank">{handRankWords(myWinInfo.hand_rank)}</span>
         {/if}
       {:else}
-        <span class="winner-text">
-          {seatLabel(winners[0].seat)} wins {fmt(Number(winners[0].amount))} {currencySymbol}
+        <span class="winner-text" data-seat={Number(winners[0].seat)}>
+          {winnerName(winners[0].seat)} wins {fmt(Number(winners[0].amount))} {currencySymbol}
         </span>
         {#if handRankWords(winners[0].hand_rank)}
           <span class="winner-hand-rank">{handRankWords(winners[0].hand_rank)}</span>

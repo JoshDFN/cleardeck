@@ -56,8 +56,8 @@
   }
 
   .quick-amount.btc {
-    border-color: rgba(247, 147, 26, 0.3);
-    background: rgba(247, 147, 26, 0.1);
+    border-color: var(--cd-btc-line);
+    background: var(--cd-btc-dim);
     color: var(--cd-btc);
   }
 

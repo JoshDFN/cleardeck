@@ -1,5 +1,5 @@
 /**
- * ClearDeck shuffle verifier — runs entirely in the player's browser.
+ * ClearDeck shuffle verifier, runs entirely in the player's browser.
  *
  * This is a port of `docs/SHUFFLE-SPEC.md` v1, kept deliberately independent of
  * everything else in this app:
@@ -134,7 +134,7 @@ export async function sha256Hex(bytes) {
 // --- section 3 of the spec: the shuffle -------------------------------------
 
 /**
- * `floor(2^64 / n) * n` — the largest multiple of `n` that is <= 2^64. Draws at
+ * `floor(2^64 / n) * n`, the largest multiple of `n` that is <= 2^64. Draws at
  * or above this are REJECTED rather than reduced, which is what makes the
  * modulo unbiased. See spec 3.3: this fires with probability ~2.2e-18, so a
  * player will never see it, but a verifier that omits it would one day disagree

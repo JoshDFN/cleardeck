@@ -24,7 +24,11 @@ export default {
   async verify(ctx, page) {
     const rows = await page.locator('tbody tr').count();
     const namedTables = await page.locator('.table-name').allTextContents();
-    const anonymous = await page.locator('.wallet-btn.connect').isVisible().catch(() => false);
+    // Signed out = a sign-in control in the wallet slot. On a phone a local
+    // build shows ONE button (the dev button reading "Connect", its menu
+    // holding Internet Identity and the dev players; WalletButton.svelte) and
+    // hides the wide Connect Wallet button, so either painted button counts.
+    const anonymous = await page.locator('.login-buttons .wallet-btn:visible').first().isVisible().catch(() => false);
     const disclaimer = await page.locator('.alpha-warning-banner').isVisible().catch(() => false);
     // docs/DEFECTS.md H-09: the spinner and the loaded lobby used to be able to
     // render together. They are now mutually exclusive, and this asserts it, so

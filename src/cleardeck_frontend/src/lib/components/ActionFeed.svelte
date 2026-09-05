@@ -471,7 +471,7 @@
     color: #c084fc;
   }
 
-  /* Showdown reveal — the named hand, one step below a win in weight */
+  /* Showdown reveal, the named hand, one step below a win in weight */
   .action-showdown {
     background: rgba(126, 226, 184, 0.07);
     border-left-color: rgba(126, 226, 184, 0.45);

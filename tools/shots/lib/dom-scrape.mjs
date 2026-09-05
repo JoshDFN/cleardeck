@@ -130,6 +130,17 @@ export function scrapeTable(page) {
             boardCaptionTag: one(document, '.board-caption .caption-tag'),
             heroHandText: one(document, '.caption-hand'),
             winnerText: one(document, '.winner-display .winner-text') ?? one(document, '.winner-display'),
+            // The winner line names the SEAT'S DISPLAY NAME ("Nakamoto wins
+            // 24.00 ICP"; "Seat 2" only when no name is known), so the seat it
+            // means rides `data-seat` (0-based, the canister's index). Null when
+            // the attribute is absent (an older build), and the seat is then
+            // parsed from "Seat N" as before.
+            winnerSeat: (() => {
+                const el = document.querySelector('.winner-display .winner-text[data-seat]');
+                if (!el) return null;
+                const n = Number(el.getAttribute('data-seat'));
+                return Number.isInteger(n) ? n : null;
+            })(),
             winnerHandRank: one(document, '.winner-display .winner-hand-rank'),
             splitInfo: one(document, '.winner-display .split-info'),
             tableBalanceText:

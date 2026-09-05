@@ -13,7 +13,7 @@
   //   1. the lobby canister's TableInfo (via the `tables` prop): name, stakes,
   //      buy-in range, seat count, currency, per-table canister id, and the
   //      action clock / time bank the table is configured with;
-  //   2. each table canister's `get_table_view()` query, called here — an
+  //   2. each table canister's `get_table_view()` query, called here, an
   //      anonymous query, so a signed-out visitor sees the same live truth a
   //      seated player does: pot, hand number, phase, the community board, the
   //      seat map with real stacks and per-seat status, the last hand's payout,
@@ -90,7 +90,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Live table views — the part no rake-taking client can show a signed-out
+  // Live table views, the part no rake-taking client can show a signed-out
   // visitor, because their table state is not public and not verifiable.
   // ---------------------------------------------------------------------------
 
@@ -132,7 +132,7 @@
    *
    * The lobby canister keeps its OWN copy of every table's config, written once
    * by `init_microstakes_tables`, and that copy can disagree with the config the
-   * table canister was initialised with — on this deployment it does, for two of
+   * table canister was initialised with, on this deployment it does, for two of
    * the three tables (see the wave report). The money a player posts is set by
    * the TABLE canister, so that is what this lobby renders; the lobby record is
    * only a fallback for a table we have not reached yet.
@@ -230,7 +230,7 @@
     if (ready >= 2) return { kind: 'ready', label: 'Ready to deal', detail: null };
     if (ready === 1) return { kind: 'waiting', label: 'Waiting for one more', detail: null };
     if (seated > 0) return { kind: 'waiting', label: 'All sitting out', detail: null };
-    return { kind: 'open', label: 'Open — no one seated', detail: null };
+    return { kind: 'open', label: 'Open, no one seated', detail: null };
   }
 
   /** Hands dealt at this table, straight off the table canister. */
@@ -332,7 +332,7 @@
    *
    * `init_microstakes_tables` in the lobby canister bakes table_1's blinds into
    * ALL THREE names ("6-Max - 0.01/0.02" on a table that charges 0.05/0.10), so
-   * the largest string on a row can quote a price the contract does not charge —
+   * the largest string on a row can quote a price the contract does not charge,
    * 222 px from a Stakes cell reading the real one. Two prices, one row.
    */
   const NAME_STAKES_RE = /(\d[\d.,]*)\s*\/\s*(\d[\d.,]*)/;
@@ -406,7 +406,7 @@
         default: cmp = Number(a.player_count) - Number(b.player_count); break;
       }
       // Table id is the tie-break so the order is total and stable across
-      // reloads — a lobby that reshuffles itself on refresh is unusable.
+      // reloads, a lobby that reshuffles itself on refresh is unusable.
       return (cmp !== 0 ? cmp * dir : Number(a.id) - Number(b.id));
     });
   });
@@ -465,7 +465,7 @@
    * Seat coordinates on a ~2:1 stadium, clockwise from the bottom seat.
    * docs/DESIGN-BAR.md §1.2: every leading client's playing surface is a wide
    * ellipse between 1.72:1 and 2.63:1, median 2.13, so the lobby's preview of a
-   * table should be one too — and an empty seat is a pod with a call to action,
+   * table should be one too, and an empty seat is a pod with a call to action,
    * never a gap (WPT Global: "Click on an empty seat to sit at the table").
    */
   function seatPositions(count) {
@@ -538,15 +538,15 @@
 
   <!-- THE LIST IS THE FIRST THING. docs/DESIGN-BAR.md §9.4: every reference
        client puts its first table row between 26.6% and 36.1% of the viewport,
-       and this lobby used to put it at 88.4%. Nothing is deleted to get there —
+       and this lobby used to put it at 88.4%. Nothing is deleted to get there,
        the heading, the counts, the filters and the drift warning all moved
        INSIDE the list pane, and the signed-out pitch moved BELOW the list, where
        a visitor reads it after seeing that the tables are real.
 
        WAVE 5 measured the rest of the way, on the rendered page at ten widths
        (docs/DESIGN-BAR.md §9.4.2a–c). Above the first row there is now exactly
-       ONE row of lobby furniture and the column headers — 70.3 px at 1440×900,
-       down from 127.4 — and the first row sits at 34.8% of the viewport against
+       ONE row of lobby furniture and the column headers, 70.3 px at 1440×900,
+       down from 127.4, and the first row sits at 34.8% of the viewport against
        PokerStars' 34.4%. What moved: the drift statement went BELOW the rows
        (its count stays here as a chip, at no cost in height), and the density
        and refresh controls went to the list footer. What did not move: 7 facts
@@ -624,7 +624,7 @@
         <div class="empty">
           <h3>The lobby canister is reporting no tables.</h3>
           <p>
-            Nothing is wrong with your wallet or your connection — the lobby simply has no
+            Nothing is wrong with your wallet or your connection, the lobby simply has no
             table registered against it right now. You can confirm that yourself: query
             <code class="mono inline">get_tables()</code> on the lobby canister.
           </p>
@@ -775,7 +775,7 @@
                 </td>
 
                 <td class="c-hands">
-                  <span class="hands-value">{hands === null ? '—' : hands}</span>
+                  <span class="hands-value">{hands === null ? '·' : hands}</span>
                 </td>
 
                 <td class="c-now">
@@ -789,7 +789,7 @@
                 <td class="c-go">
                   <!-- A full table is not a dead end: its state is public, so
                        the honest label is the one PokerStars uses next to Play
-                       Now — you can watch it. -->
+                       Now, you can watch it. -->
                   <span class="go" class:btc={currency === 'BTC'}>
                     {isFull ? 'Watch' : signedIn ? 'Sit' : 'View'}
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -805,7 +805,7 @@
         {#if liveLoaded && driftedTables > 0}
           <!-- The whole statement, immediately under the rows it is about.
                It used to sit ABOVE them and cost 26 px of desktop viewport and
-               57 px of phone viewport — the two lines that pushed the first row
+               57 px of phone viewport, the two lines that pushed the first row
                out of the reference band. Nothing here is softened: the sentence
                is the same one, the per-row "⚠ record differs" flag is still in
                the money cell of every affected row, the struck-through figure is
@@ -817,7 +817,7 @@
                 ? `1 of ${tables.length} lobby records quotes figures its table contract does not charge.`
                 : `${driftedTables} of ${tables.length} lobby records quote figures their table contracts do not charge.`}
             </strong>
-            Every figure above is what the <em>contract</em> charges — read from the table canister
+            Every figure above is what the <em>contract</em> charges, read from the table canister
             itself, not from the lobby's registration{#if staleNames > 0}; the stale
             {staleNames === 1 ? 'name is' : 'names are'} struck through{/if}.
           </p>
@@ -985,8 +985,8 @@
                 style:top="{positions[i].top}%"
                 onclick={(e) => { e.stopPropagation(); openTable(selectedTable); }}
                 title={seat
-                  ? `Seat ${i + 1}: ${seat.name ?? 'seated player'}${seat.chips != null ? ` — ${formatAmount(seat.chips, currency)} ${unitOf(currency)}` : ''}${seat.active ? '' : ' (sitting out)'}`
-                  : `Seat ${i + 1}: open — opens this table`}
+                  ? `Seat ${i + 1}: ${seat.name ?? 'seated player'}${seat.chips != null ? `, ${formatAmount(seat.chips, currency)} ${unitOf(currency)}` : ''}${seat.active ? '' : ' (sitting out)'}`
+                  : `Seat ${i + 1}: open, opens this table`}
               >{seat ? initialOf(seat, i) : '+'}</button>
             {/each}
           </div>
@@ -1011,8 +1011,8 @@
           <div><dt>Buy-in</dt><dd>{formatBuyIn(cfg.min_buy_in, cfg.max_buy_in, currency)}</dd></div>
           <div><dt>Clock</dt><dd>{cfg.action_timeout_secs}s + {cfg.time_bank_secs}s</dd></div>
           <div><dt>Ante</dt><dd>{Number(cfg.ante) === 0 ? 'None' : formatAmount(cfg.ante, currency)}</dd></div>
-          <div><dt>Hands dealt</dt><dd>{view ? Number(view.hand_number) : '—'}</dd></div>
-          <div><dt>Last pot</dt><dd>{lastPot === null ? '—' : formatAmount(lastPot, currency)}</dd></div>
+          <div><dt>Hands dealt</dt><dd>{view ? Number(view.hand_number) : '·'}</dd></div>
+          <div><dt>Last pot</dt><dd>{lastPot === null ? '·' : formatAmount(lastPot, currency)}</dd></div>
         </dl>
 
         <p class="rake-line">
@@ -1069,7 +1069,7 @@
 
          It reads better here than it did above the list. Every claim it makes is
          demonstrated by the rows and the preview a visitor has already scrolled
-         past — three live tables, real seat maps, a live board and a deck
+         past, three live tables, real seat maps, a live board and a deck
          commitment, all of it readable while signed out. Nothing was cut to move
          it: this is the same section, word for word. -->
     <section class="intro">
@@ -1560,7 +1560,7 @@
   /* ------------------------------------------- the two in-pane status strips */
 
   /* BELOW the rows, full-bleed inside the pane. Above them it was 26 px of a
-     desktop viewport and 57 px of a phone's — the last thing between the visitor
+     desktop viewport and 57 px of a phone's, the last thing between the visitor
      and the list, and on a phone the single most expensive line on the screen.
      The statement is unchanged, the count is still above the list as a chip, and
      every affected row still flags its own money cell. */
@@ -1611,10 +1611,10 @@
   /* A flex column so the provenance footer sits at the BOTTOM of the pane.
      The pane stretches to the preview's height (align-items: stretch above), so
      without this a three-row lobby left ~600 px of unexplained void beside a
-     tall preview — the single worst thing about the previous layout. */
+     tall preview, the single worst thing about the previous layout. */
   /* `container-type: inline-size` is load-bearing, not decoration. Which columns
      fit is a question about the PANE's width, and the pane's width is the
-     viewport MINUS the preview (0, 320 or 352 px) minus the gaps — so a
+     viewport MINUS the preview (0, 320 or 352 px) minus the gaps, so a
      viewport-width media query answers the wrong question and got it wrong in
      four separate sub-ranges, every one of which clipped the row's action
      control (docs/DEFECTS.md L-01). Measured minimum pane widths for the table's
@@ -1631,7 +1631,7 @@
     container-type: inline-size;
   }
 
-  /* Hands goes first — it is the least load-bearing column and the one a
+  /* Hands goes first, it is the least load-bearing column and the one a
      rake-funded client would not have either. Buy-in goes second, and its range
      is still stated in the preview pane's facts list at every width. */
   @container (max-width: 878px) {
@@ -1704,7 +1704,7 @@
      Measured at 1440x900 on the rendered page: seven columns of nowrap content
      plus 16 px of padding a side gives the table a min-content width of
      934.5 px inside a 908 px pane, and `.list-pane { overflow: hidden }` then
-     CLIPPED the last column — every row's `Sit` / `View` / `Watch` control lost
+     CLIPPED the last column, every row's `Sit` / `View` / `Watch` control lost
      its right 10.5 px, arrow included (docs/DEFECTS.md L-01). 12 px takes 56 px
      out of the table's min-content and every column fits with room to spare. */
   .tables-list td { padding: 13px 12px; vertical-align: middle; }
@@ -1721,7 +1721,7 @@
 
   /* One line, always. A wrapped table name makes rows different heights and
      turns a scannable list into a ragged one; `table-layout: auto` widens the
-     column to honour the nowrap instead. The text itself is never altered —
+     column to honour the nowrap instead. The text itself is never altered,
      it is the lobby canister's registered name. */
   .name-line {
     display: flex;
@@ -2290,8 +2290,8 @@
   /* The preview drops below the list at 1080, not 1000. Between the two the
      pane measured 623–686 px against a 687 px five-column floor, so the table
      overflowed and `overflow: hidden` cut the Sit control off the right edge of
-     every row. There is no column left to drop at that point — Table, Stakes,
-     Seats, Now and the action are the row — so the preview is what gives way. */
+     every row. There is no column left to drop at that point, Table, Stakes,
+     Seats, Now and the action are the row, so the preview is what gives way. */
   @media (max-width: 1080px) {
     .board { grid-template-columns: minmax(0, 1fr); }
     .preview { position: static; }
@@ -2300,13 +2300,13 @@
   }
 
   /* Below this the grid stops being readable, so each row becomes a card.
-     The <table> element is kept — one <tr> per table, whatever the layout. */
+     The <table> element is kept, one <tr> per table, whatever the layout. */
   @media (max-width: 760px) {
     .lobby { padding: 2px 12px 24px; }
 
     /* The intro used to sit ABOVE the list, where the disclaimer banner and the
        app header had already spent 388 px of an 844 px phone, so it hid its own
-       supporting sentences to buy space it never got back — the first card still
+       supporting sentences to buy space it never got back, the first card still
        landed at 119% of the viewport. It sits below the list now, where nothing
        above the fold is competing with it, so every sentence it used to drop on
        a phone is back. */
@@ -2431,8 +2431,8 @@
     .now-detail { display: inline; margin-left: 8px; }
 
     /* Inline, not a line of their own. On a phone each of these two flags added
-       15–17 px to the tallest cards — the exact cards that decide whether a
-       second table is on screen — and both fit beside the figure they qualify:
+       15–17 px to the tallest cards, the exact cards that decide whether a
+       second table is on screen, and both fit beside the figure they qualify:
        "0.05/0.10 ICP ⚠ RECORD DIFFERS" measures 181 px in a 254 px column. */
     .drift-mark { display: inline; margin-top: 0; margin-left: 7px; }
     .seat-note { display: inline; margin-top: 0; margin-left: 6px; }

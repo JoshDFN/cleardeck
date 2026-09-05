@@ -188,16 +188,17 @@
       /* The hero plate: wide enough for a named hand at the floor on one row. */
       --pod-w-hero-r: 0.50;
       --pod-h-hero-r: 0.135;
-      /* 0.14 fw = 42 px on the nine-seat phone (was 0.13 = 39). This ring
-         has no room below the hero plate (its lower half reached the dock's
-         balance at ring-ky 1.0), so the seat stays where it is, and a tuck
-         is out too: an 8% tuck measured 20.9% of the card's ink covered (the
-         plate's shadow spills onto the card, tools/shots/lib/occlusion.mjs
-         allows 20%). So the pair stands clear with a hair of gap and grows
-         only as far as the band allows: its top edge lands at 0.244 fw above
-         the seat against the old 0.240. */
-      --card-hero-r: 0.14;
-      --hero-dy-r: 0;
+      /* 0.165 fw = 50 px on the nine-seat phone (was 0.14 = 42, 0.13 = 39
+         before that). The room comes from the hero SEAT moving down by
+         --hero-dy-r (0.03 fw = 9 px): ring-ky 0.955 left 12 px between the
+         plate's lower half and the dock's balance row, and the mobile
+         phase's third round spends 9 of them. A tuck is still out: an 8%
+         tuck measured 20.9% of the card's ink covered (the plate's shadow
+         spills onto the card, tools/shots/lib/occlusion.mjs allows 20%). So
+         the pair stands clear with a hair of gap; the felt and occlusion
+         gates and the dock's balance figure decide the number. */
+      --card-hero-r: 0.165;
+      --hero-dy-r: 0.03;
       --hero-tuck: 0;
       --hero-gap-r: 0.004;
       --cluster-dy-r: -0.180;

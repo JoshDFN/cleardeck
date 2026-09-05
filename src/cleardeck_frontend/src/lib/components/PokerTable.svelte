@@ -1216,6 +1216,15 @@
     return shortName(name, 11);
   }
 
+  /** The winner line's name for a seat: the plate's own (display_name, or
+   *  the generated one), null for an unknown seat, so PotModule falls back
+   *  to "Seat N". The hero is never asked: "You won" is its own branch. */
+  function winnerSeatName(seat) {
+    const player = players[Number(seat)];
+    if (!player?.principal) return null;
+    return getShortName(player, Number(seat));
+  }
+
   function winInfoFor(seat) {
     return lastWinners.find(w => Number(w.seat) === seat) || null;
   }
@@ -1489,6 +1498,7 @@
             {currencySymbol}
             {fmt}
             {seatLabel}
+            seatName={winnerSeatName}
             {handRankWords}
           />
           {#if gameInProgress || isShowdown || communityCards.length > 0}

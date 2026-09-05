@@ -836,11 +836,23 @@ function compare(truth, dom, opts) {
         } else {
             const mine = truth.mySeat === null ? undefined : truth.winners.find((w) => w.seat === truth.mySeat);
             const shown = mine ?? truth.winners[0];
+            // THE AMOUNT IS THE NUMBER AFTER "wins" / "won". The line names the
+            // seat's display name now ("Nakamoto wins 24.00 ICP"), so the first
+            // number on the line is no longer the seat; a name that itself
+            // carries a digit ("Player 2") would otherwise be read as money.
+            const afterVerb = /\b(?:wins|won)\s+(-?\d[\d.,]*\s*[KM]?)/i.exec(dom.winnerText);
             const nums = dom.winnerText.match(/-?\d[\d.,]*\s*[KM]?/g) || [];
-            // "Seat N wins X" leads with the seat number; "You won X" does not.
-            const amountText = mine ? nums[0] : nums[1];
-            if (!mine && nums.length >= 1 && Number(nums[0]) !== truth.winners[0].seat + 1) {
-                structural.push(`winner banner names seat ${nums[0]}, canister says seat ${truth.winners[0].seat + 1}`);
+            const amountText = afterVerb ? afterVerb[1] : (mine ? nums[0] : nums[1]);
+            // WHICH SEAT THE LINE MEANS: `data-seat` on the line (dom-scrape
+            // winnerSeat), the canister's 0-based index; on a build without it,
+            // the "Seat N" the old copy led with.
+            if (!mine) {
+                const said = dom.winnerSeat ?? (/^Seat\s+(\d+)/i.test(dom.winnerText) ? Number(/^Seat\s+(\d+)/i.exec(dom.winnerText)[1]) - 1 : null);
+                if (said === null) {
+                    structural.push(`winner banner "${dom.winnerText}" names no seat (no data-seat, no "Seat N")`);
+                } else if (said !== truth.winners[0].seat) {
+                    structural.push(`winner banner names seat ${said + 1}, canister says seat ${truth.winners[0].seat + 1}`);
+                }
             }
             figures.push(checkFigure('winner amount vs last_hand_winners', shown.amount, amountText, { currency }));
         }

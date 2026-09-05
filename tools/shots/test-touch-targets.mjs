@@ -118,4 +118,22 @@ check('a side-pot pill standing on a plate fails', () => {
   assert.match(v.notes, /1 pot pill\(s\) on a plate/);
 });
 
+check('a sticky row standing on a money figure in a dialog fails; one clear of every figure passes', () => {
+  const m = {
+    ...base(),
+    items: [item()],
+    dialogOpen: true,
+    scrollLocked: true,
+    stickyCover: [{
+      sticky: 'Cancel Deposit to Table', stickyBox: { x: 0, y: 776, w: 390, h: 68, right: 390, bottom: 844 },
+      figure: '0.0006 ICP', figureBox: { x: 24, y: 760, w: 90, h: 24, right: 114, bottom: 784 },
+    }],
+  };
+  const v = foldTouchTargets(m, { scene: 'deposit', viewport: 'mobile', expectDialogLock: true });
+  assert.equal(v.ok, false);
+  assert.match(v.problems[0], /sticky row "Cancel Deposit to Table".*stands on the money figure "0.0006 ICP"/);
+  assert.match(v.notes, /1 money figure\(s\) under a sticky row/);
+  assert.equal(foldTouchTargets({ ...m, stickyCover: [] }, { scene: 'deposit', viewport: 'mobile', expectDialogLock: true }).ok, true);
+});
+
 console.log(`\ntouch-targets fold: ${n} cases passed`);

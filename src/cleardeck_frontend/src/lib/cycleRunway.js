@@ -19,7 +19,7 @@
 // `.github/workflows/cycles-monitor.yml` and the register: six transcriptions of
 // one measurement, none of them checked against any other, and all six wrong the
 // same way. They priced an open browser tab as a 10-second heartbeat stream and
-// omitted the 500 ms `check_timeouts` poll — an UPDATE call — which was the
+// omitted the 500 ms `check_timeouts` poll, an UPDATE call, which was the
 // larger term by more than an order of magnitude (docs/DEFECTS.md E-92).
 //
 // The numbers now live in ONE place, written from measurement:
@@ -86,7 +86,7 @@ export const RUNWAY_STATES = Object.freeze({
   UNSUPPORTED: 'unsupported',
   /**
    * The canister did not answer at all. On the IC this is what a FROZEN canister
-   * looks like from outside — and a frozen canister is holding every player's
+   * looks like from outside, and a frozen canister is holding every player's
    * balance and honouring no withdrawal. Indistinguishable from a subnet fault,
    * which is why it is stated as "one of these two things" rather than guessed.
    */
@@ -139,7 +139,7 @@ const T = 1_000_000_000_000n;
  *
  * Discovered from the Candid rather than assumed, for the reason `solvency.js`
  * gives: a mainnet canister can be running an older module than the declarations
- * in this tree, and the honest report of that is UNSUPPORTED — a warning — not a
+ * in this tree, and the honest report of that is UNSUPPORTED, a warning, not a
  * crash and not silence.
  *
  * @param {object} factory idlFactory to inspect (injectable for tests)
@@ -353,7 +353,7 @@ export function adviceFor(state, context = 'table') {
         : 'This table needs topping up well before that runs out, and nothing in this '
           + 'application does it automatically.';
     case RUNWAY_STATES.UNKNOWN:
-      return 'It answered, but it has not measured its own burn rate yet — which is normal '
+      return 'It answered, but it has not measured its own burn rate yet, which is normal '
         + 'for the first few minutes after an upgrade. Unknown is not the same as fine.';
     case RUNWAY_STATES.UNSUPPORTED:
       return 'The running module is older than this page and has no cycle-status endpoint, so '

@@ -21,7 +21,7 @@
  *   docs/DEFECTS.md T-08  the headline POT is rendered as `pot + liveBets`, but
  *                         `state.pot` in the canister ALREADY includes every
  *                         live bet, so the pot is displayed at 2x during every
- *                         betting round — while the pot-odds strip on the same
+ *                         betting round, while the pot-odds strip on the same
  *                         screen renders the same field correctly.
  *   docs/DEFECTS.md T-09  `hole_cards` is a Candid `opt (Card, Card)`, i.e.
  *                         `[] | [[Card, Card]]`. Indexing it as if it were the
@@ -222,7 +222,7 @@ export function seatedPlayers(tableState) {
  * THE POT. The number the canister will pay out, in smallest units.
  *
  * `state.pot` is incremented the instant a player posts a blind, calls, bets,
- * raises or goes all in (src/table_canister/src/lib.rs — every one of those arms
+ * raises or goes all in (src/table_canister/src/lib.rs, every one of those arms
  * does `state.pot = state.pot.saturating_add(...)`), and `player.current_bet` is
  * set in the same arm. The live bets are therefore ALREADY INSIDE `pot`, and
  * `get_pot()` returns exactly this field.
@@ -334,7 +334,7 @@ export function getPhaseName(phase) {
  * The FORMAT half of the name ("9-Max") is true and worth keeping; the price
  * half must come from the config that will actually charge it. That is what
  * these two functions do, and they are the same computation the header pill
- * already performs — extracted here so the remaining two call sites are a
+ * already performs, extracted here so the remaining two call sites are a
  * one-line change:
  *
  *     <h3>{tableTitle(selectedTable.name, effectiveConfig(selectedTable))}</h3>

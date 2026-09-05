@@ -561,18 +561,30 @@
       <span class="spinner"></span>
     </button>
   {:else if !authState.isAuthenticated}
+    <!-- SIGNED OUT ON A PHONE: ONE BUTTON. On a desktop a local build shows
+         Dev Login beside Connect Wallet; on a phone the two wrapped the table
+         header to a second row (~96 px) and cost a spectator 44 px of felt. So
+         on the phone (the media block at the foot of this style) the dev
+         button reads "Connect", its menu opens on Internet Identity first and
+         the four dev players under it, and the wide Connect Wallet button is
+         hidden while the dev container exists. A mainnet build has no dev
+         container, so its one button is Connect Wallet, reading "Connect" on
+         the phone. The menu's II row is rendered on every build that has the
+         menu and painted only on the phone (`.phone-only`). -->
     <div class="login-buttons">
       {#if isLocalDev()}
         <div class="dev-login-container">
-          <button class="wallet-btn dev" onclick={() => showDevMenu = !showDevMenu} disabled={isLoading} aria-label="Developer login options">
+          <button class="wallet-btn dev" onclick={() => showDevMenu = !showDevMenu} disabled={isLoading} aria-label="Sign-in options">
             {#if isLoading}
               <span class="spinner"></span>
             {:else}
-              Dev Login
+              <span class="label-wide">Dev Login</span>
+              <span class="label-phone">Connect</span>
             {/if}
           </button>
           {#if showDevMenu}
             <div class="dev-menu">
+              <button class="phone-only ii-row" onclick={() => { showDevMenu = false; handleLogin(); }}>Internet Identity</button>
               <button onclick={() => handleDevLogin(1)}>Player 1</button>
               <button onclick={() => handleDevLogin(2)}>Player 2</button>
               <button onclick={() => handleDevLogin(3)}>Player 3</button>
@@ -590,7 +602,8 @@
             <path d="M2 10h20"/>
             <circle cx="17" cy="14" r="2"/>
           </svg>
-          Connect Wallet
+          <span class="label-wide">Connect Wallet</span>
+          <span class="label-phone">Connect</span>
         {/if}
       </button>
     </div>
@@ -946,6 +959,10 @@
   .dev-menu button:hover {
     background: rgba(245, 158, 11, 0.2);
   }
+
+  /* The phone's one-button sign-in (the markup comment above the login
+     buttons): the short label and the menu's II row exist only on the phone. */
+  .label-phone, .dev-menu .phone-only { display: none; }
 
   .wallet-btn.connected {
     background: rgba(0, 212, 170, 0.1);
@@ -1594,6 +1611,25 @@
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {
     .wallet-btn { min-height: var(--cd-touch-min); }
     .dev-menu button { min-height: var(--cd-touch-min); font-size: var(--cd-text-md); }
+
+    /* ONE sign-in button on the phone (see the markup comment). */
+    .label-wide { display: none; }
+    .label-phone { display: inline; }
+    .dev-menu .phone-only { display: block; }
+    .dev-menu .ii-row { color: var(--cd-accent); font-weight: var(--cd-weight-strong); }
+    .dev-login-container + .wallet-btn.connect { display: none; }
+    /* It reads "Connect", so it is painted as the sign-in button, not the
+       amber developer one. */
+    .wallet-btn.dev {
+      font-size: var(--cd-text-sm);
+      font-weight: var(--cd-weight-strong);
+      background: var(--cd-accent);
+      color: var(--cd-accent-ink);
+      padding: 0 var(--cd-space-4);
+    }
+    .wallet-btn.dev:hover:not(:disabled) { background: var(--cd-accent); }
+    /* The dev menu opens under the chip at the right edge, inside 390 px. */
+    .dev-menu { left: auto; right: 0; min-width: 11em; }
     .dropdown {
       position: fixed;
       top: auto;

@@ -39,10 +39,17 @@ lost when the handoffs are.
   and twice it, QuickAmounts.svelte) and the wallet balance. The Deposit
   button stays BELOW the custody, network, solvency and runway disclosures:
   docs/SECURITY-FINDINGS.md FINDING 23 / 35 / 42 put each of them before
-  every control that can move money, and a sticky row over them covered a
-  solvency figure (the occlusion gate). A "sticky only while the form block
-  is in view" row (a wrapper around the form and the actions) is the
-  money-flows phase's call, with the security placement rule in hand.
+  every control that can move money, and tools/shots/scenarios/deposit.mjs
+  measures it geometrically at rest (the solvency block's bottom edge above
+  the primary button), so a row pinned from the first screen fails that
+  scene (measured twice: the first sticky attempt, and the mobile phase's
+  third round). What ships: the row pins to the sheet's foot only once the
+  solvency block and the runway panel have scrolled above the line its top
+  would sit on (src/lib/pin-after.js, `shouldPin` tested; `.actions.pinned`
+  in DepositModal's phone block), and the minimum-deposit notice is two
+  figure-bearing sentences with a Why disclosure holding the rest verbatim.
+  The custody paragraph is the remaining height between the amount and the
+  button; a shorter custody paragraph is a security-copy call, not a UI one.
 - **Sound for an anonymous spectator on a phone table.** The phone's table
   header has no slot for the sound toggle; it rides the dock beside Log,
   which renders for everyone, signed in or not. If the dock ever drops for

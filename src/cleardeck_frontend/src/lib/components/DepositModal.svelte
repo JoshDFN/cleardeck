@@ -19,6 +19,7 @@
   import { isTrustedTableId, untrustedTableMessage } from '$lib/trustedTables.js';
   import { scrollLock } from '$lib/scroll-lock.js';
   import QuickAmounts from './QuickAmounts.svelte';
+  import { pinAfter } from '$lib/pin-after.js';
 
   const {
     tableActor, tableCanisterId, onClose, onDepositSuccess, currency = 'ICP',
@@ -926,7 +927,7 @@
 
   // ONE dismissal contract for every dialog in this app (docs/DEFECTS.md T-13).
   // The old handler sat on a `tabindex="-1"` backdrop that nothing ever focuses,
-  // so Escape could not close this modal — measured: Escape left the backdrop up
+  // so Escape could not close this modal, measured: Escape left the backdrop up
   // and a following click on any header button was swallowed by it.
   function onWindowKeydown(e) {
     if (e.key === 'Escape') onClose();
@@ -1334,26 +1335,41 @@
               <line x1="12" y1="8" x2="12.01" y2="8"/>
             </svg>
             <!-- Interpolated, never literal: docs/DEFECTS.md T-26 is what a
-                 literal here becomes, and ui_limits.rs fails if one comes back. -->
-            <span>
-              <strong>Minimum to this address: {minExternalDepositDisplay}</strong>
-              <span class="min-why">Sweeping pays the network fee out of what you send, so
-              anything less would arrive too small to withdraw again. Sending from a
-              connected wallet instead has a lower minimum of {minDepositDisplay}.</span>
-              <!-- WHAT HAPPENS IF YOU SEND LESS, SAID BEFORE YOU SEND IT.
-                   docs/SECURITY-FINDINGS.md FINDING 31 / FINDING 11. The line above
-                   states the minimum; this one states the consequence of missing it,
-                   which is the half a player can only act on beforehand. Both figures
-                   are interpolated -- a literal here is docs/DEFECTS.md T-26. -->
-              <span class="min-why">Send less and it is not swept and it is not lost: above
-              the {feeDisplay} network fee you can ask for it back to your own wallet at any
-              time, less that one fee. <strong>At or below {feeDisplay} nothing can move
-              it</strong>: a transfer costs more than the amount, so it cannot be swept,
-              refunded or withdrawn by anyone. Top the same address up to the minimum and
-              the whole balance comes out together.</span>
-              (network fee {feeDisplay}, charged twice by the ledger, so you need
-              {minWalletBalanceDisplay} in your wallet to deposit the minimum)
-            </span>
+                 literal here becomes, and ui_limits.rs fails if one comes back.
+                 THE FIGURES FIRST, THE REASONS ONE TAP AWAY (the mobile phase).
+                 The four figures a depositor acts on (the address minimum, the
+                 wallet-route minimum, the fee, the wallet balance the minimum
+                 needs) stay on screen in two sentences; the paragraph that
+                 explains sweeping and what happens under the fee is verbatim
+                 inside the Why disclosure. Measured before: 13 lines, ~280 px
+                 of a 390 px phone between the chips and the wallet toggle.
+                 tools/shots/lib/chain-agreement.mjs reads the whole notice's
+                 textContent, so every one of its six labelled claims still
+                 matches, four of them on the visible sentences. -->
+            <div class="min-copy">
+              <strong>Minimum to this address: {minExternalDepositDisplay}</strong>; from a
+              connected wallet the lower minimum of {minDepositDisplay} applies.
+              <strong>At or below {feeDisplay} nothing can move it</strong> (network fee
+              {feeDisplay}, charged twice by the ledger, so you need {minWalletBalanceDisplay}
+              in your wallet to deposit the minimum).
+              <details class="min-why-more">
+                <summary>Why</summary>
+                <span class="min-why">Sweeping pays the network fee out of what you send, so
+                anything less would arrive too small to withdraw again. Sending from a
+                connected wallet instead has a lower minimum of {minDepositDisplay}.</span>
+                <!-- WHAT HAPPENS IF YOU SEND LESS, SAID BEFORE YOU SEND IT.
+                     docs/SECURITY-FINDINGS.md FINDING 31 / FINDING 11. The line above
+                     states the minimum; this one states the consequence of missing it,
+                     which is the half a player can only act on beforehand. Both figures
+                     are interpolated: a literal here is docs/DEFECTS.md T-26. -->
+                <span class="min-why">Send less and it is not swept and it is not lost: above
+                the {feeDisplay} network fee you can ask for it back to your own wallet at any
+                time, less that one fee. <strong>At or below {feeDisplay} nothing can move
+                it</strong>: a transfer costs more than the amount, so it cannot be swept,
+                refunded or withdrawn by anyone. Top the same address up to the minimum and
+                the whole balance comes out together.</span>
+              </details>
+            </div>
           </div>
         </div>
 
@@ -1385,7 +1401,11 @@
           </div>
         {/if}
 
-        <div class="actions">
+        <!-- THE DEPOSIT ROW ON A PHONE pins to the sheet's foot only once the
+             solvency block and the runway panel have scrolled above it
+             (lib/pin-after.js; the phone block of this style). Before that it
+             is in flow under the disclosures it must follow. -->
+        <div class="actions" use:pinAfter={{ gates: ['.solvency', '.runway-notice'], scroller: '.modal-body' }}>
           <button class="btn-secondary" onclick={onClose} disabled={processing}>
             Cancel
           </button>
@@ -1677,7 +1697,7 @@
   }
 
   .modal-content.btc-modal {
-    border-color: rgba(247, 147, 26, 0.3);
+    border-color: var(--cd-btc-line);
   }
 
   .modal-header {
@@ -1762,7 +1782,7 @@
   }
 
   .deposit-method-toggle button.active {
-    background: rgba(247, 147, 26, 0.2);
+    background: var(--cd-btc-tint);
     color: #f7931a;
   }
 
@@ -1778,8 +1798,8 @@
   }
 
   .balance-section.btc {
-    background: linear-gradient(135deg, rgba(247, 147, 26, 0.1), rgba(180, 100, 20, 0.05));
-    border: 1px solid rgba(247, 147, 26, 0.2);
+    background: linear-gradient(135deg, var(--cd-btc-dim), rgba(180, 100, 20, 0.05));
+    border: 1px solid var(--cd-btc-tint);
   }
 
   .balance-row {
@@ -1820,7 +1840,7 @@
   }
 
   .mini-spinner.btc {
-    border-color: rgba(247, 147, 26, 0.3);
+    border-color: var(--cd-btc-line);
     border-top-color: #f7931a;
   }
 
@@ -1893,7 +1913,7 @@
   }
 
   .unit-toggle button.active {
-    background: rgba(247, 147, 26, 0.3);
+    background: var(--cd-btc-line);
     color: #f7931a;
   }
 
@@ -2001,8 +2021,8 @@
   }
 
   .max-btn.btc {
-    background: rgba(247, 147, 26, 0.1);
-    border-color: rgba(247, 147, 26, 0.3);
+    background: var(--cd-btc-dim);
+    border-color: var(--cd-btc-line);
     color: #f7931a;
   }
 
@@ -2011,7 +2031,7 @@
   }
 
   .max-btn.btc:hover:not(:disabled) {
-    background: rgba(247, 147, 26, 0.2);
+    background: var(--cd-btc-tint);
   }
 
   .max-btn:disabled {
@@ -2032,8 +2052,8 @@
   }
 
   .minimum-notice.btc {
-    background: rgba(247, 147, 26, 0.1);
-    border-color: rgba(247, 147, 26, 0.3);
+    background: var(--cd-btc-dim);
+    border-color: var(--cd-btc-line);
     color: #fbbf24;
   }
 
@@ -2049,6 +2069,32 @@
   .minimum-notice strong {
     color: #c7d2fe;
   }
+
+  .min-copy { min-width: 0; }
+
+  /* The Why disclosure: a real control (44 px on the phone, below), the
+     verbatim paragraph under it in the notice's own colour. */
+  .min-why-more { margin-top: var(--cd-space-1); }
+
+  .min-why-more summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--cd-control-md);
+    padding: 0 var(--cd-space-2);
+    margin-left: calc(-1 * var(--cd-space-2));
+    border-radius: var(--cd-radius-chip);
+    cursor: pointer;
+    font-weight: var(--cd-weight-strong);
+    color: #c7d2fe;
+    list-style: none;
+  }
+
+  .min-why-more summary::-webkit-details-marker { display: none; }
+  .min-why-more summary::after { content: ' \25BE'; }
+  .min-why-more[open] summary::after { content: ' \25B4'; }
+  .min-why-more summary:hover { background: var(--cd-surface-3); }
+  .min-why-more .min-why { display: block; margin-top: var(--cd-space-1); }
+  .minimum-notice.btc .min-why-more summary { color: #fcd34d; }
 
   .minimum-notice.btc strong {
     color: #fcd34d;
@@ -2122,7 +2168,7 @@
   }
 
   .btn-primary.btc:hover:not(:disabled) {
-    box-shadow: 0 4px 15px rgba(247, 147, 26, 0.3);
+    box-shadow: 0 4px 15px var(--cd-btc-line);
   }
 
   .btn-secondary {
@@ -2153,8 +2199,8 @@
   }
 
   .info-box.btc {
-    background: rgba(247, 147, 26, 0.05);
-    border-color: rgba(247, 147, 26, 0.1);
+    background: color-mix(in srgb, var(--cd-btc) 5%, transparent);
+    border-color: var(--cd-btc-dim);
   }
 
   .info-box svg {
@@ -2193,7 +2239,7 @@
     align-items: center;
     gap: 12px;
     padding: 20px;
-    background: rgba(247, 147, 26, 0.1);
+    background: var(--cd-btc-dim);
     border-radius: 12px;
     color: #f7931a;
     font-size: 14px;
@@ -2201,7 +2247,7 @@
 
   .btc-address-box {
     background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(247, 147, 26, 0.3);
+    border: 1px solid var(--cd-btc-line);
     border-radius: 12px;
     padding: 16px;
   }
@@ -2232,8 +2278,8 @@
     align-items: center;
     gap: 6px;
     padding: 10px 16px;
-    background: rgba(247, 147, 26, 0.15);
-    border: 1px solid rgba(247, 147, 26, 0.3);
+    background: color-mix(in srgb, var(--cd-btc) 15%, transparent);
+    border: 1px solid var(--cd-btc-line);
     color: #f7931a;
     border-radius: 8px;
     font-size: 13px;
@@ -2243,7 +2289,7 @@
   }
 
   .copy-btn:hover {
-    background: rgba(247, 147, 26, 0.25);
+    background: color-mix(in srgb, var(--cd-btc) 25%, transparent);
   }
 
   .btc-minimum-warning {
@@ -2302,7 +2348,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(247, 147, 26, 0.2);
+    background: var(--cd-btc-tint);
     color: #f7931a;
     border-radius: 50%;
     font-size: 12px;
@@ -2410,8 +2456,8 @@
   }
 
   .deposit-info-section.btc {
-    background: linear-gradient(135deg, rgba(247, 147, 26, 0.1) 0%, rgba(180, 100, 20, 0.05) 100%);
-    border: 1px solid rgba(247, 147, 26, 0.3);
+    background: linear-gradient(135deg, var(--cd-btc-dim) 0%, rgba(180, 100, 20, 0.05) 100%);
+    border: 1px solid var(--cd-btc-line);
   }
 
   .deposit-info-section h3 {
@@ -2465,7 +2511,7 @@
   }
 
   .spinner.btc {
-    border-color: rgba(247, 147, 26, 0.3);
+    border-color: var(--cd-btc-line);
     border-top-color: #f7931a;
   }
 
@@ -2538,8 +2584,8 @@
   }
 
   .oisy-connect-section.btc {
-    background: linear-gradient(135deg, rgba(247, 147, 26, 0.1), rgba(180, 100, 20, 0.05));
-    border-color: rgba(247, 147, 26, 0.2);
+    background: linear-gradient(135deg, var(--cd-btc-dim), rgba(180, 100, 20, 0.05));
+    border-color: var(--cd-btc-tint);
   }
 
   .oisy-icon {
@@ -2590,7 +2636,7 @@
   }
 
   .btn-connect-oisy.btc:hover:not(:disabled) {
-    box-shadow: 0 4px 15px rgba(247, 147, 26, 0.3);
+    box-shadow: 0 4px 15px var(--cd-btc-line);
   }
 
   .btn-connect-oisy:disabled {
@@ -2615,8 +2661,8 @@
   }
 
   .balance-section.oisy.btc {
-    background: linear-gradient(135deg, rgba(247, 147, 26, 0.1), rgba(180, 100, 20, 0.05));
-    border-color: rgba(247, 147, 26, 0.2);
+    background: linear-gradient(135deg, var(--cd-btc-dim), rgba(180, 100, 20, 0.05));
+    border-color: var(--cd-btc-tint);
   }
 
   .oisy-connected-header {
@@ -2690,8 +2736,8 @@
   }
 
   .no-balance-warning.oisy.btc {
-    background: rgba(247, 147, 26, 0.1);
-    border-color: rgba(247, 147, 26, 0.3);
+    background: var(--cd-btc-dim);
+    border-color: var(--cd-btc-line);
     color: #f7931a;
   }
 
@@ -2838,5 +2884,48 @@
     .wallet-source-toggle button { min-height: var(--cd-touch-min); }
 
     .unit-toggle button { min-height: var(--cd-control-md); min-width: var(--cd-touch-min); }
+
+    .min-why-more summary { min-height: var(--cd-touch-min); }
+
+    /* A money figure never splits at its unit: "0.0006 ICP" stays one token
+       and the fiat figure wraps under it; the label stands over the value
+       (the row's two halves no longer fight for 358 px). */
+    .balance-row {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--cd-space-1);
+    }
+    .balance-value { flex-wrap: wrap; row-gap: 0; }
+    .balance-crypto { white-space: nowrap; }
+
+    /* THE DEPOSIT ROW PINS TO THE FOOT OF THE SHEET, BUT ONLY AFTER THE
+       WARNINGS. It is the LAST flex item (order 10, after the disclosures it
+       must follow: docs/SECURITY-FINDINGS.md FINDING 23 / 35 / 42). A row
+       pinned from the first screen put the button on screen with the
+       solvency verdict off it, which tools/shots/scenarios/deposit.mjs
+       measures as the FINDING 35 failure it is (the first sticky attempt,
+       and this round's first run). So lib/pin-after.js adds `pinned` only
+       once the solvency block and the runway panel have their bottom edges
+       above the line the row's top would sit on; from then on the row rides
+       the foot under any alert or status line and never stands over a
+       figure it was meant to follow. Opaque (--cd-sheet, the alpha-1 ground
+       BetSizer's phone sheet paints over money) with a hairline; the body's
+       own bottom padding is cancelled so the pinned row sits flush.
+       tools/shots/touch-targets.mjs measures the row at rest and at the end
+       of the scroll (stickyCover: no money figure under a sticky element). */
+    .actions {
+      order: 10;
+      z-index: 2;
+      margin: 0 calc(-1 * var(--cd-space-4)) calc(-1 * (var(--cd-space-5) + var(--cd-safe-bottom)));
+      padding: var(--cd-space-2) var(--cd-space-4) calc(var(--cd-space-2) + var(--cd-safe-bottom));
+      background: var(--cd-sheet);
+      border-top: 1px solid var(--cd-line-soft);
+    }
+
+    /* `pinned` is set by the action, so :global keeps Svelte from pruning it. */
+    .actions:global(.pinned) {
+      position: sticky;
+      bottom: 0;
+    }
   }
 </style>

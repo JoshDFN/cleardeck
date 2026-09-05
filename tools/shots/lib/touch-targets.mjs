@@ -196,6 +196,34 @@ export function measureTouchTargets(page, opts = {}) {
       }
     }
 
+    // A STICKY ROW NEVER STANDS ON A MONEY FIGURE. The phone cashier pins its
+    // Deposit row to the sheet's foot (DepositModal.svelte's phone block), the
+    // one pinned control in the app; the round that first tried it measured
+    // the row over the solvency advice and dropped it. So: every painted
+    // element inside the dialog whose computed position is sticky, against
+    // every painted money surface in the dialog it does not itself contain.
+    // Measured at rest and again with the body scrolled to its end
+    // (touch-targets.mjs's "scrolled to end" state).
+    const MONEY_IN_DIALOG = [
+      '.solvency .figures dd', '.solvency .advice', '.balance-crypto', '.balance-value', '.usd-value',
+      '.minimum-notice', '.conversion-preview', '.cd-money', 'input[type="number"]',
+    ].join(', ');
+    const stickyCover = [];
+    if (dialog) {
+      const stickies = [...dialog.querySelectorAll('*')]
+        .filter((el) => painted(el) && getComputedStyle(el).position === 'sticky');
+      const figures = [...dialog.querySelectorAll(MONEY_IN_DIALOG)].filter(painted);
+      for (const st of stickies) {
+        const sb = box(st);
+        for (const fig of figures) {
+          if (st.contains(fig) || fig.contains(st)) continue;
+          const fb = box(fig);
+          if (!intersects(sb, fb)) continue;
+          stickyCover.push({ sticky: text(st), stickyBox: sb, figure: text(fig), figureBox: fb });
+        }
+      }
+    }
+
     return {
       viewport: { w: vw, h: vh },
       coarsePointer: window.matchMedia('(pointer: coarse)').matches,
@@ -207,6 +235,7 @@ export function measureTouchTargets(page, opts = {}) {
       items,
       type,
       collisions,
+      stickyCover,
     };
   }, { selector: INTERACTIVE_SELECTOR, touchMin, floors, scope });
 }
@@ -251,6 +280,9 @@ export function foldTouchTargets(m, where) {
   for (const c of m.collisions || []) {
     problems.push(`the side-pot pill "${c.pill}" (${c.pillBox.w}x${c.pillBox.h} at ${c.pillBox.x},${c.pillBox.y}) stands on the plate of "${c.plate}" (${c.plateBox.w}x${c.plateBox.h} at ${c.plateBox.x},${c.plateBox.y})`);
   }
+  for (const c of m.stickyCover || []) {
+    problems.push(`the sticky row "${c.sticky}" (${c.stickyBox.w}x${c.stickyBox.h} at ${c.stickyBox.x},${c.stickyBox.y}) stands on the money figure "${c.figure}" (${c.figureBox.w}x${c.figureBox.h} at ${c.figureBox.x},${c.figureBox.y})`);
+  }
   if (where.expectDialogLock && m.dialogOpen && !m.scrollLocked) {
     problems.push('a dialog is open and the page behind it is not scroll-locked (html.cd-scroll-lock missing)');
   }
@@ -267,6 +299,7 @@ export function foldTouchTargets(m, where) {
     + `; document ${m.documentScrollWidth}x${m.documentScrollHeight} in ${m.viewport.w}x${m.viewport.h}`
     + `; type floors ${(m.type || []).filter((t) => !t.ok).length ? 'BROKEN' : 'met'}`
     + ((m.collisions || []).length ? `; ${m.collisions.length} pot pill(s) on a plate` : '')
+    + ((m.stickyCover || []).length ? `; ${m.stickyCover.length} money figure(s) under a sticky row` : '')
     + (m.dialogOpen ? `; dialog open, scroll ${m.scrollLocked ? 'locked' : 'NOT locked'}` : '')
     + (m.rotatePromptVisible ? '; rotate prompt showing' : '');
   return { ok: problems.length === 0, measurement: m, problems, notes, scene: where.scene, viewport: where.viewport };
