@@ -84,7 +84,9 @@ lost when the handoffs are.
   the step green, both the owner's call: (a) move `BASELINE_COMMIT` to the
   commit that introduced `lib/notices.js` (a6ddd7a) so the diff starts from
   the single-sourced state (`CLEARDECK_BASELINE=a6ddd7a ./scripts/dev.sh
-  hygiene` shows the result today); (b) replace the line diff with a
+  hygiene` shows the result today: the only line it flags is a CSS COMMENT
+  about the E-52 toast that moved from +page.svelte into Toast.svelte in
+  round 3, not a notice); (b) replace the line diff with a
   phrase-level check that counts the five phrases in `lib/notices.js` and
   the surfaces that import it. The UI wave did not edit `scripts/dev.sh`.
 - **The cold-start panel with players seated elsewhere.** It shows only when
