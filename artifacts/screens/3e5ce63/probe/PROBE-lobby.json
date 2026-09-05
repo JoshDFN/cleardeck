@@ -1,0 +1,106 @@
+[
+  {
+    "viewport": "desktop",
+    "ok": true,
+    "problems": [],
+    "states": {
+      "toast": {
+        "file": "artifacts/screens/3e5ce63/probe/PROBE-lobby-toast-desktop.png",
+        "rect": {
+          "x": 440,
+          "y": 56,
+          "w": 560,
+          "h": 101,
+          "right": 1000,
+          "bottom": 157
+        },
+        "bannerRect": {
+          "x": 0,
+          "y": 0,
+          "w": 1440,
+          "h": 48,
+          "right": 1440,
+          "bottom": 48
+        },
+        "noticesOnScreen": "5/5"
+      },
+      "terms": {
+        "file": "artifacts/screens/3e5ce63/probe/PROBE-lobby-terms-desktop.png",
+        "noticesOnScreen": "5/5"
+      },
+      "scrolled": {
+        "file": "artifacts/screens/3e5ce63/probe/PROBE-lobby-scrolled-desktop.png",
+        "scrollY": 226,
+        "barRect": {
+          "x": 0,
+          "y": 0,
+          "w": 1440,
+          "h": 48,
+          "bottom": 48
+        },
+        "noticesOnScreen": "5/5"
+      },
+      "deepLink": {
+        "file": "artifacts/screens/3e5ce63/probe/PROBE-lobby-deeplink-desktop.png",
+        "search": "?table=4fbx2-kt777-77775-aaabq-cai",
+        "onTable": true,
+        "searchAfterBack": ""
+      },
+      "signedIn": {
+        "file": "artifacts/screens/3e5ce63/probe/PROBE-lobby-signed-in-desktop.png"
+      }
+    }
+  },
+  {
+    "viewport": "mobile",
+    "ok": true,
+    "problems": [],
+    "states": {
+      "toast": {
+        "file": "artifacts/screens/3e5ce63/probe/PROBE-lobby-toast-mobile.png",
+        "rect": {
+          "x": 8,
+          "y": 697,
+          "w": 374,
+          "h": 131,
+          "right": 382,
+          "bottom": 828
+        },
+        "bannerRect": {
+          "x": 0,
+          "y": 0,
+          "w": 390,
+          "h": 58,
+          "right": 390,
+          "bottom": 58
+        },
+        "noticesOnScreen": "5/5"
+      },
+      "terms": {
+        "file": "artifacts/screens/3e5ce63/probe/PROBE-lobby-terms-mobile.png",
+        "noticesOnScreen": "5/5"
+      },
+      "scrolled": {
+        "file": "artifacts/screens/3e5ce63/probe/PROBE-lobby-scrolled-mobile.png",
+        "scrollY": 808,
+        "barRect": {
+          "x": 0,
+          "y": 0,
+          "w": 390,
+          "h": 58,
+          "bottom": 58
+        },
+        "noticesOnScreen": "5/5"
+      },
+      "deepLink": {
+        "file": "artifacts/screens/3e5ce63/probe/PROBE-lobby-deeplink-mobile.png",
+        "search": "?table=4fbx2-kt777-77775-aaabq-cai",
+        "onTable": true,
+        "searchAfterBack": ""
+      },
+      "signedIn": {
+        "file": "artifacts/screens/3e5ce63/probe/PROBE-lobby-signed-in-mobile.png"
+      }
+    }
+  }
+]
