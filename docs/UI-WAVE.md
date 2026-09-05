@@ -129,8 +129,8 @@ HANDOFF; this is the durable summary.
   as glyphs, an avatar-only wallet chip; signed out, one Connect button); the
   dock's Log, Sound, Deposit, Withdraw are 44 px; empty seats carry a 44 px hit
   area; the toast's close is 44 px; `touch-action: manipulation` everywhere;
-  safe-area insets; a PWA manifest; `overscroll-behavior-y: none` on a live
-  hand.
+  safe-area insets; a PWA manifest (display `browser`, not `standalone`:
+  section 8); `overscroll-behavior-y: none` on a live hand.
 - The table page is ONE screen in portrait (100dvh, footer off the table
   view, its links in the Log drawer). The hero pair is 60 px with a 6 degree
   fan (50 px on the 9-max phone); an opponent's clock digits sit on the acting
@@ -576,3 +576,23 @@ Then, in order of what a player would feel first:
   dependency (`qrcode-generator`, the deposit address QR).
 
 Nothing under `src/*_canister`, `Cargo.*`, `icp.yaml` or `.icp/` changed.
+
+## 8. After the wave: the review's fixes
+
+The post-wave review (2026-09-05) found the items below; each is fixed on
+`feat/ui-ux-wave` in its own commit, with the test that pins it.
+
+- **The PWA is not a standalone app.** `app.html` and
+  `static/manifest.webmanifest` shipped `display: standalone` and
+  `apple-mobile-web-app-capable=yes`. Sign-in is a popup handshake: the
+  Internet Identity window (`lib/auth.js`, `authClient.login`) and the OISY
+  signer hand the delegation back through `window.opener` / `postMessage`,
+  and a page installed to the iOS home screen in standalone mode gets a
+  `window.open` with no opener and no message channel, so the popup can never
+  return the delegation and sign-in silently never completes. The manifest
+  says `display: "browser"` now (icons and theme colour unchanged) and the
+  Apple meta is gone: that meta alone puts an installed page into the same
+  opener-less shell whatever the manifest says. The reason is in a comment in
+  `app.html` beside the manifest link. A standalone install needs a
+  redirect-based sign-in flow first (the II `derivationOrigin` work in
+  section 6, item 3).

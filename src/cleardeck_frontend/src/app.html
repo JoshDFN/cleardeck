@@ -28,12 +28,17 @@
 	-->
 	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 	<meta name="theme-color" content="#0b0d12" />
-	<!-- Standalone mode on a phone home screen: no browser toolbar eating the
-	     action row, portrait locked where the platform honours it. -->
+	<!-- NOT A STANDALONE APP, ON PURPOSE. Sign-in is a popup handshake: the
+	     Internet Identity window (lib/auth.js authClient.login) and the OISY
+	     signer hand the delegation back through window.opener / postMessage.
+	     A page installed to the iOS home screen in standalone mode gets
+	     window.open with NO opener and no message channel, so the popup can
+	     never return the delegation and sign-in silently never completes.
+	     The manifest therefore says display "browser" (the icons and the
+	     theme colour stay), and apple-mobile-web-app-capable is NOT set:
+	     that meta alone puts an installed page into the same opener-less
+	     standalone shell regardless of the manifest. -->
 	<link rel="manifest" href="%sveltekit.assets%/manifest.webmanifest" />
-	<meta name="apple-mobile-web-app-capable" content="yes" />
-	<meta name="mobile-web-app-capable" content="yes" />
-	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 	<meta name="apple-mobile-web-app-title" content="ClearDeck" />
 	<title>ClearDeck - Provably Fair Poker</title>
 	%sveltekit.head%
