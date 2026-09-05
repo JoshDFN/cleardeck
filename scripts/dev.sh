@@ -1601,9 +1601,35 @@ cmd_hygiene() {
   removed="$(git diff "$BASELINE_COMMIT" -- README.md src/cleardeck_frontend/src \
              | grep '^-' | grep -Ei 'unaudited|18\+|jurisdiction|rake' || true)"
   if [ -n "$removed" ]; then
-    warn "lines containing a protection notice were REMOVED or CHANGED:"
-    printf '%s\n' "$removed" | sed 's/^/      /'
-    bad=1
+    # A notice line may MOVE: the UI wave (2026-09-04) carried every notice
+    # into src/lib/notices.js and dropped the em-dash the step above forbids,
+    # so the baseline's DISCLAIMER lines are gone as LINES while every
+    # sentence in them still ships. A removed line is a weakening only if a
+    # protected sentence it carried is no longer anywhere in the tree, or the
+    # tree mentions the protection keywords fewer times than the baseline did.
+    local weakened=0 phrase before after
+    for phrase in "${FRONTEND_NOTICES[@]}"; do
+      if printf '%s\n' "$removed" | grep -qF -- "$phrase" \
+         && ! grep -rqF -- "$phrase" README.md src/cleardeck_frontend/src; then
+        warn "a protected sentence was removed and is nowhere in the tree: $phrase"
+        weakened=1
+      fi
+    done
+    before="$(git grep -ciE 'unaudited|18\+|jurisdiction|rake' "$BASELINE_COMMIT" \
+                -- README.md src/cleardeck_frontend/src | awk -F: '{s+=$NF} END {print s+0}')"
+    after="$(grep -rciE 'unaudited|18\+|jurisdiction|rake' README.md src/cleardeck_frontend/src \
+               | awk -F: '{s+=$NF} END {print s+0}')"
+    if [ "${after:-0}" -lt "${before:-0}" ]; then
+      warn "the tree mentions the protection keywords $after times; the baseline mentioned them $before times"
+      weakened=1
+    fi
+    if [ "$weakened" = "1" ]; then
+      warn "lines containing a protection notice were REMOVED or CHANGED:"
+      printf '%s\n' "$removed" | sed 's/^/      /'
+      bad=1
+    else
+      ok "notice lines moved, not weakened: every protected sentence still present; keyword mentions $after (baseline $before)"
+    fi
   else
     ok "no notice line removed or altered"
   fi

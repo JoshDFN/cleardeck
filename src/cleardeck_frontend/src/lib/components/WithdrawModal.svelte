@@ -387,9 +387,14 @@
         onWithdrawSuccess?.();
       }
     } catch (e) {
-      fail(e);
+      // A throw, not an Err: abandon_stuck_hand is an update, so the pot may
+      // already have moved into the balance. Say so, and re-read custody
+      // before the button comes back, so the player never retries blind.
+      fail(e, { thrown: true });
+      await loadCustody().catch(() => {});
+    } finally {
+      recovering = false;
     }
-    recovering = false;
   }
 
   onMount(() => {
