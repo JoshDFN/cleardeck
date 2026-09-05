@@ -40,8 +40,9 @@
     canCheck = false,
     canRaise = false,
     callAmount = 0,
-    raiseLabel = 'Raise to', // or 'Bet'
+    raiseLabel = 'Raise to', // or 'Bet', or 'All in' at the stack cap
     raiseAmount = 0,
+    raiseFigure = null,      // the EXACT figure as text (bet-sizing.js formatExact); fmt(raiseAmount) when null
     raiseProblem = null,     // an illegal size, in words, or null
     fmt = (v) => String(v),
     clockFraction = 0,
@@ -64,6 +65,17 @@
   } = $props();
 
   const sent = $derived(sentText !== null);
+  // The figure on the primary raise button is the figure SENT: at the cap
+  // that is the exact stack, which the table's decimals may not show, so the
+  // parent hands the exact text and this file never rounds it.
+  const raiseAmountText = $derived(raiseFigure ?? fmt(raiseAmount));
+  // "All in" carries no hotkey letter of its own on this button (A A is the
+  // all-in key, R commits this figure), so nothing is underlined there.
+  const raiseWordFirst = $derived(raiseLabel === 'All in' ? '' : raiseLabel.charAt(0));
+  const raiseWordRest = $derived.by(() => {
+    const rest = raiseLabel === 'All in' ? raiseLabel : raiseLabel.slice(1);
+    return compact ? rest.replace(/ to$/, '') : rest;
+  });
   const live = $derived(isMyTurn && gameInProgress && !actionPending && !sent);
   const showPre = $derived(gameInProgress && !isMyTurn && !sent && preOptions.length > 0);
   const raiseDisabled = $derived(!canRaise || raiseProblem !== null);
@@ -149,7 +161,7 @@
       </button>
       {#if canRaise || sentKind === 'raise' || sentKind === 'bet'}
         <button type="button" class="action-btn raise" class:pressed={sentKind === 'raise' || sentKind === 'bet'} aria-pressed={sentKind === 'raise' || sentKind === 'bet'} disabled>
-          {#if sentKind === 'raise' || sentKind === 'bet'}{sentText}{:else}{raiseLabel} {fmt(raiseAmount)}{/if}
+          {#if sentKind === 'raise' || sentKind === 'bet'}{sentText}{:else}{raiseLabel} {raiseAmountText}{/if}
         </button>
       {/if}
       <button type="button" class="action-btn danger" class:pressed={sentKind === 'allin'} aria-pressed={sentKind === 'allin'} disabled>
@@ -207,10 +219,10 @@
             class:stacked={compact}
             disabled={raiseDisabled}
             onclick={onCommitRaise}
-            title="{raiseLabel} {fmt(raiseAmount)} (R)"
+            title="{raiseLabel} {raiseAmountText} (R)"
           >
-            <span class="raise-word"><u>{raiseLabel.charAt(0)}</u>{compact ? raiseLabel.slice(1).replace(/ to$/, '') : raiseLabel.slice(1)}</span>
-            <span class="raise-amt">{fmt(raiseAmount)}</span>
+            <span class="raise-word">{#if raiseWordFirst}<u>{raiseWordFirst}</u>{/if}{raiseWordRest}</span>
+            <span class="raise-amt">{raiseAmountText}</span>
           </button>
           {#if compact}
             <button

@@ -30,8 +30,8 @@
   import TimeBankPill from './TimeBankPill.svelte';
   import { generatedName, shortName } from '$lib/table-visuals.js';
   import {
-    clampRaise, displayQuantum, presetTarget, presetsForPhase, quantise, raiseCap, raiseFloor, raiseKind,
-    raiseProblem, stepByBlind
+    clampRaise, displayQuantum, formatExact, presetTarget, presetsForPhase, primaryRaiseLabel, quantise,
+    raiseCap, raiseFloor, raiseKind, raiseProblem, stepByBlind
   } from '$lib/bet-sizing.js';
   import { useTurnAlert } from '$lib/use-turn-alert.svelte.js';
   import { armPreAction, armedTag, availablePreActions, keepPreAction, resolvePreAction } from '$lib/pre-actions.js';
@@ -1098,10 +1098,18 @@
   const raiseIllegal = $derived(
     isMyTurn && gameInProgress ? raiseProblem(raiseAmount, sizing, fmt) : null
   );
-  const raiseLabel = $derived(raiseKind(currentBet) === 'bet' ? 'Bet' : 'Raise to');
+  // The words and the figure on the primary button (bet-sizing.js
+  // primaryRaiseLabel): "All in" with the EXACT stack at the cap, otherwise
+  // "Bet" / "Raise to" with the grid figure. The figure is the one sent.
+  const raisePrimary = $derived(primaryRaiseLabel(raiseAmount, sizing, { isBTC, decimals }));
+  const raiseLabel = $derived(raisePrimary.word);
+  const raiseFigure = $derived(raisePrimary.figure);
 
+  // A value at or past the cap IS the cap, unquantised (the exact stack);
+  // below it the display grid. Typing more than the stack means all in.
   function setRaise(value) {
-    raiseAmount = quantise(value, quantum);
+    const cap = raiseCap(sizing);
+    raiseAmount = Number(value) >= cap ? cap : quantise(value, quantum);
   }
 
   function applyPreset(id) {
@@ -1165,10 +1173,13 @@
 
   // The hero's plate tag: the armed choice while waiting, the sent action
   // while the echo is open.
+  // The echo's figure is the figure SENT, written exactly (an all-in raise
+  // to an off-grid stack keeps every digit; bet-sizing.js formatExact).
+  const fmtSent = (v) => formatExact(v, { isBTC, decimals });
   const heroPlateTag = $derived.by(() => {
     if (pendingAction) {
       const echo = echoFor(pendingAction);
-      const text = echo.amountShown !== null ? `${echo.tag} ${fmt(echo.amountShown)}` : echo.tag;
+      const text = echo.amountShown !== null ? `${echo.tag} ${fmtSent(echo.amountShown)}` : echo.tag;
       // `e8s` rides the tag as data-sent-e8s so the harness can assert the
       // painted figure against the value the echo recorded.
       return { text, tone: 'sent', e8s: echo.amountShown };
@@ -1176,7 +1187,7 @@
     if (preArmedTag) return { text: preArmedTag, tone: 'armed' };
     return null;
   });
-  const sentText = $derived(pendingAction ? sentLabel(pendingAction, fmt) : null);
+  const sentText = $derived(pendingAction ? sentLabel(pendingAction, fmtSent) : null);
 
   // ---------------------------------------------------------------------------
   // 7c. The your-turn alert ($lib/use-turn-alert.svelte.js)
@@ -1812,6 +1823,7 @@
           {callAmount}
           {raiseLabel}
           {raiseAmount}
+          {raiseFigure}
           raiseProblem={raiseIllegal}
           {fmt}
           {clockFraction}

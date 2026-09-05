@@ -28,6 +28,16 @@
  * of the SizingContext so the canister's own figures (the floor, the cap) are
  * never rounded: only proposals are.
  *
+ * THE CAP IS EXACT. The all-in figure is the whole stack (chips behind plus
+ * the bet already in front), and a stack is not on the display grid after an
+ * odd pot has been split: 123,456,789 e8s quantised down is 123,000,000, and
+ * a "raise to 1.23" from that stack leaves 456,789 e8s behind, which is a
+ * raise SHORT of all-in that the table then treats as a plain raise. So a
+ * proposal at or above the cap IS the cap, unquantised (`snapRaise`), the
+ * primary button reads "All in" with the exact figure (`formatExact`), and
+ * the figure sent equals the one shown. Only the fractions, the multiples
+ * and the blind steps are quantised.
+ *
  * tools/shots/lib/chain-agreement.mjs asserts the presets against these exact
  * formulas from the canister's own get_pot(); a change here needs the same
  * change there.
@@ -85,6 +95,25 @@ export function clampRaise(value, floor, cap) {
   return Math.min(Math.max(v, lo), hi);
 }
 
+/**
+ * A proposal onto the display grid and into the legal range, with ONE
+ * exception: at or above the cap the answer is the cap itself, never
+ * quantised, because the cap is the exact stack and anything under it is a
+ * raise short of all-in. Below the cap the value is rounded down to the grid
+ * and lifted to the floor if it fell under it.
+ */
+export function snapRaise(value, floor, cap, quantum = 1) {
+  const v = toInt(value);
+  const hi = toInt(cap);
+  if (v >= hi) return clampRaise(hi, floor, hi);
+  return clampRaise(quantise(v, quantum), floor, hi);
+}
+
+/** Whether a raise-to figure is the player's whole stack. */
+export function isAllInRaise(value, ctx) {
+  return toInt(value) >= raiseCap(ctx);
+}
+
 const MIN = Object.freeze({ id: 'min', label: 'Min', hint: 'The minimum raise' });
 const POT = Object.freeze({ id: 'pot', label: 'Pot', hint: 'Call, then raise by the pot' });
 const ALL_IN = Object.freeze({ id: 'allin', label: 'All in', hint: 'Everything' });
@@ -120,22 +149,22 @@ const MULTIPLES = Object.freeze({ x2_5: 2.5, x3: 3, x4: 4 });
 
 /**
  * The raise-to figure a preset proposes: quantised to the display unit (down),
- * then clamped to the legal range.
+ * then clamped to the legal range. All in is the exact cap, never quantised.
  * @param {string} id one of PREFLOP_PRESETS[].id or POSTFLOP_PRESETS[].id
  * @param {SizingContext} ctx
  */
 export function presetTarget(id, ctx) {
   const floor = raiseFloor(ctx);
   const cap = raiseCap(ctx);
+  if (id === 'allin') return clampRaise(cap, floor, cap);
   const bet = toInt(ctx.currentBet);
   const potAfterCall = toInt(ctx.pot) + toInt(ctx.callAmount);
   let target = floor;
   if (id === 'half') target = bet + potAfterCall / 2;
   else if (id === 'twoThirds') target = bet + (2 * potAfterCall) / 3;
   else if (id === 'pot') target = bet + potAfterCall;
-  else if (id === 'allin') target = cap;
   else if (MULTIPLES[id]) target = MULTIPLES[id] * Math.max(bet, toInt(ctx.bigBlind));
-  return clampRaise(quantise(Math.floor(target), ctx.quantum), floor, cap);
+  return snapRaise(Math.floor(target), floor, cap, ctx.quantum);
 }
 
 /** Every preset's target at once, keyed by id, for the row given (default post-flop). */
@@ -177,7 +206,7 @@ export function stepByBlind(value, bigBlind, direction, floor, cap, quantum = 1)
   const next = onGrid
     ? v + dir * bb
     : dir > 0 ? Math.ceil(v / bb) * bb : Math.floor(v / bb) * bb;
-  return clampRaise(quantise(next, quantum), floor, cap);
+  return snapRaise(next, floor, cap, quantum);
 }
 
 /** 'bet' when nothing is in front of the player, otherwise 'raise'. */
@@ -221,11 +250,60 @@ export function displayUnitLabel({ isBTC = false, decimals = 2 } = {}) {
   return formatAmountInput(displayQuantum({ isBTC, decimals }), { isBTC, decimals });
 }
 
-/** Format a smallest-unit amount for the amount field (no thousands separators). */
+/**
+ * How many decimals a smallest-unit ICP figure needs to be written EXACTLY:
+ * the display's own count when it is on the grid, more (up to eight) when it
+ * is not. An off-grid figure is only ever the stack cap; every proposal is on
+ * the grid.
+ */
+export function exactDecimals(value, decimals = 2) {
+  const n = Math.abs(toInt(value));
+  const floor = Math.max(0, Math.min(ICP_DECIMALS, Math.trunc(Number(decimals) || 0)));
+  let d = floor;
+  while (d < ICP_DECIMALS && n % 10 ** (ICP_DECIMALS - d) !== 0) d += 1;
+  return d;
+}
+
+/**
+ * Format a smallest-unit amount for the amount field (no thousands
+ * separators), with every digit the figure has: "1.23" on the grid,
+ * "1.23456789" for an off-grid cap, so the field never shows a rounded
+ * figure for a value that would be sent unrounded.
+ */
 export function formatAmountInput(value, { isBTC = false, decimals = 2 } = {}) {
   const n = toInt(value);
   if (isBTC) return String(n);
-  return (n / E8S_PER_ICP).toFixed(decimals);
+  return (n / E8S_PER_ICP).toFixed(exactDecimals(n, decimals));
+}
+
+/**
+ * A smallest-unit amount as the dock writes it (thousands separators, the
+ * table's decimals) but EXACT: an off-grid figure keeps every digit it has.
+ * This is the figure on the primary button, which is the figure sent.
+ */
+export function formatExact(value, { isBTC = false, decimals = 2 } = {}) {
+  const n = toInt(value);
+  if (isBTC) return n.toLocaleString('en-US');
+  const d = exactDecimals(n, decimals);
+  return (n / E8S_PER_ICP).toLocaleString('en-US', {
+    minimumFractionDigits: d,
+    maximumFractionDigits: d,
+  });
+}
+
+/**
+ * The primary button's words for the sizer's figure: "All in" at the cap,
+ * "Bet" with nothing in front, "Raise to" otherwise, and the exact figure.
+ * @param {number} value the raise-to figure in the smallest unit
+ * @param {SizingContext} ctx
+ * @param {{ isBTC?: boolean, decimals?: number }} [display]
+ * @returns {{ word: 'All in'|'Bet'|'Raise to', figure: string, text: string, allIn: boolean }}
+ */
+export function primaryRaiseLabel(value, ctx, display = {}) {
+  const allIn = isAllInRaise(value, ctx);
+  const word = allIn ? 'All in' : raiseKind(ctx.currentBet) === 'bet' ? 'Bet' : 'Raise to';
+  const figure = formatExact(value, display);
+  return { word, figure, text: `${word} ${figure}`, allIn };
 }
 
 /**

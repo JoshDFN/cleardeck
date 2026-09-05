@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
-  POSTFLOP_PRESETS, PREFLOP_PRESETS, PRESETS, clampRaise, displayQuantum, formatAmountInput,
-  parseAmountInput, presetAt, presetTarget, presetTargets, presetsForPhase, quantise, raiseCap,
-  raiseFloor, raiseKind, raiseProblem, sliderStep, stepByBlind, typedPrecisionDropped, displayUnitLabel,
+  POSTFLOP_PRESETS, PREFLOP_PRESETS, PRESETS, clampRaise, displayQuantum, exactDecimals, formatAmountInput,
+  formatExact, isAllInRaise, parseAmountInput, presetAt, presetTarget, presetTargets, presetsForPhase,
+  primaryRaiseLabel, quantise, raiseCap, raiseFloor, raiseKind, raiseProblem, sliderStep, snapRaise,
+  stepByBlind, typedPrecisionDropped, displayUnitLabel,
 } from './bet-sizing.js';
 
 // 0.05/0.10 blinds in e8s; the hero (BB, 0.10 in) faces a raise to 0.30 with 11.90 behind.
@@ -166,6 +167,84 @@ describe('clampRaise / stepByBlind / sliderStep', () => {
   });
 });
 
+describe('the all-in figure is the EXACT stack, never the display grid', () => {
+  // An off-grid stack: 1.23456789 ICP behind plus 0.10 in front.
+  const oddStack = { ...facing, myChips: 123_456_789, myCurrentBet: e8(0.10) };
+  const oddCap = 123_456_789 + e8(0.10);
+  // The same shape on a BTC table: sats are integral, the quantum is 1.
+  const satsStack = {
+    currentBet: 300, minRaise: 200, minBet: 100, myChips: 12_345, myCurrentBet: 100,
+    pot: 450, callAmount: 200, bigBlind: 100, quantum: 1,
+  };
+
+  it('the All in preset on an off-grid stack equals the stack in e8s', () => {
+    expect(raiseCap(oddStack)).toBe(oddCap);
+    expect(oddCap % CENT).not.toBe(0);
+    expect(presetTarget('allin', oddStack)).toBe(oddCap);
+    expect(presetTargets(oddStack).allin).toBe(oddCap);
+    // quantised down it would have been 456,789 e8s short of all in
+    expect(quantise(oddCap, CENT)).toBe(oddCap - 456_789);
+  });
+
+  it('the All in preset on a BTC table equals the stack in sats', () => {
+    expect(presetTarget('allin', satsStack)).toBe(12_445);
+    expect(presetTargets(satsStack, PRESETS).allin).toBe(12_445);
+  });
+
+  it('a pot preset that reaches the cap is the exact cap, not the grid under it', () => {
+    const tiny = { ...oddStack, pot: e8(50) };
+    expect(presetTarget('pot', tiny)).toBe(oddCap);
+    expect(presetTarget('x4', { ...tiny, currentBet: e8(40), minRaise: e8(1) })).toBe(oddCap);
+  });
+
+  it('snapRaise: at or past the cap the cap, under it the grid, never below the floor', () => {
+    const floor = raiseFloor(oddStack);
+    expect(snapRaise(oddCap, floor, oddCap, CENT)).toBe(oddCap);
+    expect(snapRaise(oddCap + 5, floor, oddCap, CENT)).toBe(oddCap);
+    expect(snapRaise(oddCap - 1, floor, oddCap, CENT)).toBe(quantise(oddCap - 1, CENT));
+    expect(snapRaise(1, floor, oddCap, CENT)).toBe(floor);
+    expect(isAllInRaise(oddCap, oddStack)).toBe(true);
+    expect(isAllInRaise(oddCap - 1, oddStack)).toBe(false);
+  });
+
+  it('stepping a blind past the cap lands on the exact cap', () => {
+    const floor = raiseFloor(oddStack);
+    // 1.3046 + a blind is 1.40, past the cap: the cap, not 1.30 under it
+    expect(stepByBlind(oddCap - e8(0.03), e8(0.10), +1, floor, oddCap, CENT)).toBe(oddCap);
+    expect(stepByBlind(oddCap, e8(0.10), +1, floor, oddCap, CENT)).toBe(oddCap);
+    // and stepping down from the cap is back on the grid
+    expect(stepByBlind(oddCap, e8(0.10), -1, floor, oddCap, CENT) % CENT).toBe(0);
+  });
+
+  it('the dock label reads "All in <exact figure>" and the figure equals the figure sent', () => {
+    const label = primaryRaiseLabel(oddCap, oddStack, { isBTC: false, decimals: 2 });
+    expect(label).toEqual({ word: 'All in', figure: '1.33456789', text: 'All in 1.33456789', allIn: true });
+    // what the button shows, parsed back, is what commitRaise sends
+    expect(Math.round(Number(label.figure.replace(/,/g, '')) * ICP)).toBe(clampRaise(oddCap, raiseFloor(oddStack), oddCap));
+    const sats = primaryRaiseLabel(12_445, satsStack, { isBTC: true, decimals: 0 });
+    expect(sats.text).toBe('All in 12,445');
+    expect(Number(sats.figure.replace(/,/g, ''))).toBe(raiseCap(satsStack));
+  });
+
+  it('below the cap the label is Raise to / Bet on the display grid', () => {
+    expect(primaryRaiseLabel(e8(0.62), facing, { decimals: 2 })).toEqual({ word: 'Raise to', figure: '0.62', text: 'Raise to 0.62', allIn: false });
+    expect(primaryRaiseLabel(e8(0.30), open, { decimals: 2 }).text).toBe('Bet 0.30');
+    expect(primaryRaiseLabel(e8(12), facing, { decimals: 2 }).text).toBe('All in 12.00');
+  });
+
+  it('formatExact / formatAmountInput keep every digit an off-grid figure has and no more', () => {
+    expect(exactDecimals(e8(1.23), 2)).toBe(2);
+    expect(exactDecimals(123_450_000, 2)).toBe(4);
+    expect(exactDecimals(123_456_789, 2)).toBe(8);
+    expect(formatExact(e8(1234.5), { decimals: 2 })).toBe('1,234.50');
+    expect(formatExact(123_456_789, { decimals: 2 })).toBe('1.23456789');
+    expect(formatExact(12_445, { isBTC: true })).toBe('12,445');
+    expect(formatAmountInput(123_456_789)).toBe('1.23456789');
+    expect(formatAmountInput(e8(1.23))).toBe('1.23');
+    expect(formatAmountInput(e8(0.5), { decimals: 4 })).toBe('0.5000');
+  });
+});
+
 describe('raiseKind / raiseProblem', () => {
   const fmt = (v) => (v / ICP).toFixed(2);
   it('is a bet with nothing in front and a raise otherwise', () => {
@@ -197,7 +276,9 @@ describe('amount field parse and format', () => {
   });
   it('formats with the table precision', () => {
     expect(formatAmountInput(e8(0.30), { decimals: 2 })).toBe('0.30');
-    expect(formatAmountInput(12_345, { decimals: 4 })).toBe('0.0001');
+    // an off-grid figure keeps its digits (the field never rounds what is sent)
+    expect(formatAmountInput(12_345, { decimals: 4 })).toBe('0.00012345');
+    expect(formatAmountInput(10_000, { decimals: 4 })).toBe('0.0001');
     expect(formatAmountInput(1500, { isBTC: true })).toBe('1500');
   });
 });
