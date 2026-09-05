@@ -44,46 +44,9 @@
     /* The table area anchors the sideways-phone panel (RotatePrompt). */
     .table-area { position: relative; }
 
-    /* THE TOAST NEVER COVERS NAVIGATION. On the table view it stands UNDER
-       the header (over the far seats, dismissable), not over Lobby / History
-       / Verify Fair; on every other view it is a bottom snackbar above the
-       home indicator. The protected notices are above both, which
-       tools/shots/lib/toast-notices.mjs measures on every scene. */
-    .toast {
-      top: calc(var(--notice-safe-top, 80px) + var(--header-h, 0px) + var(--cd-space-2));
-      max-width: calc(100vw - var(--cd-space-4));
-      padding: var(--cd-space-2) var(--cd-space-3);
-      gap: var(--cd-space-2);
-    }
-
-    /* Above the footer (95 / 96): a short page or one scrolled to its foot
-       puts the footer under the snackbar, and at the toast's own 90 the
-       footer painted over its Retry and Dismiss (measured by
-       tools/shots/probe-lobby.mjs, the click intercepted by the footer's
-       paragraph). Still under the trust bar (100). */
-    .app:not(.on-table) .toast {
-      top: auto;
-      bottom: calc(var(--cd-safe-bottom) + var(--cd-space-4));
-      z-index: 99;
-      animation-name: slideUp;
-    }
-
-    /* The toast's Retry at the touch floor. */
-    .toast .toast-action { min-height: var(--cd-touch-min); }
-
-    /* A TOAST OVER AN OPEN SHEET. The dialogs are z 200 and the toast 90,
-       so an error raised while a money sheet was open on a phone stood
-       BEHIND it (measured by tools/shots/touch-targets.mjs: the toast's
-       Dismiss covered by the sheet). While the page is scroll-locked behind
-       a dialog (lib/scroll-lock.js) the toast is a bottom snackbar ABOVE
-       the sheet: over its scrolled foot, never over the protected notices
-       restated at its head. */
-    :global(html.cd-scroll-lock) .toast {
-      top: auto;
-      bottom: calc(var(--cd-safe-bottom) + var(--cd-space-4));
-      z-index: calc(var(--cd-z-dialog) + 10);
-      animation-name: slideUp;
-    }
+    /* The toast's phone placement (under the table header, a bottom
+       snackbar elsewhere, above an open sheet) lives with the toast in
+       lib/components/Toast.svelte. */
 
     /* Dialog close controls at the touch floor. */
     .sidebar-header .close-btn,
@@ -102,7 +65,10 @@
     }
 
     /* The footer's text links (the lobby keeps the footer) at the touch
-       floor. The trust bar's own touch floor is in TrustBar.svelte. */
+       floor. The trust bar's own touch floor is in TrustBar.svelte. The
+       provenance line's Full terms is its OWN row here, not a 44 px box
+       inside the paragraph (that box opened the line spacing to ~2x). */
     .footer-link { min-height: var(--cd-touch-min); display: inline-flex; align-items: center; }
+    .footer-link.inline { display: flex; margin: 0; }
   }
 }

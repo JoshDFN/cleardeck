@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DETAIL_MAX_CHARS, LOBBY_RETRY_MS, describeLobbyFailure, detailOf, isTransportFailure,
-  rawMessageOf,
+  DETAIL_MAX_CHARS, LOBBY_RETRY_MAX_MS, LOBBY_RETRY_MS, describeLobbyFailure, detailOf,
+  isTransportFailure, rawMessageOf, retryDelayMs,
 } from './humane-errors.js';
 
 const AGENT_TEXT =
@@ -70,5 +70,29 @@ describe('describeLobbyFailure', () => {
   it('never contains an em-dash', () => {
     const d = describeLobbyFailure(new Error(AGENT_TEXT));
     expect(d.message).not.toMatch(/\u2014/);
+  });
+});
+
+describe('retryDelayMs', () => {
+  it('starts at the base interval and doubles per failed attempt', () => {
+    expect(retryDelayMs(0)).toBe(LOBBY_RETRY_MS);
+    expect(retryDelayMs(1)).toBe(LOBBY_RETRY_MS * 2);
+    expect(retryDelayMs(2)).toBe(LOBBY_RETRY_MS * 4);
+  });
+
+  it('never exceeds the cap', () => {
+    expect(retryDelayMs(3)).toBe(LOBBY_RETRY_MAX_MS);
+    expect(retryDelayMs(40)).toBe(LOBBY_RETRY_MAX_MS);
+  });
+
+  it('treats a bad attempt count as the first attempt', () => {
+    expect(retryDelayMs(-1)).toBe(LOBBY_RETRY_MS);
+    expect(retryDelayMs(NaN)).toBe(LOBBY_RETRY_MS);
+    expect(retryDelayMs(1.7)).toBe(LOBBY_RETRY_MS * 2);
+  });
+
+  it('feeds the sentence on screen', () => {
+    const { message } = describeLobbyFailure(new Error('Failed to fetch'), { retryMs: retryDelayMs(1) });
+    expect(message).toBe('Could not reach the tables. Retrying in 24 s.');
   });
 });

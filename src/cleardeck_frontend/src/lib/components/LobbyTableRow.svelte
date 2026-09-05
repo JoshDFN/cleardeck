@@ -161,7 +161,7 @@
     {#if empty && inviteLink}
       <!-- A pill at the touch floor beside Watch (the phone) or under it
            (desktop): the round-1 text link measured 29 px wide. -->
-      <button class="invite" type="button" onclick={copyInvite} title="Copy a link that opens this table">
+      <button class="invite" type="button" onclick={copyInvite} title="Copy a link that opens this table. The hand deals the moment your opponent sits.">
         {copied ? 'Link copied' : 'Invite'}
       </button>
     {/if}

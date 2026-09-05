@@ -393,7 +393,7 @@
     color: rgba(255, 255, 255, 0.9);
   }
 
-  .modal-notices :global(strong) { color: #fef08a; }
+  .modal-notices :global(strong) { color: var(--cd-notice-strong); }
   .notice-icon { font-size: 12px; }
 
   .modal-header h2 {

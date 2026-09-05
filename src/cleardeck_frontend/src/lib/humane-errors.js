@@ -8,8 +8,25 @@
 // sentence, and what happens next. The raw text is kept, demoted to a detail
 // line, so nothing is hidden from someone debugging.
 
-/** How long the page waits before it re-reads the lobby on its own. */
+/** How long the page waits before it re-reads the lobby on its own (the first time). */
 export const LOBBY_RETRY_MS = 12_000;
+
+/** The longest the page waits between automatic re-reads during an outage. */
+export const LOBBY_RETRY_MAX_MS = 60_000;
+
+/**
+ * The wait before automatic re-read number `attempt` (0 for the first): the
+ * base interval doubled each time and capped, so a long outage does not poll
+ * every 12 s for an hour, and the sentence on screen stays true.
+ *
+ * @param {number} attempt how many automatic re-reads have already failed
+ * @param {{ baseMs?: number, maxMs?: number }} [opts]
+ * @returns {number} milliseconds
+ */
+export function retryDelayMs(attempt, { baseMs = LOBBY_RETRY_MS, maxMs = LOBBY_RETRY_MAX_MS } = {}) {
+  const n = Number.isFinite(attempt) && attempt > 0 ? Math.floor(attempt) : 0;
+  return Math.min(baseMs * 2 ** n, maxMs);
+}
 
 /** The longest raw message a detail line carries; the console has the rest. */
 export const DETAIL_MAX_CHARS = 240;

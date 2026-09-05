@@ -227,6 +227,31 @@ const check = (name, condition, detail) => cases.push({ name, ok: Boolean(condit
 }
 
 let failed = 0;
+// ---------------------------------------------------------------------------
+// The failure toast: the retry countdown is excused ONLY inside its sentence,
+// the detail line's dotted URL digits are excused as raw agent text, and a
+// money figure in the same toast is excused by neither.
+// ---------------------------------------------------------------------------
+{
+    const sentence = 'Could not reach the tables. Retrying in 12 s. Failed to fetch HTTP request for url (http://127.0.0.1:8077/api/v2/status)';
+    const r = await assertEveryTokenAccountedFor(pageOf([
+        { token: '12', allowRuleIds: ['lobby-failure-retry'], elementText: sentence, path: 'div.toast.error > span' },
+        { token: '127.0.0.1', allowRuleIds: ['lobby-failure-retry', 'lobby-failure-detail'], elementText: 'Failed to fetch HTTP request for url (http://127.0.0.1:8077/api/v2/status)', path: 'div.toast.error > span > small.toast-detail' },
+        { token: '8077', allowRuleIds: ['lobby-failure-retry', 'lobby-failure-detail'], elementText: 'Failed to fetch HTTP request for url (http://127.0.0.1:8077/api/v2/status)', path: 'div.toast.error > span > small.toast-detail' },
+    ]), []);
+    check('the failure toast\'s countdown and detail digits are excused', r.ok && r.checks.allowlisted === 3, r.notes);
+
+    const r2 = await assertEveryTokenAccountedFor(pageOf([
+        { token: '12', allowRuleIds: ['lobby-failure-retry'], elementText: 'Seat 3 paid 12 s ago', path: 'div.toast.error > span' },
+    ]), []);
+    check('a number in another toast sentence is NOT excused by the retry rule', !r2.ok && r2.checks.unasserted === 1, r2.notes);
+
+    const r3 = await assertEveryTokenAccountedFor(pageOf([
+        { token: '0.30', allowRuleIds: ['lobby-failure-retry'], elementText: sentence, path: 'div.toast.error > span' },
+    ]), []);
+    check('a money figure in the failure sentence is NOT excused', !r3.ok && r3.checks.unasserted === 1, r3.notes);
+}
+
 for (const c of cases) {
     if (!c.ok) failed += 1;
     console.log(`${c.ok ? 'ok  ' : 'FAIL'} ${c.name}${c.ok ? '' : `\n       ${c.detail}`}`);

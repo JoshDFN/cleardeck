@@ -170,7 +170,7 @@
     align-items: center;
     gap: 6px 10px;
     flex: 0 1 auto;
-    padding: 6px 10px;
+    padding: calc(var(--cd-space-1) * 1.5) calc(var(--cd-space-2) + var(--cd-space-1) / 2);
     border-radius: var(--cd-radius-chip);
     background: var(--cd-surface-1);
     border: 1px solid var(--cd-line-soft);

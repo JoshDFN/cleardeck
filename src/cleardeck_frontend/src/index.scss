@@ -127,6 +127,7 @@
   --cd-warn: #f59e0b;                       /* the notice glyph, drift */
   --cd-warn-dim: rgba(245, 158, 11, 0.12);
   --cd-warn-line: rgba(245, 158, 11, 0.35);
+  --cd-notice-strong: #fef08a;              /* the lead phrase of a restated notice inside a dialog */
   --cd-btc: #f7931a;                        /* Bitcoin brand orange */
   --cd-btc-dim: rgba(247, 147, 26, 0.1);    /* a BTC chip or panel at rest */
   --cd-btc-tint: rgba(247, 147, 26, 0.2);   /* a BTC control hovered, a BTC spinner track */
@@ -232,6 +233,7 @@
   --cd-control-sm: 32px;
   --cd-control-md: 40px;
   --cd-touch-min: 44px;
+  --cd-toast-w: 560px;     /* the error toast's width budget (Toast.svelte) */
 
   /* Glyphs inside controls: a 44 px square carries an 18-20 px glyph, a
      44 px chip a 28 px avatar. */

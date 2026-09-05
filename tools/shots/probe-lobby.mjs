@@ -116,6 +116,50 @@ async function probeViewport(vp, ids, browser, outDir) {
     await settle(page);
     log(`  real toast: "${realToast.message}" + Retry, detail ${realToast.detail ? 'present' : 'MISSING'}, ${realToast.rect.w}x${realToast.rect.h} at y ${realToast.rect.y}, notices ${states.realToast.noticesOnScreen}, cleared by Retry: ${cleared}`);
 
+    // ---- 1c. a failed first read WITH an invite link ----------------------
+    // Round 2's defect: `?table=` ran after a FAILED first read, replaced the
+    // failure sentence with "That invite link points to a table this lobby
+    // does not list" while the previous failure's stack trace stayed under
+    // it, and the list flipped to "Nothing is wrong with your connection".
+    // Now the link waits for a successful read: the failure toast keeps its
+    // own sentence, detail and Retry, the list says the read failed, and the
+    // table opens once Retry succeeds.
+    const linkedTable = requireId(ids, 'table_2');
+    for (const route of API_ROUTES) await page.route(route, (r) => r.abort('failed'));
+    await page.goto(`${getAppOrigin()}/?table=${linkedTable}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await page.waitForSelector('.toast.error', { timeout: 20_000 });
+    await page.waitForTimeout(1500);
+    await settle(page);
+    const failedLink = await page.evaluate(() => {
+      const el = document.querySelector('.toast.error');
+      const text = (node) => (node ? node.textContent.replace(/\s+/g, ' ').trim() : null);
+      const empty = document.querySelector('.list-pane .empty');
+      return {
+        message: text(el?.querySelector('span')),
+        detail: text(el?.querySelector('.toast-detail')),
+        action: text(el?.querySelector('.toast-action')),
+        emptyKind: empty ? empty.getAttribute('data-kind') : null,
+        search: window.location.search,
+      };
+    });
+    states.failedLink = { file: await shoot(page, outDir, 'failed-link', vp), ...failedLink };
+    const humane = /^(?:Could not reach the tables|The table list could not be read)\. Retrying in \d+ s\./;
+    if (!humane.test(failedLink.message || '')) problems.push(`with ?table= and a dead transport the toast does not read the failure sentence (read "${failedLink.message}")`);
+    if (/invite link/i.test(failedLink.message || '')) problems.push('the invite-link message replaced the failure toast after a failed first read');
+    if (!failedLink.detail) problems.push('the failure toast under ?table= lost its detail line');
+    if (failedLink.action !== 'Retry') problems.push(`the failure toast under ?table= has no Retry (found "${failedLink.action}")`);
+    if (failedLink.emptyKind !== 'failed') problems.push(`the empty list under a failed read + ?table= reads kind "${failedLink.emptyKind}", not "failed"`);
+    if (!failedLink.search.includes(`table=${linkedTable}`)) problems.push(`the invite link was dropped from the URL before a read succeeded (${failedLink.search})`);
+    for (const route of API_ROUTES) await page.unroute(route);
+    await page.click('.toast.error .toast-action');
+    const openedAfterRetry = await page.waitForSelector('.felt', { timeout: 60_000 }).then(() => true).catch(() => false);
+    states.failedLink.openedAfterRetry = openedAfterRetry;
+    if (!openedAfterRetry) problems.push('the invite link did not open its table once Retry succeeded');
+    log(`  failed read + invite link: "${failedLink.message}", detail ${failedLink.detail ? 'present' : 'MISSING'}, list kind ${failedLink.emptyKind}, opened after Retry: ${openedAfterRetry}`);
+    await openApp(page);
+    await waitForLobbySettled(page);
+    await settle(page);
+
     // ---- 2. FULL TERMS ------------------------------------------------------
     await page.click('.banner-strip');
     await page.waitForSelector('.banner-content', { timeout: 10_000 });

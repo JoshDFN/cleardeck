@@ -27,6 +27,7 @@
   import LobbyPreview from './LobbyPreview.svelte';
   import LobbyColdStart from './LobbyColdStart.svelte';
   import LobbyEmpty from './LobbyEmpty.svelte';
+  import LobbySteps from './LobbySteps.svelte';
   import { shortId, stakeTier, tierDefinition } from '$lib/lobby-format.js';
   import {
     buildRow, canisterIdOf, configDrift, currencyOf, effectiveConfig, isDealing, nameQuote, opt,
@@ -384,14 +385,19 @@
         {/if}
 
         <footer class="list-foot">
-          <p class="foot-copy">
-            Every figure is read live from its table contract, re-read every {LIVE_POLL_MS / 1000} seconds;
-            the list comes from
-            <button class="linkish mono" onclick={() => copyText(lobbyCanisterId, 'lobby')}>{shortId(lobbyCanisterId)}</button>.
-            Average pot, players-per-flop and hands-per-hour are
-            <strong>not recorded on-chain</strong>, so they are absent rather than estimated.
+          <!-- Running text carries NO controls: a 44 px hit box inside a
+               paragraph opened the phone's line spacing to ~2x (round 2).
+               The one link stands on its own line after the paragraph. -->
+          <div class="foot-copy">
+            <p>
+              Every deal is verifiable from the hand history. Every figure is read live from its
+              table contract, re-read every {LIVE_POLL_MS / 1000} seconds; the list comes from
+              <code class="mono" title={lobbyCanisterId}>{shortId(lobbyCanisterId)}</code>.
+              Average pot, players-per-flop and hands-per-hour are
+              <strong>not recorded on-chain</strong>, so they are absent rather than estimated.
+            </p>
             <button class="link-btn" onclick={() => showHow = true}>How it works</button>
-          </p>
+          </div>
 
           <div class="pane-actions">
             <label class="sort-ctl">
@@ -411,6 +417,8 @@
             </button>
           </div>
         </footer>
+
+        <LobbySteps onHow={() => { showHow = true; }} />
       {/if}
     </div>
 
@@ -429,10 +437,8 @@
   </div>
 
   <!-- The no-rake sentence is the trust bar's (lib/notices.js), stated once
-       per screen; the hero's claims line carries the 0% figure. -->
-  <p class="foot">
-    Texas Hold'em No Limit. Every deal is verifiable from the hand history.
-  </p>
+       per screen; the hero's claims line carries the 0% figure; the game is
+       named in the steps strip and the list foot, not on an orphan line. -->
 </div>
 
 {#if showHow}
@@ -487,17 +493,6 @@
     text-underline-offset: 3px;
   }
 
-  .linkish {
-    background: none;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    color: var(--cd-ink-2);
-    text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-
-  .linkish:hover { color: var(--cd-accent); }
 
   /* ----------------------------------------------------------- the board */
 
@@ -665,7 +660,9 @@
     color: var(--cd-ink-2);
   }
 
-  .foot-copy { margin: 0; min-width: 0; }
+  .foot-copy { min-width: 0; }
+  .foot-copy p { margin: 0; }
+  .foot-copy .link-btn { display: inline-block; margin-top: var(--cd-space-1); }
   .list-foot strong { color: var(--cd-ink-1); font-weight: var(--cd-weight-strong); }
 
   /* The empty, failed, loading and filtered states are LobbyEmpty.svelte. */
@@ -677,16 +674,7 @@
     word-break: break-all;
   }
 
-  button.linkish.mono { display: inline; width: auto; padding: 0; border: none; background: none; }
-
-  /* ----------------------------------------------------------------- footer */
-
-  .foot {
-    margin: var(--cd-space-4) 0 0;
-    text-align: center;
-    font-size: var(--cd-text-sm);
-    color: var(--cd-ink-2);
-  }
+  code.mono { font-size: inherit; }
 
   /* ------------------------------------------------------------ responsive */
 
@@ -719,6 +707,7 @@
     .pill .phone { display: inline; }
     .btn, .btn.icon, .btn.ghost { min-height: var(--cd-touch-min); }
     .sort-ctl select { min-height: var(--cd-touch-min); }
-    .link-btn, .linkish { min-height: var(--cd-touch-min); display: inline-flex; align-items: center; }
+    /* The foot's link is a 44 px row of its own, never a box in the text. */
+    .foot-copy .link-btn { display: flex; align-items: center; min-height: var(--cd-touch-min); margin-top: 0; }
   }
 </style>

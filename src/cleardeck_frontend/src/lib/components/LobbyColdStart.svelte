@@ -23,8 +23,17 @@
   } = $props();
 </script>
 
-<div class="cold-start" role="note">
-  <p class="cold-title">Nobody is seated yet. <strong>Be the first.</strong></p>
+<div class="cold-start" class:copied role="note">
+  <!-- The invite loop, stated where the link was copied and nowhere else:
+       the confirmation replaces the title for the copied moment, so it costs
+       the row no height at rest (on the phone the title shows only then). -->
+  <p class="cold-title" aria-live="polite">
+    {#if copied}
+      Link copied. <strong>The hand deals the moment your opponent sits.</strong>
+    {:else}
+      Nobody is seated yet. <strong>Be the first.</strong>
+    {/if}
+  </p>
   <div class="cold-actions">
     {#if starter}
       <button class="btn primary" onclick={() => onOpen(starter)}>
@@ -94,8 +103,9 @@
   .btn.ghost:hover { background: var(--cd-surface-3); }
 
   @media (max-width: 760px) {
-    .cold-start { padding: var(--cd-space-1) var(--cd-space-2); }
+    .cold-start { padding: var(--cd-space-1) var(--cd-space-2); flex-wrap: wrap; }
     .cold-title { display: none; }
+    .cold-start.copied .cold-title { display: block; flex: 1 1 100%; padding: var(--cd-space-1) var(--cd-space-1) 0; font-size: var(--cd-text-xs); }
     .cold-actions { flex: 1 1 auto; }
     .wide { display: none; }
     .phone { display: inline; }

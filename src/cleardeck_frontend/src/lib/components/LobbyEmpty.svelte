@@ -24,13 +24,13 @@
 </script>
 
 {#if kind === 'failed'}
-  <div class="empty">
+  <div class="empty" data-kind="failed">
     <h3>The tables could not be read.</h3>
-    <p>The lobby canister did not answer. The page tries again on its own; Try again asks now.</p>
+    <p>The lobby canister did not answer. The page retries on its own while the message is up; Try again asks now.</p>
     <button class="cd-btn outline" onclick={onRetry}>Try again</button>
   </div>
 {:else if kind === 'none'}
-  <div class="empty">
+  <div class="empty" data-kind="none">
     <h3>The lobby canister is reporting no tables.</h3>
     <p>
       Nothing is wrong with your connection: the lobby simply has no table
@@ -53,7 +53,7 @@
     {/each}
   </div>
 {:else}
-  <div class="empty">
+  <div class="empty" data-kind="filtered">
     <h3>No table matches this filter.</h3>
     <p>{count} {count === 1 ? 'table is' : 'tables are'} open; none of them fits the filters above.</p>
     <button class="cd-btn outline" onclick={onClearFilters}>Clear filters</button>

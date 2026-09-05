@@ -72,16 +72,21 @@ lost when the handoffs are.
   "escrow = ledger, runway N days, wasm <hash>" per table for a visitor
   deciding whether the site is alive. Every figure it would render is money
   or a duration and needs a chain-agreement site before it ships.
-- **`scripts/dev.sh hygiene` "notices not weakened"** diffs whole lines
-  against ceacc37 and is red on every line the single-sourcing removed: the
-  five phrases now live in `lib/notices.js` and every surface (TrustBar,
-  HowItWorks, HandHistory, DepositModal, WithdrawModal, the Verify code
-  dialog) renders them from there, so the six hand-synced copies are gone
-  from the diff. The presence grep (`FRONTEND_NOTICES`) is green because it
-  recurses into `src/`; a phrase-level "not weakened" check (count the
-  phrases the rendered surfaces carry, not the lines) belongs to the
-  script's owner. The rendered-pixel gate (protected-notices.mjs) is 5/5 on
-  every scene.
+- **`scripts/dev.sh hygiene` "notices not weakened" (REQUEST TO THE
+  SCRIPT'S OWNER: re-baseline).** The step diffs whole lines against
+  `ceacc37` and has been red since phase 3 on every line the single-sourcing
+  removed: the five phrases now live in `lib/notices.js` and every surface
+  (TrustBar, HowItWorks, HandHistory, DepositModal, WithdrawModal, the Verify
+  code dialog) renders them from there, so the six hand-synced copies are
+  gone from the diff. The presence grep (`FRONTEND_NOTICES`) is green because
+  it recurses into `src/`; the rendered-pixel gate (protected-notices.mjs)
+  is 5/5 on every scene at both viewports with a toast up. Two ways to make
+  the step green, both the owner's call: (a) move `BASELINE_COMMIT` to the
+  commit that introduced `lib/notices.js` (a6ddd7a) so the diff starts from
+  the single-sourced state (`CLEARDECK_BASELINE=a6ddd7a ./scripts/dev.sh
+  hygiene` shows the result today); (b) replace the line diff with a
+  phrase-level check that counts the five phrases in `lib/notices.js` and
+  the surfaces that import it. The UI wave did not edit `scripts/dev.sh`.
 - **The cold-start panel with players seated elsewhere.** It shows only when
   every table is empty; a lobby with one table waiting for a second player
   says so on the row ("Waiting for one more") but has no headline nudge.
@@ -96,10 +101,24 @@ lost when the handoffs are.
   the lobby scene's chain agreement red (T-11), so there is no fixture. A
   probe that drifts one record, photographs, and re-syncs is the way to get
   a still without touching the gate.
-- **The lobby's automatic retry** (`LOBBY_RETRY_MS`, 12 s) re-reads the
-  lobby once per failure; it does not back off. A visitor on a dead
-  transport sees the sentence refresh every 12 s, which is the intent, but
-  a long outage could use a growing interval.
+- **The lobby's automatic retry** backs off now (`retryDelayMs`: 12, 24,
+  48 s, capped at 60 s, reset on a successful read) and Dismiss stops it;
+  the sentence on screen states the current interval. Left: a "reconnected"
+  confirmation when a retry succeeds (the toast simply goes).
+- **Out-of-lane items, with owners (phase 4, round 3 carry-forward).**
+  1. Own domain + `.well-known/ii-alternative-origins` + `derivationOrigin`
+     (the II popup names the raw canister origin): OWNER Josh (a domain is
+     the blocker); then auth.js + static/.well-known, one frontend PR.
+  2. The proof rail in the preview pane (escrow = ledger, cycle runway, wasm
+     hash per table): OWNER the money-flows lane; every figure needs a
+     CHAIN_SITES entry and an assertLobbyAgreement check first.
+  3. HowItWorks reordered as Money / Fair deal / If something goes wrong,
+     with a header entry point: OWNER the next lobby/explainer round; the
+     intro sentence and the `.intro-line` are in place.
+  4. A seated-and-waiting player shown BY NAME in the lobby ("Ada is waiting
+     for one more"): OWNER the lobby lane, needs the per-table
+     `get_table_view()` seat names on the row (they are read already; the
+     row shows a count) and a chain site for the name.
 
 ## Canister follow-ups (Rust lane, out of the wave's scope)
 

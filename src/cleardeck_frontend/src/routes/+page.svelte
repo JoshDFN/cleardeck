@@ -8,13 +8,14 @@
   import HandHistory from "$lib/components/HandHistory.svelte";
   import HowItWorks from "$lib/components/HowItWorks.svelte";
   import TrustBar from "$lib/components/TrustBar.svelte";
+  import Toast from "$lib/components/Toast.svelte";
   import { searchWithTable, tableIdFromSearch } from "$lib/invite-link.js";
   import DepositModal from "$lib/components/DepositModal.svelte";
   import WithdrawModal from "$lib/components/WithdrawModal.svelte";
   import { playSound, setSoundEnabled, isSoundEnabled } from "$lib/sounds.js";
   import logger from "$lib/logger.js";
   import { auth, isSignatureError, wallet } from "$lib/auth.js";
-  import { LOBBY_RETRY_MS, describeLobbyFailure } from "$lib/humane-errors.js";
+  import { describeLobbyFailure, retryDelayMs } from "$lib/humane-errors.js";
   import NoticeLine from "$lib/components/NoticeLine.svelte";
   // docs/DEFECTS.md T-02: the "Verify the Code" panel used to hardcode
   // `icp canister status qrhly-… -e ic` in both the visible <code> block and the
@@ -67,21 +68,44 @@
   let success = $state(null);
   /** The pending automatic re-read of the lobby after a failed one. */
   let lobbyRetryTimer = null;
+  /** How many automatic re-reads have failed in a row (the back-off's input). */
+  let lobbyRetryAttempt = 0;
 
+  /**
+   * THE ONE WAY A MESSAGE REACHES THE TOAST. The detail line and the action
+   * belong to the message that raised them; a bare `error = ...` elsewhere
+   * used to leave the previous failure's stack trace under an unrelated
+   * sentence. Every caller goes through here, so the other two fields are
+   * always the ones written for THIS message.
+   */
+  function showError(message, { detail = null, action = null } = {}) {
+    error = message;
+    errorDetail = detail;
+    errorAction = action;
+  }
+
+  /** Dismiss stops the automatic re-read too: the empty list's Try again remains. */
   function dismissError() {
     error = null;
     errorDetail = null;
     errorAction = null;
+    clearTimeout(lobbyRetryTimer);
+    lobbyRetryTimer = null;
   }
 
-  /** The lobby read failed: one sentence, the raw text demoted, a Retry, and a re-read on a timer. */
+  /** The lobby read failed: one sentence, the raw text demoted, a Retry, and a re-read on a growing timer. */
   function showLobbyFailure(e) {
-    const failure = describeLobbyFailure(e, { retryMs: LOBBY_RETRY_MS });
-    error = failure.message;
-    errorDetail = failure.detail;
-    errorAction = { label: 'Retry', message: failure.message, run: retryLoadTables };
+    const retryMs = retryDelayMs(lobbyRetryAttempt);
+    const failure = describeLobbyFailure(e, { retryMs });
+    showError(failure.message, {
+      detail: failure.detail,
+      action: { label: 'Retry', message: failure.message, run: retryLoadTables },
+    });
     clearTimeout(lobbyRetryTimer);
-    lobbyRetryTimer = setTimeout(retryLoadTables, LOBBY_RETRY_MS);
+    lobbyRetryTimer = setTimeout(() => {
+      lobbyRetryAttempt += 1;
+      retryLoadTables();
+    }, retryMs);
   }
 
   /** The spectator dock's one control: the same Internet Identity flow as the header. */
@@ -90,7 +114,7 @@
       await auth.login();
     } catch (e) {
       logger.error('sign-in from the table failed', e);
-      error = 'Could not open Internet Identity. Try the Sign in button in the header.';
+      showError('Could not open Internet Identity. Try the Sign in button in the header.');
     }
   }
 
@@ -98,7 +122,7 @@
     clearTimeout(lobbyRetryTimer);
     lobbyRetryTimer = null;
     if (view !== 'lobby') return;
-    loadTables();
+    loadTables().then((ok) => { if (ok) openTableFromUrl(); });
   }
   let showProofPanel = $state(false);
   let showHandHistory = $state(false);
@@ -361,12 +385,15 @@
   // Polling interval for table state
   let pollInterval = null;
 
+  /** Reads the lobby. Resolves true on a successful read, false on a failure (the toast says why). */
   async function loadTables() {
     loading = true;
+    let ok = false;
     try {
       let lobbyTables = await lobby.get_tables();
       // A read that succeeds after a failed one clears that failure's toast.
       if (errorAction && errorAction.message === error) dismissError();
+      lobbyRetryAttempt = 0;
 
       // For tables that have a canister_id, try to fetch their player counts
       for (let i = 0; i < lobbyTables.length; i++) {
@@ -402,11 +429,12 @@
         return Number(a.id) - Number(b.id);
       });
       tables = lobbyTables;
+      ok = true;
     } catch (e) {
       logger.error('Failed to load tables:', e);
       // Check if this is a signature verification error (expired II delegation)
       if (isSignatureError(e)) {
-        error = 'Session expired. Please log in again.';
+        showError('Session expired. Please log in again.');
         await auth.logout();
       } else {
         // Not the agent's paragraph: what happened and what happens next
@@ -415,12 +443,13 @@
       }
     }
     loading = false;
+    return ok;
   }
 
   async function joinTable(tableInfo) {
     // Check if the table has a canister assigned
     if (!tableInfo.canister_id || tableInfo.canister_id.length === 0) {
-      error = "This table doesn't have an assigned canister yet";
+      showError("This table doesn't have an assigned canister yet");
       return;
     }
 
@@ -454,6 +483,11 @@
 
   let deepLinkConsumed = false;
 
+  /**
+   * Runs after a SUCCESSFUL read only: a failed first read keeps its own
+   * toast (the sentence, the detail line, the Retry) and the list's failed
+   * state, and the link is honoured by the read that eventually succeeds.
+   */
   function openTableFromUrl() {
     if (deepLinkConsumed || view !== 'lobby') return;
     let wanted = null;
@@ -468,7 +502,7 @@
     if (match) {
       joinTable(match);
     } else {
-      error = 'That invite link points to a table this lobby does not list. Pick one below instead.';
+      showError('That invite link points to a table this lobby does not list. Pick one below instead.');
       rememberTableInUrl(null);
     }
   }
@@ -602,7 +636,7 @@
       logger.error('Failed to load table state:', e);
       // Check if this is a signature verification error (expired II delegation)
       if (isSignatureError(e)) {
-        error = 'Session expired. Please log in again.';
+        showError('Session expired. Please log in again.');
         stopPolling();
         await auth.logout();
       }
@@ -889,7 +923,7 @@
     untrack(() => {
       refreshAllBalances()
         .then(() => handleTableAction('join', seat.seat))
-        .catch((e) => { error = e?.message || 'Could not take the seat after sign-in.'; });
+        .catch((e) => { showError(e?.message || 'Could not take the seat after sign-in.'); });
     });
   });
 
@@ -918,7 +952,7 @@
               await auth.login();
             } catch (e) {
               resumeSeat = null;
-              error = e?.message || 'Sign-in did not complete.';
+              showError(e?.message || 'Sign-in did not complete.');
             }
             break;
           }
@@ -929,7 +963,7 @@
           }
           result = await tableActor.join_table(data);
           if ('Err' in result) {
-            error = result.Err;
+            showError(result.Err);
           } else {
             success = `Joined seat ${data + 1}!`;
             await refreshAllBalances();
@@ -955,7 +989,7 @@
           } else if ('Err' in result) {
             // Don't show "need 2 players" as error - it's informational
             if (!result.Err.includes('2 active players')) {
-              error = result.Err;
+              showError(result.Err);
               playSound('error');
             }
             // The UI already shows "Need 2+ players to start" hint
@@ -965,7 +999,7 @@
         case 'useTimeBank':
           result = await tableActor.use_time_bank();
           if ('Err' in result) {
-            error = result.Err;
+            showError(result.Err);
           } else {
             success = 'Using time bank';
           }
@@ -974,7 +1008,7 @@
         case 'sitOut':
           result = await tableActor.sit_out();
           if ('Err' in result) {
-            error = result.Err;
+            showError(result.Err);
           } else {
             success = 'Sitting out next hand';
           }
@@ -983,7 +1017,7 @@
         case 'sitIn':
           result = await tableActor.sit_in();
           if ('Err' in result) {
-            error = result.Err;
+            showError(result.Err);
           } else {
             success = 'Back in the game';
           }
@@ -992,7 +1026,7 @@
         case 'leave':
           result = await tableActor.leave_table();
           if ('Err' in result) {
-            error = result.Err;
+            showError(result.Err);
           } else {
             const returnedSmallest = Number(result.Ok);
             const tableCurrency = getTableCurrency(currentTableInfo);
@@ -1020,7 +1054,7 @@
       pendingAction = null;
       // Check if this is a signature verification error (expired II delegation)
       if (isSignatureError(e)) {
-        error = 'Session expired. Please log in again.';
+        showError('Session expired. Please log in again.');
         stopPolling();
         await auth.logout();
       } else if (PLAYER_ACTION_VARIANTS[action]) {
@@ -1028,7 +1062,7 @@
         showActionError(e, { refusal: false });
         playSound('error');
       } else {
-        error = e.message || 'Action failed';
+        showError(e.message || 'Action failed');
       }
     } finally {
       actionPending = false;
@@ -1051,7 +1085,7 @@
 
   // Load tables on mount and ensure cleanup on unmount
   $effect(() => {
-    loadTables().then(openTableFromUrl);
+    loadTables().then((ok) => { if (ok) openTableFromUrl(); });
     // Cleanup function ensures all intervals are cleared on component unmount
     return () => {
       stopPolling();
@@ -1094,7 +1128,8 @@
     (TrustBar.svelte): every protected phrase verbatim, FULL TERMS opening the
     complete text. It is measured here (`--notice-safe-top`, which anchors the
     toast below it) and it is the element whose scope class the screenshot
-    harness reads to style the toast it injects, so it stays in this file.
+    harness reads for the toast it injects (Toast.svelte's rules are global,
+    so that node and the real toast are painted alike), so it stays here.
 
     The words are protected by `make hygiene` (source) and by
     tools/shots/lib/protected-notices.mjs (rendered pixels, hit-tested on every
@@ -1191,33 +1226,8 @@
     </div>
   </header>
 
-  {#if error}
-    <div class="toast error">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="10"/>
-        <line x1="15" y1="9" x2="9" y2="15"/>
-        <line x1="9" y1="9" x2="15" y2="15"/>
-      </svg>
-      <span>
-        {error}
-        {#if errorDetail}<small class="toast-detail">{errorDetail}</small>{/if}
-      </span>
-      {#if errorAction && errorAction.message === error}
-        <button class="toast-action" type="button" onclick={errorAction.run}>{errorAction.label}</button>
-      {/if}
-      <button class="toast-close" onclick={dismissError} aria-label="Dismiss">×</button>
-    </div>
-  {/if}
-
-  {#if success}
-    <div class="toast success">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="10"/>
-        <path d="M9 12l2 2 4-4"/>
-      </svg>
-      <span>{success}</span>
-    </div>
-  {/if}
+  <Toast kind="error" message={error} detail={errorDetail} action={errorAction && errorAction.message === error ? errorAction : null} onDismiss={dismissError} />
+  <Toast kind="success" message={success} />
 
   <!--
     docs/DEFECTS.md H-09. The "Loading tables..." block used to be a SIBLING of
@@ -1783,182 +1793,10 @@
     color: var(--cd-ink-2);
   }
 
-  /* --------------------------------------------------------------------------
-     TOAST NOTIFICATIONS -- AND WHY THEY CANNOT COVER A PROTECTED NOTICE
-     --------------------------------------------------------------------------
-     docs/DEFECTS.md E-52. This block used to read `top: 80px; z-index: 100` with
-     no width or height bound at all. Measured on the rendered page at 390x844,
-     that produced a panel `rect=[-117, 80, 624, 534]`: 624 px wide on a 390 px
-     screen, so it overflowed BOTH edges and left no clear column, 534 px tall,
-     and painted over `.alpha-warning-banner` -- the no-rake property covered at
-     9 of 9 sample points, the other four protected phrases at 3 of 9. HARD RULE
-     2 is that all four notices are ON SCREEN AND LEGIBLE at any viewport on any
-     view, so that was a hard-rule violation reachable from the app's own error
-     path, not a cosmetic overlap.
-
-     THREE INDEPENDENT LOCKS, because one is a thing that can be edited away:
-
-       1. POSITION. The toast starts below the notice banner, at
-          `--notice-safe-top` (its measured height, published by `.app`). The
-          banner is the first element in the flow, so at scroll offset s it
-          occupies viewport rows [-s, H-s] while the toast starts at H+12.
-          H + 12 > H - s for every s >= 0, so they cannot overlap at any scroll
-          position, and scrolling only widens the gap.
-       2. PAINT ORDER. z-index 90 puts the toast BENEATH the banner (100) and
-          beneath `footer` (95), the two carriers of the protected phrases, so
-          even a wrong measurement cannot win the `elementFromPoint` hit test
-          that tools/shots/lib/protected-notices.mjs runs on each phrase's own
-          pixels. It is still above `header` (50) and the page content.
-       3. SIZE. Clamped to the viewport horizontally and to 40vh (320 px max)
-          vertically, so a long error message cannot grow into a full-screen
-          sheet the way the 534 px one did. Overflowing text scrolls INSIDE the
-          toast.
-
-     GATED IN TWO PLACES, and it is worth knowing which does what.
-     `tools/shots/lib/toast-notices.mjs` runs from run.mjs for EVERY scene at
-     EVERY viewport: it raises a toast and re-runs the protected-notice probe
-     with it up, asserting all three locks separately so they cannot collapse
-     into one. The `toast-notices` SCENARIO raises a real toast through the app's
-     own error path and compares it against that injected one property by
-     property, which is what makes the central gate's node the same node a player
-     sees rather than a lookalike.
-     -------------------------------------------------------------------------- */
-  .toast {
-    position: fixed;
-    top: calc(var(--notice-safe-top, 80px) + 12px);
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 90;
-    display: flex;
-    align-items: center;
-    gap: var(--cd-space-3);
-    padding: var(--cd-space-3) var(--cd-space-4);
-    border-radius: var(--cd-radius-card);
-    animation: slideDown var(--cd-base) var(--cd-ease);
-    box-sizing: border-box;
-    width: max-content;
-    max-width: min(560px, calc(100vw - 24px));
-    max-height: min(40vh, 320px);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    font-size: var(--cd-text-sm);
-    line-height: 1.45;
-  }
-
-  /* A long message wraps and, if it still does not fit, scrolls inside the
-     toast. Before this it simply made the box wider than the screen. */
-  .toast span {
-    min-width: 0;
-    overflow-wrap: anywhere;
-    color: var(--cd-ink-1);
-  }
-
-  /* The glyph sits in a tinted disc; the panel is opaque (4.5:1 over
-     anything) and the colour of the disc is the only thing that says which
-     kind of message this is. Under the trust bar at every viewport: `top`
-     reads the bar's measured height. */
-  .toast svg {
-    flex: 0 0 auto;
-    width: var(--cd-icon-md);
-    height: var(--cd-icon-md);
-    padding: 6px;
-    box-sizing: content-box;
-    border-radius: 50%;
-  }
-
-  /* The error toast is a panel at its full width budget, whatever its
-     message: it carries a Retry and a detail line, and the harness compares
-     the box of the toast it injects with the one the app raises
-     (toast-notices scene), which a content-sized box would fail on x. */
-  .toast.error {
-    width: min(560px, calc(100vw - 24px));
-    background: var(--cd-sheet);
-    border: 1px solid var(--cd-line-strong);
-    color: var(--cd-ink);
-    box-shadow: var(--cd-shadow-lift);
-  }
-
-  .toast span { flex: 1 1 auto; }
-
-  /* The raw text behind the sentence: three lines at most, then the console. */
-  .toast-detail {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    overflow: hidden;
-    margin-top: var(--cd-space-1);
-    font-family: var(--cd-font-mono);
-    font-size: var(--cd-text-xs);
-    line-height: 1.4;
-    color: var(--cd-ink-2);
-    overflow-wrap: anywhere;
-  }
-
-  .toast .toast-action {
-    flex: 0 0 auto;
-    min-height: var(--cd-control-sm);
-    padding: 0 var(--cd-space-3);
-    border-radius: var(--cd-radius-chip);
-    border: 1px solid var(--cd-line-strong);
-    background: var(--cd-surface-2);
-    color: var(--cd-ink);
-    font: inherit;
-    font-size: var(--cd-text-sm);
-    font-weight: var(--cd-weight-strong);
-    cursor: pointer;
-  }
-
-  .toast .toast-action:hover { background: var(--cd-surface-3); }
-
-  .toast.error svg {
-    background: var(--cd-danger-dim);
-    color: var(--cd-danger-hi);
-  }
-
-  .toast.success {
-    background: var(--cd-sheet);
-    border: 1px solid var(--cd-accent-line);
-    color: var(--cd-ink);
-    box-shadow: var(--cd-shadow-lift);
-  }
-
-  .toast.success svg {
-    background: var(--cd-accent-dim);
-    color: var(--cd-accent);
-  }
-
-  /* A 44 px dismiss target (the audit measured ~20x24). The negative margins
-     keep the toast's box the size it was; only the hit area grew. */
-  .toast .toast-close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: 0 0 auto;
-    min-width: var(--cd-touch-min);
-    min-height: var(--cd-touch-min);
-    margin: calc(-1 * var(--cd-space-2)) calc(-1 * var(--cd-space-3)) calc(-1 * var(--cd-space-2)) 0;
-    background: none;
-    border: none;
-    border-radius: 50%;
-    color: var(--cd-ink-2);
-    font-size: 20px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0;
-  }
-
-  .toast .toast-close:hover,
-  .toast .toast-close:focus-visible {
-    color: var(--cd-ink);
-    background: var(--cd-surface-3);
-    outline: none;
-  }
-
-  @keyframes slideDown {
-    from { transform: translateX(-50%) translateY(-20px); opacity: 0; }
-    to { transform: translateX(-50%) translateY(0); opacity: 1; }
-  }
+  /* The toast (Toast.svelte) is not styled here: its rules are global by
+     design so the harness's injected node and the real toast are painted by
+     the same declarations. Its place under the trust bar reads
+     `--notice-safe-top`, published by `.app` above. */
 
   /* Main content */
   main {
@@ -2297,10 +2135,15 @@
       padding: 10px 16px;
     }
 
+    /* How It Works and Verify Code on ONE row; the divider between them
+       was a line of its own on the phone. */
     .footer-center {
-      flex-direction: column;
-      gap: 8px;
+      flex-direction: row;
+      justify-content: center;
+      gap: var(--cd-space-5);
     }
+
+    .footer-center .footer-divider { display: none; }
   }
 
   @media (max-width: 480px) {
@@ -2442,7 +2285,7 @@
     color: rgba(255, 255, 255, 0.9);
   }
 
-  .verify-modal .modal-notices :global(strong) { color: #fef08a; }
+  .verify-modal .modal-notices :global(strong) { color: var(--cd-notice-strong); }
   .verify-modal .notice-icon { font-size: 12px; }
 
   .verify-modal h2 {
@@ -2788,9 +2631,4 @@
      view, the toast's place and the shell's touch floors. A mixin, included
      LAST on purpose (see app-phone.scss). */
   @include app-phone.rules;
-
-  @keyframes slideUp {
-    from { transform: translateX(-50%) translateY(20px); opacity: 0; }
-    to { transform: translateX(-50%) translateY(0); opacity: 1; }
-  }
 </style>

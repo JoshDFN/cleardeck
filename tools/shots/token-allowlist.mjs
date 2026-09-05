@@ -201,10 +201,36 @@ export const ALLOWLIST = [
     },
     {
         id: 'static-explainer-copy',
-        selector: '.how-it-works, .how-it-works-modal, .explainer, .steps, .step, .hiw-body',
+        selector: '.how-it-works, .how-it-works-modal, .explainer, .steps, .step, .hiw-body, '
+            + '.lobby-steps',
         tokens: '^\\d{1,4}$',
-        why: 'numbered steps and worked examples in the static "How it works" copy: the '
-            + 'same text for every table, quoting no live state',
+        why: 'numbered steps and worked examples in the static "How it works" copy, and the '
+            + 'lobby\'s three-step strip under the list (LobbySteps.svelte: the step numerals '
+            + '1, 2, 3 and the "SHA-256" of the committed deck): the same text for every '
+            + 'table, quoting no live state',
+    },
+
+    // ---- the failure toast ---------------------------------------------------
+    {
+        id: 'lobby-failure-retry',
+        selector: '.toast.error',
+        tokens: '^\\d{1,3}$',
+        context: '^(?:Could not reach the tables|The table list could not be read)\\. Retrying in \\d{1,3} s\\.',
+        why: 'the seconds until the page re-reads the lobby on its own ("Retrying in 12 s.", '
+            + 'lib/humane-errors.js describeLobbyFailure + retryDelayMs): a wall-clock '
+            + 'interval the client chose, never a canister figure. The context pins the rule '
+            + 'to that sentence, so a number in any other toast is excused by nothing',
+    },
+    {
+        id: 'lobby-failure-detail',
+        selector: '.toast.error .toast-detail',
+        tokens: '^\\d+(?:[.,]\\d+)*$',
+        moneyShaped: true,
+        why: 'the raw agent text under the humane failure sentence (Toast.svelte '
+            + '`.toast-detail`, lib/humane-errors.js detailOf): the gateway URL\'s host and '
+            + 'port digits, an "os error 61", a line:column. MONEY-SHAPED because a URL '
+            + 'carries dotted numbers (127.0.0.1); the element renders only what the agent '
+            + 'threw, never a balance, and only while every canister read is failing',
     },
 
     // ---- how a computed figure was computed ----------------------------------
@@ -220,14 +246,10 @@ export const ALLOWLIST = [
             + 'allowlisted: it is recomputed by a second evaluator lineage and asserted '
             + '(lib/token-census.mjs, site `equity-badge`)',
     },
-    {
-        id: 'board-caption-count',
-        selector: '.board-caption .caption-tag',
-        tokens: '^\\d$',
-        why: 'how many community cards are still to be dealt ("Board · 5 to come"). A '
-            + 'count of cards; the cards themselves are asserted rank-and-suit against '
-            + 'get_community_cards()',
-    },
+    // (`board-caption-count`, the "Board · 5 to come" caption, was retired here:
+    // BoardStrip.svelte no longer renders a caption tag, so the rule excused
+    // nothing. The list stays at its cap of 25 with the two failure-toast rules
+    // above.)
 
     {
         id: 'log-equity-method-counts',
