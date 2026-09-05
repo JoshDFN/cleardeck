@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { chipAffordable, openingAmountText, quickChips } from './deposit-amounts.js';
+import {
+  chipAffordable, costRows, equivalentText, inputFloorText, openingAmountText, quickChips, typedToSmallest,
+} from './deposit-amounts.js';
 
 const FEE = 10_000n;
 const format = (v) => `${(Number(v) / 1e8).toFixed(4)} ICP`;
@@ -46,6 +48,11 @@ describe('quickChips', () => {
     expect(chips.every((c) => !c.disabled)).toBe(true);
   });
 
+  it('puts the figure with its unit on the chip face', () => {
+    const chips = quickChips({ minBuyIn: 1_000_000_000n, fee: FEE, balance: null, format });
+    expect(chips.map((c) => c.figure)).toEqual(['10.0000 ICP', '20.0000 ICP']);
+  });
+
   it('disables a chip the wallet cannot cover and says why in the hint', () => {
     const chips = quickChips({ minBuyIn: 200_000_000n, fee: FEE, balance: 300_000_000n, format });
     expect(chips[0].disabled).toBe(false);
@@ -66,3 +73,48 @@ describe('quickChips', () => {
     expect(quickChips({ minBuyIn: 'junk', fee: FEE, balance: 1n, format })).toEqual([]);
   });
 });
+
+describe('typedToSmallest', () => {
+  it('floors ICP text to e8s the way the deposit always did', () => {
+    expect(typedToSmallest('0.0005')).toBe(50_000n);
+    expect(typedToSmallest('2')).toBe(200_000_000n);
+  });
+
+  it('keeps sats whole and floors a fraction of one', () => {
+    expect(typedToSmallest('1000', { isBTC: true, inputUnit: 'sats' })).toBe(1000n);
+    expect(typedToSmallest('1000.9', { isBTC: true, inputUnit: 'sats' })).toBe(1000n);
+  });
+
+  it('is zero for nothing usable', () => {
+    for (const text of ['', '0', '-1', 'junk', null, undefined]) expect(typedToSmallest(text)).toBe(0n);
+  });
+});
+
+describe('inputFloorText', () => {
+  it('is the plain decimal for ICP and whole sats in sats mode', () => {
+    expect(inputFloorText(20_000n)).toBe('0.0002');
+    expect(inputFloorText(1_000n, { isBTC: true, inputUnit: 'sats' })).toBe('1000');
+    expect(inputFloorText(1_000n, { isBTC: true, inputUnit: 'btc' })).toBe('0.00001');
+  });
+});
+
+describe('equivalentText', () => {
+  it('names the amount with its unit on an ICP table and the other unit on a BTC table', () => {
+    expect(equivalentText(50_000n, { format })).toBe('0.0005 ICP');
+    expect(equivalentText(1_000n, { isBTC: true, inputUnit: 'sats', format })).toBe('= 0.00001 BTC');
+    expect(equivalentText(1_000n, { isBTC: true, inputUnit: 'btc', format })).toBe('= 1,000 sats');
+    expect(equivalentText(0n, { format })).toBe('');
+  });
+});
+
+describe('costRows', () => {
+  it('lays the cost out by row id, the total strong and the credit in money tone', () => {
+    const rows = costRows({ amount: 50_000n, fees: 20_000n, total: 70_000n, credited: 50_000n }, format);
+    expect(rows.map((r) => r.id)).toEqual(['send', 'fees', 'total', 'credited']);
+    expect(rows.map((r) => r.value)).toEqual(['0.0005 ICP', '0.0002 ICP', '0.0007 ICP', '0.0005 ICP']);
+    expect(rows[2].strong).toBe(true);
+    expect(rows[3].tone).toBe('money');
+    expect(costRows(null, format)).toEqual([]);
+  });
+});
+

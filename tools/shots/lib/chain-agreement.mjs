@@ -236,6 +236,10 @@ export async function readTableTruth(tableId, playerNum) {
         bigBlindSeat: Number(view.big_blind_seat),
         smallBlind: Number(view.config.small_blind),
         bigBlind: Number(view.config.big_blind),
+        // The table's own minimum buy-in: the deposit sheet's quick chips
+        // derive their figures from it (docs/DEFECTS.md T-11: never the
+        // lobby record's).
+        minBuyIn: Number(view.config.min_buy_in),
         handNumber: Number(view.hand_number),
         // THE CALLER'S OWN STAKE IN THE MIDDLE (docs/SECURITY-FINDINGS.md
         // FINDING 18). The dock renders this as ICP; until E-64 nothing read the
@@ -1901,6 +1905,23 @@ export async function assertDepositAgreement(ctx, page, opts) {
         }
     } else if (dom.buttonText && /\d/.test(dom.buttonText) && dom.route !== 'address') {
         structural.push(`the deposit button names a figure (${dom.buttonText}) with no cost summary on screen`);
+    }
+
+    // THE QUICK CHIPS' FACES (the cashier wave's third round): 'Min buy-in
+    // 10.0000 ICP' and '2x min 20.0000 ICP' are the TABLE canister's own
+    // config.min_buy_in and twice it, whatever the wallet can pay. A chip
+    // this check does not know is structural.
+    const expectedChip = { min: truth.minBuyIn, double: 2 * truth.minBuyIn };
+    for (const chip of dom.quickChips ?? []) {
+        const expected = expectedChip[chip.id];
+        if (expected === undefined) {
+            structural.push(`the deposit sheet shows a quick chip "${chip.id}" this check does not know`);
+            continue;
+        }
+        figures.push(checkFigure(
+            `deposit modal quick chip "${chip.id}" vs get_table_view().config.min_buy_in`,
+            expected, chip.figure, { currency: truth.currency },
+        ));
     }
 
     // THE ADDRESS ROUTE'S READING (the cashier wave's second round). The card

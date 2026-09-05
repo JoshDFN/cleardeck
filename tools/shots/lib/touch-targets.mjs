@@ -233,8 +233,11 @@ export function measureTouchTargets(page, opts = {}) {
     // it over the runway panel's "Do not deposit" headline, which the money
     // list above cannot see (a headline is not a figure). So every painted
     // disclosure block in the dialog, whole, against every sticky element.
+    // `.cashier-note` is the sentence right above the row (the third round
+    // photographed the row over its second line at the end of the scroll).
     const DISCLOSURES_IN_DIALOG = [
       '.solvency', '.runway-notice', '.custody-notice', '.network-line', '.untrusted-table',
+      '.cashier-note',
     ].join(', ');
     const stickyCover = [];
     const stickyOverDisclosure = [];

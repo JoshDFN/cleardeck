@@ -61,6 +61,8 @@ const DEPOSIT_E8S = 50_000n;
 const DEPOSIT_TYPED = '0.0005';
 const WITHDRAW_E8S = 100_000n;
 const WITHDRAW_TYPED = '0.001';
+/** How many phone screens the Deposit button may sit down the sheet with an amount typed. */
+const PHONE_REACH_SCREENS = 2;
 /** The escrow and wallet floors the probe tops the hero up to first. */
 const HERO_ESCROW_FLOOR = 1_000_000n;
 const HERO_WALLET_FLOOR = 1_000_000n;
@@ -213,6 +215,14 @@ async function probeDeposit(page, vp, ctx, outDir, tableId) {
   const frame = await primaryInFrame(page);
   if (vp.name === 'desktop' && !frame.ok) {
     problems.push(`deposit: the Deposit button is not inside the ${vp.width}x${vp.height} viewport with an amount typed (${JSON.stringify(frame.rect)})`);
+  }
+  // ...AND WITHIN REACH ON THE PHONE. The row follows the disclosures by
+  // product rule, so it is below the fold there; the ceiling is one full
+  // screen of scrolling (its top inside twice the viewport height). The
+  // third round measured 1720 px before the runway panel's command and the
+  // local-build line folded under their disclosures.
+  if (vp.name === 'mobile' && frame.rect && frame.rect.y > PHONE_REACH_SCREENS * vp.height) {
+    problems.push(`deposit: the Deposit button's top is at y=${frame.rect.y} with an amount typed, past ${PHONE_REACH_SCREENS} screens of ${vp.height} px on the phone`);
   }
   states.summary = {
     file: await shoot(page, outDir, 'deposit-summary', vp),

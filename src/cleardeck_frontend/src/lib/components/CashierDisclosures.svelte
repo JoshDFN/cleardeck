@@ -67,16 +67,24 @@
          (ic-config.js NETWORK), from the same constant that chooses the
          gateway and the canister ids, so this line and the destination can
          never disagree. -->
-    <p class="network-line" class:mainnet={IS_MAINNET_BUILD} data-network={NETWORK}>
+    <div class="network-line" class:mainnet={IS_MAINNET_BUILD} class:folded={!IS_MAINNET_BUILD} data-network={NETWORK}>
       {#if IS_MAINNET_BUILD}
         <strong>Internet Computer mainnet.</strong> This moves REAL {currencySymbol}
         to canister <code>{tableCanisterId ?? 'unknown'}</code>, and it is not reversible.
       {:else}
-        <strong>{NETWORK} build.</strong> This moves test {currencySymbol} on your own
-        replica, to canister <code>{tableCanisterId ?? 'unknown'}</code>. No real funds
-        can be reached from this bundle.
+        <!-- A local build moves nothing real, so the destination folds under
+             "Where"; the mainnet sentence above never folds. -->
+        <span class="network-lead"><strong>{NETWORK} build.</strong> Test {currencySymbol} only.</span>
+        <details class="more where">
+          <summary>Where</summary>
+          <p>
+            This moves test {currencySymbol} on your own replica, to canister
+            <code>{tableCanisterId ?? 'unknown'}</code>. No real funds can be reached
+            from this bundle.
+          </p>
+        </details>
       {/if}
-    </p>
+    </div>
 
     <!-- IS THIS EVEN A CLEARDECK TABLE? FINDING 42. When this shows, the
          address derivation has already refused and the deposit refuses before
@@ -173,6 +181,22 @@
     background: var(--cd-danger-dim);
     color: var(--cd-ink-1);
   }
+
+  /* Folded: the lead on the left, "Where" on the right; open, the fold takes
+     its own row under the lead. */
+  .network-line.folded {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0 var(--cd-space-3);
+  }
+
+  .network-lead { flex: 1 1 auto; }
+  .where { flex: 0 0 auto; margin-top: 0; }
+  .where[open] { flex-basis: 100%; }
+  .where summary { color: var(--cd-accent); font-size: var(--cd-text-xs); }
+  .where p { color: var(--cd-ink-2); }
 
   .network-line strong { color: var(--cd-ink); }
   .network-line.mainnet strong { color: var(--cd-danger-hi); }

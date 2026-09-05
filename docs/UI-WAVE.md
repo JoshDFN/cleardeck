@@ -73,7 +73,24 @@ lost when the handoffs are.
   player never sees a Claim button; `tools/shots/probe-deposit-address.mjs`
   drains a dev player's wallet, photographs the card, pays the derived
   address from a second identity and checks the detection, the sweep and
-  the receipt against the ledger.
+  the receipt against the ledger. Round 3: DepositModal.svelte is under the
+  800-line cap (798) with the paying wallet and the derived address
+  (lib/deposit-wallet.svelte.js), the flow and the address watch with its
+  sweep (lib/deposit-flow.svelte.js), the two wallet routes pressed
+  (lib/deposit-submit.js), the receipts (lib/deposit-receipts.js), the
+  amount field (DepositAmountField.svelte), the tabs (DepositRouteTabs.svelte)
+  and the notice strip (NoticeStrip.svelte) each their own module, the
+  verification code moved statement for statement; the quick chips carry
+  their figure on the face (the table's own min_buy_in, asserted against
+  get_table_view().config by the harness) and honour their own disabled
+  flag; the phone's pinned row no longer lifts into the note at the end of
+  the scroll (the sticky box was kept inside the scroller's content edge, so
+  the scroller's foot padding is zero while the row is in it); the phone
+  receipt fills the sheet with Done at the foot; the runway panel's top-up
+  command and the local build's destination fold under a disclosure so the
+  phone's Deposit button sits within two screens with an amount typed
+  (probe-cashier asserts it); the address card shows a sweep bar while the
+  claim runs.
 - **Sound for an anonymous spectator on a phone table.** The phone's table
   header has no slot for the sound toggle; it rides the dock beside Log,
   which renders for everyone, signed in or not. If the dock ever drops for

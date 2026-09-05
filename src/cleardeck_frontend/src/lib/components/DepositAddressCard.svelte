@@ -26,6 +26,8 @@
     detectedText = null,
     /** The sentence under the figure (lib/deposit-detect.js detectionCopy). */
     detectCopy = '',
+    /** True while the sweep of a ready reading is running: a live bar shows it. */
+    sweeping = false,
   } = $props();
 
   let copied = $state(false);
@@ -89,6 +91,13 @@
       {#if detectedText}
         <span class="detected-glyph" aria-hidden="true"></span>
         <span><strong class="detected-amount">Detected {detectedText}</strong> {detectCopy}</span>
+        {#if sweeping}
+          <!-- THE SWEEP, SEEN: one chain commit is running (the same
+               claim_external_deposit the button makes); the bar rides under
+               the sentence so the progress is on the card itself, not only
+               in the button's spinner under the fold. -->
+          <span class="sweep" role="progressbar" aria-label="Sweeping into your table balance"><span class="sweep-fill"></span></span>
+        {/if}
       {:else}
         <span class="detected-glyph idle" aria-hidden="true"></span>
         <span>{detectCopy}</span>
@@ -143,9 +152,9 @@
   }
 
   .qr {
-    width: 112px;
-    height: 112px;
-    padding: 6px;
+    width: var(--cd-qr-size);
+    height: var(--cd-qr-size);
+    padding: var(--cd-space-2);
     border-radius: var(--cd-radius-chip);
     background: var(--cd-card-face);
     color: var(--cd-card-face);
@@ -165,7 +174,7 @@
   .address-value {
     display: flex;
     flex-wrap: wrap;
-    gap: 2px 8px;
+    gap: var(--cd-space-1) var(--cd-space-2);
     padding: var(--cd-space-2) var(--cd-space-3);
     border-radius: var(--cd-radius-chip);
     background: var(--cd-bg-deep);
@@ -200,6 +209,7 @@
 
   .detected {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-start;
     gap: var(--cd-space-2);
     margin: 0;
@@ -222,7 +232,7 @@
     flex: 0 0 auto;
     width: var(--cd-space-2);
     height: var(--cd-space-2);
-    margin-top: 6px;
+    margin-top: var(--cd-space-2);
     border-radius: 50%;
     background: var(--cd-accent);
   }
@@ -234,8 +244,36 @@
 
   @keyframes detect-breathe { to { opacity: 0.3; } }
 
+  /* The sweep bar: a track the width of the line, a segment travelling along
+     it while the claim runs (an indeterminate bar: the commit's length is the
+     chain's, not ours). */
+  .sweep {
+    flex: 1 1 100%;
+    display: block;
+    height: var(--cd-space-1);
+    margin-top: var(--cd-space-1);
+    border-radius: var(--cd-radius-pill);
+    background: var(--cd-accent-line);
+    overflow: hidden;
+  }
+
+  .sweep-fill {
+    display: block;
+    width: 40%;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--cd-accent);
+    animation: sweep-travel 1.4s ease-in-out infinite;
+  }
+
+  @keyframes sweep-travel {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(250%); }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .detected-glyph.idle { animation: none; }
+    .sweep-fill { animation: none; width: 100%; opacity: 0.6; }
   }
 
   .how-to-fund {
@@ -246,11 +284,11 @@
     line-height: 1.55;
   }
 
-  .how-to-fund li + li { margin-top: 2px; }
+  .how-to-fund li + li { margin-top: var(--cd-space-1); }
 
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {
     .address-body { grid-template-columns: minmax(0, 1fr); }
-    .qr { width: 132px; height: 132px; }
+    .qr { width: var(--cd-qr-size-lg); height: var(--cd-qr-size-lg); }
     .copy-address-btn { min-height: var(--cd-touch-min); }
   }
 </style>

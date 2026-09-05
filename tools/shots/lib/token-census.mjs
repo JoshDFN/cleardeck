@@ -297,6 +297,15 @@ export const CHAIN_SITES = [
             + 'advice sentence quoting them, against get_solvency() (docs/SECURITY-FINDINGS.md FINDING 35)',
     },
     {
+        id: 'deposit-quick-chip',
+        selector: '.quick-amounts .quick-amount .chip-figure',
+        label: /^deposit modal quick chip "/,
+        why: 'the figure on a quick chip\'s face (the table\'s minimum buy-in, twice it), '
+            + 'derived from the TABLE canister\'s config.min_buy_in and asserted against '
+            + 'get_table_view().config by chain-agreement.mjs; the "2x" factor beside it is '
+            + 'the allowlist\'s deposit-quick-multiple',
+    },
+    {
         id: 'deposit-detected',
         selector: '.deposit-address-section .detected-amount',
         label: /^deposit modal detected at the address vs/,

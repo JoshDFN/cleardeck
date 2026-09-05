@@ -23,7 +23,11 @@
   //  3. IT NAMES THE NUMBERS AND THE COMMAND. "Somebody should top this up" is
   //     not actionable. `deposit-cycles` on the IC needs no controller rights and
   //     is open to any principal, so the exact command is shown: anybody reading
-  //     this can be the person who fixes it.
+  //     this can be the person who fixes it. The headline, the advice and the
+  //     figures are always on screen; the command and the warning threshold
+  //     stand one tap away under "How to top it up" (the cashier wave's third
+  //     round: on a phone they were what pushed the Deposit button a second
+  //     screen down), the same fold the custody disclosure uses.
 
   import {
     RUNWAY_STATES, severityOf, headlineFor, adviceFor, formatCycles, topUpHint,
@@ -85,19 +89,24 @@
   >
     <p class="headline">{headline}</p>
     <p class="advice">{advice}</p>
-    {#if detail}
-      <p class="detail">{detail}</p>
-    {/if}
-    <p class="topup">
-      Anyone can top this canister up. It needs no permission and no controller:
-      <code>{topUpHint(canisterId)}</code>
-    </p>
-    {#if state === RUNWAY_STATES.LOW || state === RUNWAY_STATES.CRITICAL}
-      <p class="detail">
-        Warning threshold is {WARN_DAYS} days of measured runway. There is no automatic
-        top-up anywhere in this application.
-      </p>
-    {/if}
+    <div class="detail-row">
+      {#if detail}
+        <p class="detail">{detail}</p>
+      {/if}
+      <details class="more">
+        <summary>How to top it up</summary>
+        <p class="topup">
+          Anyone can top this canister up. It needs no permission and no controller:
+          <code>{topUpHint(canisterId)}</code>
+        </p>
+        {#if state === RUNWAY_STATES.LOW || state === RUNWAY_STATES.CRITICAL}
+          <p class="detail">
+            Warning threshold is {WARN_DAYS} days of measured runway. There is no automatic
+            top-up anywhere in this application.
+          </p>
+        {/if}
+      </details>
+    </div>
   </div>
 {/if}
 
@@ -177,6 +186,44 @@
     margin: var(--cd-space-1) 0 0;
     font-size: var(--cd-text-xs);
     color: var(--cd-ink-2);
+  }
+
+  /* The figures on the left, the fold on the right; open, the fold takes its
+     own row under them. */
+  .detail-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0 var(--cd-space-3);
+  }
+
+  .detail-row .detail { flex: 1 1 auto; }
+  .more { flex: 0 0 auto; }
+  .more[open] { flex-basis: 100%; }
+
+  .more summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-2);
+    margin-left: calc(-1 * var(--cd-space-2));
+    border-radius: var(--cd-radius-chip);
+    color: var(--cd-warn);
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-strong);
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .runway-notice.danger .more summary { color: var(--cd-danger-hi); }
+  .more summary::-webkit-details-marker { display: none; }
+  .more summary::after { content: ' \25BE'; }
+  .more[open] summary::after { content: ' \25B4'; }
+  .more summary:hover { background: var(--cd-surface-2); }
+
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    .more summary { min-height: var(--cd-touch-min); }
   }
 
   code {

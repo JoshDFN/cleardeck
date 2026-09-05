@@ -473,6 +473,15 @@ export function scrapeDeposit(page) {
             // arrived.
             route: document.querySelector('.modal-content')?.getAttribute('data-route') ?? null,
             detectedAmount: txt(document.querySelector('.modal-content .detected-amount')),
+            // THE QUICK CHIPS' FACES (the cashier wave's third round): the
+            // table's minimum buy-in and twice it, by `data-chip`; asserted
+            // against get_table_view().config.min_buy_in.
+            quickChips: [...document.querySelectorAll('.modal-content .quick-amounts .quick-amount')]
+                .map((chip) => ({
+                    id: chip.getAttribute('data-chip'),
+                    figure: txt(chip.querySelector('.chip-figure')),
+                    disabled: chip.disabled,
+                })),
         };
     });
 }

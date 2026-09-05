@@ -127,33 +127,7 @@ $phone: '(max-aspect-ratio: 1/1), (max-height: 560px)';
     background: var(--cd-surface-1);
   }
 
-  /* The five protected phrases, restated inside the dialog as the trust
-     bar's neutral strip: the amber glyph, the lead in bold, the sentences in
-     body ink. Not dimmed and not red: it is the one block that must read as
-     a statement, not as fine print and not as an alarm bell. */
-  .player-notice {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: var(--cd-space-3);
-    align-items: start;
-    margin: 0;
-    padding: var(--cd-space-2) var(--cd-space-3);
-    border-radius: var(--cd-radius-card);
-    border: 1px solid var(--cd-warn-line);
-    border-left-width: 3px;
-    background: var(--cd-surface-1);
-    color: var(--cd-ink-1);
-    font-size: var(--cd-text-sm);
-    line-height: 1.5;
-  }
-
-  .player-notice .notice-glyph {
-    display: inline-flex;
-    margin-top: 2px;
-    color: var(--cd-warn);
-  }
-
-  .player-notice :global(strong) { color: var(--cd-notice-strong); }
+  /* The five protected phrases are NoticeStrip.svelte, first in every sheet. */
 }
 
 /* The two-column cashier on a wide screen: the money on the left, the
@@ -231,9 +205,10 @@ $phone: '(max-aspect-ratio: 1/1), (max-height: 560px)';
   }
 }
 
-/* Sections, the amount row, the destination card, the chips. The FROM cards
-   with a balance live in from-card.scss (IiFromCard, OisyFromCard). */
-@mixin money($preview: true, $destination: false) {
+/* The amount row: its label, the field with its unit suffix, MAX, the unit
+   toggle of a BTC table and the preview line under it. DepositAmountField
+   includes this on its own; the withdraw sheet includes it beside `money`. */
+@mixin amount-field($preview: true) {
   .section-label {
     display: flex;
     justify-content: space-between;
@@ -244,14 +219,6 @@ $phone: '(max-aspect-ratio: 1/1), (max-height: 560px)';
     font-weight: var(--cd-weight-strong);
     letter-spacing: var(--cd-tracking-label);
     text-transform: uppercase;
-  }
-
-  @if $destination {
-  .section-label .label-aside {
-    font-weight: var(--cd-weight-medium);
-    letter-spacing: 0;
-    text-transform: none;
-  }
   }
 
   .form-section {
@@ -383,6 +350,29 @@ $phone: '(max-aspect-ratio: 1/1), (max-height: 560px)';
   }
 
   .unit-toggle button.active { background: var(--cd-btc-tint); color: var(--cd-btc); }
+}
+
+/* The amount row on a phone: 16 px in the field (below that iOS Safari zooms
+   the page on focus, and no token means 16), every control at the touch
+   floor. Included inside the phone media block. */
+@mixin amount-field-phone {
+  input[type='number'] { font-size: 16px; min-height: var(--cd-touch-min); }
+  .amount-field input { font-size: var(--cd-text-lg); }
+  .max-btn { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
+  .unit-toggle button { min-height: var(--cd-control-md); min-width: var(--cd-touch-min); }
+}
+
+/* The destination card of the withdraw sheet and the limits line of the
+   deposit sheet. The FROM cards with a balance live in from-card.scss
+   (IiFromCard, OisyFromCard); the amount row in `amount-field` above. */
+@mixin money($preview: true, $destination: false) {
+  @if $destination {
+  .section-label .label-aside {
+    font-weight: var(--cd-weight-medium);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  }
 
   /* The destination card of the withdraw sheet (`.from-card.destination`),
      its note and its Copy link; the deposit sheet's FROM cards are their own
@@ -581,14 +571,13 @@ $phone: '(max-aspect-ratio: 1/1), (max-height: 560px)';
 }
 
 /* The phone: the shared sheet rules. */
-@mixin phone($deposit: true) {
-  @include sheet.sheet;
+@mixin phone($deposit: true, $field: true) {
+  @include sheet.sheet($field: $field);
 
   .cashier-grid { display: flex; flex-direction: column; gap: var(--cd-space-3); }
   .cashier-col { gap: var(--cd-space-3); }
   .cashier-note { display: block; }
-  .amount-field input { font-size: var(--cd-text-lg); }
-  .unit-toggle button { min-height: var(--cd-control-md); min-width: var(--cd-touch-min); }
+  @if $field { @include amount-field-phone; }
   @if not $deposit { .path-link { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); justify-content: center; } }
   .close-btn { border: 0; background: none; }
 

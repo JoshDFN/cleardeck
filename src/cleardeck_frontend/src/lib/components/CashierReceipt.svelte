@@ -169,8 +169,12 @@
 
   .done.btc { background: var(--cd-btc); color: var(--cd-ink-on-light); }
 
+  /* THE PHONE: the receipt fills the sheet, Done at its foot where the thumb
+     is, never floating mid-screen over an empty lower half. */
   @media (max-aspect-ratio: 1/1), (max-height: 560px) {
-    .done { min-height: calc(var(--cd-touch-min) + var(--cd-space-1)); }
+    .cashier-receipt { flex: 1 0 auto; }
+    .done { margin-top: auto; min-height: calc(var(--cd-touch-min) + var(--cd-space-1)); }
     .copy { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
   }
+
 </style>

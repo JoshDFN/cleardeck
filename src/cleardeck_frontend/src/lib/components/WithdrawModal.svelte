@@ -12,13 +12,12 @@
 
   import IcpLogo from './IcpLogo.svelte';
   import BtcGlyph from './BtcGlyph.svelte';
-  import NoticeLine from './NoticeLine.svelte';
   import CashierAlert from './CashierAlert.svelte';
   import { phoneMedia } from '$lib/phone-media.svelte.js';
   import SolvencyNotice from './SolvencyNotice.svelte';
-  import { readTableSolvency, refreshTableSolvency } from '$lib/solvency.js';
   import CycleRunwayNotice from './CycleRunwayNotice.svelte';
-  import { readCycleRunway } from '$lib/cycleRunway.js';
+  import NoticeStrip from './NoticeStrip.svelte';
+  import { createRunwayRead, createSolvencyRead } from '$lib/cashier-disclosures.svelte.js';
   import { scrollLock } from '$lib/scroll-lock.js';
   import { auth } from '$lib/auth.js';
   import { IS_MAINNET_BUILD } from '$lib/ic-config.js';
@@ -55,28 +54,12 @@
   // WHETHER THERE IS ENOUGH ON THE LEDGER TO PAY THIS WITHDRAWAL
   // (docs/SECURITY-FINDINGS.md FINDING 35). `Available balance` is a number the
   // canister keeps for you; it is not evidence that the canister holds it.
-  let solvency = $state(null);
-  let solvencyRefreshing = $state(false);
-
-  async function loadSolvency() {
-    solvency = await readTableSolvency(tableActor);
-  }
-
-  async function refreshSolvency() {
-    solvencyRefreshing = true;
-    try {
-      solvency = await refreshTableSolvency(tableActor);
-    } finally {
-      solvencyRefreshing = false;
-    }
-  }
+  // svelte-ignore state_referenced_locally
+  const solvencyRead = createSolvencyRead(tableActor);
 
   // HOW LONG CAN THIS TABLE KEEP HONOURING WITHDRAWALS? (docs/DEFECTS.md E-55).
-  let runway = $state(null);
-
-  async function loadRunway() {
-    runway = await readCycleRunway(tableActor);
-  }
+  // svelte-ignore state_referenced_locally
+  const runwayRead = createRunwayRead(tableActor);
 
   let withdrawAmount = $state('');
   let processing = $state(false);
@@ -404,8 +387,8 @@
 
   onMount(() => {
     loadCustody();
-    loadSolvency();
-    loadRunway();
+    solvencyRead.load();
+    runwayRead.load();
     loadPrices().then((p) => { prices = p; }).catch(() => { prices = null; });
     const tick = setInterval(() => { now = Date.now(); }, 500);
     return () => clearInterval(tick);
@@ -463,16 +446,7 @@
     <!-- THE FIVE PROTECTED NOTICES, INSIDE THE DIALOG (HARD RULE 2, docs/DEFECTS.md T-31):
          the page's trust bar is behind this dialog's scrim, so the words are
          restated here, first. -->
-    <p class="player-notice">
-      <span class="notice-glyph" aria-hidden="true">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round">
-          <path d="M12 3.5 2.5 20h19L12 3.5z"/>
-          <path d="M12 9.5v4.5" stroke-linecap="round"/>
-          <circle cx="12" cy="17" r="0.8" fill="currentColor" stroke="none"/>
-        </svg>
-      </span>
-      <span class="notice-text"><NoticeLine /></span>
-    </p>
+    <NoticeStrip />
 
     {#if receipt}
       <CashierReceipt
@@ -598,13 +572,13 @@
             <!-- Whether the ledger actually holds the balance above (FINDING 35),
                  and whether the call will be accepted at all (E-55). -->
             <SolvencyNotice
-              {solvency}
+              solvency={solvencyRead.solvency}
               {currency}
               context="withdraw"
-              onRefresh={refreshSolvency}
-              refreshing={solvencyRefreshing}
+              onRefresh={solvencyRead.refresh}
+              refreshing={solvencyRead.refreshing}
             />
-            <CycleRunwayNotice {runway} context="withdraw" canisterId={tableCanisterId} />
+            <CycleRunwayNotice runway={runwayRead.runway} context="withdraw" canisterId={tableCanisterId} />
           </CashierDisclosures>
         </div>
       </div>
@@ -645,6 +619,7 @@
 
   @include cashier.shell;
   @include cashier.columns;
+  @include cashier.amount-field($preview: false);
   @include cashier.money($preview: false, $destination: true);
   @include cashier.feedback($money-button: true, $success: true);
 

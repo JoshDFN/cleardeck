@@ -234,6 +234,10 @@
   --cd-control-md: 40px;
   --cd-touch-min: 44px;
   --cd-toast-w: 560px;     /* the error toast's width budget (Toast.svelte) */
+  /* The deposit address QR (DepositAddressCard.svelte): beside the hex on a
+     wide screen, larger and alone on its row on a phone. */
+  --cd-qr-size: 112px;
+  --cd-qr-size-lg: 132px;
 
   /* Glyphs inside controls: a 44 px square carries an 18-20 px glyph, a
      44 px chip a 28 px avatar. */

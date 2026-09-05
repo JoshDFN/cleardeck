@@ -12,7 +12,7 @@
    order). Svelte scopes every rule here to the including component, so a
    selector one of them lacks is a warning there, not a leak. */
 
-@mixin sheet {
+@mixin sheet($field: true) {
   .modal-content {
     top: 0;
     left: 0;
@@ -53,18 +53,9 @@
     gap: var(--cd-space-3);
   }
 
-  /* The five protected phrases as a compact strip, the size the table view's
-     trust bar uses (11 px); every word stays. */
-  .player-notice {
-    font-size: var(--cd-text-xs);
-    line-height: 1.45;
-    padding: var(--cd-space-2) var(--cd-space-3);
-  }
-
-  /* 16 px: the one literal that must stay a literal. Below 16 px iOS Safari
-     zooms the page when the field takes focus, and no token means 16. */
-  input[type='number'] { font-size: 16px; min-height: var(--cd-touch-min); }
-  .max-btn { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
+  /* The amount field's own phone rules (16 px in the field, MAX at the
+     touch floor) are cashier.scss's `amount-field-phone`, included by the
+     component that renders the field. */
 
   .btn-primary, .btn-secondary {
     min-height: calc(var(--cd-touch-min) + var(--cd-space-1));
