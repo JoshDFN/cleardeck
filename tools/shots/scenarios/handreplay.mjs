@@ -52,7 +52,12 @@ import {
 } from '../lib/table-driver.mjs';
 import { assertChainAgreement, named, withAgreement } from '../lib/chain-agreement.mjs';
 import { handRecordActor } from '../lib/hand-record-wire.mjs';
-import { RANK_BY_GLYPH, SUIT_BY_SYMBOL, checkFigure, foldFigures } from '../lib/money.mjs';
+import {
+  RANK_BY_GLYPH, SUIT_BY_SYMBOL, checkFigure, checkPlainNumber, foldFigures, parseDisplayedAmount,
+} from '../lib/money.mjs';
+import {
+  MC_TOLERANCE_POINTS, ORACLE_TRIALS, exactEquity, monteCarloEquity, toCard as toOracleCard,
+} from '../lib/equity-oracle.mjs';
 import { foldProtectedNotices, probeProtectedNotices } from '../lib/protected-notices.mjs';
 import { heroPrincipal, prepareTable, tableDisplayName } from './_shared.mjs';
 
@@ -204,8 +209,11 @@ async function chainRecord(tableId, handNumber) {
       seat: Number(p.seat),
       principal: p.principal.toText(),
       cards: (optional(p.cards) || []).map(faceOf),
+      // the Candid cards too, for the independent equity oracle
+      raw: (optional(p.cards) || []).map(toOracleCard),
       won: Number(p.amount_won),
     })),
+    communityRaw: rec.community_cards.map(toOracleCard),
     blinds,
     pot,
     // The replayer's own arithmetic, recomputed here from the chain: blinds plus
@@ -223,9 +231,17 @@ async function chainRecord(tableId, handNumber) {
 // reading the rendered page
 // ---------------------------------------------------------------------------
 
-/** Every card face inside a container, whitespace stripped, in DOM order. */
+/**
+ * Every card face inside a container, in DOM order, read the way the table
+ * scraper reads a card (dom-scrape.mjs readCard): the `.rank` and the `.pip`
+ * of the top-left index. A card's whole textContent is no longer its face:
+ * the phase-1 face carries a mirrored index and a centre pip as well.
+ */
 async function cardFaces(locator) {
-  return (await locator.locator('.card').allTextContents()).map((t) => t.replace(/\s+/g, ''));
+  return locator.locator('.card').evaluateAll((els) => els.map((el) => {
+    const t = (sel) => (el.querySelector(sel)?.textContent || '').replace(/\s+/g, '');
+    return `${t('.rank')}${t('.pip')}`;
+  }));
 }
 
 /**
@@ -271,17 +287,53 @@ function scrapeReplayer(page) {
       auditMoney: [...document.querySelectorAll('.log-panel .audit .replay-money')].map(t),
       provenance: t(document.querySelector('.log-panel .provenance')),
       potTotal: t(document.querySelector('.pot-panel .pot-total strong')),
+      // `data-award` says where the figure is painted: on the winner's pod
+      // (`pod`, the line then names the seat without an amount) or on the line
+      // itself (`line`, a seat no pod can paint). Never both: one figure, one place.
       winners: [...document.querySelectorAll('.pot-panel .winner-line')].map((el) => ({
         seat: t(el.querySelector('.seat-label')),
         amount: t(el.querySelector('.won-amt')),
+        award: el.getAttribute('data-award'),
       })),
-      players: [...document.querySelectorAll('.player-row')].map((el) => ({
+      // the board's re-derivation, readable with the captions off
+      boardSlotChecks: [...document.querySelectorAll('.hand-history-modal .felt .board-slot')]
+        .map((el) => el.getAttribute('data-deck-check')),
+      boardCaptions: document.querySelectorAll('.hand-history-modal .felt .deck-pos').length,
+      positionsPressed: document.querySelector('.positions-toggle')?.getAttribute('aria-pressed') ?? null,
+      // the sync, at the end: a lit line and a lit audit
+      activeLines: [...document.querySelectorAll('.log-panel .log-line.active')].map((el) => t(el.querySelector('.log-index'))),
+      playedLines: document.querySelectorAll('.log-panel .log-line.played').length,
+      auditLit: !!document.querySelector('.log-panel .audit.lit'),
+      handId: t(document.querySelector('.replay-title .hand-id')),
+      copyLinkText: t(document.querySelector('.replayer .copy-link')),
+      // The seat pods on the mini table. A seat that folded is on the table but
+      // not a showdown row, so it is not compared with `showdown_players`.
+      players: [...document.querySelectorAll('.player-row:not(.folded)')].map((el) => ({
         seat: t(el.querySelector('.seat-tag')),
-        cards: [...el.querySelectorAll('.player-cards .card')].map((c) => t(c).replace(/\s+/g, '')),
+        cards: [...el.querySelectorAll('.player-cards .card')].map((c) => {
+          const f = (sel) => (c.querySelector(sel)?.textContent || '').replace(/\s+/g, '');
+          return `${f('.rank')}${f('.pip')}`;
+        }),
         deckPos: t(el.querySelector('.deck-pos')),
         rank: t(el.querySelector('.player-rank')),
         won: t(el.querySelector('.player-result .won-amt')),
+        equity: t(el.querySelector('.replay-equity')),
+        equitySeat: el.querySelector('.replay-equity')?.getAttribute('data-seat') ?? null,
+        equityMethod: el.querySelector('.replay-equity')?.getAttribute('data-method') ?? null,
       })),
+      tablePot: t(document.querySelector('.hand-history-modal .pot-panel .pot-total strong')),
+      tableBets: [...document.querySelectorAll('.hand-history-modal .replay-bet .bet-figure')].map(t),
+      equityMethodText: t(document.querySelector('.replay-equity-method')),
+      // the 4-point equity line under the transport: every cell is a
+      // percentage the oracle recomputes at that street's board
+      equityLine: [...document.querySelectorAll('.equity-line .replay-equity')].map((el) => ({
+        seat: Number(el.getAttribute('data-seat')),
+        method: el.getAttribute('data-method'),
+        street: el.getAttribute('data-street'),
+        text: t(el),
+      })),
+      equityLineStreets: [...document.querySelectorAll('.equity-line .eq-col')].map(t),
+      equityLineNote: t(document.querySelector('.equity-line .eq-method')),
       // the fairness claims
       // Svelte appends its own scoped class, so the tone has to be read as a
       // class MEMBERSHIP rather than sliced out of `className`.
@@ -303,23 +355,110 @@ function scrapeReplayer(page) {
   });
 }
 
-/** Clicks every street stop and reads the board at each one. */
+/**
+ * The figures on the mini table, summed, against one chain number. Each
+ * displayed literal stands for a half-ulp window and the windows add.
+ */
+function sumOnTable(label, chainValue, texts) {
+  const parsed = texts.map((t) => parseDisplayedAmount(t, { currency: 'ICP' }));
+  const chain = Number(chainValue);
+  if (parsed.length === 0 || parsed.some((p) => !p)) {
+    return {
+      label, chain, domText: texts.join(' + '), agrees: false, discriminates2x: false, ok: false,
+      detail: `could not read a number out of ${JSON.stringify(texts)}`,
+    };
+  }
+  const low = parsed.reduce((n, p) => n + p.low, 0);
+  const high = parsed.reduce((n, p) => n + p.high, 0);
+  const agrees = chain >= low - 1e-6 && chain <= high + 1e-6;
+  const resolution = high - low;
+  const discriminates2x = chain === 0 ? true : Math.abs(chain) > resolution / 2;
+  const ok = agrees && discriminates2x;
+  return {
+    label, chain, domText: parsed.map((p) => p.text).join(' + '), agrees, discriminates2x, ok,
+    detail: agrees
+      ? `on the table ${parsed.map((p) => p.text).join(' + ')} == chain ${chain} e8s`
+      : `DISAGREES: on the table ${parsed.map((p) => p.text).join(' + ')} (${low}..${high} e8s) but the chain sums to ${chain} e8s`,
+  };
+}
+
+/**
+ * The "Deck positions" toggle: the "#N ✓" captions under the board cards and
+ * on the pods are off by default (the hover title keeps them); the walk turns
+ * them on so the ticks can be counted, and off again so the published frame is
+ * the resting one.
+ */
+async function setPositions(page, on) {
+  const toggle = page.locator('.positions-toggle');
+  if (!(await toggle.count())) throw new Error('no .positions-toggle in the replayer');
+  const pressed = (await toggle.getAttribute('aria-pressed')) === 'true';
+  if (pressed !== on) {
+    await toggle.click();
+    await settle(page, { extraFrames: 1 });
+  }
+  return (await toggle.getAttribute('aria-pressed')) === 'true';
+}
+
+/** Clicks every street stop and reads the board at each one, captions on. */
 async function walkStreets(page) {
   const stops = page.locator('.scrubber .stop');
   const count = await stops.count();
   const walk = [];
+  const captionsOn = await setPositions(page, true);
+  if (!captionsOn) throw new Error('the Deck positions toggle did not turn on');
   for (let i = 0; i < count; i += 1) {
     await stops.nth(i).click();
     await settle(page, { extraFrames: 1 });
+    const table = await page.evaluate(() => {
+      const t = (el) => (el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : null);
+      const root = document.querySelector('.hand-history-modal');
+      return {
+        pot: t(root?.querySelector('.pot-panel .pot-total strong')),
+        bets: [...(root?.querySelectorAll('.replay-bet .bet-figure') || [])].map(t),
+        equity: [...(root?.querySelectorAll('.player-row:not(.folded) .replay-equity') || [])].map((el) => ({
+          seat: Number(el.getAttribute('data-seat')),
+          method: el.getAttribute('data-method'),
+          text: t(el),
+        })),
+      };
+    });
     walk.push({
       label: (await stops.nth(i).textContent())?.trim() ?? null,
-      faces: await cardFaces(page.locator('.felt .board')),
-      ticks: await page.locator('.felt .deck-pos.good').count(),
-      crosses: await page.locator('.felt .deck-pos.bad').count(),
+      faces: await cardFaces(page.locator('.hand-history-modal .felt .board')),
+      ticks: await page.locator('.hand-history-modal .felt .deck-pos.good').count(),
+      crosses: await page.locator('.hand-history-modal .felt .deck-pos.bad').count(),
       transport: (await page.locator('.transport-label').textContent())?.trim() ?? null,
+      table,
     });
   }
+  // the resting frame: captions off, the stop still on Showdown
+  await setPositions(page, false);
   return walk;
+}
+
+/**
+ * Captures what a Copy button hands the clipboard. The headless context has
+ * no clipboard permission, so `writeText` is replaced with a recorder; the
+ * app's own fallback route is never reached because the recorder resolves.
+ */
+async function armClipboardRecorder(page) {
+  await page.evaluate(() => {
+    window.__copied = null;
+    const rec = (text) => { window.__copied = String(text); return Promise.resolve(); };
+    try {
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText: rec }, configurable: true });
+    } catch {
+      navigator.clipboard.writeText = rec;
+    }
+  });
+}
+
+const readCopied = (page) => page.evaluate(() => window.__copied ?? null);
+
+/** The lobby name slugged the way lib/hand-link.js tableSlug does. */
+export function tableSlug(name) {
+  const slug = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return slug || 'table';
 }
 
 /**
@@ -549,6 +688,24 @@ export default {
     }
     if (chain.seedRevealed === null) problems.push('the chain has no revealed seed for this hand');
 
+    // ---- 1b. the hand's stable id and its link, copied ---------------------
+    // Done first: the button wears "Copied" for two seconds and the published
+    // frame is minutes away.
+    const expectedId = `${tableSlug(tableDisplayName(ctx, TABLE))}#${chain.handNumber}`;
+    checks.handId = dom.handId;
+    checks.handIdExpected = expectedId;
+    if (dom.handId !== expectedId) problems.push(`the replay title's id reads "${dom.handId}", expected "${expectedId}"`);
+    await armClipboardRecorder(page);
+    await page.locator('.replayer .copy-link').click();
+    await settle(page, { extraFrames: 1 });
+    checks.copiedLink = await readCopied(page);
+    checks.copyLinkAfter = (await page.locator('.replayer .copy-link').textContent())?.trim() ?? null;
+    const expectedLinkTail = `?table=${tableId}&hand=${chain.handNumber}`;
+    if (!checks.copiedLink || !checks.copiedLink.startsWith(`${expectedId} `) || !checks.copiedLink.endsWith(expectedLinkTail)) {
+      problems.push(`Copy link handed the clipboard ${JSON.stringify(checks.copiedLink)}, expected "${expectedId} <origin>/${expectedLinkTail}"`);
+    }
+    if (checks.copyLinkAfter !== 'Copied') problems.push(`after copying, the button reads "${checks.copyLinkAfter}", not "Copied"`);
+
     // ---- 2. the streets, and the board growing ----------------------------
     const walk = await walkStreets(page);
     checks.streetWalk = walk;
@@ -577,8 +734,173 @@ export default {
       }
     }
 
+    // ---- 2b. THE MINI TABLE AT EVERY STREET STOP -----------------------
+    // The pot the table module shows plus every bet chip in front of a seat
+    // must equal the blinds and every recorded amount up to that street: at a
+    // street's reveal the previous streets are in the pot and nothing is in
+    // front of anyone; at the showdown the pot is what the table paid. Only
+    // meaningful while every amount is an increment (sumIsIncremental), which
+    // the staged hand guarantees. And the equity on each pod is recomputed by
+    // the independent oracle from the record's own cards and the board at that
+    // stop: exact where the client says exact, Monte Carlo inside the stated
+    // tolerance where it says Monte Carlo.
+    checks.tableWalk = [];
+    const streetsBefore = { 'Pre-flop': [], Flop: ['Pre-flop'], Turn: ['Pre-flop', 'Flop'], River: ['Pre-flop', 'Flop', 'Turn'] };
+    for (const step of walk) {
+      const row = { label: step.label, pot: step.table.pot, bets: step.table.bets, equity: step.table.equity };
+      if (chain.sumIsIncremental) {
+        const before = streetsBefore[step.label];
+        const expectedTotal = step.label === 'Showdown'
+          ? chain.pot
+          : chain.blinds.small + chain.blinds.big
+            + chain.actions.filter((a) => before && before.includes(a.street)).reduce((n, a) => n + a.amount, 0);
+        const onTable = [step.table.pot, ...step.table.bets].filter((x) => x !== null);
+        // One figure per stop: the sum of what the table shows, compared with
+        // the chain's own sum (the windows add, as in chain-agreement's
+        // checkSum). The showdown's figure covers the resting frame's pot
+        // token; the others are asserted on the walk.
+        const f = sumOnTable(`replay table at "${step.label}": pot plus chips in front vs blinds and amounts so far`,
+          expectedTotal, onTable);
+        figures.push(f);
+        row.potOk = f.ok;
+        row.potDetail = f.detail;
+        if (step.label === 'Showdown' && step.table.bets.length) {
+          problems.push(`at "Showdown" ${step.table.bets.length} bet chip(s) are still in front of the seats`);
+        }
+      }
+      // equity, when the client showed one
+      const want = BOARD_BY_STOP[step.label] ?? 0;
+      const board = chain.communityRaw.slice(0, want);
+      const hands = chain.showdown.map((p) => p.raw);
+      if (step.table.equity.length && hands.length >= 2 && hands.every((h) => h.length === 2 && h.every(Boolean))) {
+        const methods = new Set(step.table.equity.map((e) => e.method));
+        if (methods.size !== 1) problems.push(`at "${step.label}" the pods disagree on the equity method`);
+        const method = [...methods][0];
+        const oracle = method === 'exact'
+          ? exactEquity(hands, board)
+          : monteCarloEquity(hands, board, ORACLE_TRIALS);
+        row.oracle = { method: oracle.method, trials: oracle.trials, share: oracle.share.map((v) => Math.round(v * 10000) / 100) };
+        for (const e of step.table.equity) {
+          const at = chain.showdown.findIndex((p) => p.seat === e.seat);
+          if (at < 0) { problems.push(`at "${step.label}" seat ${e.seat + 1} shows an equity but showed no cards`); continue; }
+          const oraclePct = Math.round(oracle.share[at] * 10000) / 100;
+          if (method === 'exact') {
+            figures.push(checkPlainNumber(
+              `replay seat ${e.seat} equity at ${step.label} vs independent exact enumeration (${oracle.trials} runouts)`,
+              oraclePct, e.text, { unit: '%' },
+            ));
+          } else {
+            const screenPct = Number(String(e.text).replace(/[^\d.]/g, ''));
+            const delta = Math.abs(screenPct - oraclePct);
+            const ok = Number.isFinite(screenPct) && delta <= MC_TOLERANCE_POINTS;
+            figures.push({
+              label: `replay seat ${e.seat} equity at ${step.label} vs independent Monte Carlo (${oracle.trials} trials)`,
+              chain: oraclePct, domText: e.text, agrees: ok, discriminates2x: true, ok,
+              detail: ok
+                ? `screen ${screenPct}% vs independent ${oraclePct.toFixed(2)}% (|d| ${delta.toFixed(3)} <= ${MC_TOLERANCE_POINTS.toFixed(3)} points)`
+                : `DISAGREES: screen ${screenPct}% vs independent ${oraclePct.toFixed(2)}% (tolerance ${MC_TOLERANCE_POINTS.toFixed(3)} points)`,
+            });
+          }
+        }
+      } else if (step.table.equity.length) {
+        problems.push(`at "${step.label}" an equity is shown but the record reveals ${hands.length} hand(s)`);
+      }
+      checks.tableWalk.push(row);
+    }
+    const showdownStep = walk.find((w) => w.label === 'Showdown');
+    if (showdownStep && chain.showdown.length >= 2 && showdownStep.table.equity.length !== chain.showdown.length) {
+      problems.push(`at "Showdown" ${showdownStep.table.equity.length} pod(s) carry an equity for ${chain.showdown.length} revealed hand(s)`);
+    }
+
     // The walk ends on Showdown, which is the frame this scene publishes.
     dom = await scrapeReplayer(page);
+
+    // ---- 2c. the resting frame: captions off, verdicts still readable -----
+    checks.positionsPressed = dom.positionsPressed;
+    checks.boardCaptionsAtRest = dom.boardCaptions;
+    checks.boardSlotChecks = dom.boardSlotChecks;
+    if (dom.positionsPressed !== 'false') problems.push(`the Deck positions toggle reads aria-pressed="${dom.positionsPressed}" at rest, not "false"`);
+    if (dom.boardCaptions !== 0) problems.push(`${dom.boardCaptions} "#N" caption(s) painted under the board with the toggle off`);
+    if (dom.boardSlotChecks.length !== 5 || dom.boardSlotChecks.some((c) => c !== 'good')) {
+      problems.push(`at rest the board slots carry data-deck-check ${JSON.stringify(dom.boardSlotChecks)}, expected five "good"`);
+    }
+    // the equity caption names what the percentages are, as the live table does
+    checks.equityMethodText = dom.equityMethodText;
+    if (dom.equityMethodText && !/^Equity\b/i.test(dom.equityMethodText)) {
+      problems.push(`the equity caption reads "${dom.equityMethodText}" without the word Equity`);
+    }
+    // ---- 2d. THE EQUITY LINE, cell by cell against the oracle -------------
+    // One row per seat, one cell per street the hand reached; each cell is
+    // recomputed from the record's own cards and the board at that street,
+    // exact where the cell says exact, Monte Carlo inside the tolerance where
+    // it says Monte Carlo. The census site `replay-equity` covers the cells.
+    checks.equityLine = dom.equityLine;
+    checks.equityLineStreets = dom.equityLineStreets;
+    checks.equityLineNote = dom.equityLineNote;
+    {
+      const hands = chain.showdown.map((p) => p.raw);
+      const allKnown = hands.length >= 2 && hands.every((h) => h.length === 2 && h.every(Boolean));
+      if (allKnown) {
+        const expectStreets = ['Pre-flop', 'Flop', 'Turn', 'River'];
+        if (String(dom.equityLineStreets) !== String(expectStreets)) {
+          problems.push(`the equity line's columns are ${JSON.stringify(dom.equityLineStreets)}, expected ${JSON.stringify(expectStreets)}`);
+        }
+        const expectCells = expectStreets.length * chain.showdown.length;
+        if (dom.equityLine.length !== expectCells) {
+          problems.push(`the equity line carries ${dom.equityLine.length} cell(s) for ${chain.showdown.length} revealed hand(s) over ${expectStreets.length} streets, expected ${expectCells}`);
+        }
+        if (!/^Pre-flop/.test(dom.equityLineNote || '')) problems.push(`the equity line's method note reads "${dom.equityLineNote}"`);
+        const oracles = new Map();
+        for (const cell of dom.equityLine) {
+          const want = BOARD_BY_STOP[cell.street];
+          if (want === undefined) { problems.push(`an equity line cell names the street "${cell.street}"`); continue; }
+          const at = chain.showdown.findIndex((p) => p.seat === cell.seat);
+          if (at < 0) { problems.push(`the equity line shows seat ${cell.seat + 1} at ${cell.street} but it showed no cards`); continue; }
+          const key = `${cell.street}|${cell.method}`;
+          if (!oracles.has(key)) {
+            const board = chain.communityRaw.slice(0, want);
+            oracles.set(key, cell.method === 'exact' ? exactEquity(hands, board) : monteCarloEquity(hands, board, ORACLE_TRIALS));
+          }
+          const oracle = oracles.get(key);
+          const oraclePct = Math.round(oracle.share[at] * 10000) / 100;
+          if (cell.method === 'exact') {
+            figures.push(checkPlainNumber(
+              `replay seat ${cell.seat} equity line at ${cell.street} vs independent exact enumeration (${oracle.trials} runouts)`,
+              oraclePct, cell.text, { unit: '%' },
+            ));
+          } else {
+            const screenPct = Number(String(cell.text).replace(/[^\d.]/g, ''));
+            const delta = Math.abs(screenPct - oraclePct);
+            const ok = Number.isFinite(screenPct) && delta <= MC_TOLERANCE_POINTS;
+            figures.push({
+              label: `replay seat ${cell.seat} equity line at ${cell.street} vs independent Monte Carlo (${oracle.trials} trials)`,
+              chain: oraclePct, domText: cell.text, agrees: ok, discriminates2x: true, ok,
+              detail: ok
+                ? `line ${screenPct}% vs independent ${oraclePct.toFixed(2)}% (|d| ${delta.toFixed(3)} <= ${MC_TOLERANCE_POINTS.toFixed(3)} points)`
+                : `DISAGREES: line ${screenPct}% vs independent ${oraclePct.toFixed(2)}% (tolerance ${MC_TOLERANCE_POINTS.toFixed(3)} points)`,
+            });
+          }
+        }
+        // the line and the pod agree at the showdown (one engine, one cache)
+        for (const pod of dom.players) {
+          const cell = dom.equityLine.find((c) => c.street === 'River' && c.seat === Number(pod.equitySeat));
+          if (pod.equity && cell && cell.text !== pod.equity) {
+            problems.push(`seat ${Number(pod.equitySeat) + 1}: the pod reads ${pod.equity} at the showdown but the line's River cell reads ${cell.text}`);
+          }
+        }
+      } else if (dom.equityLine.length) {
+        problems.push(`an equity line is shown but the record reveals ${hands.length} hand(s)`);
+      }
+    }
+
+    // the sync, visible at the end: the last line stays lit and the audit lights
+    checks.activeLinesAtEnd = dom.activeLines;
+    checks.playedLinesAtEnd = dom.playedLines;
+    checks.auditLitAtEnd = dom.auditLit;
+    if (dom.activeLines.length !== 1) problems.push(`${dom.activeLines.length} log line(s) lit at the Showdown stop, expected exactly one (the last played)`);
+    else if (dom.activeLines[0] !== `#${dom.lines.length}`) problems.push(`the lit line at the Showdown stop is ${dom.activeLines[0]}, not the last (#${dom.lines.length})`);
+    if (dom.playedLines !== Math.max(0, dom.lines.length - 1)) problems.push(`${dom.playedLines} line(s) marked played at the end for ${dom.lines.length} lines`);
+    if (!dom.auditLit) problems.push('the audit line is not lit at the paid stop');
 
     // ---- 3. the action log, line by line ----------------------------------
     // Two blind lines first, then one line per ActionRecord, in order.
@@ -672,11 +994,26 @@ export default {
     }
     for (let i = 0; i < Math.min(dom.winners.length, chain.winners.length); i += 1) {
       const w = chain.winners[i];
-      if (!String(dom.winners[i].seat || '').startsWith(`Seat ${w.seat + 1}`)) {
-        problems.push(`winner line ${i + 1} names "${dom.winners[i].seat}", not Seat ${w.seat + 1}`);
+      const line = dom.winners[i];
+      if (!String(line.seat || '').startsWith(`Seat ${w.seat + 1}`)) {
+        problems.push(`winner line ${i + 1} names "${line.seat}", not Seat ${w.seat + 1}`);
       }
-      figures.push(checkFigure(`replay winner ${i + 1} award vs winners[${i}].amount`,
-        w.amount, dom.winners[i].amount, { currency: 'ICP' }));
+      // ONE FIGURE IN ONE PLACE. The award is painted on the winner's pod when
+      // the pod can carry it, and on the line only when it cannot; whichever it
+      // is, exactly one of the two holds the figure and it is the chain's.
+      const pod = dom.players.find((p) => String(p.seat || '').startsWith(`Seat ${w.seat + 1}`)) || null;
+      const onPod = pod?.won ?? null;
+      if (line.award === 'pod') {
+        if (line.amount !== null) problems.push(`winner line ${i + 1} says the award is on the pod but paints "${line.amount}" too`);
+        if (onPod === null) problems.push(`winner line ${i + 1} says the award is on the pod, and the pod for Seat ${w.seat + 1} shows none`);
+        // the pod's figure is asserted against amount_won in the showdown loop below
+      } else if (line.award === 'line') {
+        if (onPod !== null) problems.push(`winner line ${i + 1} carries the award and the pod for Seat ${w.seat + 1} paints "${onPod}" as well`);
+        figures.push(checkFigure(`replay winner ${i + 1} award vs winners[${i}].amount`,
+          w.amount, line.amount, { currency: 'ICP' }));
+      } else {
+        problems.push(`winner line ${i + 1} carries data-award="${line.award}", expected "pod" or "line"`);
+      }
     }
 
     checks.players = dom.players;
@@ -846,6 +1183,7 @@ export default {
         replayerClientHeight: document.querySelector('.replayer')?.clientHeight ?? null,
         banner: of('.proof-banner'),
         witness: of('.witness-panel'),
+        table: of('.scene'),
         scrubber: of('.scrubber'),
         felt: of('.felt'),
         log: of('.log-panel'),

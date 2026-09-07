@@ -1,0 +1,587 @@
+/* ==========================================================================
+   THE CASHIER'S SHARED STYLE (mixins for DepositModal.svelte and
+   WithdrawModal.svelte)
+   ==========================================================================
+   One dialog shell, one amount row, one set of buttons and alerts, on the
+   design tokens. Each modal includes the mixins it uses inside its own
+   <style>, so Svelte scopes every rule to that component; a selector one of
+   them lacks is a warning there, never a leak. Nothing here carries a hex or
+   an rgba literal: every colour is a token.
+
+   The phone sheet (money-sheet-phone.scss) is included by each modal's own
+   media block after these, as before. */
+
+@use './money-sheet-phone' as sheet;
+
+// The phone breakpoint, named once: a modal interpolates cashier.$phone into
+// its own @media rule, so its style block never spells a size next to a limit
+// word (the money-safety literal gate reads a `<style lang="scss">` block as
+// copy).
+$phone: '(max-aspect-ratio: 1/1), (max-height: 560px)';
+
+/* The dialog: an opaque sheet over the scrim, the header fixed, the body the
+   one scroller. Opaque on purpose: this sheet paints over the felt's money. */
+@mixin shell {
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: var(--cd-scrim);
+    backdrop-filter: blur(4px);
+    z-index: var(--cd-z-dialog);
+  }
+
+  .modal-content {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(92vw, var(--cashier-w, 520px));
+    max-height: min(92vh, 860px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--cd-sheet);
+    border: 1px solid var(--cd-line);
+    border-radius: var(--cd-radius-panel);
+    box-shadow: var(--cd-shadow-lift), var(--cd-shadow-inset-soft);
+    z-index: calc(var(--cd-z-dialog) + 1);
+    color: var(--cd-ink-1);
+  }
+
+  .modal-content.btc-modal { border-color: var(--cd-btc-line); }
+
+  .modal-header {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--cd-space-3);
+    padding: var(--cd-space-3) var(--cd-space-4) var(--cd-space-3) var(--cd-space-5);
+    border-bottom: 1px solid var(--cd-line-soft);
+    background: var(--cd-surface-1);
+  }
+
+  .modal-header h2 {
+    display: flex;
+    align-items: center;
+    gap: var(--cd-space-3);
+    margin: 0;
+    font-size: var(--cd-text-lg);
+    font-weight: var(--cd-weight-figure);
+    color: var(--cd-ink);
+    letter-spacing: -0.01em;
+  }
+
+  .modal-header .title-sub {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-body);
+    color: var(--cd-ink-2);
+    letter-spacing: 0;
+  }
+
+  .close-btn {
+    flex: 0 0 auto;
+    width: var(--cd-control-md);
+    height: var(--cd-control-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid var(--cd-line-soft);
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-xl);
+    line-height: 1;
+    cursor: pointer;
+    transition: background var(--cd-fast) var(--cd-ease), color var(--cd-fast) var(--cd-ease);
+  }
+
+  .close-btn:hover { background: var(--cd-surface-3); color: var(--cd-ink); }
+
+  .modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: var(--cd-space-3) var(--cd-space-5) var(--cd-space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--cd-space-3);
+  }
+
+  /* THE FOOTER ON A WIDE SCREEN: header / scrolling body / fixed foot. The
+     button row rides here so the CTA is in the 1440x900 frame in every
+     state of the sheet (the cost summary with an amount typed pushed it
+     under the fold when it sat in the body). The body still scrolls under
+     it, and the disclosures still end above it at rest: the solvency block
+     is measured above the primary button by tools/shots/scenarios/deposit.mjs.
+     On the phone the row lives in the scroller instead (lib/phone-media.svelte.js
+     picks the placement), so this never renders there. */
+  .modal-foot {
+    flex: 0 0 auto;
+    padding: var(--cd-space-3) var(--cd-space-5) var(--cd-space-4);
+    border-top: 1px solid var(--cd-line-soft);
+    background: var(--cd-surface-1);
+  }
+
+  /* The five protected phrases are NoticeStrip.svelte, first in every sheet. */
+}
+
+/* The two-column cashier on a wide screen: the money on the left, the
+   disclosures on the right, the button row under both. Below 720 px the
+   columns stack in DOM order (amount first, disclosures after it). */
+@mixin columns {
+  .cashier-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--cd-space-4);
+  }
+
+  .cashier-col {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cd-space-4);
+    min-width: 0;
+  }
+
+  @media (min-width: 720px) and (min-aspect-ratio: 1/1) and (min-height: 561px) {
+    .cashier-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: var(--cd-space-5);
+      align-items: start;
+    }
+  }
+}
+
+/* Segmented controls: the deposit route, the wallet source, the BTC method.
+   One neutral track, the active segment lifted; each segment a flex column
+   so a label can carry a hint under it. */
+@mixin segmented {
+  .segmented {
+    display: flex;
+    gap: var(--cd-space-1);
+    padding: var(--cd-space-1);
+    border-radius: var(--cd-radius-card);
+    background: var(--cd-surface-2);
+  }
+
+  .segmented button {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-height: var(--cd-control-md);
+    padding: var(--cd-space-2) var(--cd-space-3);
+    border: 1px solid transparent;
+    border-radius: var(--cd-radius-chip);
+    background: transparent;
+    color: var(--cd-ink-2);
+    font-family: inherit;
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-strong);
+    line-height: 1.25;
+    text-align: center;
+    cursor: pointer;
+    transition: background var(--cd-fast) var(--cd-ease), color var(--cd-fast) var(--cd-ease);
+  }
+
+  .segmented button.active {
+    background: var(--cd-surface-4);
+    border-color: var(--cd-line-strong);
+    color: var(--cd-ink);
+  }
+
+  .segmented.btc button.active { background: var(--cd-btc-dim); border-color: var(--cd-btc-line); color: var(--cd-btc); }
+  .segmented button:hover:not(.active) { background: var(--cd-surface-3); color: var(--cd-ink-1); }
+  .segmented .segment-hint { font-size: var(--cd-text-xs); font-weight: var(--cd-weight-body); color: var(--cd-ink-2); }
+
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    .segmented button { min-height: var(--cd-touch-min); }
+  }
+}
+
+/* The amount row: its label, the field with its unit suffix, MAX, the unit
+   toggle of a BTC table and the preview line under it. DepositAmountField
+   includes this on its own; the withdraw sheet includes it beside `money`. */
+@mixin amount-field($preview: true) {
+  .section-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 0 0 var(--cd-space-2);
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-strong);
+    letter-spacing: var(--cd-tracking-label);
+    text-transform: uppercase;
+  }
+
+  .form-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cd-space-2);
+  }
+
+  .input-row {
+    display: flex;
+    align-items: stretch;
+    gap: var(--cd-space-2);
+  }
+
+  .amount-field {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--cd-line-strong);
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-bg-deep);
+    transition: border-color var(--cd-fast) var(--cd-ease), box-shadow var(--cd-fast) var(--cd-ease);
+  }
+
+  .amount-field:focus-within {
+    border-color: var(--cd-accent-line-strong);
+    box-shadow: 0 0 0 3px var(--cd-accent-dim);
+  }
+
+  .amount-field.btc:focus-within {
+    border-color: var(--cd-btc);
+    box-shadow: 0 0 0 3px var(--cd-btc-dim);
+  }
+
+  .amount-field input {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+    padding: var(--cd-space-3) var(--cd-space-3);
+    border: 0;
+    background: transparent;
+    color: var(--cd-ink);
+    font-family: inherit;
+    font-size: var(--cd-text-xl);
+    font-weight: var(--cd-weight-figure);
+    font-variant-numeric: tabular-nums;
+    outline: none;
+  }
+
+  .amount-field input::placeholder { color: var(--cd-ink-2); opacity: 0.6; font-weight: var(--cd-weight-medium); }
+  .amount-field input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Chrome's spin buttons on a money field. */
+  .amount-field input::-webkit-outer-spin-button,
+  .amount-field input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .amount-field input[type='number'] { -moz-appearance: textfield; appearance: textfield; }
+
+  .input-suffix {
+    flex: 0 0 auto;
+    padding: 0 var(--cd-space-3) 0 0;
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-strong);
+    letter-spacing: 0.04em;
+  }
+
+  .input-suffix.btc { color: var(--cd-btc); }
+
+  .max-btn {
+    flex: 0 0 auto;
+    min-width: var(--cd-control-md);
+    padding: 0 var(--cd-space-3);
+    border: 1px solid var(--cd-accent-line);
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-accent-dim);
+    color: var(--cd-accent);
+    font-family: inherit;
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-figure);
+    letter-spacing: var(--cd-tracking-label);
+    cursor: pointer;
+    transition: background var(--cd-fast) var(--cd-ease);
+  }
+
+  .max-btn.btc { border-color: var(--cd-btc-line); background: var(--cd-btc-dim); color: var(--cd-btc); }
+  .max-btn:hover:not(:disabled) { background: var(--cd-accent-line); }
+  .max-btn.btc:hover:not(:disabled) { background: var(--cd-btc-tint); }
+  .max-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* The fiat hint under the amount: the amount's dollars, muted. */
+  @if $preview {
+  .conversion-preview {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--cd-space-3);
+    margin: 0;
+    padding: 0 var(--cd-space-1);
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-sm);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .conversion-preview .usd-amount { color: var(--cd-ink-1); font-weight: var(--cd-weight-strong); }
+  .conversion-preview .crypto-equiv { color: var(--cd-ink-1); }
+  }
+
+  /* The unit toggle on a BTC table: sats or BTC. */
+  .unit-toggle {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-surface-2);
+  }
+
+  .unit-toggle button {
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-3);
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--cd-ink-2);
+    font-family: inherit;
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-strong);
+    cursor: pointer;
+  }
+
+  .unit-toggle button.active { background: var(--cd-btc-tint); color: var(--cd-btc); }
+}
+
+/* The amount row on a phone: 16 px in the field (below that iOS Safari zooms
+   the page on focus, and no token means 16), every control at the touch
+   floor. Included inside the phone media block. */
+@mixin amount-field-phone {
+  input[type='number'] { font-size: 16px; min-height: var(--cd-touch-min); }
+  .amount-field input { font-size: var(--cd-text-lg); }
+  .max-btn { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
+  .unit-toggle button { min-height: var(--cd-control-md); min-width: var(--cd-touch-min); }
+}
+
+/* The destination card of the withdraw sheet and the limits line of the
+   deposit sheet. The FROM cards with a balance live in from-card.scss
+   (IiFromCard, OisyFromCard); the amount row in `amount-field` above. */
+@mixin money($preview: true, $destination: false) {
+  @if $destination {
+  .section-label .label-aside {
+    font-weight: var(--cd-weight-medium);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  }
+
+  /* The destination card of the withdraw sheet (`.from-card.destination`),
+     its note and its Copy link; the deposit sheet's FROM cards are their own
+     components (from-card.scss). */
+  @if $destination {
+  /* The FROM card: which wallet pays, what it holds. */
+  .from-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cd-space-2);
+    padding: var(--cd-space-3) var(--cd-space-4);
+    border: 1px solid var(--cd-line);
+    border-radius: var(--cd-radius-card);
+    background: var(--cd-surface-1);
+  }
+
+  .from-note {
+    margin: 0;
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-xs);
+    line-height: 1.5;
+  }
+
+  .from-note.short { color: var(--cd-warn); }
+  .from-note code, .from-card code {
+    font-family: var(--cd-font-mono);
+    font-size: var(--cd-text-xs);
+    color: var(--cd-ink-1);
+    word-break: break-all;
+  }
+
+  @if $destination {
+  /* A quiet text link that switches the path ("Send from an exchange instead"). */
+  .path-link {
+    align-self: flex-start;
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-1);
+    border: 0;
+    background: none;
+    color: var(--cd-accent);
+    font-family: inherit;
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-strong);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+
+  .path-link:hover { color: var(--cd-accent-hi); }
+  }
+
+  }
+
+  /* The limits line: figures first, the reasons one tap away. Neutral, not
+     indigo: a limit is information, not a warning. */
+  @if $preview {
+  .minimum-notice {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--cd-space-2) var(--cd-space-3);
+    padding: var(--cd-space-3) var(--cd-space-4);
+    border: 1px solid var(--cd-line-soft);
+    border-radius: var(--cd-radius-card);
+    background: var(--cd-surface-1);
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-xs);
+    line-height: 1.5;
+  }
+
+  .minimum-notice svg { margin-top: 3px; color: var(--cd-ink-2); }
+  .minimum-notice strong { color: var(--cd-ink-1); font-weight: var(--cd-weight-strong); }
+  .minimum-notice.btc strong { color: var(--cd-btc); }
+  .min-copy { min-width: 0; }
+  .min-why-more { margin-top: var(--cd-space-1); }
+
+  .min-why-more summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-2);
+    margin-left: calc(-1 * var(--cd-space-2));
+    border-radius: var(--cd-radius-chip);
+    color: var(--cd-accent);
+    font-weight: var(--cd-weight-strong);
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .min-why-more summary::-webkit-details-marker { display: none; }
+  .min-why-more summary::after { content: ' \25BE'; }
+  .min-why-more[open] summary::after { content: ' \25B4'; }
+  .min-why-more summary:hover { background: var(--cd-surface-2); }
+  .min-why-more .min-why { display: block; margin-top: var(--cd-space-1); }
+  }
+}
+
+/* Alerts, the status line, the button row, the foot note. */
+@mixin feedback($money-button: false, $success: false) {
+  /* The refusal is CashierAlert.svelte; only the withdraw sheet's recovery
+     notice still paints an alert of its own, so the base rules ride the
+     $success flag. */
+  @if $success {
+  .alert {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--cd-space-2) var(--cd-space-3);
+    align-items: start;
+    padding: var(--cd-space-3) var(--cd-space-4);
+    border-radius: var(--cd-radius-card);
+    border: 1px solid;
+    font-size: var(--cd-text-sm);
+    line-height: 1.5;
+  }
+
+  .alert svg { margin-top: 2px; }
+  .alert .alert-text { min-width: 0; }
+
+  .alert.success {
+    background: var(--cd-accent-dim);
+    border-color: var(--cd-accent-line);
+    color: var(--cd-accent);
+  }
+  }
+
+  /* The one-line note under the columns: on a wide screen the header's
+     subtitle already says it and the button row needs the height (the
+     cashier's CTA must be in frame at 1440x900 with every disclosure up),
+     so it renders on the phone sheet only. */
+  .cashier-note {
+    display: none;
+    margin: 0;
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-xs);
+    line-height: 1.5;
+  }
+
+  .actions {
+    display: flex;
+    gap: var(--cd-space-3);
+  }
+
+  .btn-primary, .btn-secondary {
+    flex: 1 1 0;
+    min-height: var(--cd-control-md);
+    padding: 0 var(--cd-space-4);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--cd-space-2);
+    border-radius: var(--cd-radius-chip);
+    font-family: inherit;
+    font-size: var(--cd-text-md);
+    font-weight: var(--cd-weight-figure);
+    cursor: pointer;
+    transition: background var(--cd-fast) var(--cd-ease), box-shadow var(--cd-fast) var(--cd-ease),
+      transform var(--cd-fast) var(--cd-ease);
+  }
+
+  .btn-primary {
+    flex-grow: 1.6;
+    border: 0;
+    background: var(--cd-accent);
+    color: var(--cd-accent-ink);
+    box-shadow: var(--cd-gloss);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .btn-primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--cd-gloss), 0 6px 18px var(--cd-accent-glow); }
+
+  @if $money-button {
+  .btn-primary.money { background: var(--cd-money); color: var(--cd-money-ink); }
+  .btn-primary.money:hover:not(:disabled) { box-shadow: var(--cd-gloss), 0 6px 18px var(--cd-money-glow); }
+  } @else {
+  .btn-primary.btc { background: var(--cd-btc); color: var(--cd-ink-on-light); }
+  }
+
+  .btn-secondary {
+    border: 1px solid var(--cd-line-strong);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-1);
+  }
+
+  .btn-secondary:hover:not(:disabled) { background: var(--cd-surface-3); color: var(--cd-ink); }
+  .btn-primary:disabled, .btn-secondary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--cd-line-bright);
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: cashier-spin-btn 0.8s linear infinite;
+  }
+
+  @keyframes cashier-spin-btn { to { transform: rotate(360deg); } }
+}
+
+/* The phone: the shared sheet rules. */
+@mixin phone($deposit: true, $field: true) {
+  @include sheet.sheet($field: $field);
+
+  .cashier-grid { display: flex; flex-direction: column; gap: var(--cd-space-3); }
+  .cashier-col { gap: var(--cd-space-3); }
+  .cashier-note { display: block; }
+  @if $field { @include amount-field-phone; }
+  @if not $deposit { .path-link { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); justify-content: center; } }
+  .close-btn { border: 0; background: none; }
+
+  @if $deposit {
+  .min-why-more summary { min-height: var(--cd-touch-min); }
+  }
+}

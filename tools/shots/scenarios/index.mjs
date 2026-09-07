@@ -7,9 +7,12 @@ import lobby from './lobby.mjs';
 import tableEmpty from './table-empty.mjs';
 import tablePreflop from './table-preflop.mjs';
 import tableFacingBet from './table-facing-bet.mjs';
+import tableFacingBetFlop from './table-facing-bet-flop.mjs';
+import tableWaiting from './table-waiting.mjs';
 import tableAllin from './table-allin.mjs';
 import tableShowdown from './table-showdown.mjs';
 import tableSidepots from './table-sidepots.mjs';
+import tableLog from './table-log.mjs';
 import deposit from './deposit.mjs';
 import handhistory from './handhistory.mjs';
 import handreplay from './handreplay.mjs';
@@ -21,9 +24,12 @@ export const SCENES = [
   tableEmpty,
   tablePreflop,
   tableFacingBet,
+  tableFacingBetFlop,
+  tableWaiting,
   tableAllin,
   tableShowdown,
   tableSidepots,
+  tableLog,
   deposit,
   handhistory,
   handreplay,

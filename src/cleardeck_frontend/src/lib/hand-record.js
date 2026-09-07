@@ -124,9 +124,15 @@ export function normalizeAction(record) {
     ? fromRecord
     : (fromVariant !== null && fromVariant > 0 ? fromVariant : null);
   const rawPhase = typeof record?.phase === 'string' ? record.phase : null;
+  // The archive's ActionRecord names the principal who acted; the table's
+  // does not. Kept when present so a hand the hero folded before showdown
+  // still says the hero was in it (hand-history-records.js participatedIn).
+  const who = record?.principal;
+  const principal = who === null || who === undefined ? null : (typeof who.toString === 'function' ? who.toString() : String(who));
   return {
     kind: kind || 'Unknown',
     amount,
+    principal,
     amountFrom: amount === null ? null : (fromRecord !== null && fromRecord > 0 ? 'record.amount' : 'variant payload'),
     amountMeaning: amount === null ? 'none' : amountMeaningOf(kind),
     seat: Number(record?.seat ?? 0),

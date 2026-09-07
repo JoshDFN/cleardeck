@@ -33,7 +33,8 @@
 // verdict was won.
 
 import { Principal } from '@dfinity/principal';
-import { ledgerBalance, ledgerTransferFee, tableActorFor } from './table-driver.mjs';
+import { ledgerBalance, ledgerSubaccountBalance, ledgerTransferFee, tableActorFor } from './table-driver.mjs';
+import { depositSubaccountBytes } from './deposit-address.mjs';
 import { BTC_MIN_DEPOSIT_SATS as BTC_MIN_DEPOSIT, ICP_MIN_DEPOSIT_E8S as ICP_MIN_DEPOSIT } from './config.mjs';
 import { lobbyActor, optional, variantKey } from './agent.mjs';
 // The archive and the table's hand record are read through the HARNESS's own
@@ -44,11 +45,12 @@ import { lobbyActor, optional, variantKey } from './agent.mjs';
 import { archiveActor } from './archive-wire.mjs';
 import { handRecordActor } from './hand-record-wire.mjs';
 import {
-  checkFigure, checkPlainNumber, foldFigures, parseDisplayedAmount,
+  checkFigure, checkPlainNumber, displayQuantumFor, foldFigures, parseDisplayedAmount, quantiseDown,
   RANK_BY_GLYPH, SUIT_BY_SYMBOL, cardToText, fmt,
 } from './money.mjs';
 import {
-  closeBetPresets, readBetPreset, scrapeDeposit, scrapeHandHistory, scrapeLobby, scrapeTable,
+  closeBetPresets, readBetPreset, scrapeDeposit, scrapeHandHistory, scrapeLobby, scrapeSolvency,
+  scrapeTable,
 } from './dom-scrape.mjs';
 import { devPlayerPrincipal } from './identities.mjs';
 import { thirdPartyObservations } from './browser.mjs';
@@ -58,6 +60,97 @@ import {
 } from './equity-oracle.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * `formatTokenAmount(v, { includeUnit: true })` as the client renders it, so
+ * a solvency row can be compared with what SolvencyNotice.svelte prints:
+ * "140.00 ICP (14000000000 e8s)". Mirrors src/lib/utils.js; a change there
+ * fails here, on purpose.
+ */
+export function clientTokenText(smallestUnit, currency = 'ICP') {
+    const num = Number(smallestUnit);
+    if (currency === 'BTC') {
+        if (num >= 100_000_000) return `${(num / 100_000_000).toFixed(2)} BTC`;
+        if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M sats`;
+        if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K sats`;
+        return `${num} sats`;
+    }
+    const tokens = num / 100_000_000;
+    if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}K ICP`;
+    if (tokens >= 0.01) return `${tokens.toFixed(2)} ICP`;
+    return `${tokens.toFixed(4)} ICP`;
+}
+
+/**
+ * One solvency row: the rounded token figure on the row must be the
+ * canister's, rendered exactly as the client renders it. The whole row text is
+ * the figure's `domText`, so the census credits every literal in it to this
+ * check. (The exact e8s integer moved under "What the table said" in the
+ * cashier wave's second round; `checkSolvencyExact` asserts it there.)
+ */
+export function checkSolvencyLine(label, chainValue, domText, currency = 'ICP') {
+    const chain = chainValue === null || chainValue === undefined ? null : Number(chainValue);
+    if (chain === null) {
+        return {
+            label, chain: null, domText: domText ?? null, agrees: false, discriminates2x: false,
+            ok: false, detail: 'the canister publishes no figure for this row, yet the row is on screen',
+        };
+    }
+    const text = String(domText ?? '');
+    const wantTokens = clientTokenText(chain, currency);
+    const agrees = text.includes(wantTokens);
+    return {
+        label, chain, domText: text, agrees, discriminates2x: true, ok: agrees,
+        detail: agrees
+            ? `screen "${text}" carries "${wantTokens}"`
+            : `screen "${text}" does not carry "${wantTokens}"`,
+    };
+}
+
+/**
+ * One exact solvency figure: the e8s integer under "What the table said"
+ * must be the canister's, digit for digit. The census credits the "8" of
+ * "e8s" and the integer itself to this check.
+ */
+export function checkSolvencyExact(label, chainValue, domText) {
+    const chain = chainValue === null || chainValue === undefined ? null : Number(chainValue);
+    if (chain === null) {
+        return {
+            label, chain: null, domText: domText ?? null, agrees: false, discriminates2x: false,
+            ok: false, detail: 'the canister publishes no figure for this row, yet an exact figure is on screen',
+        };
+    }
+    const text = String(domText ?? '');
+    const wantExact = `${chain} e8s`;
+    const agrees = text.trim() === wantExact;
+    return {
+        label, chain, domText: text, agrees, discriminates2x: true, ok: agrees,
+        detail: agrees ? `screen "${text}" is exactly "${wantExact}"` : `screen "${text}" is not "${wantExact}"`,
+    };
+}
+
+/**
+ * The canister-authored advice sentence quotes its figures at four decimals
+ * ("140.0000 ICP (14000000000 e8s)"). Every numeric literal in it must be one
+ * of the report's own figures, as e8s or as tokens at any precision, or the
+ * literal "8" of "e8s".
+ */
+export function checkSolvencyAdvice(label, knownE8s, domText) {
+    const text = String(domText ?? '');
+    const literals = text.match(/\d+(?:[.,]\d+)*/g) || [];
+    const asNumber = (s) => Number(s.replace(/,/g, ''));
+    const explained = (n) => n === 8
+        || knownE8s.some((k) => k === n || Math.abs(k / 100_000_000 - n) < 0.00005);
+    const strays = literals.filter((s) => !explained(asNumber(s)));
+    const ok = strays.length === 0;
+    return {
+        label, chain: knownE8s.length ? knownE8s[0] : null, domText: text, agrees: ok,
+        discriminates2x: true, ok,
+        detail: ok
+            ? `every figure in the advice is one of get_solvency()'s own (${knownE8s.join(', ')} e8s)`
+            : `the advice quotes ${strays.join(', ')}, which is none of get_solvency()'s figures (${knownE8s.join(', ')} e8s)`,
+    };
+}
 
 /** Attempts before a disagreement is believed, and the gap between them. */
 const MAX_ATTEMPTS = Number(process.env.SHOTS_AGREEMENT_ATTEMPTS || 3);
@@ -133,12 +226,20 @@ export async function readTableTruth(tableId, playerNum) {
         balance: Number(balance),
         mySeat: optional(view.my_seat) === null ? null : Number(optional(view.my_seat)),
         callAmount: Number(view.call_amount),
+        // The raise-legality fields the sizer's resting figure is checked by.
+        currentBet: Number(view.current_bet),
+        minRaise: Number(view.min_raise ?? view.config.big_blind),
+        minBet: Number(view.min_bet ?? view.config.big_blind),
         isMyTurn: view.is_my_turn,
         dealerSeat: Number(view.dealer_seat),
         smallBlindSeat: Number(view.small_blind_seat),
         bigBlindSeat: Number(view.big_blind_seat),
         smallBlind: Number(view.config.small_blind),
         bigBlind: Number(view.config.big_blind),
+        // The table's own minimum buy-in: the deposit sheet's quick chips
+        // derive their figures from it (docs/DEFECTS.md T-11: never the
+        // lobby record's).
+        minBuyIn: Number(view.config.min_buy_in),
         handNumber: Number(view.hand_number),
         // THE CALLER'S OWN STAKE IN THE MIDDLE (docs/SECURITY-FINDINGS.md
         // FINDING 18). The dock renders this as ICP; until E-64 nothing read the
@@ -392,16 +493,23 @@ function equityProblems(truth, dom, figures) {
  * two pair "Pair of Aces" fails instead of passing on a substring.
  */
 const RANK_WORDS = '(?:two|three|four|five|six|seven|eight|nine|ten|jack|queen|king|ace)';
+const RANK_PLURALS = '(?:twos|threes|fours|fives|sixes|sevens|eights|nines|tens|jacks|queens|kings|aces)';
+// The plate row prints the COMPACT form of the same name (src/lib/hand-names.js
+// deletes the kicker clause and, where the ranks already say the category,
+// the category prefix: "Aces full of Eights", "Aces and Eights", "Three
+// Sevens"). Each alternate is anchored on the rank words of ITS category, so
+// "aces and eights" still cannot pass as a pair and "three sevens" cannot pass
+// as a straight.
 const HAND_PHRASE = {
     'Royal Flush': /^royal flush$/,
-    'Straight Flush': /^straight flush, .+ high$/,
-    'Four of a Kind': /^four of a kind, /,
-    'Full House': /^full house, .+ full of /,
+    'Straight Flush': /^straight flush(?:, .+ high)?$/,
+    'Four of a Kind': new RegExp(`^(?:four of a kind, |four )${RANK_PLURALS}$`),
+    'Full House': new RegExp(`^(?:full house, )?${RANK_PLURALS} full of ${RANK_PLURALS}$`),
     Flush: /^flush, .+ high$/,
     Straight: /^straight, .+ high$/,
-    'Three of a Kind': /^three of a kind, /,
-    'Two Pair': /^two pair, .+ and /,
-    Pair: /^pair of /,
+    'Three of a Kind': new RegExp(`^(?:three of a kind, |three )${RANK_PLURALS}$`),
+    'Two Pair': new RegExp(`^(?:two pair, )?${RANK_PLURALS} and ${RANK_PLURALS}$`),
+    Pair: new RegExp(`^pair of ${RANK_PLURALS}(?:, ${RANK_WORDS} kicker)?$`),
     'High Card': new RegExp(`^${RANK_WORDS} high$`),
 };
 
@@ -686,6 +794,68 @@ function compare(truth, dom, opts) {
     if (dom.turnHint && /call/i.test(dom.turnHint) && /\d/.test(dom.turnHint)) {
         figures.push(checkFigure('turn hint "Call X" vs call_amount', truth.callAmount, dom.turnHint.replace(/^[^\d-]*/, ''), { currency }));
     }
+    // The pre-action row's "Call X" toggle (PreActions.svelte) is the same
+    // call_amount, promised in advance; "Call any" carries no figure.
+    for (const label of dom.preActionButtons || []) {
+        if (!/^call\s+\d/i.test(label)) continue;
+        figures.push(checkFigure('pre-action "Call X" vs call_amount', truth.callAmount, label.replace(/^call/i, ''), { currency }));
+    }
+    // THE HERO PLATE TAG (SeatPod.svelte): "Call 0.10" while that pre-action
+    // is armed, or the sent echo ("Raise to 0.30", "Call 0.10") while a send
+    // is open. Money painted on the felt, so: the armed figure against
+    // call_amount; the sent figure against the e8s the echo recorded and will
+    // send (data-sent-e8s). A digit in the tag that neither rule can name is
+    // structural: a money figure nothing asserts.
+    if (dom.heroPlateTag && /\d/.test(dom.heroPlateTag)) {
+        const tag = dom.heroPlateTag;
+        if (dom.heroPlateTagSentE8s !== null && dom.heroPlateTagSentE8s !== undefined) {
+            figures.push(checkFigure(
+                'hero plate tag (sent echo) vs the e8s the echo recorded',
+                dom.heroPlateTagSentE8s, tag.replace(/^[^\d-]*/, ''), { currency },
+            ));
+        } else if (/^call\s+\d/i.test(tag)) {
+            figures.push(checkFigure('hero plate tag "Call X" vs call_amount', truth.callAmount, tag.replace(/^call/i, ''), { currency }));
+        } else {
+            structural.push(`hero plate tag "${tag}" carries a figure that no rule asserts`);
+        }
+    }
+
+    // ---- the sizer at rest -----------------------------------------------
+    // The dock sizer (BetSizer.svelte) proposes the LEGAL FLOOR on every
+    // my-turn edge: current_bet + min_raise, or min_bet with nothing in front.
+    // Three places show that figure (the typed field, the range's value and
+    // the primary "Raise to X" / "Bet X" button), and every one of them is
+    // money the next click SENDS, so all three are asserted against the
+    // canister's own fields. assertBetPresetsAgree moves the sizer to the
+    // pot-fraction presets and puts it back to Min before this runs.
+    if (dom.raiseSliderRange && truth.isMyTurn) {
+        const floor = truth.currentBet === 0 ? truth.minBet : truth.currentBet + truth.minRaise;
+        const cap = truth.mySeat === null ? 0
+            : (truth.seats[truth.mySeat]?.chips ?? 0) + (truth.seats[truth.mySeat]?.currentBet ?? 0);
+        const expected = Math.min(cap, Math.max(floor, 0));
+        const sliderValue = Number(dom.raiseSliderRange.value);
+        figures.push({
+            label: 'bet sizer at rest vs the legal floor (current_bet + min_raise, or min_bet)',
+            chain: expected,
+            domText: String(sliderValue),
+            agrees: sliderValue === expected,
+            discriminates2x: false,
+            ok: sliderValue === expected,
+            detail: sliderValue === expected
+                ? `the range holds ${sliderValue} e8s, the legal floor`
+                : `the range holds ${sliderValue} e8s where the legal floor is ${expected} e8s `
+                  + `(current_bet ${truth.currentBet}, min_raise ${truth.minRaise}, min_bet ${truth.minBet}, cap ${cap})`,
+        });
+        if (dom.raiseInputValue) {
+            figures.push(checkFigure('bet preset "at rest" typed field vs the value that would be SENT', sliderValue, dom.raiseInputValue, { currency }));
+        }
+        if (dom.raiseButtonText && /\d/.test(dom.raiseButtonText)) {
+            figures.push(checkFigure(
+                'action button "Raise to X" vs the value that would be SENT',
+                sliderValue, dom.raiseButtonText.replace(/^[^\d-]*/, ''), { currency },
+            ));
+        }
+    }
 
     // ---- winner banner ---------------------------------------------------
     if (dom.winnerText) {
@@ -694,11 +864,23 @@ function compare(truth, dom, opts) {
         } else {
             const mine = truth.mySeat === null ? undefined : truth.winners.find((w) => w.seat === truth.mySeat);
             const shown = mine ?? truth.winners[0];
+            // THE AMOUNT IS THE NUMBER AFTER "wins" / "won". The line names the
+            // seat's display name now ("Nakamoto wins 24.00 ICP"), so the first
+            // number on the line is no longer the seat; a name that itself
+            // carries a digit ("Player 2") would otherwise be read as money.
+            const afterVerb = /\b(?:wins|won)\s+(-?\d[\d.,]*\s*[KM]?)/i.exec(dom.winnerText);
             const nums = dom.winnerText.match(/-?\d[\d.,]*\s*[KM]?/g) || [];
-            // "Seat N wins X" leads with the seat number; "You won X" does not.
-            const amountText = mine ? nums[0] : nums[1];
-            if (!mine && nums.length >= 1 && Number(nums[0]) !== truth.winners[0].seat + 1) {
-                structural.push(`winner banner names seat ${nums[0]}, canister says seat ${truth.winners[0].seat + 1}`);
+            const amountText = afterVerb ? afterVerb[1] : (mine ? nums[0] : nums[1]);
+            // WHICH SEAT THE LINE MEANS: `data-seat` on the line (dom-scrape
+            // winnerSeat), the canister's 0-based index; on a build without it,
+            // the "Seat N" the old copy led with.
+            if (!mine) {
+                const said = dom.winnerSeat ?? (/^Seat\s+(\d+)/i.test(dom.winnerText) ? Number(/^Seat\s+(\d+)/i.exec(dom.winnerText)[1]) - 1 : null);
+                if (said === null) {
+                    structural.push(`winner banner "${dom.winnerText}" names no seat (no data-seat, no "Seat N")`);
+                } else if (said !== truth.winners[0].seat) {
+                    structural.push(`winner banner names seat ${said + 1}, canister says seat ${truth.winners[0].seat + 1}`);
+                }
             }
             figures.push(checkFigure('winner amount vs last_hand_winners', shown.amount, amountText, { currency }));
         }
@@ -846,14 +1028,12 @@ export async function assertChainAgreement(ctx, page, opts) {
 /**
  * THE BET-SIZING PRESETS: what the client would WAGER, not what it displays.
  *
- * `½ Pot` and `Pot` write an amount into the raise field that the next click
- * sends to the canister. If the client's idea of "the pot" is wrong, this is not
- * a cosmetic defect: the player commits real chips at a size they did not
- * intend. So the presets are read off the live UI and compared with the
- * canister's own `get_pot()`, using the poker definition the labels promise:
- *
- *   Pot   = raise TO (pot + amount_to_call)   — the pot after you call
- *   ½ Pot = raise TO (pot/2), floored at the legal minimum raise
+ * A preset writes an amount into the raise field that the next click sends
+ * to the canister. If the client's idea of "the pot" (or of the big blind) is
+ * wrong, this is not a cosmetic defect: the player commits real chips at a
+ * size they did not intend. So the presets are read off the live UI and
+ * compared with the canister's own `get_pot()` and config, using the poker
+ * definition the labels promise.
  *
  * WHAT "POT-SIZED" MEANS, WRITTEN DOWN ONCE.
  *
@@ -863,25 +1043,42 @@ export async function assertChainAgreement(ctx, page, opts) {
  * `m` = my `current_bet`, `P` = `get_pot()` and `c = B - m = call_amount`:
  *
  *     Pot    raise TO  B + P + c        ( = P + 2B - m )
- *     ½ Pot  raise TO  B + floor(P/2 + c/2)
+ *     ½ Pot  raise TO  B + (P + c) / 2
+ *     ⅔ Pot  raise TO  B + 2 (P + c) / 3
+ *
+ * and pre-flop the row is multiples of the bet in front (or the big blind when
+ * only the blinds are in): 2.5x, 3x, 4x of max(B, big_blind).
  *
  * `P` already contains every live bet, which is exactly the fact T-08 got wrong.
+ *
+ * QUANTISED TO THE DISPLAY UNIT. Every formula's figure is rounded DOWN onto
+ * the grid the screen shows (`displayQuantumFor`, 0.01 ICP at two decimals)
+ * before the floor and the cap are applied, because that is what the client
+ * does ($lib/bet-sizing.js): a proposal off the grid is a figure the button
+ * cannot show, and before this the two-thirds preset read 0.47 on the button
+ * while 46,666,666 e8s would have been sent. This check reads the two-thirds
+ * preset precisely because that was the one that failed.
  *
  * Getting this arithmetic wrong in the HARNESS is as bad as getting it wrong in
  * the client, and the first draft of this check did: it used `P + c` as a
  * ceiling, which is a chips-added quantity compared against a raise-to figure,
  * and it convicted a correct client. So the observed value is also inverted back
- * into an IMPLIED POT, `implied = observed - B - c`, and reported next to
- * `get_pot()`. That number is definition-free: if the client is sizing off twice
- * the pot, `impliedPot / get_pot()` reads 2.0 and says so, whatever formula
- * either side prefers.
+ * into an IMPLIED POT (for the pot fractions) or an IMPLIED BASE (for the
+ * multiples) and reported next to the canister's figure. That number is
+ * definition-free: if the client is sizing off twice the pot,
+ * `impliedPot / get_pot()` reads 2.0 and says so, whatever formula either side
+ * prefers.
  *
- * Both presets are floored at the legal minimum (`current_bet + min_raise`, or
+ * Every preset is floored at the legal minimum (`current_bet + min_raise`, or
  * `min_bet` when there is no bet) and capped at the player's stack, so a preset
  * that lands on the floor or the cap is reported as UNCONSTRAINING rather than as
  * a pass — a preset pinned to the floor proves nothing about the pot behind it.
  *
- * Nothing is committed: the popover is opened, read and closed again.
+ * Which row is read follows the STREET the scene photographs: the multiples
+ * pre-flop, the fractions after. A label that is not on screen is an advisory,
+ * never a pass.
+ *
+ * Nothing is committed: the sizer is opened, read and put back to Min.
  *
  * @param {object} ctx
  * @param {import('playwright').Page} page
@@ -909,39 +1106,72 @@ export async function assertBetPresetsAgree(ctx, page, opts) {
     const cap = raw.myChips + raw.myCurrentBet;
     const B = raw.currentBet;
     const c = truth.callAmount;
-    const expectedRaiseTo = {
-        Pot: Math.min(cap, Math.max(floor, B + truth.pot + c)),
-        '½ Pot': Math.min(cap, Math.max(floor, B + Math.floor((truth.pot + c) / 2))),
-    };
-    /** The pot the client must have been sizing from, given what it proposed. */
-    const impliedPotFrom = (raiseTo, label) =>
-        (label === 'Pot' ? raiseTo - B - c : (raiseTo - B) * 2 - c);
+    const P = truth.pot;
+    const bb = truth.bigBlind;
+    const quantum = displayQuantumFor(truth.currency, bb);
+    const legal = (v) => Math.min(cap, Math.max(floor, quantiseDown(Math.floor(v), quantum)));
 
-    for (const label of ['½ Pot', 'Pot']) {
+    /**
+     * The rules per label: the expected raise-to, and the inversion that turns
+     * an observed raise-to back into the figure the client must have used.
+     */
+    const RULES = {
+        'Pot': { expected: () => legal(B + P + c), implied: (to) => to - B - c, base: 'pot', discriminates: P > 0 },
+        '½ Pot': { expected: () => legal(B + (P + c) / 2), implied: (to) => (to - B) * 2 - c, base: 'pot', discriminates: P > 0 },
+        '⅔ Pot': { expected: () => legal(B + (2 * (P + c)) / 3), implied: (to) => ((to - B) * 3) / 2 - c, base: 'pot', discriminates: P > 0 },
+        '2.5x': { expected: () => legal(2.5 * Math.max(B, bb)), implied: (to) => to / 2.5, base: 'bet', discriminates: true },
+        '3x': { expected: () => legal(3 * Math.max(B, bb)), implied: (to) => to / 3, base: 'bet', discriminates: true },
+        '4x': { expected: () => legal(4 * Math.max(B, bb)), implied: (to) => to / 4, base: 'bet', discriminates: true },
+    };
+    const preflop = truth.phase === 'PreFlop';
+    const labels = preflop ? ['2.5x', '3x', '4x', 'Pot'] : ['½ Pot', '⅔ Pot', 'Pot'];
+    const baseFigure = (rule) => (rule.base === 'pot' ? P : Math.max(B, bb));
+    const baseName = (rule) => (rule.base === 'pot' ? 'get_pot()' : 'max(current_bet, big_blind)');
+
+    for (const label of labels) {
+        const rule = RULES[label];
         const read = await readBetPreset(page, label);
         const sliderValue = read.sliderValue === null || read.sliderValue === undefined
             ? null : Number(read.sliderValue);
-        const impliedPot = sliderValue === null ? null : impliedPotFrom(sliderValue, label);
+        const implied = sliderValue === null ? null : rule.implied(sliderValue);
+        const base = baseFigure(rule);
         const entry = {
             label,
+            street: truth.phase,
             ...read,
             sliderValueE8s: sliderValue,
-            expectedRaiseToE8s: expectedRaiseTo[label],
-            impliedPotE8s: impliedPot,
-            impliedPotMultiple: impliedPot === null || truth.pot === 0
-                ? null : Math.round((impliedPot / truth.pot) * 1000) / 1000,
+            expectedRaiseToE8s: rule.expected(),
+            impliedBaseE8s: implied,
+            impliedBaseMultiple: implied === null || base === 0
+                ? null : Math.round((implied / base) * 1000) / 1000,
+            quantumE8s: quantum,
         };
         results.push(entry);
         if (!read.available) {
-            advisory.push(`preset "${label}" is not reachable on this screen`);
+            advisory.push(`preset "${label}" is not reachable on this screen (street ${truth.phase})`);
             continue;
         }
         if (sliderValue === null) {
             advisory.push(`preset "${label}": no slider value to read`);
             continue;
         }
+        // THE FIGURE MUST BE ON THE DISPLAY GRID: a proposal the button cannot
+        // show exactly is a figure that would be sent while a different one is
+        // read. Checked before anything about the pot.
+        if (sliderValue % quantum !== 0 && sliderValue !== floor && sliderValue !== cap) {
+            figures.push({
+                label: `bet preset "${label}" is on the display grid`,
+                chain: quantum,
+                domText: String(sliderValue),
+                agrees: false,
+                discriminates2x: false,
+                ok: false,
+                detail: `WOULD WAGER ${sliderValue} e8s, which is not a multiple of the display unit `
+                    + `${quantum} e8s: the button shows a rounded figure and the canister gets another`,
+            });
+        }
         // The two places the client SHOWS the amount must agree with the amount
-        // it would SEND. A popover that displays one number and posts another is
+        // it would SEND. A sizer that displays one number and posts another is
         // its own defect, so this is checked before anything about the pot.
         for (const [what, text] of [['slider readout', read.amountText], ['confirm button', read.confirmText]]) {
             if (!text) continue;
@@ -956,29 +1186,30 @@ export async function assertBetPresetsAgree(ctx, page, opts) {
         if (pinned) {
             advisory.push(
                 `preset "${label}" landed on ${pinned} (${sliderValue} e8s), so this sample `
-                + 'cannot discriminate a wrong pot behind it',
+                + 'cannot discriminate a wrong figure behind it',
             );
             continue;
         }
-        const want = expectedRaiseTo[label];
+        const want = rule.expected();
         const ok = sliderValue === want;
         figures.push({
-            label: `bet preset "${label}" is sized from get_pot()`,
+            label: `bet preset "${label}" is sized from ${baseName(rule)}`,
             chain: want,
             domText: String(sliderValue),
             agrees: ok,
-            // Would a doubled pot have produced a different number here? It moves
-            // the target by exactly get_pot(), so yes whenever the pot is non-zero
-            // and the result is not pinned by the floor or the cap.
-            discriminates2x: truth.pot > 0,
+            // Would a doubled pot (or big blind) have produced a different number
+            // here? Yes whenever the base is non-zero and the result is not
+            // pinned by the floor or the cap.
+            discriminates2x: rule.discriminates,
             ok,
             detail: ok
-                ? `raise-to ${sliderValue} e8s == current_bet ${B} + get_pot() ${truth.pot} `
-                  + `${label === 'Pot' ? '+' : '/2 +'} call ${c} (implied pot ${impliedPot} e8s, `
-                  + `${entry.impliedPotMultiple}x get_pot())`
+                ? `raise-to ${sliderValue} e8s == ${label} of ${baseName(rule)} ${base} e8s `
+                  + `(current_bet ${B}, call ${c}, quantised to ${quantum} e8s; implied base `
+                  + `${entry.impliedBaseE8s} e8s, ${entry.impliedBaseMultiple}x)`
                 : `WOULD WAGER a raise-to of ${sliderValue} e8s where a ${label} raise is ${want} e8s. `
-                  + `The client is sizing from a pot of ${impliedPot} e8s — ${entry.impliedPotMultiple}x `
-                  + `get_pot() (${truth.pot}). This number is SENT to the canister, not merely displayed.`,
+                  + `The client is sizing from a base of ${entry.impliedBaseE8s} e8s, `
+                  + `${entry.impliedBaseMultiple}x ${baseName(rule)} (${base}). This number is SENT to `
+                  + 'the canister, not merely displayed.',
         });
     }
     await closeBetPresets(page);
@@ -992,15 +1223,15 @@ export async function assertBetPresetsAgree(ctx, page, opts) {
             moneyMismatches: folded.mismatches,
             advisory,
             onChain: {
-                getPot: truth.pot, callAmount: truth.callAmount,
-                currentBet: raw.currentBet, minRaise: raw.minRaise, minBet: raw.minBet,
-                legalFloor: floor, cap,
+                street: truth.phase, getPot: P, callAmount: c, bigBlind: bb,
+                currentBet: B, minRaise: raw.minRaise, minBet: raw.minBet,
+                legalFloor: floor, cap, displayQuantum: quantum,
             },
             onScreen: results,
             figures: folded.figures.map((f) => ({ label: f.label, chain: f.chain, screen: f.domText, ok: f.ok, detail: f.detail })),
         },
         notes: folded.ok
-            ? `bet presets: ${folded.checked} sizing figure(s) match get_pot()`
+            ? `bet presets (${truth.phase}): ${folded.checked} sizing figure(s) match the canister`
             : `BET SIZING DISAGREEMENT: ${folded.mismatches.slice(0, 3).join(' | ')}`,
     };
 }
@@ -1103,7 +1334,21 @@ export async function assertLobbyAgreement(ctx, page) {
     for (const entry of byName.values()) await readTableSide(entry);
     const potsBefore = new Map([...byName.values()].map((e) => [e.name, e.livePot]));
 
-    const dom = await scrapeLobby(page);
+    let dom = await scrapeLobby(page);
+
+    // THE QUOTE CAN LAND AFTER THE FIRST SCRAPE. The lobby reads the price on
+    // mount (lib/prices.js) and paints its fiat hints when it arrives, so a
+    // scrape a moment after the rows settled can see rows without hints while
+    // a live quote was served. Re-read a few times before calling that a
+    // structural failure; a quote that was never served needs no wait.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+        const quoteNow = servedIcpUsd();
+        const anyFiat = dom.rows.some((r) => r.fiat && r.fiat.length > 0);
+        if (!quoteNow || quoteNow.mode === 'unavailable' || anyFiat) break;
+        await page.waitForTimeout(400);
+        dom = await scrapeLobby(page);
+    }
+    const quote = servedIcpUsd();
 
     // Second read, so a live pot that moved under us is reported as unstable
     // rather than as a lie. Blinds and buy-ins are static and need no bracket.
@@ -1149,6 +1394,22 @@ export async function assertLobbyAgreement(ctx, page) {
             figures.push(checkFigure(`lobby "${row.name}" max buy-in (vs TABLE canister config)`, cfg.maxBuyIn, buyInNums[1], { currency: cur }));
         } else {
             structural.push(`lobby row "${row.name}": could not read a buy-in range out of "${row.buyInText}"`);
+        }
+
+        // The card's clock: seconds, not money, but a promise about how long a
+        // player has to act on money, so it is compared like everything else.
+        const clockNums = (row.clockText || '').match(/\d+/g) || [];
+        if (clockNums.length >= 2 && entry.tableConfig) {
+            figures.push(checkPlainNumber(`lobby "${row.name}" clock action timeout`, entry.tableConfig.actionTimeoutSecs, clockNums[0], { unit: 's' }));
+            figures.push(checkPlainNumber(`lobby "${row.name}" clock time bank`, entry.tableConfig.timeBankSecs, clockNums[1], { unit: 's' }));
+        }
+
+        // The dollar lines under the stakes and the buy-in.
+        assertFiatHints(`lobby "${row.name}"`, row.fiat, cfg, cur, quote, figures, structural);
+        if ((!row.fiat || row.fiat.length === 0) && quote && quote.mode !== 'unavailable') {
+            structural.push(
+                `a live quote (${quote.usd} USD/ICP) was served but lobby row "${row.name}" shows no fiat hint`,
+            );
         }
 
         // THE ROW NAME IS A MONEY FIGURE TOO.
@@ -1311,6 +1572,8 @@ export async function assertLobbyAgreement(ctx, page) {
                 structural.push(`preview fact "Buy-in" has no range: "${fact('Buy-in')}"`);
             }
 
+            assertFiatHints('lobby preview', pv.fiat, cfg, cur, quote, figures, structural);
+
             if (fact('Ante') !== null) {
                 figures.push(checkFigure(label('fact "Ante"'), cfg.ante ?? 0, fact('Ante'), {
                     currency: cur, allowAbsentWhenZero: true,
@@ -1373,17 +1636,63 @@ export async function assertLobbyAgreement(ctx, page) {
     };
 }
 
-/** The USD price the harness actually served this run, or null. */
+/**
+ * The USD price the harness actually served this run, or null. `usd` is the
+ * ICP quote (every caller reads it); `btc` is the bitcoin quote off the same
+ * body, for a sats table's fiat hint, or null when the body had none.
+ */
 function servedIcpUsd() {
     for (const o of thirdPartyObservations().slice().reverse()) {
         if (!o.body) continue;
         try {
             const parsed = JSON.parse(o.body);
             const usd = parsed?.['internet-computer']?.usd;
-            if (typeof usd === 'number') return { usd, mode: o.mode, observedAt: o.observedAt };
+            const btc = parsed?.bitcoin?.usd;
+            if (typeof usd === 'number') {
+                return { usd, btc: typeof btc === 'number' ? btc : null, mode: o.mode, observedAt: o.observedAt };
+            }
         } catch { /* a truncated body is not a quote */ }
     }
     return null;
+}
+
+/**
+ * THE LOBBY'S FIAT HINTS ARE MONEY FIGURES. Each `.fiat-num` names the chain
+ * figure it converts (sb | bb | min | max); the expected dollar value is that
+ * figure times the quote the harness served, and the client's `formatUsd`
+ * rounds to the shown precision, so the half-resolution window of
+ * checkPlainNumber contains the exact product.
+ *
+ * @param {string} where  e.g. `lobby "6-Max"` or `lobby preview`
+ * @param {Array<{of:string, text:string}>} fiat
+ * @param {object} cfg     the TABLE config (smallBlind, bigBlind, minBuyIn, maxBuyIn)
+ * @param {'ICP'|'BTC'} currency
+ * @param {{usd:number, btc:number|null, mode:string}|null} quote
+ */
+function assertFiatHints(where, fiat, cfg, currency, quote, figures, structural) {
+    if (!fiat || fiat.length === 0) return;
+    if (!quote) {
+        structural.push(`${where} shows a fiat figure (${fiat[0].text}) but no price was served this run`);
+        return;
+    }
+    const perToken = currency === 'BTC' ? quote.btc : quote.usd;
+    if (typeof perToken !== 'number') {
+        structural.push(`${where} shows a ${currency} fiat figure but the served quote carries no ${currency} price`);
+        return;
+    }
+    const source = { sb: cfg.smallBlind, bb: cfg.bigBlind, min: cfg.minBuyIn, max: cfg.maxBuyIn };
+    for (const hint of fiat) {
+        const raw = source[hint.of];
+        if (raw === undefined) {
+            structural.push(`${where} fiat hint names an unknown figure "${hint.of}"`);
+            continue;
+        }
+        const expected = (raw / 100_000_000) * perToken;
+        figures.push(checkPlainNumber(
+            `${where} fiat ${hint.of} vs (${raw} x ${perToken} USD, ${quote.mode})`,
+            expected, hint.text, { unit: ' USD' },
+        ));
+    }
 }
 
 /**
@@ -1415,12 +1724,18 @@ export async function assertDepositAgreement(ctx, page, opts) {
     // asserted. The token census then re-reads the page independently, so a
     // figure that appears after even this loop still cannot slip through: it
     // would be counted as UNASSERTED.
-    const priceServed = servedIcpUsd();
+    // THE QUOTE CAN LAND AFTER THE FIRST SCRAPE. `servedIcpUsd()` is re-read
+    // on every attempt: read once before the loop it was null while the
+    // request was still in flight, the loop settled on the balance alone, and
+    // the fiat figure that rendered a moment later reached the census with no
+    // check behind it (measured: "0.0015" in .usd-value asserted by nothing).
     let dom = await scrapeDeposit(page);
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+        const priceServed = servedIcpUsd();
         const settled = dom.found.modal
             && dom.cryptoBalances.length > 0
-            && (!priceServed || priceServed.mode === 'unavailable' || dom.usdValues.length > 0);
+            && priceServed !== null
+            && (priceServed.mode === 'unavailable' || dom.usdValues.length > 0);
         if (settled) break;
         await sleep(ATTEMPT_GAP_MS);
         dom = await scrapeDeposit(page);
@@ -1475,20 +1790,39 @@ export async function assertDepositAgreement(ctx, page, opts) {
         // one fee (src/table_canister/src/lib.rs ICP_MIN_EXTERNAL_DEPOSIT).
         const externalMinimum = minimum + Number(fee);
         const N = '(-?\\d[\\d.,]*)';
+        // THE LINE IS ROUTE-AWARE (the cashier wave's second round): on the
+        // wallet route it leads with the wallet minimum ("Minimum from this
+        // wallet: N") and names the address floor after it ("your deposit
+        // address instead has a minimum of N"); on the address route the
+        // order is the older one. Each figure keeps a label in both orders,
+        // and each label is accepted in both phrasings.
         const claims = [
             {
                 label: 'deposit modal "Minimum deposit" (to the address) vs the canister\'s external-deposit floor',
-                re: new RegExp(`Minimum to this address:\\s*${N}`, 'i'),
+                re: new RegExp(`(?:Minimum to this address:|deposit address instead has a minimum of)\\s*${N}`, 'i'),
                 expected: externalMinimum,
             },
             {
                 label: 'deposit modal "Minimum deposit" (from a connected wallet) vs the minimum the table canister enforces',
-                re: new RegExp(`lower minimum of\\s*${N}`, 'i'),
+                re: new RegExp(`(?:lower minimum of|Minimum from this wallet:)\\s*${N}`, 'i'),
                 expected: minimum,
             },
             {
                 label: 'deposit modal "Network fee" vs the ledger\'s own icrc1_fee()',
                 re: new RegExp(`network fee\\s*${N}`, 'i'),
+                expected: Number(fee),
+            },
+            // T-26's consequence sentence quotes the fee TWICE more ("above the
+            // N network fee", "At or below N nothing can move it"); each quote is
+            // a token the census has to see asserted, one check per quote.
+            {
+                label: 'deposit modal "above the N network fee" vs the ledger\'s own icrc1_fee()',
+                re: new RegExp(`above the\\s*${N}\\s*(?:ICP|BTC|sats)?\\s*network fee`, 'i'),
+                expected: Number(fee),
+            },
+            {
+                label: 'deposit modal "At or below N nothing can move it" vs the ledger\'s own icrc1_fee()',
+                re: new RegExp(`at or below\\s*${N}`, 'i'),
                 expected: Number(fee),
             },
             {
@@ -1514,6 +1848,101 @@ export async function assertDepositAgreement(ctx, page, opts) {
         }
     }
 
+    // THE TYPED AMOUNT, WHAT IT COSTS, AND THE BUTTON THAT NAMES IT (the
+    // cashier wave). None of these render until an amount is in the field, so
+    // a resting still carries none of them; when they are on screen every one
+    // is recomputed here from the field's own value and the LEDGER's fee, by
+    // `data-row`, never by position (docs/DEFECTS.md E-86 is what position
+    // does). The amount is the player's input, so it is not a chain figure;
+    // the fee is, and the arithmetic on it is the claim being checked: two
+    // fees leave the wallet, the amount whole reaches the table.
+    const typed = dom.inputValue && Number(dom.inputValue) > 0
+        ? (truth.currency === 'BTC'
+            ? Math.floor(Number(dom.inputValue))
+            : Math.floor(Number(dom.inputValue) * 100_000_000))
+        : null;
+    if (dom.costRows.length || dom.amountFiat.length) {
+        if (typed === null) {
+            structural.push(
+                'the deposit modal shows a cost summary or an amount fiat hint with no amount in the field',
+            );
+        } else {
+            const fee = Number(await ledgerTransferFee());
+            const expectedByRow = {
+                send: typed,
+                fees: 2 * fee,
+                total: typed + 2 * fee,
+                credited: typed,
+            };
+            for (const row of dom.costRows) {
+                const expected = expectedByRow[row.id];
+                if (expected === undefined) {
+                    structural.push(`the deposit cost summary shows a row "${row.id}" this check does not know`);
+                    continue;
+                }
+                figures.push(checkFigure(
+                    `deposit modal cost row "${row.id}" vs the typed amount and 2 x icrc1_fee()`,
+                    expected, row.text, { currency: truth.currency },
+                ));
+            }
+            if (dom.buttonText && /\d/.test(dom.buttonText)) {
+                figures.push(checkFigure(
+                    'deposit modal button amount vs the typed amount',
+                    typed, dom.buttonText, { currency: truth.currency },
+                ));
+            }
+            const quoteNow = servedIcpUsd();
+            for (const text of dom.amountFiat) {
+                if (!quoteNow) {
+                    structural.push(`the modal shows an amount fiat hint (${text}) but no price was served this run`);
+                    continue;
+                }
+                figures.push(checkPlainNumber(
+                    `deposit modal fiat value vs (amount x ${quoteNow.usd} USD/ICP, ${quoteNow.mode})`,
+                    (typed / 100_000_000) * quoteNow.usd, text, { unit: ' USD' },
+                ));
+            }
+        }
+    } else if (dom.buttonText && /\d/.test(dom.buttonText) && dom.route !== 'address') {
+        structural.push(`the deposit button names a figure (${dom.buttonText}) with no cost summary on screen`);
+    }
+
+    // THE QUICK CHIPS' FACES (the cashier wave's third round): 'Min buy-in
+    // 10.0000 ICP' and '2x min 20.0000 ICP' are the TABLE canister's own
+    // config.min_buy_in and twice it, whatever the wallet can pay. A chip
+    // this check does not know is structural.
+    const expectedChip = { min: truth.minBuyIn, double: 2 * truth.minBuyIn };
+    for (const chip of dom.quickChips ?? []) {
+        const expected = expectedChip[chip.id];
+        if (expected === undefined) {
+            structural.push(`the deposit sheet shows a quick chip "${chip.id}" this check does not know`);
+            continue;
+        }
+        figures.push(checkFigure(
+            `deposit modal quick chip "${chip.id}" vs get_table_view().config.min_buy_in`,
+            expected, chip.figure, { currency: truth.currency },
+        ));
+    }
+
+    // THE ADDRESS ROUTE'S READING (the cashier wave's second round). The card
+    // says what has arrived at the derived deposit subaccount and sweeps it in
+    // by itself; the figure it names is the ledger's, re-read here from the
+    // subaccount the harness derives on its own (lib/deposit-address.mjs).
+    if (dom.detectedAmount) {
+        const subaccount = depositSubaccountBytes(heroPrincipal);
+        const arrived = await ledgerSubaccountBalance(tableId, subaccount);
+        figures.push(checkFigure(
+            'deposit modal detected at the address vs icrc1_balance_of(deposit subaccount)',
+            Number(arrived), dom.detectedAmount, { currency: truth.currency },
+        ));
+        if (dom.buttonText && /\d/.test(dom.buttonText)) {
+            figures.push(checkFigure(
+                'deposit modal detected at the address vs the figure the button names',
+                Number(arrived), dom.buttonText, { currency: truth.currency },
+            ));
+        }
+    }
+
     // Re-read after the settle loop: a quote can land between the two.
     const quote = servedIcpUsd();
     if (dom.usdValues.length === 0) {
@@ -1535,6 +1964,51 @@ export async function assertDepositAgreement(ctx, page, opts) {
         }
     }
 
+    // THE SOLVENCY BLOCK NAMES MONEY (docs/SECURITY-FINDINGS.md FINDING 35).
+    // "Owed to players 140.00 ICP (14000000000 e8s)" is two spellings of the
+    // canister's `owed`; "Held" and "Short by" the same for `held` and
+    // `shortfall_e8s`; and the advice sentence is the canister's own words,
+    // which quote the same figures at four decimals. SolvencyNotice.svelte's
+    // header asked for exactly this site the day the figures started to render;
+    // until it existed both deposit shots were UNVERIFIED on the census.
+    const solvencyDom = await scrapeSolvency(page);
+    if (solvencyDom.present) {
+        const solvencyTable = await tableActorFor(opts.asPlayer, tableId);
+        const report = await solvencyTable.get_solvency();
+        const opt = (v) => (Array.isArray(v) ? (v.length ? v[0] : null) : (v ?? null));
+        const expectedByLabel = {
+            'Owed to players': opt(report.owed),
+            'Held on the ledger': opt(report.held),
+            'Short by': opt(report.shortfall_e8s),
+        };
+        for (const row of solvencyDom.rows) {
+            const expected = expectedByLabel[row.label];
+            if (expected === undefined) {
+                structural.push(`the solvency block shows a row labelled "${row.label}" that this check does not know`);
+                continue;
+            }
+            figures.push(checkSolvencyLine(
+                `solvency "${row.label}" vs get_solvency()`, expected, row.text, truth.currency,
+            ));
+        }
+        const expectedById = { owed: opt(report.owed), held: opt(report.held), shortfall: opt(report.shortfall_e8s) };
+        for (const row of solvencyDom.exact || []) {
+            const expected = expectedById[row.id];
+            if (expected === undefined) {
+                structural.push(`the solvency block shows an exact figure "${row.id}" that this check does not know`);
+                continue;
+            }
+            figures.push(checkSolvencyExact(`solvency exact "${row.id}" vs get_solvency()`, expected, row.text));
+        }
+        if (solvencyDom.advice && /\d/.test(solvencyDom.advice)) {
+            const known = [opt(report.owed), opt(report.held), opt(report.shortfall_e8s)]
+                .filter((v) => v !== null).map((v) => Number(v));
+            figures.push(checkSolvencyAdvice(
+                'solvency advice figures vs get_solvency()', known, solvencyDom.advice,
+            ));
+        }
+    }
+
     const folded = foldFigures(figures);
     const ok = folded.ok && structural.length === 0;
     return {
@@ -1545,6 +2019,7 @@ export async function assertDepositAgreement(ctx, page, opts) {
             moneyMismatches: folded.mismatches,
             structuralProblems: structural,
             figures: folded.figures.map((f) => ({ label: f.label, chain: f.chain, screen: f.domText, ok: f.ok, detail: f.detail })),
+            solvencyOnScreen: solvencyDom,
             onChain: {
                 heroPrincipal,
                 ledgerBalanceE8s: wallet,

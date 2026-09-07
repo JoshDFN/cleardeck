@@ -1,0 +1,436 @@
+/* ==========================================================================
+   POKER TABLE: THE DOCK (a partial of PokerTable.svelte's style)
+   ==========================================================================
+   THE DOCK IS SIZED BY WHAT IS IN IT, NOT BY A NUMBER (docs/DEFECTS.md
+   E-63): `min-height` keeps its presence stable at --dock-h while letting it
+   take the room its contents need, so a tall wallet panel never spills under
+   the stage. The outer tracks are sized by symmetry (so the action row stays
+   centred) and `overflow: hidden` on them is a known trade recorded in
+   docs/DESIGN-BAR.md section 11.6. Behaviour and sizing logic belong to
+   phase 2; only the styling lives here. */
+
+@mixin dock {
+  .action-dock {
+    flex: 0 0 auto;
+    min-height: var(--dock-h);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--cd-space-3);
+    padding: 0 var(--cd-space-1);
+  }
+
+  .dock-aux {
+    display: flex;
+    align-items: center;
+    gap: var(--cd-space-2);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .dock-right { justify-content: flex-end; }
+
+  .log-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-3);
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-2);
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-figure);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .log-toggle.active { background: var(--cd-accent-dim); color: var(--cd-accent); border-color: var(--cd-accent-line); }
+
+  /* The phone's sound toggle (PokerTable dock-left). Off in landscape, where
+     the header carries it. */
+  .sound-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: var(--cd-touch-min);
+    min-height: var(--cd-touch-min);
+    padding: 0;
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-2);
+    cursor: pointer;
+  }
+
+  /* The turn indicator with the time-bank pill UNDER it (TimeBankPill), one
+     column in the row of dock-left controls. */
+  .turn-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--cd-space-1);
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .turn-indicator {
+    display: flex;
+    flex-direction: column;
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 6px 10px;
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-surface-1);
+    border: 1px solid var(--cd-line-soft);
+    transition: border-color var(--cd-acting) var(--cd-ease), background-color var(--cd-acting) var(--cd-ease);
+  }
+
+  .turn-indicator.my-turn {
+    background: var(--cd-accent-dim);
+    border-color: var(--cd-accent-line-strong);
+  }
+
+  .turn-indicator.time-bank { border-color: var(--cd-warn-line); }
+
+  .turn-title {
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-display);
+    letter-spacing: var(--cd-tracking-label);
+    text-transform: uppercase;
+    color: var(--cd-ink-2);
+  }
+
+  .turn-indicator.my-turn .turn-title { color: var(--cd-accent); }
+
+  .turn-hint {
+    font-size: var(--cd-text-sm);
+    color: var(--cd-ink-1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .dock-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--cd-space-1);
+    min-width: 0;
+  }
+
+  /* THE SIZER'S ANCHOR. The sizer and the action bar share this box so the
+     phone's sizer sheet (BetSizer.svelte, position: absolute) can stand on
+     the action row's top edge at the dock's full width. In landscape the
+     sizer is simply the first row of the box. */
+  .dock-actions {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--cd-space-1);
+    min-width: 0;
+    width: 100%;
+  }
+
+  .pot-odds-display {
+    display: flex;
+    align-items: baseline;
+    gap: var(--cd-space-2);
+    font-size: var(--cd-text-xs);
+  }
+
+  .pot-odds-label {
+    letter-spacing: var(--cd-tracking-label);
+    text-transform: uppercase;
+    color: var(--cd-ink-2);
+  }
+
+  .pot-odds-value { font-size: var(--cd-text-sm); font-weight: var(--cd-weight-display); color: var(--cd-money); }
+
+  .pot-odds-explanation {
+    color: var(--cd-ink-1);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .equity-hint { color: var(--cd-ink-2); }
+
+  /* The action row, the sizer and the pre-action toggles are ActionBar.svelte,
+     BetSizer.svelte and PreActions.svelte, each with its own scoped styles. */
+
+  .wallet-panel {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    flex: 0 1 auto;
+    padding: calc(var(--cd-space-1) * 1.5) calc(var(--cd-space-2) + var(--cd-space-1) / 2);
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-surface-1);
+    border: 1px solid var(--cd-line-soft);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* The signed-out spectator's dock: no balance, no cashier, one way in. */
+  .spectator-dock {
+    display: flex;
+    align-items: center;
+    gap: var(--cd-space-2) var(--cd-space-3);
+    flex: 0 1 auto;
+    padding: 6px 10px;
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-surface-1);
+    border: 1px solid var(--cd-line-soft);
+    min-width: 0;
+  }
+
+  .spectator-note {
+    font-size: var(--cd-text-xs);
+    color: var(--cd-ink-2);
+    white-space: nowrap;
+  }
+
+  /* A money figure is never squeezed: the balance keeps its width and the
+     committed block takes a row of its own beneath it. */
+  .wallet-balance { display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; }
+
+  .balance-label {
+    font-size: var(--cd-text-xs);
+    letter-spacing: var(--cd-tracking-label);
+    text-transform: uppercase;
+    color: var(--cd-ink-2);
+    white-space: nowrap;
+  }
+
+  .balance-value {
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-display);
+    color: var(--cd-accent-hi);
+    white-space: nowrap;
+  }
+
+  /* MONEY OF MINE THAT IS IN THE MIDDLE (docs/SECURITY-FINDINGS.md FINDING 18):
+     the base `.wallet-committed` rule lives in PokerTable.svelte itself, just
+     before this mixin is included, because tests/money_safety/tests/ui_limits.rs
+     reads that file for the rule and asserts it is static flow (no z-index, no
+     positioning). The `.stuck` and portrait overrides below still follow it in
+     the cascade, as they did when all three sat here. */
+  .wallet-committed.stuck {
+    border-color: var(--cd-danger-line);
+    background: var(--cd-danger-dim);
+  }
+
+  .committed-label {
+    font-size: var(--cd-text-xs);
+    letter-spacing: var(--cd-tracking-label);
+    text-transform: uppercase;
+    color: var(--cd-money);
+    white-space: nowrap;
+  }
+
+  .wallet-committed.stuck .committed-label { color: var(--cd-danger-hi); }
+
+  .committed-value {
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-display);
+    color: var(--cd-ink);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .committed-note {
+    font-size: var(--cd-text-xs);
+    line-height: 1.35;
+    color: var(--cd-ink-1);
+  }
+
+  .wallet-actions { display: flex; gap: 6px; }
+
+  .wallet-action-btn {
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-3);
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid transparent;
+    font-family: inherit;
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-display);
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .wallet-action-btn.deposit { background: var(--cd-accent); color: var(--cd-accent-ink); }
+
+  .wallet-action-btn.withdraw {
+    background: var(--cd-surface-2);
+    border-color: var(--cd-line-strong);
+    color: var(--cd-ink-1);
+  }
+
+  .wallet-action-btn.withdraw:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .panel-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    min-height: var(--cd-control-sm);
+    padding: 0 9px;
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-2);
+    cursor: pointer;
+  }
+
+  .collapsed-balance {
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-display);
+    color: var(--cd-accent-hi);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sit-controls { display: flex; gap: 5px; flex: 0 1 auto; min-width: 0; }
+
+  .control-btn {
+    min-height: var(--cd-control-sm);
+    padding: 0 9px;
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-surface-1);
+    color: var(--cd-ink-2);
+    font-family: inherit;
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-figure);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .control-btn:hover { color: var(--cd-ink); }
+  .control-btn.destructive:hover { color: var(--cd-danger-hi); border-color: var(--cd-danger-line); }
+
+  /* ==========================================================================
+     PORTRAIT: a two-row dock, the action row at the bottom for the thumb.
+     ========================================================================== */
+  @media (max-aspect-ratio: 1/1) {
+    /* THE LEFT CELL IS SIZED BY ITS TWO BUTTONS, THE RIGHT CELL TAKES THE
+       REST. With `1fr auto` the wallet panel's max-content (the committed
+       note is a sentence) took the whole row and the 1fr cell collapsed to
+       nothing: Log and Sound painted under the wallet toggle (measured by
+       tools/shots/touch-targets.mjs: five probes of five hit something else).
+       `auto minmax(0, 1fr)` lets the note wrap inside the panel instead. */
+    .action-dock {
+      grid-template-columns: auto minmax(0, 1fr);
+      grid-template-rows: auto auto;
+      gap: var(--cd-space-1) var(--cd-space-2);
+      min-height: var(--dock-h);
+      padding: 0 var(--cd-space-2);
+    }
+    .dock-left { overflow: visible; }
+    .dock-right { justify-content: flex-start; }
+    .wallet-panel { width: 100%; }
+    /* The spectator's dock on a phone: the button takes the cell, the note
+       (a sentence) would push it off the right edge (measured). */
+    .spectator-dock { width: 100%; padding: var(--cd-space-1) var(--cd-space-2); }
+    .spectator-note { display: none; }
+    .spectator-dock .sign-in-to-sit { flex: 1 1 auto; min-height: var(--cd-touch-min); }
+    /* The wallet toggle has no row to itself on a phone: the panel is always
+       open here (PokerTable renders it whenever `portrait`), and the 44 px
+       the toggle took is what lets Deposit and Withdraw stay 44 px tall
+       beside the balance. */
+    .panel-toggle { display: none; }
+
+    /* EVERY PIXEL BETWEEN THE STAGE AND THE DOCK IS FELT. */
+    .poker-table { gap: var(--cd-space-1); }
+    .pot-odds-display { font-size: var(--cd-text-xs); line-height: 1.1; gap: calc(var(--cd-space-1) * 1.5); }
+    .pot-odds-value { font-size: var(--cd-text-xs); }
+
+    /* THUMB REACH: the action row is the BOTTOM row on a phone. */
+    .dock-center { grid-column: 1 / -1; grid-row: 2; }
+    .dock-left { grid-column: 1; grid-row: 1; }
+    .dock-right { grid-column: 2; grid-row: 1; }
+
+    .turn-indicator { display: none; }
+
+    /* THE COMMITTED BLOCK IS ONE ROW UNDER THE BALANCE on a phone. Measured
+       in the old shape (a column squeezed to 77 px beside the buttons) the
+       note wrapped to five lines and the wallet row was 122 px; as a full-width
+       row of the panel it is 26 px, and every word is still there. */
+    .wallet-panel { padding: var(--cd-space-1) var(--cd-space-2); gap: var(--cd-space-1); }
+    .balance-label { display: none; }
+    /* THE TABLE BALANCE MUST NEVER BE SQUEEZED (a money figure lying only in
+       pixels); the committed block pays instead, on one line. */
+    .wallet-balance { flex: 0 0 auto; }
+    .committed-note { line-height: 1.2; }
+    .wallet-committed {
+      order: 1;
+      margin-top: 0;
+      padding: calc(var(--cd-space-1) / 2) calc(var(--cd-space-1) * 1.5);
+      column-gap: var(--cd-space-1);
+      row-gap: 0;
+    }
+    .committed-label { font-size: var(--cd-text-xs); letter-spacing: 0.08em; }
+    .committed-value { font-size: var(--cd-text-xs); }
+    .committed-note { font-size: var(--cd-text-xs); }
+    /* EVERY DOCK CONTROL AT THE TOUCH FLOOR (the audit measured 28-30 px):
+       Log, Sound, the wallet toggle, Deposit and Withdraw are 44 px tall.
+       Log is a glyph on the phone so the row still fits 374 px beside the
+       wallet panel: measured Log 44 + Sound 44 + toggle 44 + balance ~70 +
+       Deposit ~70 + Withdraw ~74 = 346 plus gaps. */
+    .log-toggle {
+      width: var(--cd-touch-min);
+      min-height: var(--cd-touch-min);
+      padding: 0;
+      justify-content: center;
+      font-size: 0;
+      gap: 0;
+    }
+    .log-toggle svg { width: var(--cd-icon-sm); height: var(--cd-icon-sm); }
+    .sound-btn { display: inline-flex; }
+    .wallet-action-btn { min-height: var(--cd-touch-min); padding: 0 var(--cd-space-3); }
+    /* The balance reads at body size on a phone: it is the figure a player
+       checks between hands, at arm's length. */
+    .balance-value { font-size: var(--cd-text-md); }
+    .sit-controls { display: none; }
+
+    /* THE THUMB ZONE ENDS AT THE HOME INDICATOR. The action row is the dock's
+       last row; the inset (0 outside an iPhone in standalone or Safari with
+       viewport-fit=cover) keeps Fold out of the gesture area. */
+    .action-dock { padding-bottom: var(--cd-safe-bottom); }
+
+    /* THE LOG AS A SHADE UNDER THE HEADER (portrait): fixed, full width,
+       --cd-log-sheet-h tall, over the far seats. The stage keeps its size, so
+       the hero's cards, the pot, the board and the dock stay exactly where
+       they were, at full type; the felt stays above its floor. (A sheet the
+       stage yielded to was tried first: at 24dvh the felt fell to 27% and
+       every pod's type went under the phone's floors.) */
+    .poker-table.log-open { display: flex; }
+    .feed-container.left {
+      position: fixed;
+      left: 0;
+      right: 0;
+      top: calc(var(--notice-safe-top, 0px) + var(--header-h, 0px));
+      height: var(--cd-log-sheet-h);
+      z-index: 32;
+      padding: 0 var(--cd-space-2);
+    }
+    .feed-container.left :global(.action-feed) {
+      border-radius: 0 0 var(--cd-radius-panel) var(--cd-radius-panel);
+      box-shadow: var(--cd-shadow-lift);
+    }
+  }
+
+  /* Very short landscape (phone held sideways): trim the dock, keep the felt. */
+  @media (min-aspect-ratio: 1/1) and (max-height: 560px) {
+    .poker-table-wrapper { --dock-h: 62px; }
+    .turn-indicator { display: none; }
+    .sit-controls { display: none; }
+  }
+}

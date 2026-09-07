@@ -128,8 +128,19 @@ export function scrapeTable(page) {
             equityMethodText: one(document, '.equity-method'),
             equityMethodTitle: document.querySelector('.equity-method')?.getAttribute('title') ?? null,
             boardCaptionTag: one(document, '.board-caption .caption-tag'),
-            heroHandText: one(document, '.board-caption .caption-hand'),
+            heroHandText: one(document, '.caption-hand'),
             winnerText: one(document, '.winner-display .winner-text') ?? one(document, '.winner-display'),
+            // The winner line names the SEAT'S DISPLAY NAME ("Nakamoto wins
+            // 24.00 ICP"; "Seat 2" only when no name is known), so the seat it
+            // means rides `data-seat` (0-based, the canister's index). Null when
+            // the attribute is absent (an older build), and the seat is then
+            // parsed from "Seat N" as before.
+            winnerSeat: (() => {
+                const el = document.querySelector('.winner-display .winner-text[data-seat]');
+                if (!el) return null;
+                const n = Number(el.getAttribute('data-seat'));
+                return Number.isInteger(n) ? n : null;
+            })(),
             winnerHandRank: one(document, '.winner-display .winner-hand-rank'),
             splitInfo: one(document, '.winner-display .split-info'),
             tableBalanceText:
@@ -164,18 +175,42 @@ export function scrapeTable(page) {
             actionButtons: [...document.querySelectorAll('.actions .action-btn')]
                 .map((b) => (b.textContent || '').replace(/\s+/g, ' ').trim())
                 .filter(Boolean),
-            // The bet-sizing popover. `.slider-amount` and the confirm button are
-            // the two places the client shows what it is ABOUT TO WAGER, so they
-            // are money figures even though the amount is client-side state.
+            // The bet sizer (BetSizer.svelte, in the dock since the decision-loop
+            // wave). The typed field `.raise-input`, the primary "Raise to X"
+            // button and the range's value are the places the client shows what
+            // it is ABOUT TO WAGER, so they are money figures even though the
+            // amount is client-side state. `.slider-amount` / `.confirm-raise`
+            // are the old popover's names, kept so an older build still scrapes.
             raiseSliderPresent: !!document.querySelector('.raise-slider-panel'),
             raiseSliderAmountText: one(document, '.raise-slider-panel .slider-amount'),
             raiseConfirmText: one(document, '.raise-slider-panel .confirm-raise'),
+            raiseInputValue: (() => {
+                const el = document.querySelector('.raise-slider-panel .raise-input');
+                return el ? String(el.value || '').trim() : null;
+            })(),
+            raiseButtonText: one(document, '.actions .action-btn.raise:not(.caret)'),
             raiseSliderRange: (() => {
                 const el = document.querySelector('.raise-slider-panel .raise-slider');
                 return el ? { min: el.min, max: el.max, value: el.value } : null;
             })(),
             presetButtons: [...document.querySelectorAll('.raise-slider-panel .preset-buttons button')]
                 .map((b) => (b.textContent || '').replace(/\s+/g, ' ').trim()),
+            // THE HERO PLATE TAG (SeatPod.svelte `.plate-tag`): "Call 0.10" while
+            // that pre-action is armed, "Raise to 0.30" while a send is open. A
+            // money figure painted ON THE FELT, so it is read here and asserted
+            // (chain-agreement.mjs): the armed figure against call_amount, the
+            // sent one against the e8s the echo recorded (data-sent-e8s).
+            heroPlateTag: one(document, '.player-nameplate.highlight-me .plate-tag'),
+            heroPlateTagSentE8s: (() => {
+                const el = document.querySelector('.player-nameplate.highlight-me .plate-tag.sent');
+                const raw = el ? el.getAttribute('data-sent-e8s') : null;
+                return raw === null || raw === '' ? null : Number(raw);
+            })(),
+            // The pre-action row (PreActions.svelte), shown while it is NOT the
+            // hero's turn. A "Call X" toggle carries the call amount.
+            preActionButtons: [...document.querySelectorAll('.pre-actions .pre-btn')]
+                .map((b) => (b.textContent || '').replace(/\s+/g, ' ').trim())
+                .filter(Boolean),
         };
     });
 }
@@ -224,23 +259,42 @@ export async function readBetPreset(page, label) {
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
     return page.evaluate(() => {
+        // The readout is the typed field in the dock sizer (BetSizer.svelte);
+        // `.slider-amount` was the old popover's readout and is read if present.
         const amt = document.querySelector('.raise-slider-panel .slider-amount');
+        const field = document.querySelector('.raise-slider-panel .raise-input');
         const slider = document.querySelector('.raise-slider-panel .raise-slider');
-        const confirm = document.querySelector('.raise-slider-panel .confirm-raise');
+        // The commit is the primary "Raise to X" button in the action row now;
+        // `.confirm-raise` was the popover's own button.
+        const confirm = document.querySelector('.raise-slider-panel .confirm-raise')
+            || document.querySelector('.actions .action-btn.raise:not(.caret)');
         return {
             available: true,
-            amountText: amt ? (amt.textContent || '').replace(/\s+/g, ' ').trim() : null,
+            amountText: amt
+                ? (amt.textContent || '').replace(/\s+/g, ' ').trim()
+                : field ? String(field.value || '').trim() : null,
             confirmText: confirm ? (confirm.textContent || '').replace(/\s+/g, ' ').trim() : null,
             sliderValue: slider ? slider.value : null,
         };
     });
 }
 
-/** Closes the bet-sizing popover so the scene photographs its normal state. */
+/**
+ * Puts the sizer back to its resting state so the scene photographs what a
+ * player sees on arrival: the LEGAL FLOOR (current_bet + min_raise, or min_bet),
+ * which is what the client proposes on every my-turn edge and what
+ * assertChainAgreement checks the resting readout against. The old popover was
+ * closed here; the dock sizer stays where it is and is reset with "Min".
+ */
 export async function closeBetPresets(page) {
     await page.evaluate(() => {
+        const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const min = [...document.querySelectorAll('.raise-slider-panel .preset-buttons button')]
+            .find((b) => norm(b.textContent) === 'min');
+        if (min) min.click();
         document.querySelector('.raise-slider-panel .close-slider')?.click();
     });
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 }
 
 /**
@@ -290,6 +344,15 @@ export function scrapeLobby(page) {
                 nowLabel: txt(tr.querySelector('.now')),
                 livePotText: txt(tr.querySelector('.now-detail')),
                 currencyTag: txt(tr.querySelector('.currency-tag, .tag.currency')),
+                // The card's clock cell ("45s + 30s"): seconds, asserted against
+                // the table config like the preview's Clock fact.
+                clockText: txt(tr.querySelector('.clock-value')),
+                // The fiat hints under the stakes and the buy-in, one span per
+                // figure, each naming which chain figure it converts
+                // (data-fiat-of: sb | bb | min | max).
+                fiat: [...tr.querySelectorAll('.fiat-num')].map((el) => ({
+                    of: el.getAttribute('data-fiat-of'), text: txt(el),
+                })),
             };
         });
 
@@ -323,9 +386,46 @@ export function scrapeLobby(page) {
             facts,
             factByLabel: Object.fromEntries(facts.filter((f) => f.label).map((f) => [f.label, f.value])),
             rakeLineText: txt(document.querySelector('.rake-line')),
+            fiat: [...document.querySelectorAll('aside.preview .facts .fiat-num')].map((el) => ({
+                of: el.getAttribute('data-fiat-of'), text: txt(el),
+            })),
         };
 
         return { rows, rowCount: rows.length, headers, columnMap: col, preview };
+    });
+}
+
+/**
+ * The solvency block (SolvencyNotice.svelte) inside an open money dialog: its
+ * state, each labelled figure row ("Owed to players" / "Held on the ledger" /
+ * "Short by"), and the canister-authored advice sentence. Every number in
+ * these is money and is asserted against get_solvency() by
+ * chain-agreement.mjs; the census site `solvency-figures` reads the same
+ * elements.
+ */
+export function scrapeSolvency(page) {
+    return page.evaluate(() => {
+        const txt = (el) => (el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : null);
+        const block = document.querySelector('.modal-content .solvency');
+        if (!block) return { present: false, state: null, rows: [], advice: null };
+        const rows = [...block.querySelectorAll('.figures > div')].map((row) => ({
+            label: txt(row.querySelector('dt')),
+            text: txt(row.querySelector('dd')),
+        }));
+        // The exact e8s integers, once, under "What the table said" (the
+        // cashier wave's second round moved them off the row); read by
+        // `data-exact` id, open or closed.
+        const exact = [...block.querySelectorAll('.exact [data-exact]')].map((row) => ({
+            id: row.getAttribute('data-exact'),
+            text: txt(row.querySelector('dd')),
+        }));
+        return {
+            present: true,
+            state: block.getAttribute('data-solvency-state'),
+            rows,
+            exact,
+            advice: txt(block.querySelector('.advice')),
+        };
     });
 }
 
@@ -353,6 +453,35 @@ export function scrapeDeposit(page) {
             priceError: txt(document.querySelector('.price-error')),
             sourceButtons: [...document.querySelectorAll('.wallet-source-toggle button')]
                 .map((b) => txt(b)).filter(Boolean),
+            // THE TYPED AMOUNT AND EVERYTHING DERIVED FROM IT (the cashier
+            // wave). The field's value, the cost summary's rows by `data-row`,
+            // the amount's own fiat hint and the button that names the
+            // amount. Empty on a resting still; asserted by
+            // chain-agreement.mjs whenever they are on screen.
+            inputValue: (() => {
+                const input = document.querySelector('#deposit-amount');
+                return input ? String(input.value ?? '') : null;
+            })(),
+            costRows: [...document.querySelectorAll('.modal-content .cost-summary [data-row]')]
+                .map((row) => ({ id: row.getAttribute('data-row'), text: txt(row.querySelector('dd')) })),
+            amountFiat: [...document.querySelectorAll('.modal-content .usd-amount')].map((e) => txt(e)),
+            buttonText: txt(document.querySelector('.modal-content .actions .btn-primary')),
+            // THE ADDRESS ROUTE'S OWN READING: what the card says has arrived
+            // at the derived deposit subaccount ("Detected 0.0005 ICP"),
+            // asserted against icrc1_balance_of on that subaccount whenever it
+            // is on screen. Null on the wallet route and while nothing has
+            // arrived.
+            route: document.querySelector('.modal-content')?.getAttribute('data-route') ?? null,
+            detectedAmount: txt(document.querySelector('.modal-content .detected-amount')),
+            // THE QUICK CHIPS' FACES (the cashier wave's third round): the
+            // table's minimum buy-in and twice it, by `data-chip`; asserted
+            // against get_table_view().config.min_buy_in.
+            quickChips: [...document.querySelectorAll('.modal-content .quick-amounts .quick-amount')]
+                .map((chip) => ({
+                    id: chip.getAttribute('data-chip'),
+                    figure: txt(chip.querySelector('.chip-figure')),
+                    disabled: chip.disabled,
+                })),
         };
     });
 }

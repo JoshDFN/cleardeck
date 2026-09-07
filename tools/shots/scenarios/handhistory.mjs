@@ -4,8 +4,9 @@
 // 1..hand_number, so the table needs at least one finished hand. Because the
 // table is reset at the start of the scene, that hand is always hand #1.
 
-import { devLogin, enterTable, openApp, settle } from '../lib/browser.mjs';
+import { devLogin, enterTable, getAppOrigin, openApp, settle } from '../lib/browser.mjs';
 import { HERO_PLAYER } from '../lib/config.mjs';
+import { tableSlug } from './handreplay.mjs';
 import { phaseOf } from '../lib/table-driver.mjs';
 import {
   assertChainAgreement, assertHandHistoryAgreement, named, withAgreement,
@@ -14,6 +15,58 @@ import { foldProtectedNotices, probeProtectedNotices } from '../lib/protected-no
 import { heroPrincipal, playCompletedHand, tableDisplayName } from './_shared.mjs';
 
 const TABLE = 'table_2';
+
+/**
+ * What `stage` observed about the hand's id, its Copy and its deep link, for
+ * `verify` to assert (run.mjs does not hand verify the value stage returned;
+ * see handreplay.mjs for the same handoff). Cleared at the top of `stage`.
+ */
+let observed = null;
+
+/** Opens the history dialog and waits for the list (one bounded re-open). */
+async function openHistoryList(page) {
+  await page.waitForSelector('.history-btn', { timeout: 30_000 });
+  await page.click('.history-btn');
+  await page.waitForSelector('.hand-history-modal', { timeout: 30_000 });
+  // One bounded re-open: HandHistory kicks off its load from an effect on mount,
+  // so a panel opened a beat too early can settle on the empty result. Closing
+  // and re-opening remounts it against the now-populated table state. Bounded,
+  // and any remaining emptiness is reported by verify() rather than retried away.
+  try {
+    await page.waitForSelector('.hand-row', { timeout: 8_000 });
+  } catch {
+    await page.locator('.hand-history-modal .close-btn, .hand-history-modal button')
+      .first().click().catch(() => {});
+    await page.click('.history-btn');
+    await page.waitForSelector('.hand-history-modal', { timeout: 15_000 });
+    await page.waitForSelector('.hand-row', { timeout: 20_000 });
+  }
+}
+
+/** The five community cards of the finished hand, face up on the felt. */
+function boardOfFive(page) {
+  return page.waitForFunction(
+    () => document.querySelectorAll('.community-cards .card:not(.empty):not(.face-down)').length >= 5,
+    undefined,
+    { timeout: 60_000 },
+  );
+}
+
+/**
+ * Captures what a Copy button hands the clipboard: the headless context has no
+ * clipboard permission, so `writeText` is replaced with a recorder.
+ */
+async function armClipboardRecorder(page) {
+  await page.evaluate(() => {
+    window.__copied = null;
+    const rec = (text) => { window.__copied = String(text); return Promise.resolve(); };
+    try {
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText: rec }, configurable: true });
+    } catch {
+      navigator.clipboard.writeText = rec;
+    }
+  });
+}
 
 export default {
   name: 'handhistory',
@@ -45,6 +98,8 @@ export default {
   },
 
   async stage(ctx, page) {
+    observed = null;
+    const tableId = ctx.tableIds[TABLE];
     await openApp(page);
     await devLogin(page, HERO_PLAYER);
     await enterTable(page, tableDisplayName(ctx, TABLE));
@@ -71,30 +126,50 @@ export default {
     // instant the board frame mounted, with nothing dealt — a wait that could not
     // fail, standing in for the one thing this scene depends on. docs/DEFECTS.md
     // H-33.
-    await page.waitForFunction(
-      () => document.querySelectorAll('.community-cards .card:not(.empty):not(.face-down)').length >= 5,
-      undefined,
-      { timeout: 60_000 },
-    );
+    await boardOfFive(page);
+    await openHistoryList(page);
 
-    await page.waitForSelector('.history-btn', { timeout: 30_000 });
-    await page.click('.history-btn');
-    await page.waitForSelector('.hand-history-modal', { timeout: 30_000 });
+    // --- 1. the row's stable id, and what its Copy hands the clipboard ------
+    // Done here, not in verify: the button wears "Copied" for two seconds and
+    // the published frame must be the resting list.
+    const row = page.locator('.hand-row').first();
+    const handNumberText = (await row.locator('.hand-number').textContent())?.trim() ?? '';
+    const handNumber = Number((handNumberText.match(/#(\d+)/) || [])[1]);
+    const handId = (await row.locator('.hand-id').textContent())?.trim() ?? null;
+    await armClipboardRecorder(page);
+    await row.locator('.copy-id').click();
+    await settle(page, { extraFrames: 1 });
+    const copied = await page.evaluate(() => window.__copied ?? null);
+    const copyIdAfter = (await row.locator('.copy-id').textContent())?.trim() ?? null;
+    const listRowsAfterCopy = await page.locator('.hand-row').count();
+    const replayerAfterCopy = await page.locator('.replayer').count();
 
-    // One bounded re-open: HandHistory kicks off its load from an effect on mount,
-    // so a panel opened a beat too early can settle on the empty result. Closing
-    // and re-opening remounts it against the now-populated table state. Bounded,
-    // and any remaining emptiness is reported by verify() rather than retried away.
+    // --- 2. the deep link: ?table=<canister>&hand=N opens the replay itself --
+    const deepLink = `${getAppOrigin()}/?table=${tableId}&hand=${handNumber}`;
+    await page.goto(deepLink, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    let deepLinkTitle = null;
+    let deepLinkSearch = null;
+    let deepLinkError = null;
     try {
-      await page.waitForSelector('.hand-row', { timeout: 8_000 });
-    } catch {
-      await page.locator('.hand-history-modal .close-btn, .hand-history-modal button')
-        .first().click().catch(() => {});
-      await page.click('.history-btn');
-      await page.waitForSelector('.hand-history-modal', { timeout: 15_000 });
-      await page.waitForSelector('.hand-row', { timeout: 20_000 });
+      await page.waitForSelector('.replayer .replay-title .hand-number', { timeout: 60_000 });
+      deepLinkTitle = (await page.locator('.replay-title .hand-number').textContent())?.trim() ?? null;
+      deepLinkSearch = await page.evaluate(() => window.location.search);
+    } catch (e) {
+      deepLinkError = e?.message || String(e);
     }
+    observed = {
+      handNumber, handId, copied, copyIdAfter, listRowsAfterCopy, replayerAfterCopy,
+      deepLink, deepLinkTitle, deepLinkSearch, deepLinkError,
+    };
+
+    // --- 3. the resting list, for the still --------------------------------
+    await openApp(page);
+    await devLogin(page, HERO_PLAYER);
+    await enterTable(page, tableDisplayName(ctx, TABLE));
+    await boardOfFive(page);
+    await openHistoryList(page);
     await settle(page);
+    return observed;
   },
 
   async verify(ctx, page) {
@@ -122,21 +197,56 @@ export default {
       await probeProtectedNotices(page), 'with the hand-history modal open',
     );
 
+    // THE ID, THE COPY AND THE DEEP LINK, as `stage` observed them.
+    const staged = observed || {};
+    const tableId = ctx.tableIds[TABLE];
+    const problems = [];
+    if (!staged.handNumber) {
+      problems.push('stage() left no observations: the id, the Copy and the deep link were never exercised');
+    } else {
+      const expectedId = `${tableSlug(tableDisplayName(ctx, TABLE))}#${staged.handNumber}`;
+      const expectedTail = `?table=${tableId}&hand=${staged.handNumber}`;
+      if (staged.handId !== expectedId) problems.push(`the row's id reads "${staged.handId}", expected "${expectedId}"`);
+      if (!staged.copied || !staged.copied.startsWith(`${expectedId} `) || !staged.copied.endsWith(expectedTail)) {
+        problems.push(`the row's Copy handed the clipboard ${JSON.stringify(staged.copied)}, expected "${expectedId} <origin>/${expectedTail}"`);
+      }
+      if (staged.copyIdAfter !== 'Copied') problems.push(`after copying, the row's button reads "${staged.copyIdAfter}", not "Copied"`);
+      if (staged.replayerAfterCopy !== 0 || staged.listRowsAfterCopy < 1) {
+        problems.push('clicking the row\'s Copy opened the replay (the click must not reach the row)');
+      }
+      if (staged.deepLinkError) problems.push(`the deep link ${staged.deepLink} did not open a replay: ${staged.deepLinkError}`);
+      else if (staged.deepLinkTitle !== `Hand #${staged.handNumber}`) {
+        problems.push(`the deep link opened "${staged.deepLinkTitle}", not Hand #${staged.handNumber}`);
+      }
+      if (staged.deepLinkSearch && !staged.deepLinkSearch.includes(`hand=${staged.handNumber}`)) {
+        problems.push(`with the replay open the URL reads "${staged.deepLinkSearch}" without the hand`);
+      }
+    }
+
     return withAgreement({
-      verified: modal === 1 && rows >= 1 && notices.ok,
+      verified: modal === 1 && rows >= 1 && notices.ok && problems.length === 0,
       checks: {
         modal,
         handRows: rows,
         firstRow: rowText.slice(0, 160),
+        handId: staged.handId ?? null,
+        copied: staged.copied ?? null,
+        copyIdAfter: staged.copyIdAfter ?? null,
+        deepLink: staged.deepLink ?? null,
+        deepLinkTitle: staged.deepLinkTitle ?? null,
+        deepLinkSearch: staged.deepLinkSearch ?? null,
+        deepLinkError: staged.deepLinkError ?? null,
+        idAndLinkProblems: problems,
         protectedOnScreen: notices.onScreen,
         protectedTotal: notices.total,
         protectedProblems: notices.problems,
         protectedNotices: notices.notices,
       },
-      notes: notices.ok
-        ? `${rows} hand row(s); first: ${rowText.slice(0, 80)}; `
+      notes: notices.ok && problems.length === 0
+        ? `${rows} hand row(s); first: ${rowText.slice(0, 80)}; id ${staged.handId} copied with its link and `
+          + `${staged.deepLink} opened the replay on ${staged.deepLinkTitle}; `
           + `${notices.onScreen} of ${notices.total} protected notices measured on screen and unoccluded`
-        : `PROTECTED NOTICE NOT ON SCREEN: ${notices.problems.join(' | ')}`,
+        : `NOT VERIFIED: ${[...problems, ...notices.problems].join(' | ')}`,
     }, tableAgreement, historyAgreement);
   },
 };

@@ -288,11 +288,18 @@ tick of `BALANCE_REFRESH_INTERVAL`/`loadTableState`. Measured cost: p50 43.7 ms,
 the call-return p95 of 473 ms — and, more to the point, would remove the tail where the player
 has seen the spinner stop and the money has not moved yet.
 
-**2. The action clock is invisible on mobile.** Not a latency number, but it belongs with
-them: `.turn-timer` lives inside `.feed-container`, which `PokerTable.svelte` hides below
-900 px. On a 390 px viewport there is no visible countdown at all, so a mobile player cannot
-see how long they have to act. Recorded by the screenshot harness as
-`actionClockVisible: false` on every mobile table scene.
+**2. The action clock on mobile (corrected by the UI/UX wave).** This item used to say
+the clock was invisible under 900 px because `.turn-timer` lived inside the hidden
+`.feed-container`. It no longer does: the clock is the conic ring around the acting
+avatar plus its digits (`SeatPod.svelte`, the digits on the hero's plate row and, in
+portrait, on an opponent's avatar), and the `.actions-clock` line across the top of the
+action row (`ActionBar.svelte`), 2 px on desktop and 4 px on a phone. The audit measured
+the earlier phone form at 13 px of type over a 3 px line; the mobile phase set the floors
+in `tools/shots/lib/touch-targets.mjs` (digits at least 11 px, the line a full space
+unit) and `tools/shots/touch-targets.mjs` measures them on every table scene. In the last
+ten seconds the primary button carries the seconds too ("Call 0.10 · 8s", painted from
+`data-secs` by a pseudo-element so the button's text stays the chain-asserted "Call X");
+`tools/shots/probe-time-bank.mjs` photographs it.
 
 **3. Re-run headed before quoting any frame rate.** §3.
 

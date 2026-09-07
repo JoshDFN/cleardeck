@@ -1,0 +1,171 @@
+{
+  "heroPlayer": 1,
+  "holdMs": 1500,
+  "results": [
+    {
+      "viewport": "desktop",
+      "onChain": {
+        "phase": "PreFlop",
+        "actionOn": 0,
+        "pot": "30000000",
+        "callAmount": "10000000",
+        "currentBet": "20000000",
+        "minRaise": "10000000",
+        "handNumber": "1",
+        "potOddsFromChain": "3.00:1"
+      },
+      "sizerOpen": {
+        "skipped": "no caret at this viewport (the sizer is always open)"
+      },
+      "echo": {
+        "clicked": "Call 0.10",
+        "holdMs": 1500,
+        "midSendAtMs": 502,
+        "midSend": {
+          "tagBox": {
+            "x": 810.2,
+            "y": 654.2,
+            "w": 93.9,
+            "h": 24.3
+          },
+          "timerBox": null,
+          "tagOverClock": false,
+          "plateTag": "Call 0.10",
+          "plateTagTone": "sent",
+          "plateTagSentE8s": "10000000",
+          "rowSent": true,
+          "pressedButton": "Calling 0.10",
+          "spinner": false,
+          "turnIndicator": "Sent Calling 0.10",
+          "heroStack": "11.80",
+          "heroBet": "0.20",
+          "clock": null
+        },
+        "midSendFile": "artifacts/screens/fa77af3/probe/PROBE-echo-mid-send-desktop.png",
+        "settled": {
+          "tagBox": null,
+          "timerBox": {
+            "x": 799.5,
+            "y": 637.7,
+            "w": 31.4,
+            "h": 16.9
+          },
+          "tagOverClock": false,
+          "plateTag": null,
+          "plateTagTone": null,
+          "plateTagSentE8s": null,
+          "rowSent": false,
+          "pressedButton": null,
+          "spinner": false,
+          "turnIndicator": "Your turn Check or bet",
+          "heroStack": "11.80",
+          "heroBet": null,
+          "clock": "44s"
+        },
+        "settledFile": "artifacts/screens/fa77af3/probe/PROBE-echo-settled-desktop.png",
+        "echoPainted": true,
+        "echoReconciled": true,
+        "tagClearOfClock": true
+      }
+    },
+    {
+      "viewport": "mobile",
+      "onChain": {
+        "phase": "PreFlop",
+        "actionOn": 0,
+        "pot": "30000000",
+        "callAmount": "10000000",
+        "currentBet": "20000000",
+        "minRaise": "10000000",
+        "handNumber": "1",
+        "potOddsFromChain": "3.00:1"
+      },
+      "sizerOpen": {
+        "file": "artifacts/screens/fa77af3/probe/PROBE-sizer-open-mobile.png",
+        "feltBefore": {
+          "x": 43.3,
+          "y": 131.5,
+          "w": 303.4,
+          "h": 546.6
+        },
+        "feltAfter": {
+          "x": 43.3,
+          "y": 131.5,
+          "w": 303.4,
+          "h": 546.6
+        },
+        "podsMoved": false,
+        "sheetPaint": {
+          "backgroundColor": "rgb(13, 15, 21)",
+          "alpha": 1,
+          "effectiveOpacity": 1
+        },
+        "sheetOpaque": true,
+        "sizerBox": {
+          "x": 8,
+          "y": 666,
+          "w": 374,
+          "h": 114
+        },
+        "actionRow": {
+          "x": 8,
+          "y": 784,
+          "w": 374,
+          "h": 52
+        },
+        "sizerAboveActionRow": true,
+        "sizerInsideViewport": true
+      },
+      "echo": {
+        "clicked": "Call 0.10",
+        "holdMs": 1500,
+        "midSendAtMs": 429,
+        "midSend": {
+          "tagBox": {
+            "x": 256.5,
+            "y": 600.1,
+            "w": 80.6,
+            "h": 21.1
+          },
+          "timerBox": null,
+          "tagOverClock": false,
+          "plateTag": "Call 0.10",
+          "plateTagTone": "sent",
+          "plateTagSentE8s": "10000000",
+          "rowSent": true,
+          "pressedButton": "Calling 0.10",
+          "spinner": false,
+          "turnIndicator": "Sent Calling 0.10",
+          "heroStack": "11.80",
+          "heroBet": "0.20",
+          "clock": null
+        },
+        "midSendFile": "artifacts/screens/fa77af3/probe/PROBE-echo-mid-send-mobile.png",
+        "settled": {
+          "tagBox": null,
+          "timerBox": {
+            "x": 249,
+            "y": 594.2,
+            "w": 25.7,
+            "h": 13.8
+          },
+          "tagOverClock": false,
+          "plateTag": null,
+          "plateTagTone": null,
+          "plateTagSentE8s": null,
+          "rowSent": false,
+          "pressedButton": null,
+          "spinner": false,
+          "turnIndicator": "Your turn Check or bet",
+          "heroStack": "11.80",
+          "heroBet": null,
+          "clock": "45s"
+        },
+        "settledFile": "artifacts/screens/fa77af3/probe/PROBE-echo-settled-mobile.png",
+        "echoPainted": true,
+        "echoReconciled": true,
+        "tagClearOfClock": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,662 @@
+{
+  "touchMinPx": 44,
+  "results": [
+    {
+      "scene": "deposit",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "10 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Close deposit modal\"); document 390x844 in 390x844; type floors met; dialog open, scroll locked",
+      "problems": [],
+      "file": "artifacts/screens/ff4ec6e/probe/TOUCH-deposit-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.modal-content > div.modal-header > button.close-btn",
+          "text": "Close deposit modal",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 338,
+            "y": 10.3,
+            "w": 44,
+            "h": 44,
+            "right": 382,
+            "bottom": 54.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.cashier-col.main > div.segmented.deposit-route > button.active",
+          "text": "From this wallet",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 20,
+            "y": 175.3,
+            "w": 173,
+            "h": 50.5,
+            "right": 193,
+            "bottom": 225.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.cashier-col.main > div.segmented.deposit-route > button",
+          "text": "From an exchange or another wallet",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 197,
+            "y": 175.3,
+            "w": 173,
+            "h": 50.5,
+            "right": 370,
+            "bottom": 225.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.from-card > div.section-label > button.path-link",
+          "text": "Re-read",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 298.7,
+            "y": 254.8,
+            "w": 58.3,
+            "h": 44,
+            "right": 357,
+            "bottom": 298.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": true,
+          "ok": true
+        },
+        {
+          "path": "div.input-row > div.amount-field > input",
+          "text": "",
+          "tag": "input",
+          "type": "number",
+          "box": {
+            "x": 17,
+            "y": 402.8,
+            "w": 255.7,
+            "h": 45,
+            "right": 272.7,
+            "bottom": 447.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": true,
+          "ok": true
+        },
+        {
+          "path": "div.form-section > div.input-row > button.max-btn",
+          "text": "MAX",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 316.8,
+            "y": 401.8,
+            "w": 57.2,
+            "h": 47,
+            "right": 374,
+            "bottom": 448.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": true,
+          "ok": true
+        },
+        {
+          "path": "div.form-section > div.quick-amounts > button.quick-amount",
+          "text": "The table's minimum buy-in",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 16,
+            "y": 456.8,
+            "w": 187.5,
+            "h": 44,
+            "right": 203.5,
+            "bottom": 500.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": true,
+          "ok": true
+        },
+        {
+          "path": "div.form-section > div.quick-amounts > button.quick-amount",
+          "text": "Twice the table's minimum buy-in",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 211.5,
+            "y": 456.8,
+            "w": 162.5,
+            "h": 44,
+            "right": 373.9,
+            "bottom": 500.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": true,
+          "ok": true
+        },
+        {
+          "path": "div.min-copy > details.min-why-more > summary",
+          "text": "Why",
+          "tag": "summary",
+          "type": null,
+          "box": {
+            "x": 51,
+            "y": 628.8,
+            "w": 45.6,
+            "h": 44,
+            "right": 96.6,
+            "bottom": 672.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.custody-notice > details.more > summary",
+          "text": "How",
+          "tag": "summary",
+          "type": null,
+          "box": {
+            "x": 23,
+            "y": 774.3,
+            "w": 50.5,
+            "h": 44,
+            "right": 73.5,
+            "bottom": 818.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 15.6,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 19.5,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "deposit (toast up)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "1 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Dismiss\"); document 390x844 in 390x844; type floors met; dialog open, scroll locked",
+      "problems": [],
+      "file": "artifacts/screens/ff4ec6e/probe/TOUCH-deposit-toast-up-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.app.on-table > div.toast.error > button.toast-close",
+          "text": "Dismiss",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 333,
+            "y": 731,
+            "w": 44,
+            "h": 44,
+            "right": 377,
+            "bottom": 775
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 15.6,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 19.5,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    },
+    {
+      "scene": "deposit (scrolled to end)",
+      "viewport": "mobile",
+      "ok": true,
+      "notes": "8 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Close deposit modal\"); document 390x844 in 390x844; type floors met; dialog open, scroll locked",
+      "problems": [],
+      "file": "artifacts/screens/ff4ec6e/probe/TOUCH-deposit-scrolled-to-end-mobile.png",
+      "coarsePointer": true,
+      "notices": null,
+      "items": [
+        {
+          "path": "div.modal-content > div.modal-header > button.close-btn",
+          "text": "Close deposit modal",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 338,
+            "y": 10.3,
+            "w": 44,
+            "h": 44,
+            "right": 382,
+            "bottom": 54.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.custody-notice > details.more > summary",
+          "text": "How",
+          "tag": "summary",
+          "type": null,
+          "box": {
+            "x": 23,
+            "y": 156.3,
+            "w": 50.5,
+            "h": 44,
+            "right": 73.5,
+            "bottom": 200.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.network-line.folded > details.more.where > summary",
+          "text": "Where",
+          "tag": "summary",
+          "type": null,
+          "box": {
+            "x": 304.5,
+            "y": 226.3,
+            "w": 56.5,
+            "h": 44,
+            "right": 361,
+            "bottom": 270.3
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "section.solvency.warning > details.more > summary",
+          "text": "What the table said",
+          "tag": "summary",
+          "type": null,
+          "box": {
+            "x": 23,
+            "y": 445.8,
+            "w": 123.6,
+            "h": 44,
+            "right": 146.6,
+            "bottom": 489.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "section.disclosures > section.solvency.warning > button.refresh",
+          "text": "Ask this table to re-read the ledger now",
+          "tag": "button",
+          "type": null,
+          "box": {
+            "x": 31,
+            "y": 497.8,
+            "w": 330,
+            "h": 44,
+            "right": 361,
+            "bottom": 541.8
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.detail-row > details.more > summary",
+          "text": "How to top it up",
+          "tag": "summary",
+          "type": null,
+          "box": {
+            "x": 256.4,
+            "y": 670,
+            "w": 104.6,
+            "h": 44,
+            "right": 361,
+            "bottom": 714
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.modal-body > div.actions.pinned > button.btn-secondary",
+          "text": "Cancel",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 16,
+            "y": 788,
+            "w": 141.7,
+            "h": 48,
+            "right": 157.7,
+            "bottom": 836
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": false,
+          "ok": true
+        },
+        {
+          "path": "div.modal-body > div.actions.pinned > button.btn-primary",
+          "text": "Deposit ICP",
+          "tag": "button",
+          "type": "button",
+          "box": {
+            "x": 169.7,
+            "y": 788,
+            "w": 204.3,
+            "h": 48,
+            "right": 374,
+            "bottom": 836
+          },
+          "inViewport": true,
+          "probed": true,
+          "hits": "yyyyy",
+          "boxOk": true,
+          "effectiveOk": true,
+          "disabled": true,
+          "ok": true
+        }
+      ],
+      "type": [
+        {
+          "label": "seat name",
+          "selector": ".seat .player-name",
+          "minPx": 11,
+          "count": 1,
+          "smallestPx": 15.6,
+          "ok": true
+        },
+        {
+          "label": "seat stack",
+          "selector": ".seat .chips",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 19.5,
+          "ok": true
+        },
+        {
+          "label": "bet amount",
+          "selector": ".seat .bet-amount, .bet-amount",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "card rank",
+          "selector": ".player-cards .card .rank, .community-cards .card .rank",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "action clock digits",
+          "selector": ".turn-timer",
+          "minPx": 11,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "pot figure",
+          "selector": ".pot-amount",
+          "minPx": 16,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        },
+        {
+          "label": "table balance",
+          "selector": ".wallet-panel .balance-value, .collapsed-balance",
+          "minPx": 13,
+          "count": 1,
+          "smallestPx": 14,
+          "ok": true
+        },
+        {
+          "label": "action button label",
+          "selector": ".actions .action-btn",
+          "minPx": 13,
+          "count": 0,
+          "smallestPx": null,
+          "ok": true
+        }
+      ],
+      "document": {
+        "w": 390,
+        "h": 844,
+        "viewport": {
+          "w": 390,
+          "h": 844
+        }
+      }
+    }
+  ]
+}

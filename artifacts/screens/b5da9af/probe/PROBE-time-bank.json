@@ -1,0 +1,68 @@
+{
+  "heroPlayer": 1,
+  "results": [
+    {
+      "viewport": "mobile",
+      "urgentBadge": {
+        "file": "artifacts/screens/b5da9af/probe/PROBE-clock-urgent-mobile.png",
+        "text": "Call 0.10",
+        "dataSecs": "10s",
+        "painted": "\"10s\"",
+        "podClock": "10s"
+      },
+      "pill": {
+        "file": "artifacts/screens/b5da9af/probe/PROBE-time-bank-mobile.png",
+        "pressedFile": "artifacts/screens/b5da9af/probe/PROBE-time-bank-pressed-mobile.png",
+        "before": {
+          "text": "Time bank +30s",
+          "box": {
+            "x": 276.7,
+            "y": 598.2,
+            "w": 48.8,
+            "h": 18.5
+          },
+          "timerBox": {
+            "x": 247.7,
+            "y": 589.6,
+            "w": 25.1,
+            "h": 13.5
+          },
+          "overClockDigits": false,
+          "hitsAtTouchFloor": true,
+          "hitProbes": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "inActionRow": false,
+          "onHeroPlate": true,
+          "underTurnIndicator": false,
+          "actionRowCells": 5,
+          "actionRowLabels": [
+            "Fold",
+            "Call 0.10",
+            "Raise 0.30",
+            "",
+            "All in"
+          ],
+          "clock": "15s",
+          "turnIndicatorOnBank": false
+        },
+        "after": {
+          "onBank": false,
+          "clock": "29s",
+          "pillStillOffered": false,
+          "pill": null
+        },
+        "placedRight": true,
+        "rowIsFourCells": true,
+        "hitsAtTouchFloor": true,
+        "hitsWhereRequired": true,
+        "clearOfClockDigits": true,
+        "clockWentUp": true
+      }
+    }
+  ]
+}

@@ -15,7 +15,7 @@
 // `check_timeouts` is `#[ic_cdk::update]` (`lib.rs`) and carries no `query` in
 // `table_canister.did`. So the RENDER RATE was driving an UPDATE LOOP, one per
 // open browser tab, and it was the single largest per-tab cost of running this
-// game — larger than the heartbeat by more than an order of magnitude, and
+// game, larger than the heartbeat by more than an order of magnitude, and
 // counted by no cycles figure anywhere in this repository.
 //
 // Measured on the local replica (`tools/cycles/tab-burn.mjs`, method in that
@@ -32,7 +32,7 @@
 // run as fast as the eye needs.
 //
 // Advancing the clock is an UPDATE, it changes state, and the rate it needs is
-// the rate at which DEADLINES ARRIVE — which has nothing to do with how often a
+// the rate at which DEADLINES ARRIVE, which has nothing to do with how often a
 // browser repaints. The canister already advances its own clock on an on-chain
 // timer (`schedule_next_wake` arms a precise wake at the next deadline, with a
 // 30-second watchdog behind it). So a tab is a BACKSTOP, not the engine, and it
@@ -73,7 +73,7 @@
 //     to MIN_GAP_MS the moment the table actually moves.
 //
 // The worst case a tab can reach is therefore one update per MAX_GAP_MS, which is
-// 2,880 calls a day — against 43,200 to 172,800 for the loop this replaces. The
+// 2,880 calls a day, against 43,200 to 172,800 for the loop this replaces. The
 // normal case is two or three calls per hand.
 //
 // `MAX_GAP_MS` is 30 s because that is `CLOCK_WATCHDOG_SECS` in the canister: if
@@ -89,7 +89,7 @@
 // `TableView` and a clock; `observe()` is a function of what came back. That is
 // what lets `tools/shots/test-clock-nudge.mjs` simulate a full day of table
 // states offline and assert an upper bound on the number of update calls a tab
-// can emit — an assertion that is meaningless if the policy can only be exercised
+// can emit, an assertion that is meaningless if the policy can only be exercised
 // against a live replica.
 
 /** Every tunable in one frozen object, so a caller cannot drift from the gate. */
@@ -100,8 +100,8 @@ export const CLOCK_NUDGE = Object.freeze({
      * EQUAL TO `MIN_GAP_MS`, AND THAT IS A GATE, NOT A COINCIDENCE.
      * `tools/shots/test-poll-updates.mjs` refuses any repeating timer whose
      * period is below 2 s and which can reach an update method. A driver that
-     * ticked faster than its own floor would be exactly that shape — a fast
-     * update loop with a runtime excuse — and a runtime excuse is not something a
+     * ticked faster than its own floor would be exactly that shape, a fast
+     * update loop with a runtime excuse, and a runtime excuse is not something a
      * static reader of this tree can check. So the timer's period and the
      * policy's floor are the same number, and the shape of the code carries the
      * bound rather than only the logic inside it.
@@ -112,7 +112,7 @@ export const CLOCK_NUDGE = Object.freeze({
      * permanently-due table is one call per 2 to 4 seconds rather than one per 2.
      * Measured on the local replica at 30 calls in 120 s, not 60
      * (`artifacts/cycles/fixed-max-1tab.json`). That is the conservative
-     * direction — fewer calls, a slightly longer pause between hands — and it is
+     * direction, fewer calls, a slightly longer pause between hands, and it is
      * left alone rather than "corrected" with a tolerance, because a tolerance is
      * a floor that can be argued with.
      */
@@ -131,8 +131,8 @@ export const CLOCK_NUDGE = Object.freeze({
     MAX_GAP_MS: 30_000,
     /**
      * The unconditional backstop, used ONLY when at least one player is seated.
-     * Its job is the case where the tab's read of the table is wrong or stale —
-     * including a view that failed to decode — so "nothing looks due" is not
+     * Its job is the case where the tab's read of the table is wrong or stale,
+     * including a view that failed to decode, so "nothing looks due" is not
      * allowed to mean "never call again". An empty table gets nothing at all: a
      * table with no players has no deadline anybody is waiting on.
      */
@@ -162,7 +162,7 @@ function optOf(v) {
 /**
  * Seats that `will_be_dealt_in` would count: Active, with chips.
  *
- * Mirrors `will_be_dealt_in` in `lib.rs` — `status == Active && chips > 0` — and
+ * Mirrors `will_be_dealt_in` in `lib.rs`, `status == Active && chips > 0`, and
  * it is a *lower bound on when to ask*, not a decision the client acts on alone.
  * If this ever disagrees with the canister the only consequence is that the tab
  * asks slightly more or less often; the canister still decides whether a hand
@@ -267,7 +267,7 @@ export function tableFingerprint(view) {
  *     }
  *
  * `observe` MUST be called after every call `decide` authorised, including a
- * failed one — a policy that only learns from successes cannot back off on a
+ * failed one, a policy that only learns from successes cannot back off on a
  * canister that is refusing, which is the one time backing off matters most.
  */
 export class ClockNudgePolicy {
@@ -351,15 +351,15 @@ export class ClockNudgePolicy {
         // THE ONLY THING THAT RESETS THE FLOOR IS THE TABLE ACTUALLY MOVING.
         //
         // The tempting alternative is to reset whenever the reply is *actionable*
-        // — `AutoDealReady`, `PlayerTimedOut` — on the grounds that the call did
+        //, `AutoDealReady`, `PlayerTimedOut`, on the grounds that the call did
         // work. That is wrong, and measurably so: a table jammed between hands
         // returns `AutoDealReady` to every single call while `start_new_hand`
         // keeps failing, so "actionable" would hold the gap at its floor for as
         // long as the jam lasts. Simulated over four jammed hours
         // (`tools/shots/test-clock-nudge.mjs`) that was 7,200 calls against 480.
         //
-        // A deal that really happened changes the fingerprint — a new hand
-        // number, a new phase, moved chips — so the honest signal is already
+        // A deal that really happened changes the fingerprint, a new hand
+        // number, a new phase, moved chips, so the honest signal is already
         // there and does not need a second, more optimistic one.
         if (fp !== this.lastFingerprint) {
             this.gap = this.minGap;

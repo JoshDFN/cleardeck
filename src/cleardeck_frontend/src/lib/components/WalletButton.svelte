@@ -6,6 +6,9 @@
   import { Actor, HttpAgent } from '@dfinity/agent';
   import { isMainnet, IC_HOST } from '../ic-config.js';
   import logger from '$lib/logger.js';
+  import { readTurnAlertPref, writeTurnAlertPref } from '$lib/turn-alert.js';
+  import { hotkeysPref } from '$lib/hotkeys-pref.svelte.js';
+  import { playSound } from '$lib/sounds.js';
 
   // Props
   const { onProfileChange = null } = $props();
@@ -525,6 +528,16 @@
     isLoading = false;
   }
 
+  // The your-turn alert preference ($lib/turn-alert.js); read on every turn
+  // edge by PokerTable, so a change here takes effect on the next turn.
+  const prefStorage = typeof localStorage !== 'undefined' ? localStorage : null;
+  let turnAlert = $state(readTurnAlertPref(prefStorage));
+  function toggleTurnAlert() {
+    turnAlert = !turnAlert;
+    writeTurnAlertPref(prefStorage, turnAlert);
+    if (turnAlert) playSound('yourTurn');
+  }
+
   async function handleLogout() {
     await auth.logout();
     showDropdown = false;
@@ -549,18 +562,30 @@
       <span class="spinner"></span>
     </button>
   {:else if !authState.isAuthenticated}
+    <!-- SIGNED OUT ON A PHONE: ONE BUTTON. On a desktop a local build shows
+         Dev Login beside Connect Wallet; on a phone the two wrapped the table
+         header to a second row (~96 px) and cost a spectator 44 px of felt. So
+         on the phone (the media block at the foot of this style) the dev
+         button reads "Sign in", its menu opens on Internet Identity first and
+         the four dev players under it, and the wide Connect Wallet button is
+         hidden while the dev container exists. A mainnet build has no dev
+         container, so its one button is Sign in, reading "Sign in" on
+         the phone. The menu's II row is rendered on every build that has the
+         menu and painted only on the phone (`.phone-only`). -->
     <div class="login-buttons">
       {#if isLocalDev()}
         <div class="dev-login-container">
-          <button class="wallet-btn dev" onclick={() => showDevMenu = !showDevMenu} disabled={isLoading} aria-label="Developer login options">
+          <button class="wallet-btn dev" onclick={() => showDevMenu = !showDevMenu} disabled={isLoading} aria-label="Sign-in options">
             {#if isLoading}
               <span class="spinner"></span>
             {:else}
-              Dev Login
+              <span class="label-wide">Dev Login</span>
+              <span class="label-phone">Sign in</span>
             {/if}
           </button>
           {#if showDevMenu}
             <div class="dev-menu">
+              <button class="phone-only ii-row" onclick={() => { showDevMenu = false; handleLogin(); }}>Internet Identity</button>
               <button onclick={() => handleDevLogin(1)}>Player 1</button>
               <button onclick={() => handleDevLogin(2)}>Player 2</button>
               <button onclick={() => handleDevLogin(3)}>Player 3</button>
@@ -569,22 +594,35 @@
           {/if}
         </div>
       {/if}
-      <button class="wallet-btn connect" onclick={handleLogin} disabled={isLoading}>
+      <!-- "Sign in", not "Connect Wallet": what opens is Internet Identity (a
+           passkey or Google), not a wallet chooser. Money arrives later, in the
+           cashier. While the popup is open the button keeps its width and says
+           what is happening, so a blocked popup is not a spinner forever. -->
+      <button
+        class="wallet-btn connect"
+        onclick={handleLogin}
+        disabled={isLoading}
+        title="Sign in with Internet Identity: a passkey or Google. No wallet needed to look around."
+      >
         {#if isLoading}
           <span class="spinner"></span>
+          <span class="label-wide">Opening Internet Identity…</span>
+          <span class="label-phone">Opening…</span>
         {:else}
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="2" y="4" width="20" height="16" rx="2"/>
-            <path d="M2 10h20"/>
-            <circle cx="17" cy="14" r="2"/>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="8" cy="12" r="4"/>
+            <path d="M12 12h9M18 12v3M21 12v2"/>
           </svg>
-          Connect Wallet
+          <span class="label-wide">Sign in</span>
+          <span class="label-phone">Sign in</span>
         {/if}
       </button>
     </div>
   {:else}
     <div class="wallet-connected">
-      <button class="wallet-btn connected" onclick={() => showDropdown = !showDropdown}>
+      <!-- The name is also the accessible name: the phone's table header
+           shows this chip as the avatar alone (table-header-phone.scss). -->
+      <button class="wallet-btn connected" onclick={() => showDropdown = !showDropdown} aria-label={displayName} title={displayName}>
         {#if avatarUrl}
           <img class="avatar-img" src={avatarUrl} alt="Avatar" />
         {:else}
@@ -651,6 +689,26 @@
             </div>
           </div>
 
+          <!-- Table alerts -->
+          <div class="dropdown-section">
+            <span class="section-title">Table alerts</span>
+            <!-- `.pref-box` is the checkbox's own hit area (44 px on a phone,
+                 tools/shots/touch-targets.mjs probes 21 px around the box):
+                 the native input stays 24 px and never shrinks under a long
+                 sentence. -->
+            <label class="pref-row">
+              <span class="pref-box"><input type="checkbox" checked={turnAlert} onchange={toggleTurnAlert} /></span>
+              <span>Your-turn alert: a chime, a vibration on touch, and the tab title</span>
+            </label>
+            <!-- OFF BY DEFAULT ($lib/hotkeys-pref.js): the keys send real
+                 money, so the player opts in. The legend under the action
+                 row points here while they are off. -->
+            <label class="pref-row">
+              <span class="pref-box"><input type="checkbox" checked={hotkeysPref.enabled} onchange={() => hotkeysPref.toggle()} /></span>
+              <span>Keyboard shortcuts at the table: F fold, C check or call, R raise, A twice for all in, the number keys for sizes</span>
+            </label>
+          </div>
+
           <!-- Principal ID Section -->
           <div class="dropdown-section">
             <span class="section-title">Principal ID</span>
@@ -691,10 +749,15 @@
             </button>
           </div>
 
-          <!-- Deposit Addresses Section -->
+          <!-- YOUR WALLET'S OWN ADDRESS, NOT A TABLE DEPOSIT. Money sent here
+               lands in this wallet; a table deposit is made from the table
+               page, where the derived per-table address lives. This section
+               used to be headed "Deposit Addresses", which is the coin flip
+               the money-flows audit named: two "deposit address" concepts on
+               one screen, one of which does not reach the table. -->
           <div class="dropdown-section">
-            <span class="section-title">Deposit Addresses</span>
-            <span class="section-hint">Send funds to these addresses to deposit</span>
+            <span class="section-title">Your wallet address</span>
+            <span class="section-hint">This is your Internet Identity wallet, not a table deposit. To deposit to a table, open the table and press Deposit.</span>
 
             <!-- ICP Deposit -->
             <div class="deposit-item">
@@ -750,7 +813,7 @@
                   </button>
                 {/if}
               </div>
-              <span class="btc-note">BTC deposits require 6 confirmations (~1 hour)</span>
+              <span class="btc-note">Bitcoin sent here needs six confirmations, about an hour.</span>
             {/if}
           </div>
 
@@ -870,14 +933,20 @@
   }
 
   .wallet-btn.connect {
-    background: linear-gradient(135deg, #00d4aa 0%, #00a88a 100%);
+    background: var(--cd-accent);
     border: none;
+    color: var(--cd-accent-ink);
+    font-weight: var(--cd-weight-strong);
   }
 
   .wallet-btn.connect:hover:not(:disabled) {
-    background: linear-gradient(135deg, #00e4ba 0%, #00b89a 100%);
+    background: var(--cd-accent-hi);
     transform: translateY(-1px);
   }
+
+  /* The label stays while the popup is open, so the button does not collapse
+     to a spinner square. */
+  .wallet-btn.connect:disabled { opacity: 0.85; cursor: progress; }
 
   .wallet-btn.dev {
     background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
@@ -923,6 +992,10 @@
   .dev-menu button:hover {
     background: rgba(245, 158, 11, 0.2);
   }
+
+  /* The phone's one-button sign-in (the markup comment above the login
+     buttons): the short label and the menu's II row exist only on the phone. */
+  .label-phone, .dev-menu .phone-only { display: none; }
 
   .wallet-btn.connected {
     background: rgba(0, 212, 170, 0.1);
@@ -1189,6 +1262,26 @@
     margin-top: 4px;
     font-style: italic;
   }
+
+  .pref-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--cd-space-2);
+    color: var(--cd-ink-1);
+    font-size: var(--cd-text-sm);
+    line-height: 1.35;
+    cursor: pointer;
+  }
+
+  .pref-box {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    margin-top: 2px;
+  }
+
+  .pref-row input { flex: 0 0 auto; margin: 0; cursor: pointer; }
 
   .dropdown-btn {
     width: 100%;
@@ -1549,5 +1642,64 @@
 
   @keyframes spin {
     to { transform: rotate(360deg); }
+  }
+  /* =========================================================================
+     THE PHONE: the chip, the login buttons and every row of the menu at the
+     44 px touch floor (the audit measured Connect Wallet at 24 px and the
+     menu rows at ~26). The menu becomes a sheet pinned to the right edge of
+     the screen rather than the chip, so it never runs past 390 px.
+     ========================================================================= */
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    .wallet-btn { min-height: var(--cd-touch-min); }
+    .dev-menu button { min-height: var(--cd-touch-min); font-size: var(--cd-text-md); }
+
+    /* ONE sign-in button on the phone (see the markup comment). */
+    .label-wide { display: none; }
+    .label-phone { display: inline; }
+    .dev-menu .phone-only { display: block; }
+    .dev-menu .ii-row { color: var(--cd-accent); font-weight: var(--cd-weight-strong); }
+    .dev-login-container + .wallet-btn.connect { display: none; }
+    /* It reads "Sign in", so it is painted as the sign-in button, not the
+       amber developer one. */
+    .wallet-btn.dev {
+      font-size: var(--cd-text-sm);
+      font-weight: var(--cd-weight-strong);
+      background: var(--cd-accent);
+      color: var(--cd-accent-ink);
+      padding: 0 var(--cd-space-4);
+    }
+    .wallet-btn.dev:hover:not(:disabled) { background: var(--cd-accent); }
+    /* The dev menu opens under the chip at the right edge, inside 390 px. */
+    .dev-menu { left: auto; right: 0; min-width: 11em; }
+    .dropdown {
+      position: fixed;
+      top: auto;
+      right: var(--cd-space-2);
+      left: var(--cd-space-2);
+      /* Three control heights of room above the sheet: the trust bar and the
+         header it opens under. */
+      max-height: calc(100dvh - 3 * var(--cd-control-md));
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      min-width: 0;
+    }
+    .dropdown-btn { min-height: var(--cd-touch-min); font-size: var(--cd-text-md); }
+    .copy-btn, .copy-btn.small { min-height: var(--cd-touch-min); min-width: var(--cd-touch-min); }
+    /* The label is the checkbox's hit area; it reaches into the section's
+       padding so a thumb 21 px left of the box still lands on it. */
+    .pref-row {
+      min-height: var(--cd-touch-min);
+      align-items: center;
+      margin-left: calc(-1 * var(--cd-space-3));
+      padding-left: var(--cd-space-3);
+    }
+    /* The box is the 44 px target; the input inside it stays 24 px. */
+    .pref-box {
+      width: var(--cd-touch-min);
+      height: var(--cd-touch-min);
+      margin: 0;
+    }
+    .pref-row input { width: var(--cd-icon-lg); height: var(--cd-icon-lg); }
+    .refresh-btn, .show-address-btn { min-height: var(--cd-touch-min); }
   }
 </style>

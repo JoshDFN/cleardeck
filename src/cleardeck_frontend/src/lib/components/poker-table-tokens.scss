@@ -1,0 +1,253 @@
+/* ==========================================================================
+   POKER TABLE: THE GEOMETRY TOKENS (a partial of PokerTable.svelte's style)
+   ==========================================================================
+   Every geometric value on the table is a ratio of --fw, the felt width.
+   --fw itself is resolved once, from the stage's own box: width-capped,
+   otherwise height-fitted. Colours, shadows and motion come from index.scss.
+   The JS mirrors of a few of these (card, plate and ring ratios) live in
+   PokerTable.svelte's ringSeats() and spokeEndBySeat; change one, change
+   the other. */
+
+@mixin tokens {
+
+  .poker-table-wrapper {
+    /* Felt aspect. Declared 2.10 so the measured surface lands ~2.06, inside
+       bar 2's 1.9-2.3 and next to the reference median of 2.13. */
+    --ar: 2.10;
+
+    /* ring -- pods straddle the rail, as PokerStars, GGPoker and WPT Global all
+       do; the ring is a little larger than the felt so the pods sit on the rail
+       rather than biting into the playing surface. */
+    --ring-kx: 1.02;
+    --ring-ky: 1.00;
+    --pod-w-r: 0.235;
+    --pod-h-r: 0.086;
+    --avatar-r: 0.066;
+
+    /* cards -- board 11.2% of surface width, opponents 68% of a board card
+       (PokerNow's exact ratio), hero 82%. */
+    --card-board-r: 0.112;
+    --card-hero-r: 0.092;
+    --card-opp-r: 0.076;
+    --board-gap-r: 0.009;
+    --card-nudge-r: 0.035;
+    --off-opp-r: 0.050;
+    --off-shown-r: 0.090;
+    --off-hero-r: 0.085;
+    --cluster-dy-r: 0.012;
+
+    /* type -- the audit's floor: at the measured desktop felt this is ~21 px,
+       so a 0.58em label is 12 px and a stack figure is the largest text on the
+       table after the pot. */
+    --ui-r: 0.021;
+
+    /* rail -- thickness in felt widths; the near (bottom) edge is 2.5x the
+       far one because the table is seen from a chair, not the ceiling. */
+    --rail-side-r: 0.044;
+    --rail-top-r: 0.03;
+    --rail-bottom-r: 0.075;
+
+    --dock-h: 78px;
+
+    display: flex;
+    justify-content: center;
+    width: 100%;
+    height: var(--cd-avail, 620px);
+    margin-bottom: calc(-1 * var(--cd-slack, 0px));
+    min-width: 0;
+  }
+
+  /* 8- and 9-max: the same rail has to carry four more plates, so everything
+     comes down together by ~0.86. */
+  .poker-table-wrapper.ring-crowded {
+    --pod-w-r: 0.202;
+    --pod-h-r: 0.074;
+    --avatar-r: 0.056;
+    --card-opp-r: 0.065;
+    --off-opp-r: 0.043;
+    --off-shown-r: 0.077;
+    --ui-r: 0.018;
+  }
+
+  /* Heads-up and 3-handed: bigger plates and bigger type. The opponent's
+     pair is NOT bigger: on the two-seat ring the top seat hangs its shown
+     pair straight into the band the winner readout uses (measured at
+     1440x900, fw 1027.8: pair y 241-348, readout y 308-362, 43.6% of
+     "Nakamoto wins 12.00 ICP" covered; tools/shots/probe-heads-up.mjs).
+     At 0.066 fw and 0.074 off the pair ends at y 309, the cluster 9 px
+     lower puts the readout at 317-371, and the board's foot (530) still
+     clears the hero's pair (536). */
+  .poker-table-wrapper.ring-sparse {
+    --pod-w-r: 0.262;
+    --pod-h-r: 0.094;
+    --avatar-r: 0.072;
+    --card-opp-r: 0.066;
+    --off-opp-r: 0.064;
+    --off-shown-r: 0.074;
+    --cluster-dy-r: 0.021;
+    --ui-r: 0.0225;
+  }
+
+  /* THE single scale input. Both caps are the stage box divided by what the
+     RING needs (the pods hang off the felt on every side, and the avatar
+     breaks the plate's outer edge by half its width):
+       width  needs  ring-kx + pod-w-r + avatar-r = 1.02 + 0.235 + 0.066 = 1.32 -> 75cqw
+       height needs  ring-ky / ar + pod-h-r        = 0.476 + 0.086         = 0.562 -> 177cqh
+     These MUST precede the portrait block below: the portrait --fw is the
+     same selector, and the later declaration wins (measured: with this rule
+     after the portrait one, the 6-max phone felt fell from 54% to 47%). */
+  .table-inner {
+    /* The near rail (0.075) is 2.5x the far one (0.03), so the padded table
+       is 0.581 fw tall (0.476 felt + 0.105 rail) and its centre sits 0.0225 fw
+       BELOW the felt's. The whole scene is lifted by that much so the padded
+       object, not the felt, is centred in the stage; measured without it the
+       near rail painted 22 px into the dock, over the pot-odds line, as soon
+       as the dock carried the sizer. The height cap is the padded object:
+       0.581 -> 172cqh (was 177, the ring's need, which the rail now exceeds). */
+    --stage-lift: calc(var(--fw) * (var(--rail-bottom-r) - var(--rail-top-r)) * 0.5);
+    --fw: min(75cqw, 172cqh);
+    --fh: calc(var(--fw) / var(--ar));
+    --rx: calc(var(--fw) * 0.5 * var(--ring-kx));
+    --ry: calc(var(--fh) * 0.5 * var(--ring-ky));
+    --pod-w: calc(var(--fw) * var(--pod-w-r));
+    --pod-h: calc(var(--fw) * var(--pod-h-r));
+    --avatar: calc(var(--fw) * var(--avatar-r));
+    --ui: calc(var(--fw) * var(--ui-r));
+  }
+
+  /* 1.02 + 0.202 + 0.056 = 1.278 -> 78cqw ; the padded table 0.581 -> 172cqh */
+  .ring-crowded .table-inner { --fw: min(78cqw, 172cqh); }
+  /* 1.02 + 0.262 + 0.072 = 1.354 -> 73cqw ; the padded table 0.581 -> 172cqh */
+  .ring-sparse  .table-inner { --fw: min(73cqw, 172cqh); }
+
+  /* ==========================================================================
+     PORTRAIT: switched on ASPECT RATIO, not width (bar 19): a 0.555 stadium
+     that takes the whole phone, pods ON the felt in two columns, the pot under
+     the board. The numbers are docs/DESIGN-BAR.md section 11.
+     ========================================================================== */
+  @media (max-aspect-ratio: 1/1) {
+    .poker-table-wrapper {
+      --ar: 0.555;
+      --ring-kx: 0.70;
+      --ring-ky: 0.70;
+      --pod-w-r: 0.46;
+      --pod-h-r: 0.140;
+      --avatar-r: 0.098;
+      --card-board-r: 0.112;
+      --card-opp-r: 0.092;
+      --board-gap-r: 0.010;
+      --card-nudge-r: 0.050;
+      /* The face-down pair shows ~70% of itself past the plate's edge (at
+         0.068 it showed a third and read as a glitch). */
+      --off-opp-r: 0.095;
+      --off-shown-r: 0.112;
+      /* THE HERO'S PAIR: 0.19 fw (60 px on the 6-max phone; 0.14 was 44)
+         with a 6 degree fan (HoleCards.svelte). At that size a pair standing
+         clear of the plate reached the lower flank plates' band, so the HERO
+         SEAT moves DOWN by --hero-dy-r (the felt has 0.27 fw below the plate
+         on this ring and the nine-seat ring has none, see ring-crowded) and
+         the pair's top edge lands where the 0.14 pair's was (measured 0.246
+         fw above the old seat point; now 0.242). The puck rule
+         (table-geometry puckSpot) and the hero's chip spot (PokerTable
+         ringSeats) are relative to the seat and move with it. The offset is
+         derived: half the plate, the card's visible half (aspect 0.81), the
+         gap; a ring may TUCK the pair behind the plate's top edge by
+         --hero-tuck of its height instead (the occlusion gate allows a card
+         face 20% covered, tools/shots/lib/occlusion.mjs). */
+      --hero-dy-r: 0.08;
+      --hero-tuck: 0;
+      --hero-gap-r: 0.006;
+      --card-hero-r: 0.19;
+      --off-hero-r: calc(var(--pod-h-hero-r) / 2 + (0.5 - var(--hero-tuck)) * var(--card-hero-r) / 0.81 + var(--hero-gap-r));
+      /* The hero plate on a phone: wider (the bottom of the felt is free) and
+         tall enough for three rows (name, stack, your hand). */
+      --pod-w-hero-r: 0.58;
+      --pod-h-hero-r: 0.165;
+      --cluster-dy-r: -0.066;
+      --ui-r: 0.058;
+      --rail-side-r: 0.05;
+      --rail-top-r: 0.035;
+      /* The near rail is capped by the dock: at 0.075 it painted over the
+         wallet balance (measured: 82% of "53.20 ICP" under the rail). */
+      --rail-bottom-r: 0.06;
+      --dock-h: 90px;
+    }
+
+    /* width 0.70 + 0.46 = 1.160 -> 86cqw ; height: the FELT itself -> 55cqh.
+       In portrait the avatar sits INSIDE the plate (SeatPod), so the flank
+       pods' extent is the plate's, as measured in section 11. */
+    /* No lift in portrait: the phone stage is height-bound and the far rail
+       already sits under the header. */
+    .table-inner { --fw: min(86cqw, 55cqh); --stage-lift: 0px; }
+
+    /* Nine pods on a phone: the ring opens out and everything comes down. */
+    .poker-table-wrapper.ring-crowded {
+      --ring-kx: 0.90;
+      /* 0.955, not 1.00: the hero plate's three rows at the 11 px floor make
+         it 46 px tall, and centred on the felt's bottom edge its lower half
+         reached the dock's wallet balance (measured: 14% of "12.80 ICP"
+         under the plate). The top chairs come 12 px down with it and keep
+         18 px to the pot module. */
+      --ring-ky: 0.955;
+      --pod-w-r: 0.38;
+      --pod-h-r: 0.112;
+      /* Big enough for the ALL IN disc's two words at the 11 px floor. */
+      --avatar-r: 0.09;
+      /* The hero plate: wide enough for a named hand at the floor on one row. */
+      --pod-w-hero-r: 0.50;
+      --pod-h-hero-r: 0.135;
+      /* 0.165 fw = 50 px on the nine-seat phone (was 0.14 = 42, 0.13 = 39
+         before that). The room comes from the hero SEAT moving down by
+         --hero-dy-r (0.03 fw = 9 px): ring-ky 0.955 left 12 px between the
+         plate's lower half and the dock's balance row, and the mobile
+         phase's third round spends 9 of them. A tuck is still out: an 8%
+         tuck measured 20.9% of the card's ink covered (the plate's shadow
+         spills onto the card, tools/shots/lib/occlusion.mjs allows 20%). So
+         the pair stands clear with a hair of gap; the felt and occlusion
+         gates and the dock's balance figure decide the number. */
+      --card-hero-r: 0.165;
+      --hero-dy-r: 0.03;
+      --hero-tuck: 0;
+      --hero-gap-r: 0.004;
+      --cluster-dy-r: -0.180;
+      /* 0.116 fw = 34.5 px on the nine-seat phone: the corner index (0.32 of
+         the card) reaches the 11 px on-felt floor. At 0.098 it was 9.3 px,
+         measured by tools/shots/touch-targets.mjs. */
+      --card-board-r: 0.116;
+      --card-opp-r: 0.076;
+      --off-opp-r: 0.085;
+      --off-shown-r: 0.094;
+      --ui-r: 0.050;
+    }
+    .ring-crowded .table-inner { --fw: min(78cqw, 52cqh); }
+
+    .poker-table-wrapper.ring-sparse {
+      --ring-kx: 0.62;
+      --ring-ky: 0.62;
+      --pod-w-r: 0.52;
+      --pod-h-r: 0.155;
+      --avatar-r: 0.112;
+      --card-opp-r: 0.104;
+      --off-opp-r: 0.10;
+      --off-shown-r: 0.124;
+      /* The landscape sparse rule above carries two classes and would beat
+         the one-class portrait offset; the portrait value is restated here. */
+      --cluster-dy-r: -0.066;
+      --pod-w-hero-r: 0.62;
+      --pod-h-hero-r: 0.18;
+      --card-hero-r: 0.20;
+      --ui-r: 0.062;
+    }
+    .ring-sparse .table-inner { --fw: min(87cqw, 55cqh); }
+
+    /* THE HERO SEAT'S OWN PLATE SIZE. Everything that hangs off the seat
+       (plate, badge, award, puck) reads --pod-w/--pod-h, so it all follows.
+       And its own PLACE: --hero-dy-r felt widths below the ring point, so
+       the bigger pair above it stays out of the flank plates' band. */
+    .seat.is-me {
+      --pod-w: calc(var(--fw) * var(--pod-w-hero-r));
+      --pod-h: calc(var(--fw) * var(--pod-h-hero-r));
+      --sy: calc(var(--ry) * var(--sn, 0) + var(--fw) * var(--hero-dy-r, 0));
+    }
+  }
+}

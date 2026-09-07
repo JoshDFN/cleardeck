@@ -7,11 +7,17 @@
   import WalletButton from "$lib/components/WalletButton.svelte";
   import HandHistory from "$lib/components/HandHistory.svelte";
   import HowItWorks from "$lib/components/HowItWorks.svelte";
+  import TrustBar from "$lib/components/TrustBar.svelte";
+  import Toast from "$lib/components/Toast.svelte";
+  import { searchWithTable, tableIdFromSearch } from "$lib/invite-link.js";
+  import { handNumberFromSearch } from "$lib/hand-link.js";
   import DepositModal from "$lib/components/DepositModal.svelte";
   import WithdrawModal from "$lib/components/WithdrawModal.svelte";
   import { playSound, setSoundEnabled, isSoundEnabled } from "$lib/sounds.js";
   import logger from "$lib/logger.js";
   import { auth, isSignatureError, wallet } from "$lib/auth.js";
+  import { describeLobbyFailure, retryDelayMs } from "$lib/humane-errors.js";
+  import NoticeLine from "$lib/components/NoticeLine.svelte";
   // docs/DEFECTS.md T-02: the "Verify the Code" panel used to hardcode
   // `icp canister status qrhly-… -e ic` in both the visible <code> block and the
   // Copy button, so a LOCAL dev build handed the user a mainnet command. The
@@ -39,6 +45,15 @@
   import { ClockNudgePolicy, CLOCK_NUDGE } from "$lib/clockNudge.js";
   import { HttpAgent } from '@dfinity/agent';
   import { Principal } from '@dfinity/principal';
+  import {
+    beginPending, humaneActionError, pendingExpired, pendingStatus, projectPending, settlePendingReply,
+  } from '$lib/optimistic.js';
+  // The audit's critical mobile finding: an anonymous "Sit" tap reached the
+  // canister and came back as a red balance error over the phone header. The
+  // decision (sign in / top up / join) is a pure module; this file only acts.
+  import { escrowFromRead, joinGateDecision, joinGateFacts, seatToResume } from '$lib/join-gate.js';
+  import RotatePrompt from '$lib/components/RotatePrompt.svelte';
+  import { untrack } from 'svelte';
 
   let view = $state('lobby'); // 'lobby' | 'table'
   let tables = $state([]);
@@ -49,23 +64,81 @@
   let loadingTableState = false; // Non-reactive flag to prevent concurrent loadTableState calls
   let loadTableStateRequestId = 0; // Counter to discard stale responses
   let error = $state(null);
+  /** The raw text behind a humane `error`, shown as a detail line, or null. */
+  let errorDetail = $state(null);
+  /** A control the toast offers for THIS `error` ({ label, message, run }), or null. */
+  let errorAction = $state(null);
   let success = $state(null);
+  /** The pending automatic re-read of the lobby after a failed one. */
+  let lobbyRetryTimer = null;
+  /** How many automatic re-reads have failed in a row (the back-off's input). */
+  let lobbyRetryAttempt = 0;
+
+  /**
+   * THE ONE WAY A MESSAGE REACHES THE TOAST. The detail line and the action
+   * belong to the message that raised them; a bare `error = ...` elsewhere
+   * used to leave the previous failure's stack trace under an unrelated
+   * sentence. Every caller goes through here, so the other two fields are
+   * always the ones written for THIS message.
+   */
+  function showError(message, { detail = null, action = null } = {}) {
+    error = message;
+    errorDetail = detail;
+    errorAction = action;
+  }
+
+  /** Dismiss stops the automatic re-read too: the empty list's Try again remains. */
+  function dismissError() {
+    error = null;
+    errorDetail = null;
+    errorAction = null;
+    clearTimeout(lobbyRetryTimer);
+    lobbyRetryTimer = null;
+  }
+
+  /** The lobby read failed: one sentence, the raw text demoted, a Retry, and a re-read on a growing timer. */
+  function showLobbyFailure(e) {
+    const retryMs = retryDelayMs(lobbyRetryAttempt);
+    const failure = describeLobbyFailure(e, { retryMs });
+    showError(failure.message, {
+      detail: failure.detail,
+      action: { label: 'Retry', message: failure.message, run: retryLoadTables },
+    });
+    clearTimeout(lobbyRetryTimer);
+    lobbyRetryTimer = setTimeout(() => {
+      lobbyRetryAttempt += 1;
+      retryLoadTables();
+    }, retryMs);
+  }
+
+  /** The spectator dock's one control: the same Internet Identity flow as the header. */
+  async function signInFromTable() {
+    try {
+      await auth.login();
+    } catch (e) {
+      logger.error('sign-in from the table failed', e);
+      showError('Could not open Internet Identity. Try the Sign in button in the header.');
+    }
+  }
+
+  function retryLoadTables() {
+    clearTimeout(lobbyRetryTimer);
+    lobbyRetryTimer = null;
+    if (view !== 'lobby') return;
+    loadTables().then((ok) => { if (ok) openTableFromUrl(); });
+  }
   let showProofPanel = $state(false);
   let showHandHistory = $state(false);
+  /** The hand a `?table=…&hand=N` link asked for; the history dialog opens on it. */
+  let historyOpenHand = $state(null);
   let showHowItWorks = $state(false);
   let showVerify = $state(false);
 
-  // PRESENTATION of the four player-protection notices, never their content.
-  //
-  // In portrait ON THE TABLE VIEW the notices render as a compact red strip that
-  // carries the protected words themselves (see `.banner-strip` below), and this
-  // flag opens the full verbatim text over the whole screen in one tap. It is a
-  // full-screen OVERLAY rather than an in-flow expansion on purpose: the table
-  // sizes itself to "the viewport, less everything above me in the flow", so an
-  // in-flow expansion would resize the felt underneath the player mid-hand.
-  //
-  // Everywhere else -- desktop, landscape, and the lobby in portrait -- the full
-  // block renders in the flow exactly as before and this flag does nothing.
+  // PRESENTATION of the five player-protection notices, never their content.
+  // They ride the trust bar (TrustBar.svelte) on every view; this flag opens
+  // the full verbatim text as an opaque OVERLAY (never an in-flow expansion:
+  // the table sizes itself to the space under the bar and must not resize
+  // under a player mid-hand).
   let noticesExpanded = $state(false);
 
   // HOW TALL THE PROTECTED-NOTICE BANNER IS, RIGHT NOW, IN CSS PIXELS.
@@ -289,6 +362,17 @@
   });
   let showDepositModal = $state(false);
   let showWithdrawModal = $state(false);
+  // The shortfall a Sit tap found, handed to the cashier as its opening figure
+  // (smallest unit, or null). Cleared when the dialog closes.
+  let depositPrefill = $state(null);
+  // The seat an anonymous Sit tap wanted, resumed once sign-in lands (a NEW
+  // object each time; never mutated). Keyed by table so a sign-in on another
+  // table does not seat the player somewhere they did not tap.
+  let resumeSeat = $state(null);
+  // The header's measured height, published as `--header-h` so the phone's
+  // toast can stand UNDER the header instead of over it (the audit measured
+  // the error panel covering Lobby / History / Verify Fair at 390 px).
+  let headerHeight = $state(0);
 
   // Current table info - stores the canister ID of the table we joined
   let currentTableInfo = $state(null);
@@ -306,10 +390,15 @@
   // Polling interval for table state
   let pollInterval = null;
 
+  /** Reads the lobby. Resolves true on a successful read, false on a failure (the toast says why). */
   async function loadTables() {
     loading = true;
+    let ok = false;
     try {
       let lobbyTables = await lobby.get_tables();
+      // A read that succeeds after a failed one clears that failure's toast.
+      if (errorAction && errorAction.message === error) dismissError();
+      lobbyRetryAttempt = 0;
 
       // For tables that have a canister_id, try to fetch their player counts
       for (let i = 0; i < lobbyTables.length; i++) {
@@ -345,23 +434,27 @@
         return Number(a.id) - Number(b.id);
       });
       tables = lobbyTables;
+      ok = true;
     } catch (e) {
       logger.error('Failed to load tables:', e);
       // Check if this is a signature verification error (expired II delegation)
       if (isSignatureError(e)) {
-        error = 'Session expired. Please log in again.';
+        showError('Session expired. Please log in again.');
         await auth.logout();
       } else {
-        error = e.message;
+        // Not the agent's paragraph: what happened and what happens next
+        // (lib/humane-errors.js), the raw text on a detail line, a Retry.
+        showLobbyFailure(e);
       }
     }
     loading = false;
+    return ok;
   }
 
   async function joinTable(tableInfo) {
     // Check if the table has a canister assigned
     if (!tableInfo.canister_id || tableInfo.canister_id.length === 0) {
-      error = "This table doesn't have an assigned canister yet";
+      showError("This table doesn't have an assigned canister yet");
       return;
     }
 
@@ -373,6 +466,58 @@
 
     view = 'table';
     startPolling();
+    rememberTableInUrl(canisterId);
+  }
+
+  /**
+   * The invite link (lib/invite-link.js): the open table rides the URL so the
+   * page can be shared, and a visit with `?table=<id>` opens that table once
+   * the lobby has listed it. The URL is replaced, never pushed: Back still
+   * leaves the app, as it did before.
+   */
+  function rememberTableInUrl(canisterId) {
+    try {
+      const next = searchWithTable(window.location.search, canisterId);
+      if (next !== window.location.search) {
+        window.history.replaceState(null, '', `${window.location.pathname}${next}`);
+      }
+    } catch (e) {
+      logger.debug('could not update the URL for the open table', e);
+    }
+  }
+
+  let deepLinkConsumed = false;
+
+  /**
+   * Runs after a SUCCESSFUL read only: a failed first read keeps its own
+   * toast (the sentence, the detail line, the Retry) and the list's failed
+   * state, and the link is honoured by the read that eventually succeeds.
+   */
+  function openTableFromUrl() {
+    if (deepLinkConsumed || view !== 'lobby') return;
+    let wanted = null;
+    try { wanted = tableIdFromSearch(window.location.search); } catch { wanted = null; }
+    if (!wanted) return;
+    deepLinkConsumed = true;
+    const match = tables.find((t) => {
+      const p = t.canister_id?.[0];
+      const cid = p ? (p.toText ? p.toText() : String(p)) : null;
+      return cid === wanted;
+    });
+    if (match) {
+      // The hand half of the link (lib/hand-link.js): the table opens, and the
+      // history dialog opens on that hand once the table's records have landed.
+      let hand = null;
+      try { hand = handNumberFromSearch(window.location.search); } catch { hand = null; }
+      joinTable(match);
+      if (hand) {
+        historyOpenHand = hand;
+        showHandHistory = true;
+      }
+    } else {
+      showError('That invite link points to a table this lobby does not list. Pick one below instead.');
+      rememberTableInUrl(null);
+    }
   }
 
   // =========================================================================
@@ -382,13 +527,13 @@
   // This function used to open with `await tableActor.check_timeouts()`, and it
   // is driven by `setInterval(..., POLL_INTERVAL)` at 500 ms. `check_timeouts` is
   // `#[ic_cdk::update]` in `src/table_canister/src/lib.rs` and carries no `query`
-  // in `table_canister.did`, so THE RENDER RATE WAS DRIVING AN UPDATE LOOP — one
+  // in `table_canister.did`, so THE RENDER RATE WAS DRIVING AN UPDATE LOOP: one
   // per open browser tab, forever, whether or not anything was due.
   //
   // Measured on the local replica with `tools/cycles/tab-burn.mjs`, ten tabs open
   // on an idle table: the loop cost more than the whole rest of the canister put
   // together, and no cycles figure in this repository counted it. Every runway
-  // number in the tree therefore read HIGH — the dangerous direction, and the
+  // number in the tree therefore read HIGH, the dangerous direction, and the
   // same failure [E-55](docs/DEFECTS.md#e-55) was reopened for one level down.
   //
   // So the two jobs are now two loops:
@@ -403,11 +548,15 @@
   //
   // The `loadingTableState` re-entrancy guard is kept: a query is cheap for the
   // canister but not free for the browser, and overlapping polls still race.
+  // A load asked for while one is in flight (the action-return re-read) runs
+  // as soon as the in-flight one settles, rather than being dropped.
+  let reloadWanted = false;
+
   async function loadTableState() {
     if (!tableActor) return;
 
-    // Prevent concurrent loadTableState calls - skip if already loading
-    if (loadingTableState) return;
+    // Prevent concurrent loadTableState calls - queue one if already loading
+    if (loadingTableState) { reloadWanted = true; return; }
     loadingTableState = true;
 
     // Track this request to discard stale responses
@@ -427,14 +576,29 @@
       let currentTableView = null;
       if (viewResult && viewResult.length > 0) {
         currentTableView = viewResult[0];
+        // RECONCILE THE ECHO. A certified view that has absorbed the sent
+        // action closes it; one that still shows the pre-click state (a
+        // replica that has not seen the update) keeps it open and is
+        // rendered with is_my_turn held false, so the dock cannot flip back
+        // to "your turn" between the click and the commit (the flicker the
+        // audit measured at one poll after every action).
+        if (pendingAction) {
+          if (pendingStatus(pendingAction, currentTableView) === 'absorbed') {
+            pendingAction = null;
+          } else if (pendingExpired(pendingAction, Date.now())) {
+            pendingAction = null;
+            showActionError('The table has not confirmed your action yet. It will show on the next update.', { verbatim: true });
+          }
+        }
+        const nextView = projectPending(currentTableView, pendingAction);
         // Only update state if game data changed (timer ticks client-side)
-        if (gameStateChanged(tableState, currentTableView)) {
-          tableState = currentTableView;
+        if (gameStateChanged(tableState, nextView)) {
+          tableState = nextView;
         } else {
           // Still update time_remaining_secs for the client-side timer sync
           // This is a shallow merge - only update the timer field
-          if (tableState && currentTableView.time_remaining_secs) {
-            tableState = { ...tableState, time_remaining_secs: currentTableView.time_remaining_secs };
+          if (tableState && nextView.time_remaining_secs) {
+            tableState = { ...tableState, time_remaining_secs: nextView.time_remaining_secs };
           }
         }
 
@@ -485,21 +649,52 @@
       logger.error('Failed to load table state:', e);
       // Check if this is a signature verification error (expired II delegation)
       if (isSignatureError(e)) {
-        error = 'Session expired. Please log in again.';
+        showError('Session expired. Please log in again.');
         stopPolling();
         await auth.logout();
       }
     } finally {
       // Always reset loading flag to allow next poll
       loadingTableState = false;
+      if (reloadWanted) {
+        reloadWanted = false;
+        loadTableState();
+      }
     }
   }
 
-  // Fast polling - 500ms for responsive gameplay. QUERIES ONLY (E-92).
+  // The render poll. QUERIES ONLY (E-92): the in-flight guard in loadTableState
+  // keeps overlapping polls from racing, and a load requested while one is in
+  // flight runs right after it, so the hero's own action is re-read the moment
+  // its update returns. The period is 500 ms because tools/cycles/tab-burn.mjs
+  // prices an open tab at exactly this loop and tools/cycles/burn-table.json
+  // was MEASURED with it (tools/shots/test-poll-updates.mjs fails on a drift
+  // between the two). The decision-loop wave ran it at 250 ms for a while; a
+  // faster poll needs the burn table re-measured at that period first.
   const POLL_INTERVAL = 500;
   const HEARTBEAT_INTERVAL = 10000; // Send heartbeat every 10 seconds
   const BALANCE_REFRESH_INTERVAL = 5000; // Refresh balance every 5 seconds
   let actionPending = $state(false);
+  // THE OPTIMISTIC ECHO ($lib/optimistic.js). Set before the update call is
+  // awaited, rendered as fact by PokerTable, cleared when a certified view has
+  // absorbed the action (or on Err, or after PENDING_TTL_MS as a lost send).
+  let pendingAction = $state(null);
+  // A canister refusal of the last action. Shown beside the buttons, not in
+  // the page toast, and cleared after a few seconds.
+  let actionError = $state(null);
+  let actionErrorTimer = null;
+  const ACTION_ERROR_MS = 6000;
+
+  function showActionError(err, opts = {}) {
+    actionError = humaneActionError(err, opts);
+    if (actionErrorTimer) clearTimeout(actionErrorTimer);
+    actionErrorTimer = setTimeout(() => { actionError = null; actionErrorTimer = null; }, ACTION_ERROR_MS);
+  }
+
+  function dismissActionError() {
+    actionError = null;
+    if (actionErrorTimer) { clearTimeout(actionErrorTimer); actionErrorTimer = null; }
+  }
   let heartbeatInterval = null;
   let balanceRefreshInterval = null;
   let clockNudgeInterval = null;
@@ -511,13 +706,13 @@
   // =========================================================================
   //
   // `check_timeouts` is the only update the old 500 ms poll made, and it is still
-  // needed for three things — an action clock the on-chain timer has not resolved,
+  // needed for three things: an action clock the on-chain timer has not resolved,
   // the between-hands `AutoDealReady` signal (which the on-chain clock deliberately
   // never delivers to anybody by itself), and the stall opportunities that make
   // `abandon_stuck_hand` reachable when a timer is lost.
   //
   // What it is NOT needed for is a repaint. `$lib/clockNudge.js` holds the whole
-  // decision — is anything due, and may we call yet — and it is pure, so
+  // decision (is anything due, and may we call yet) and it is pure, so
   // `tools/shots/test-clock-nudge.mjs` simulates a day of table states against it
   // offline and asserts a ceiling on the calls one tab can emit.
   //
@@ -540,7 +735,7 @@
       result = await tableActor.check_timeouts();
     } catch (e) {
       // A failed nudge is still a nudge: `observe` below has to see it, or the
-      // policy cannot back off on a canister that is refusing — which is the one
+      // policy cannot back off on a canister that is refusing, which is the one
       // time backing off matters most. Not surfaced to the player: the poll's own
       // error path already reports a table that has stopped answering.
       logger.debug('check_timeouts failed:', e);
@@ -668,14 +863,18 @@
     clockPolicy = null;
   }
 
-  // Get current balance
-  let myBalance = $state(0);
+  // The escrow at this table, as last READ. Null until `get_balance()` has
+  // answered and null again after a failed read: the join gate treats null as
+  // unknown, not as zero (lib/join-gate.js escrowFromRead), and the dock shows
+  // no figure it has not been given.
+  let myBalance = $state(null);
   async function loadBalance() {
     if (!tableActor) return;
     try {
-      myBalance = Number(await tableActor.get_balance());
+      myBalance = escrowFromRead({ ok: true, value: await tableActor.get_balance() });
     } catch (e) {
       logger.error('Failed to load balance:', e);
+      myBalance = escrowFromRead({ ok: false });
     }
   }
 
@@ -686,6 +885,72 @@
     }
   });
 
+  const PLAYER_ACTION_VARIANTS = {
+    fold: () => ({ Fold: null }),
+    check: () => ({ Check: null }),
+    call: () => ({ Call: null }),
+    raise: (amount) => ({ Raise: BigInt(amount) }),
+    bet: (amount) => ({ Bet: BigInt(amount) }),
+    allin: () => ({ AllIn: null }),
+  };
+
+  // THE DECISION LOOP'S UPDATE. The echo is set BEFORE the await so the felt
+  // shows the action at the click; the certified view is never written to in
+  // place (the old code mutated tableState.is_my_turn, which the next poll
+  // undid). On Err the echo is dropped, the certified figures are back on the
+  // next paint, and the reason lands beside the buttons.
+  async function sendPlayerAction(kind, amount) {
+    const variant = PLAYER_ACTION_VARIANTS[kind];
+    if (!variant) return null;
+    if ((kind === 'raise' || kind === 'bet') && !(Number(amount) > 0)) return null;
+    dismissActionError();
+    pendingAction = beginPending(kind, kind === 'raise' || kind === 'bet' ? amount : null, tableState, Date.now());
+    if (pendingAction && tableState) tableState = projectPending(tableState, pendingAction);
+    playSound(kind);
+    let result;
+    try {
+      result = await tableActor.player_action(variant(amount));
+    } catch (e) {
+      // A throw is not a refusal: the update may have landed, so the echo is
+      // KEPT (lib/optimistic.js settlePendingReply) and closes only when a
+      // certified view absorbs it or the TTL expires. The strip's "Do not
+      // act again until it does" stays true because the dock stays sent.
+      pendingAction = settlePendingReply(pendingAction, 'throw');
+      throw e;
+    }
+    if ('Err' in result) {
+      pendingAction = settlePendingReply(pendingAction, 'err');
+      showActionError(result.Err);
+      playSound('error');
+    } else {
+      pendingAction = settlePendingReply(pendingAction, 'ok');
+    }
+    return result;
+  }
+
+  /** The key `resumeSeat` is remembered under: this table's canister id. */
+  function currentTableKey() {
+    const cid = currentTableInfo?.canister_id?.[0];
+    if (cid?.toText) return cid.toText();
+    return String(cid ?? currentTableInfo?.id ?? '');
+  }
+
+  // THE RESUME. When sign-in lands and a seat was remembered for THIS table,
+  // refresh the balances (the gate reads escrow) and tap the seat again on
+  // the player's behalf. `untrack` keeps the effect keyed to the sign-in edge
+  // and the remembered seat only.
+  $effect(() => {
+    const authed = $auth.isAuthenticated;
+    const seat = seatToResume(resumeSeat, untrack(currentTableKey));
+    if (!authed || !seat) return;
+    resumeSeat = null;
+    untrack(() => {
+      refreshAllBalances()
+        .then(() => handleTableAction('join', seat.seat))
+        .catch((e) => { showError(e?.message || 'Could not take the seat after sign-in.'); });
+    });
+  });
+
   async function handleTableAction(action, data) {
     if (actionPending || !tableActor) return;
     actionPending = true;
@@ -693,66 +958,50 @@
     try {
       let result;
       switch (action) {
-        case 'join':
+        case 'join': {
+          // THE GATE. Anonymous: open sign-in and remember the seat. Under the
+          // buy-in: open the cashier with the shortfall filled in. Only a
+          // signed-in, funded tap reaches the canister (the canister still
+          // decides; this only stops the two taps whose answer is known).
+          // The facts are CERTIFIED ones: the table canister's own config
+          // (never the lobby record, T-11) and the escrow as last read.
+          const decision = joinGateDecision(joinGateFacts({
+            isAuthenticated: $auth.isAuthenticated,
+            escrow: myBalance,
+            tableView: tableState,
+          }));
+          if (decision.kind === 'login') {
+            resumeSeat = { seat: data, tableKey: currentTableKey() };
+            try {
+              await auth.login();
+            } catch (e) {
+              resumeSeat = null;
+              showError(e?.message || 'Sign-in did not complete.');
+            }
+            break;
+          }
+          if (decision.kind === 'deposit') {
+            depositPrefill = decision.shortfall;
+            showDepositModal = true;
+            break;
+          }
           result = await tableActor.join_table(data);
           if ('Err' in result) {
-            error = result.Err;
+            showError(result.Err);
           } else {
             success = `Joined seat ${data + 1}!`;
             await refreshAllBalances();
           }
           break;
+        }
 
         case 'fold':
-          if (tableState) tableState.is_my_turn = false;
-          playSound('fold');
-          result = await tableActor.player_action({ Fold: null });
-          if ('Err' in result) {
-            error = result.Err;
-            playSound('error');
-          }
-          break;
-
         case 'check':
-          if (tableState) tableState.is_my_turn = false;
-          playSound('check');
-          result = await tableActor.player_action({ Check: null });
-          if ('Err' in result) {
-            error = result.Err;
-            playSound('error');
-          }
-          break;
-
         case 'call':
-          if (tableState) tableState.is_my_turn = false;
-          playSound('call');
-          result = await tableActor.player_action({ Call: null });
-          if ('Err' in result) {
-            error = result.Err;
-            playSound('error');
-          }
-          break;
-
         case 'raise':
-          if (data) {
-            if (tableState) tableState.is_my_turn = false;
-            playSound('raise');
-            result = await tableActor.player_action({ Raise: BigInt(data) });
-            if ('Err' in result) {
-              error = result.Err;
-              playSound('error');
-            }
-          }
-          break;
-
+        case 'bet':
         case 'allin':
-          if (tableState) tableState.is_my_turn = false;
-          playSound('allin');
-          result = await tableActor.player_action({ AllIn: null });
-          if ('Err' in result) {
-            error = result.Err;
-            playSound('error');
-          }
+          result = await sendPlayerAction(action, data);
           break;
 
         case 'start':
@@ -764,29 +1013,17 @@
           } else if ('Err' in result) {
             // Don't show "need 2 players" as error - it's informational
             if (!result.Err.includes('2 active players')) {
-              error = result.Err;
+              showError(result.Err);
               playSound('error');
             }
             // The UI already shows "Need 2+ players to start" hint
           }
           break;
 
-        case 'bet':
-          if (data) {
-            if (tableState) tableState.is_my_turn = false;
-            playSound('bet');
-            result = await tableActor.player_action({ Bet: BigInt(data) });
-            if ('Err' in result) {
-              error = result.Err;
-              playSound('error');
-            }
-          }
-          break;
-
         case 'useTimeBank':
           result = await tableActor.use_time_bank();
           if ('Err' in result) {
-            error = result.Err;
+            showError(result.Err);
           } else {
             success = 'Using time bank';
           }
@@ -795,7 +1032,7 @@
         case 'sitOut':
           result = await tableActor.sit_out();
           if ('Err' in result) {
-            error = result.Err;
+            showError(result.Err);
           } else {
             success = 'Sitting out next hand';
           }
@@ -804,7 +1041,7 @@
         case 'sitIn':
           result = await tableActor.sit_in();
           if ('Err' in result) {
-            error = result.Err;
+            showError(result.Err);
           } else {
             success = 'Back in the game';
           }
@@ -813,7 +1050,7 @@
         case 'leave':
           result = await tableActor.leave_table();
           if ('Err' in result) {
-            error = result.Err;
+            showError(result.Err);
           } else {
             const returnedSmallest = Number(result.Ok);
             const tableCurrency = getTableCurrency(currentTableInfo);
@@ -833,16 +1070,26 @@
           break;
       }
 
+      // The action-return re-read: the felt settles when the call returns,
+      // not up to a poll later (docs/RESPONSIVENESS.md section 5).
       await loadTableState();
     } catch (e) {
       logger.error(`Action ${action} failed:`, e);
+      // The pending record is NOT cleared here: sendPlayerAction kept it on
+      // the throw, and loadTableState closes it (absorbed or expired).
       // Check if this is a signature verification error (expired II delegation)
       if (isSignatureError(e)) {
-        error = 'Session expired. Please log in again.';
+        // The session is gone and polling stops: nothing will ever absorb it.
+        pendingAction = null;
+        showError('Session expired. Please log in again.');
         stopPolling();
         await auth.logout();
+      } else if (PLAYER_ACTION_VARIANTS[action]) {
+        // A throw, not a canister Err: the update may have landed. Say so.
+        showActionError(e, { refusal: false });
+        playSound('error');
       } else {
-        error = e.message || 'Action failed';
+        showError(e.message || 'Action failed');
       }
     } finally {
       actionPending = false;
@@ -852,17 +1099,20 @@
   function backToLobby() {
     stopPolling();
     view = 'lobby';
+    pendingAction = null;
+    dismissActionError();
     tableState = null;
     myCards = null;
     shuffleProof = null;
     currentTableInfo = null;
     tableActor = null;
+    rememberTableInUrl(null);
     loadTables(); // Refresh tables list
   }
 
   // Load tables on mount and ensure cleanup on unmount
   $effect(() => {
-    loadTables();
+    loadTables().then((ok) => { if (ok) openTableFromUrl(); });
     // Cleanup function ensures all intervals are cleared on component unmount
     return () => {
       stopPolling();
@@ -892,136 +1142,50 @@
 <!-- `--notice-safe-top` is the measured height of the protected-notice banner.
      Everything that floats over the page reads it so that nothing can be
      positioned on top of the notices (docs/DEFECTS.md E-52). -->
-<div class="app" style="--notice-safe-top: {noticeBannerHeight}px">
-  <!-- Ambient background effects -->
-  <div class="bg-effects">
-    <div class="glow glow-1"></div>
-    <div class="glow glow-2"></div>
-    <div class="glow glow-3"></div>
-  </div>
+<div class="app" class:on-table={view === 'table'} style="--notice-safe-top: {noticeBannerHeight}px; --header-h: {headerHeight}px">
+  <!-- Ambient background: ONE static gradient (the audit retired the three
+       animated blur orbs), and none at all behind the table, where the stage
+       paints its own single pool of light. -->
+  <div class="bg-effects"></div>
 
   <!--
-    THE FOUR NOTICES RENDER ONCE PER PAGE, NOT TWICE.
+    THE FIVE NOTICES, ONCE PER PAGE, ON EVERY VIEW, AT EVERY VIEWPORT.
 
-    This block and the identical `.footer-disclaimer` block below carry the same
-    four notices word for word: the unaudited-alpha disclaimer, the jurisdiction
-    warning, the 18+ notice, and the no-middleman/no-house statement. Both were
-    rendered on EVERY page, so a phone showed all four twice and spent 268 px --
-    32% of a 390x844 screen -- saying the same thing a second time. That 268 px
-    is why the table could not be given a playing surface: `--cd-avail` is the
-    viewport less everything above the table in the flow, and the banner is
-    above it.
+    `.alpha-warning-banner` is the sticky carrier of the trust bar
+    (TrustBar.svelte): every protected phrase verbatim, FULL TERMS opening the
+    complete text. It is measured here (`--notice-safe-top`, which anchors the
+    toast below it) and it is the element whose scope class the screenshot
+    harness reads for the toast it injects (Toast.svelte's rules are global,
+    so that node and the real toast are painted alike), so it stays here.
 
-    Nothing is deleted and nothing is softened. Both blocks are still here,
-    verbatim, and on a desktop both still render. The de-duplication is a
-    PORTRAIT rule and it lives in `src/index.scss` under "THE FOUR
-    PLAYER-PROTECTION NOTICES RENDER ONCE PER PAGE ON A PHONE", where it is
-    stated in full: in portrait the table view shows the FOOTER copy and every
-    other view shows THIS banner, so a phone always sees all four notices, once.
-
-    The wording, the phrase count in this file, and `make hygiene` are all
-    unchanged. Making either copy MORE prominent is always allowed; making
-    either one shorter, quieter, or conditional on anything else is not.
-
-    WAVE 5: THE PRESENTATION CHANGED IN PORTRAIT ON THE TABLE VIEW. THE WORDS
-    DID NOT.
-
-    `.banner-strip` below is a compact red strip that carries the protected words
-    THEMSELVES, not a summary of them: it states, verbatim, "Unaudited code with
-    known bugs", "your funds are NOT safe", "illegal in many jurisdictions",
-    "18+ only", "No middleman, no house" and "No rake is taken from any pot on any
-    table". Those are the five literal strings BOTH of this repo's notice checks
-    look for -- `FRONTEND_NOTICES` in `scripts/dev.sh` (which greps the source)
-    and `PROTECTED_PHRASES` in `tools/shots/lib/protected-notices.mjs` (which
-    hit-tests the rendered pixels) -- so the strip is not a paraphrase that a
-    reviewer has to adjudicate. A player who never taps has still been told, on
-    screen, every one of them. One tap opens `.banner-content` -- the full text
-    below, unchanged, every word -- over the whole screen.
-
-    The no-rake sentence was added last and budgeted at a line of strip height,
-    i.e. ~2 points of felt area, on the reasoning that a protected notice in the
-    app's own canonical wording is worth that. Measured, it cost NOTHING: the
-    strip is still three lines at `y 6..50` and the felt is still 332.8 x 599.5.
-    What it bought is real -- before it, the table view stated the no-rake
-    property only as "No middleman, no house", and the pixel-level notice gate
-    read 4 of 5 on every mobile table scene for that reason alone.
-
-    It renders ONLY in portrait AND only on the table view. On desktop, in
-    landscape, and on the lobby in portrait the full block renders in the flow
-    exactly as it did before, and the strip is `display: none`.
-
-    WHY THIS IS ALLOWED AND THE WAVE-4 VERSION WAS NOT. Wave 4 hid all four
-    notices on the phone's table view: `make hygiene` was green because it greps
-    the SOURCE, and a player saw NOTHING. This does the opposite of that -- the
-    protected words are on screen on every view at every viewport, and the probe
-    that says so reads the RENDERED page (`elementFromPoint` at the text's own
-    centre, box inside the viewport), not the source.
+    The words are protected by `make hygiene` (source) and by
+    tools/shots/lib/protected-notices.mjs (rendered pixels, hit-tested on every
+    scene at both viewports, with an error toast up). Making them MORE
+    prominent is always allowed; shortening, hiding, or gating them behind a
+    click is not.
   -->
   <div
     class="alpha-warning-banner"
-    class:on-table={view === 'table'}
     class:expanded={noticesExpanded}
     bind:clientHeight={noticeBannerHeight}
   >
-    <!-- Collapsed presentation, portrait + table view only. Every protected
-         phrase is literal, so the on-screen test and `make hygiene` ask about
-         the same words. -->
-    <button
-      class="banner-strip"
-      type="button"
-      aria-expanded={noticesExpanded}
-      title="Open the full player-protection terms"
-      onclick={() => noticesExpanded = true}
-    >
-      <span class="warning-icon">⚠️</span>
-      <span class="strip-text">Unaudited code with known bugs: your funds are NOT safe. Online gambling is illegal in many jurisdictions. 18+ only. No middleman, no house. No rake is taken from any pot on any table.</span>
-      <span class="strip-more">FULL TERMS</span>
-    </button>
-    <div class="banner-content">
-      <p class="banner-warning">
-        <span class="warning-icon">⚠️</span>
-        <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk—your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
-      </p>
-      <!-- WAVE 5 COHERENCE PASS. The canonical no-rake sentence is stated HERE,
-           not only in `.banner-strip`.
-
-           Measured on the rendered page with the repo's own gate
-           (tools/shots/lib/protected-notices.mjs) before this line existed: the
-           strip is `display: none` at every viewport except portrait-on-table,
-           so DESKTOP read 4 of 5 on the lobby signed out, the lobby signed in,
-           the table, the table behind the Deposit modal and the table behind
-           Verify Fair, and PORTRAIT dropped to 4 of 5 the moment a player TAPPED
-           the strip — this very block covers the strip and did not restate the
-           property. The missing phrase was always "No rake is taken from any pot
-           on any table".
-
-           `.banner-content` is now a strict superset of `.banner-strip`, which
-           is what a "FULL TERMS" button has to be. -->
-      <p class="banner-info">
-        No middleman, no house. <strong>No rake is taken from any pot on any table.</strong> Built to demonstrate the power of the Internet Computer: 100% on-chain—frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
-      </p>
-      <p class="banner-ai">
-        This entire project was built 100% by AI. <span class="warning-icon">⚠️</span>
-      </p>
-    </div>
-    {#if noticesExpanded}
-      <button
-        class="banner-close"
-        type="button"
-        onclick={() => noticesExpanded = false}
-        aria-label="Close the full player-protection terms"
-      >Close</button>
-    {/if}
+    <TrustBar
+      expanded={noticesExpanded}
+      onExpand={() => { noticesExpanded = true; }}
+      onClose={() => { noticesExpanded = false; }}
+    />
   </div>
 
-  <header class:compact={view === 'table'}>
+  <header class:compact={view === 'table'} bind:clientHeight={headerHeight}>
     <div class="header-left">
       {#if view === 'table'}
-        <button class="back-btn" onclick={backToLobby}>
+        <!-- The labels are spans so the phone's one-row header can keep the
+             glyph and drop the word without a second markup path. -->
+        <button class="back-btn" onclick={backToLobby} aria-label="Back to the lobby" title="Lobby">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M19 12H5M12 19l-7-7 7-7"/>
           </svg>
-          Lobby
+          <span class="btn-label">Lobby</span>
         </button>
         {#if currentTableInfo}
           <span class="current-table-name">{headerStakes}</span>
@@ -1044,7 +1208,7 @@
              with the canisters this bundle is actually wired to by construction:
              the same constant decides both. -->
         <span class="tagline">
-          Provably Fair Poker
+          <span class="tagline-text">Provably Fair Poker</span>
           <span class="net-chip" class:mainnet={IS_MAINNET_BUILD} data-network={NETWORK}>
             {IS_MAINNET_BUILD ? 'IC mainnet · real funds' : `${NETWORK} build · test funds`}
           </span>
@@ -1070,46 +1234,27 @@
         {/if}
       </button>
       {#if view === 'table'}
-        <button class="history-btn" onclick={() => showHandHistory = true}>
+        <button class="history-btn" onclick={() => { historyOpenHand = null; showHandHistory = true; }} aria-label="Hand history" title="Hand history">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/>
             <polyline points="12,6 12,12 16,14"/>
           </svg>
-          History
+          <span class="btn-label">History</span>
         </button>
-        <button class="verify-btn" onclick={() => showProofPanel = !showProofPanel}>
+        <button class="verify-btn" onclick={() => showProofPanel = !showProofPanel} aria-label="Verify fair" title="Verify fair">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             <path d="M9 12l2 2 4-4"/>
           </svg>
-          Verify Fair
+          <span class="btn-label">Verify Fair</span>
         </button>
       {/if}
       <WalletButton onProfileChange={handleProfileChange} />
     </div>
   </header>
 
-  {#if error}
-    <div class="toast error">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="10"/>
-        <line x1="15" y1="9" x2="9" y2="15"/>
-        <line x1="9" y1="9" x2="15" y2="15"/>
-      </svg>
-      <span>{error}</span>
-      <button onclick={() => error = null}>×</button>
-    </div>
-  {/if}
-
-  {#if success}
-    <div class="toast success">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="10"/>
-        <path d="M9 12l2 2 4-4"/>
-      </svg>
-      <span>{success}</span>
-    </div>
-  {/if}
+  <Toast kind="error" message={error} detail={errorDetail} action={errorAction && errorAction.message === error ? errorAction : null} onDismiss={dismissError} />
+  <Toast kind="success" message={success} />
 
   <!--
     docs/DEFECTS.md H-09. The "Loading tables..." block used to be a SIBLING of
@@ -1118,7 +1263,7 @@
     screenshot or not depending on when the shutter fired.
 
     It is now a real either/or, and the spinner only stands in when there is
-    genuinely nothing to show yet (`tables.length === 0`) — a background refresh
+    genuinely nothing to show yet (`tables.length === 0`), a background refresh
     of an already-populated lobby must not blank the list.
 
     `data-lobby-state` exposes the settled/unsettled distinction to the
@@ -1140,6 +1285,7 @@
           {tables}
           onJoinTable={joinTable}
           onRefresh={loadTables}
+          loadFailed={Boolean(errorAction) && errorAction.message === error}
         />
       {/if}
     {:else}
@@ -1150,6 +1296,10 @@
             {tableState}
             {myCards}
             {actionPending}
+            {pendingAction}
+            {actionError}
+            onDismissError={dismissActionError}
+            maxPlayers={Number(currentTableInfo?.config?.max_players ?? 0) || null}
             onAction={handleTableAction}
             tableBalance={myBalance}
             currency={tableCurrency}
@@ -1157,9 +1307,18 @@
             customName={currentCustomName}
             onShowDeposit={() => showDepositModal = true}
             onShowWithdraw={() => showWithdrawModal = true}
+            signedIn={$auth.isAuthenticated}
+            onSignIn={signInFromTable}
+            {soundMuted}
+            onToggleSound={toggleSound}
             {shuffleProof}
             onShowProof={() => showProofPanel = true}
+            onHowItWorks={() => { showHowItWorks = true; }}
+            onVerifyCode={() => { showVerify = true; }}
           />
+          <!-- The phone held sideways: over the table area only, so the trust
+               bar and the header stay on screen (RotatePrompt.svelte). -->
+          <RotatePrompt />
         </div>
 
         {#if showProofPanel}
@@ -1171,6 +1330,7 @@
             <ShuffleProof
               proof={shuffleProof}
               handNumber={tableState?.hand_number}
+              tableId={currentTableInfo?.canister_id?.[0]}
               {tableActor}
             />
           </aside>
@@ -1180,22 +1340,15 @@
   </main>
 
   <footer>
-    <!-- The other half of the once-per-page rule above. In portrait on the
-         TABLE view this is the copy that renders, and it is the full
-         four-notice text, exactly as written, never a summary of it. -->
-    <div class="footer-disclaimer">
-      <div class="disclaimer-content">
-        <p class="disclaimer-warning">
-          <span class="warning-icon">⚠️</span>
-          <strong>DISCLAIMER:</strong> Unaudited code with known bugs. This is for educational and testing purposes only. Any deposit of ICP or Bitcoin is at your own risk—your funds are NOT safe. Expect to lose everything you deposit. Online gambling is illegal in many jurisdictions. Only use where legally permitted. 18+ only.
-        </p>
-        <p class="disclaimer-info">
-          No middleman, no house. <strong>No rake is taken from any pot on any table.</strong> Built to demonstrate the power of the Internet Computer: 100% on-chain—frontend, backend, and game logic all running on smart contracts (canisters). Provably fair, fully transparent, and completely decentralized.
-        </p>
-        <p class="disclaimer-ai">
-          This entire project was built 100% by AI. <span class="warning-icon">⚠️</span>
-        </p>
-      </div>
+    <!-- Provenance, not a second copy of the notices. The five protected
+         phrases ride the sticky trust bar at the top of every view (TrustBar
+         .svelte), which is on screen at every scroll position, so the footer
+         no longer repeats them; it says who built this and links the terms. -->
+    <div class="footer-provenance">
+      <p>
+        Built with AI, in the open. Every table is a canister you can query while signed out.
+        <button class="footer-link inline" onclick={() => noticesExpanded = true}>Full terms</button>
+      </p>
     </div>
     <div class="footer-bottom">
       <div class="footer-left">
@@ -1217,7 +1370,7 @@
              screenshot harness's token census requires every numeric token on
              screen to be matched to a canister figure or excused by a REVIEWED
              rule, and a bare principal in a <span> is four unexplained numbers
-             ("4", "5", "777", "77775") on every scene — it failed the census on
+             ("4", "5", "777", "77775") on every scene: it failed the census on
              all 24 shots the first time this shipped. `token-allowlist.mjs`
              already has the right rule (`identifier-digits`, scoped to
              `.canister-id` among others), so this reuses it rather than widening
@@ -1237,7 +1390,9 @@
     tableId={currentTableInfo?.canister_id?.[0]}
     {tableActor}
     handNumber={tableState?.hand_number || 0}
-    onClose={() => { showHandHistory = false; }}
+    tableName={currentTableInfo?.name || 'ClearDeck table'}
+    openHand={historyOpenHand}
+    onClose={() => { showHandHistory = false; historyOpenHand = null; }}
   />
 {/if}
 
@@ -1246,8 +1401,11 @@
     {tableActor}
     tableCanisterId={currentTableInfo?.canister_id?.[0]}
     currency={getTableCurrency(currentTableInfo)}
-    onClose={() => { showDepositModal = false; }}
+    initialAmount={depositPrefill}
+    minBuyIn={tableState?.config?.min_buy_in ?? null}
+    onClose={() => { showDepositModal = false; depositPrefill = null; }}
     onDepositSuccess={() => { refreshAllBalances(); loadTableState(); }}
+    onMoneyUnclear={async () => { await Promise.allSettled([refreshAllBalances(), loadTableState()]); }}
   />
 {/if}
 
@@ -1259,6 +1417,7 @@
     currency={getTableCurrency(currentTableInfo)}
     onClose={() => { showWithdrawModal = false; }}
     onWithdrawSuccess={() => { refreshAllBalances(); loadTableState(); }}
+    onMoneyUnclear={async () => { await Promise.allSettled([refreshAllBalances(), loadTableState()]); }}
   />
 {/if}
 
@@ -1290,7 +1449,7 @@
       <h3>0. What this page is connected to</h3>
       <dl class="wiring-list">
         <div><dt>Network</dt><dd class:live={IS_MAINNET_BUILD}>
-          {IS_MAINNET_BUILD ? 'Internet Computer mainnet — REAL funds' : `${NETWORK} — test funds only`}
+          {IS_MAINNET_BUILD ? 'Internet Computer mainnet: REAL funds' : `${NETWORK}: test funds only`}
         </dd></div>
         <div><dt>Gateway</dt><dd><code>{agentHost()}</code></dd></div>
         <div><dt>Sign-in</dt><dd><code>{IS_MAINNET_BUILD ? II_URL : 'local Internet Identity'}</code></dd></div>
@@ -1300,7 +1459,7 @@
       {#if !IS_MAINNET_BUILD}
         <p class="hash-note">
           This is a <strong>{NETWORK}</strong> development build. It cannot reach the live
-          canisters — the build refuses to wire them (docs/DEFECTS.md T-01) — so nothing
+          canisters (the build refuses to wire them, docs/DEFECTS.md T-01), so nothing
           you do here moves real money. The mainnet ids below are shown for reference.
         </p>
       {/if}
@@ -1354,7 +1513,7 @@
         <strong>These are a claim, not a measurement.</strong> Declared
         {EXPECTED_PROVENANCE.declaredOn} by {EXPECTED_PROVENANCE.declaredBy}:
         {EXPECTED_PROVENANCE.claim}. This page was built on a machine that
-        {EXPECTED_PROVENANCE.whyNot}, so press the button and compare for yourself —
+        {EXPECTED_PROVENANCE.whyNot}, so press the button and compare for yourself:
         the reading comes from {LIVE_HASH_SOURCE.name}, which is not us.
       </p>
 
@@ -1389,7 +1548,7 @@
                       live&nbsp;&nbsp;&nbsp;&nbsp; {displayHash(live.live)}
                       {live.verdict === 'match' ? '  ✓ match' : '  ✗ MISMATCH'}
                     {:else}
-                      live&nbsp;&nbsp;&nbsp;&nbsp; could not be read — {live.error ?? 'unknown'}
+                      live&nbsp;&nbsp;&nbsp;&nbsp; could not be read: {live.error ?? 'unknown'}
                     {/if}
                   </code>
                 </td>
@@ -1420,7 +1579,7 @@
                                         that opens this dialog, so the top banner
                                         is above the fold)
            .disclaimer-warning y  674  in the viewport, and under
-                                       `.modal-backdrop` — rgba(0,0,0,0.8) plus a
+                                       `.modal-backdrop`: rgba(0,0,0,0.8) plus a
                                        4 px blur at z-index 1000
            .strip-text         display:none (portrait table strip, not this view)
 
@@ -1434,15 +1593,18 @@
          additional copy only, nothing anywhere else weakened. -->
     <p class="modal-notices">
       <span class="notice-icon" aria-hidden="true">⚠️</span>
-      <strong>Unaudited code with known bugs</strong> — this is for education and testing, any
-      deposit is at your own risk and your funds are NOT safe. Online gambling is illegal in many
-      jurisdictions; only use it where legally permitted. 18+ only. No middleman, no house, 0% rake.
-      No rake is taken from any pot on any table.
+      <NoticeLine />
     </p>
   </div>
 {/if}
 
-<style>
+<style lang="scss">
+  /* The table view's phone header lives in a partial next to this file,
+     included below where its rules used to sit (the cascade is
+     order-sensitive) and scoped by Svelte like everything else. */
+  @use './table-header-phone' as phone;
+  @use './app-phone' as app-phone;
+
   :global(*) {
     box-sizing: border-box;
   }
@@ -1450,88 +1612,37 @@
   :global(body) {
     margin: 0;
     padding: 0;
-    background: #0a0a0f;
+    background: var(--cd-bg);
     min-height: 100vh;
-    color: #e0e0e0;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: var(--cd-ink-1);
+    font-family: var(--cd-font-ui);
     overflow-x: hidden;
   }
 
-  /* Disclaimer Banner */
+  /* THE TRUST BAR'S CARRIER. The words are protected (docs/DESIGN-BAR.md
+     section 7, tools/shots/lib/protected-notices.mjs); the carrier is not. One
+     neutral bar with a single amber rule, on every view, STICKY so it is on
+     screen at every scroll position of the lobby (which is why the footer no
+     longer repeats it). The content is TrustBar.svelte; this element stays
+     here because it is measured (`--notice-safe-top`) and the screenshot
+     harness reads its scope class to style the toast it injects. */
   .alpha-warning-banner {
-    background: linear-gradient(180deg, rgba(185, 28, 28, 0.95), rgba(140, 20, 20, 0.95));
-    color: rgba(255, 255, 255, 0.95);
-    padding: 16px 24px;
-    position: relative;
+    position: sticky;
+    top: 0;
     z-index: 100;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.3);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-  }
-
-  .banner-content {
-    max-width: 800px;
-    margin: 0 auto;
-  }
-
-  /* ------------------------------------------------------------------------
-     THE COMPACT NOTICE STRIP -- portrait, table view only.
-     ------------------------------------------------------------------------
-     Off everywhere by default, so desktop and landscape are byte-identical to
-     before. The portrait rules that switch it on live in the media query at the
-     bottom of this stylesheet, next to the compact header they pay for.
-     ------------------------------------------------------------------------ */
-  .banner-strip {
-    display: none;
-    width: 100%;
-    text-align: left;
-    background: none;
-    border: 0;
     padding: 0;
-    margin: 0;
-    color: inherit;
-    font-family: inherit;
-    cursor: pointer;
+    background: var(--cd-plate);
+    color: var(--cd-ink-1);
+    border-top: 3px solid var(--cd-warn);
+    border-bottom: 1px solid var(--cd-line);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
   }
 
-  .banner-close {
-    display: none;
-  }
-
-  .banner-content p {
-    margin: 0 0 8px 0;
-    line-height: 1.5;
-    font-size: 12px;
-  }
-
-  .banner-content p:last-child {
-    margin-bottom: 0;
-  }
-
-  p.banner-warning {
-    color: rgba(255, 255, 255, 0.95);
-    text-align: left;
-  }
-
-  p.banner-warning strong {
-    color: #fef08a;
-    letter-spacing: 0.5px;
-  }
-
-  .banner-content .warning-icon {
-    font-size: 13px;
-  }
-
-  p.banner-info {
-    color: rgba(255, 255, 255, 0.75);
-    text-align: left;
-    padding-left: 20px;
-  }
-
-  p.banner-ai {
-    color: #c4b5fd;
-    text-align: left;
-    padding-left: 20px;
-    font-weight: 500;
+  /* Expanded: the overlay is the bar's child, and the bar is a stacking
+     context, so the bar itself rises above every dialog while the terms are
+     open. */
+  .alpha-warning-banner.expanded {
+    z-index: 2000;
   }
 
   .app {
@@ -1541,59 +1652,21 @@
     position: relative;
   }
 
-  /* Ambient background */
+  /* Ambient background: one static gradient. The three 400-600 px blur(100px)
+     orbs that animated for 20-25 s behind every page are gone (they were two
+     contradictory light sources behind a felt that has its own), and on the
+     table view the stage paints the room, so this is hidden outright. */
   .bg-effects {
     position: fixed;
     inset: 0;
     pointer-events: none;
-    overflow: hidden;
     z-index: 0;
+    background:
+      radial-gradient(ellipse 60% 50% at 20% 0%, var(--cd-accent-dim), transparent 70%),
+      radial-gradient(ellipse 50% 40% at 100% 100%, var(--cd-surface-2), transparent 70%);
   }
 
-  .glow {
-    position: absolute;
-    border-radius: 50%;
-    filter: blur(100px);
-    opacity: 0.15;
-  }
-
-  .glow-1 {
-    width: 600px;
-    height: 600px;
-    background: #00d4aa;
-    top: -200px;
-    left: -100px;
-    animation: float 20s ease-in-out infinite;
-  }
-
-  .glow-2 {
-    width: 500px;
-    height: 500px;
-    background: #6366f1;
-    bottom: -150px;
-    right: -100px;
-    animation: float 25s ease-in-out infinite reverse;
-  }
-
-  .glow-3 {
-    width: 400px;
-    height: 400px;
-    background: #f59e0b;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    animation: pulse 15s ease-in-out infinite;
-  }
-
-  @keyframes float {
-    0%, 100% { transform: translate(0, 0); }
-    50% { transform: translate(50px, 30px); }
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 0.1; transform: translate(-50%, -50%) scale(1); }
-    50% { opacity: 0.2; transform: translate(-50%, -50%) scale(1.1); }
-  }
+  .app.on-table .bg-effects { display: none; }
 
   /* Header */
   header {
@@ -1602,11 +1675,27 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 32px;
-    background: rgba(10, 10, 15, 0.8);
-    backdrop-filter: blur(20px);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 12px 24px;
+    background: var(--cd-bg);
+    border-bottom: 1px solid var(--cd-line-soft);
   }
+
+  /* THE TABLE VIEW'S HEADER IS ONE SLIM BAR. Every pixel above the felt is a
+     pixel of felt (docs/DEFECTS.md T-19): 52 px, brand mark and name only, the
+     network chip beside the name, controls at one height and one radius. */
+  header.compact {
+    min-height: 52px;
+    padding: 6px 16px;
+  }
+
+  header.compact .logo { gap: 10px; }
+  header.compact .logo-mark { width: 30px; height: 30px; border-radius: var(--cd-radius-chip); }
+  header.compact .suit { font-size: 13px; }
+  header.compact .suit-1 { top: 4px; left: 6px; }
+  header.compact .suit-2 { bottom: 4px; right: 6px; }
+  header.compact .brand { font-size: 17px; }
+  header.compact .logo-text { flex-direction: row; align-items: center; gap: 8px; }
+  header.compact .tagline-text { display: none; }
 
   .header-left, .header-right {
     display: flex;
@@ -1620,12 +1709,15 @@
   }
 
   .current-table-name {
-    color: #00d4aa;
-    font-weight: 600;
-    font-size: 14px;
+    color: var(--cd-accent);
+    font-weight: var(--cd-weight-strong);
+    font-size: var(--cd-text-sm);
+    font-variant-numeric: tabular-nums;
     padding: 6px 12px;
-    background: rgba(0, 212, 170, 0.1);
-    border-radius: 8px;
+    background: var(--cd-accent-dim);
+    border: 1px solid var(--cd-accent-line);
+    border-radius: var(--cd-radius-chip);
+    white-space: nowrap;
   }
 
   .logo {
@@ -1638,19 +1730,18 @@
     position: relative;
     width: 44px;
     height: 44px;
-    background: linear-gradient(135deg, #00d4aa 0%, #00b894 100%);
-    border-radius: 12px;
+    background: var(--cd-accent);
+    border-radius: var(--cd-radius-card);
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 4px 20px rgba(0, 212, 170, 0.3);
+    box-shadow: 0 4px 20px var(--cd-accent-glow);
   }
 
   .suit {
     position: absolute;
     font-size: 18px;
-    color: white;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    color: var(--cd-ink);
   }
 
   .suit-1 {
@@ -1661,7 +1752,7 @@
   .suit-2 {
     bottom: 6px;
     right: 8px;
-    color: #0a0a0f;
+    color: var(--cd-accent-ink);
   }
 
   .logo-text {
@@ -1671,187 +1762,73 @@
 
   .brand {
     font-size: 22px;
-    font-weight: 700;
-    color: white;
+    font-weight: var(--cd-weight-figure);
+    color: var(--cd-ink);
     letter-spacing: -0.5px;
   }
 
   .tagline {
-    font-size: 11px;
-    color: #00d4aa;
+    font-size: var(--cd-text-xs);
+    color: var(--cd-accent);
     text-transform: uppercase;
     letter-spacing: 1.5px;
-    font-weight: 500;
+    font-weight: var(--cd-weight-medium);
   }
 
-  .back-btn {
-    display: flex;
+  /* ONE control primitive for the header (the audit counted three heights,
+     two radii and two accent families on this row): 40 px, one radius, quiet
+     for navigation and the sound toggle, outline teal for the two tools.
+     History and Verify Fair are the same button; indigo is gone. */
+  .back-btn,
+  .verify-btn,
+  .history-btn,
+  .sound-toggle-btn {
+    display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 8px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #a0a0a0;
-    padding: 10px 16px;
-    border-radius: 10px;
+    min-height: var(--cd-control-md);
+    padding: 0 14px;
+    border-radius: var(--cd-radius-chip);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-surface-2);
+    color: var(--cd-ink-1);
+    font-family: inherit;
+    font-size: var(--cd-text-sm);
+    font-weight: var(--cd-weight-strong);
+    line-height: 1;
     cursor: pointer;
-    font-size: 14px;
-    transition: all 0.2s;
+    transition: background-color var(--cd-fast) var(--cd-ease),
+                border-color var(--cd-fast) var(--cd-ease),
+                color var(--cd-fast) var(--cd-ease);
   }
 
-  .back-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: white;
+  .back-btn:hover,
+  .sound-toggle-btn:hover {
+    background: var(--cd-surface-3);
+    color: var(--cd-ink);
   }
 
   .verify-btn, .history-btn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: rgba(0, 212, 170, 0.1);
-    border: 1px solid rgba(0, 212, 170, 0.3);
-    color: #00d4aa;
-    padding: 10px 16px;
-    border-radius: 10px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    transition: all 0.2s;
+    background: var(--cd-accent-dim);
+    border-color: var(--cd-accent-line);
+    color: var(--cd-accent);
   }
 
-  .history-btn {
-    background: rgba(99, 102, 241, 0.1);
-    border: 1px solid rgba(99, 102, 241, 0.3);
-    color: #6366f1;
+  .verify-btn:hover, .history-btn:hover {
+    border-color: var(--cd-accent-line-strong);
   }
 
-  .verify-btn:hover {
-    background: rgba(0, 212, 170, 0.2);
-    box-shadow: 0 0 20px rgba(0, 212, 170, 0.2);
-  }
-
-  .history-btn:hover {
-    background: rgba(99, 102, 241, 0.2);
-    box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
-  }
-
-  /* Sound toggle button */
   .sound-toggle-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 10px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-    color: rgba(255, 255, 255, 0.6);
-    cursor: pointer;
-    transition: all 0.2s;
+    width: var(--cd-control-md);
+    padding: 0;
+    color: var(--cd-ink-2);
   }
 
-  .sound-toggle-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: white;
-    border-color: rgba(255, 255, 255, 0.2);
-  }
-
-  /* --------------------------------------------------------------------------
-     TOAST NOTIFICATIONS -- AND WHY THEY CANNOT COVER A PROTECTED NOTICE
-     --------------------------------------------------------------------------
-     docs/DEFECTS.md E-52. This block used to read `top: 80px; z-index: 100` with
-     no width or height bound at all. Measured on the rendered page at 390x844,
-     that produced a panel `rect=[-117, 80, 624, 534]`: 624 px wide on a 390 px
-     screen, so it overflowed BOTH edges and left no clear column, 534 px tall,
-     and painted over `.alpha-warning-banner` -- the no-rake property covered at
-     9 of 9 sample points, the other four protected phrases at 3 of 9. HARD RULE
-     2 is that all four notices are ON SCREEN AND LEGIBLE at any viewport on any
-     view, so that was a hard-rule violation reachable from the app's own error
-     path, not a cosmetic overlap.
-
-     THREE INDEPENDENT LOCKS, because one is a thing that can be edited away:
-
-       1. POSITION. The toast starts below the notice banner, at
-          `--notice-safe-top` (its measured height, published by `.app`). The
-          banner is the first element in the flow, so at scroll offset s it
-          occupies viewport rows [-s, H-s] while the toast starts at H+12.
-          H + 12 > H - s for every s >= 0, so they cannot overlap at any scroll
-          position, and scrolling only widens the gap.
-       2. PAINT ORDER. z-index 90 puts the toast BENEATH the banner (100) and
-          beneath `footer` (95), the two carriers of the protected phrases, so
-          even a wrong measurement cannot win the `elementFromPoint` hit test
-          that tools/shots/lib/protected-notices.mjs runs on each phrase's own
-          pixels. It is still above `header` (50) and the page content.
-       3. SIZE. Clamped to the viewport horizontally and to 40vh (320 px max)
-          vertically, so a long error message cannot grow into a full-screen
-          sheet the way the 534 px one did. Overflowing text scrolls INSIDE the
-          toast.
-
-     GATED IN TWO PLACES, and it is worth knowing which does what.
-     `tools/shots/lib/toast-notices.mjs` runs from run.mjs for EVERY scene at
-     EVERY viewport: it raises a toast and re-runs the protected-notice probe
-     with it up, asserting all three locks separately so they cannot collapse
-     into one. The `toast-notices` SCENARIO raises a real toast through the app's
-     own error path and compares it against that injected one property by
-     property, which is what makes the central gate's node the same node a player
-     sees rather than a lookalike.
-     -------------------------------------------------------------------------- */
-  .toast {
-    position: fixed;
-    top: calc(var(--notice-safe-top, 80px) + 12px);
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 90;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 20px;
-    border-radius: 12px;
-    backdrop-filter: blur(20px);
-    animation: slideDown 0.3s ease-out;
-    box-sizing: border-box;
-    width: max-content;
-    max-width: min(560px, calc(100vw - 24px));
-    max-height: min(40vh, 320px);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-  }
-
-  /* A long message wraps and, if it still does not fit, scrolls inside the
-     toast. Before this it simply made the box wider than the screen. */
-  .toast span {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .toast.error {
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    color: #ef4444;
-  }
-
-  .toast.success {
-    background: rgba(0, 212, 170, 0.15);
-    border: 1px solid rgba(0, 212, 170, 0.3);
-    color: #00d4aa;
-  }
-
-  .toast button {
-    background: none;
-    border: none;
-    color: inherit;
-    font-size: 20px;
-    cursor: pointer;
-    padding: 0 0 0 8px;
-    opacity: 0.7;
-  }
-
-  .toast button:hover {
-    opacity: 1;
-  }
-
-  @keyframes slideDown {
-    from { transform: translateX(-50%) translateY(-20px); opacity: 0; }
-    to { transform: translateX(-50%) translateY(0); opacity: 1; }
-  }
+  /* The toast (Toast.svelte) is not styled here: its rules are global by
+     design so the harness's injected node and the real toast are painted by
+     the same declarations. Its place under the trust bar reads
+     `--notice-safe-top`, published by `.app` above. */
 
   /* Main content */
   main {
@@ -1898,6 +1875,12 @@
     flex-direction: column;
     overflow-y: auto;
   }
+
+  /* The stage fills the frame: 8 px above, nothing below that the wrapper
+     does not already cancel (measureViewport reads the parent's bottom padding
+     as --cd-slack). */
+  main[data-view='table'] .game-layout { min-height: 0; padding-bottom: 0; }
+  main[data-view='table'] .table-area { padding: 8px 16px 8px; }
 
   /* Balance bar */
   .balance-bar {
@@ -2023,12 +2006,10 @@
   /* Footer */
   footer {
     position: relative;
-    /* Above `.toast` (90). `.footer-disclaimer` is the copy of the four notices
-       that a DESKTOP player reads once the banner has scrolled away, so it has
-       to win the same hit test the banner does (docs/DEFECTS.md E-52). It was
-       z-index 10, i.e. under every floating panel in the app. It overlaps
-       nothing else: it is the last thing in the flow, and both money dialogs
-       still cover it from z-index 200. */
+    /* Above `.toast` (90), as it was when it carried a copy of the notices
+       (docs/DEFECTS.md E-52); the trust bar is sticky now and the footer only
+       carries provenance, but the layer is kept so nothing floats over the
+       footer's links. Both money dialogs still cover it from z-index 200. */
     z-index: 95;
     display: flex;
     flex-direction: column;
@@ -2038,54 +2019,23 @@
     font-size: 13px;
   }
 
-  .footer-disclaimer {
-    padding: 20px 32px;
-    background: linear-gradient(180deg, rgba(245, 158, 11, 0.12) 0%, rgba(245, 158, 11, 0.06) 100%);
-    border-bottom: 1px solid rgba(245, 158, 11, 0.2);
+  .footer-provenance {
+    padding: var(--cd-space-4) var(--cd-space-6) 0;
   }
 
-  .disclaimer-content {
+  .footer-provenance p {
     max-width: 800px;
     margin: 0 auto;
+    font-size: var(--cd-text-sm);
+    line-height: 1.5;
+    color: var(--cd-ink-2);
   }
 
-  .disclaimer-content p {
-    margin: 0 0 12px 0;
-    line-height: 1.6;
-  }
-
-  .disclaimer-content p:last-child {
-    margin-bottom: 0;
-  }
-
-  p.disclaimer-warning {
-    color: #f59e0b;
-    font-size: 12px;
-    text-align: left;
-  }
-
-  p.disclaimer-warning strong {
-    color: #fbbf24;
-    letter-spacing: 0.5px;
-  }
-
-  .disclaimer-content .warning-icon {
-    font-size: 13px;
-  }
-
-  p.disclaimer-info {
-    color: #999;
-    font-size: 12px;
-    text-align: left;
-    padding-left: 22px;
-  }
-
-  p.disclaimer-ai {
-    color: #a855f7;
-    font-size: 12px;
-    font-weight: 500;
-    text-align: left;
-    padding-left: 22px;
+  .footer-link.inline {
+    margin-left: var(--cd-space-2);
+    color: var(--cd-accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
   }
 
   .footer-bottom {
@@ -2136,27 +2086,34 @@
 
   /* Responsive */
   @media (max-width: 768px) {
+    /* THE PHONE LOBBY HEADER IS ONE ROW: mark and brand at the left, the
+       sound toggle and Sign in at the right (the table view's own one-row
+       header is table-header-phone.scss). It was a centred logo over a second
+       row of controls, ~120 px; one row is ~64, and every px above the first
+       table card is a px the five-second test pays for. */
     header {
-      padding: 12px 16px;
-      flex-wrap: wrap;
-      gap: 12px;
+      padding: var(--cd-space-2) var(--cd-space-3);
+      flex-wrap: nowrap;
+      gap: var(--cd-space-2);
     }
 
     .header-left, .header-right {
       min-width: auto;
-      flex: 1 1 auto;
+      flex: 0 1 auto;
     }
+
+    header:not(.compact) .header-left { display: none; }
 
     .logo {
-      order: -1;
-      width: 100%;
-      justify-content: center;
-      margin-bottom: 8px;
+      flex: 1 1 auto;
+      min-width: 0;
+      gap: var(--cd-space-2);
     }
 
-    .logo-text {
-      font-size: 18px;
-    }
+    header:not(.compact) .logo-mark { width: 36px; height: 36px; }
+    header:not(.compact) .suit { font-size: 15px; }
+    header:not(.compact) .brand { font-size: 18px; }
+    header:not(.compact) .tagline-text { display: none; }
 
     .tagline {
       font-size: 10px;
@@ -2192,7 +2149,12 @@
 
     .proof-sidebar {
       position: fixed;
-      inset: 0;
+      /* UNDER the trust bar and the nav, not beneath them: with `inset: 0`
+         the panel's own header (Fairness Proof, the close control) and the
+         top of the verdict card sat behind the sticky chrome and the first
+         screen of the phone showed no way to close it. Both heights are
+         measured and published by `.app`. */
+      inset: calc(var(--notice-safe-top, 0px) + var(--header-h, 0px)) 0 0 0;
       width: 100%;
       /* Above `footer`, which E-52 raised from 10 to 95 so that the copy of the
          notices a desktop player reads after scrolling wins its own hit test.
@@ -2202,25 +2164,7 @@
       z-index: 96;
     }
 
-    .footer-disclaimer {
-      padding: 16px;
-    }
-
-    .disclaimer-content p {
-      margin-bottom: 10px;
-    }
-
-    p.disclaimer-warning,
-    p.disclaimer-info,
-    p.disclaimer-ai {
-      font-size: 11px;
-      text-align: left;
-    }
-
-    p.disclaimer-info,
-    p.disclaimer-ai {
-      padding-left: 18px;
-    }
+    .footer-provenance { padding: var(--cd-space-3) var(--cd-space-4) 0; }
 
     .footer-bottom {
       flex-direction: column;
@@ -2228,10 +2172,15 @@
       padding: 10px 16px;
     }
 
+    /* How It Works and Verify Code on ONE row; the divider between them
+       was a line of its own on the phone. */
     .footer-center {
-      flex-direction: column;
-      gap: 8px;
+      flex-direction: row;
+      justify-content: center;
+      gap: var(--cd-space-5);
     }
+
+    .footer-center .footer-divider { display: none; }
   }
 
   @media (max-width: 480px) {
@@ -2312,295 +2261,10 @@
      after this one puts the compact header on ONE row there, because in a 390 px
      -tall window a header row costs more than a header column.
      ========================================================================= */
-  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+  /* The trust bar's own rules live in TrustBar.svelte; on every view the
+     carrier above is the same sticky bar. */
 
-    /* ---------------- the notice strip, collapsed ------------------------ */
-
-    .alpha-warning-banner.on-table {
-      padding: 0;
-    }
-
-    .alpha-warning-banner.on-table .banner-strip {
-      display: block;
-      padding: 6px 9px 7px;
-      font-size: 11px;
-      line-height: 1.3;
-    }
-
-    .alpha-warning-banner.on-table .banner-strip .warning-icon {
-      font-size: 11px;
-    }
-
-    .alpha-warning-banner.on-table .strip-text {
-      color: #fff;
-      font-weight: 500;
-    }
-
-    /* The affordance. It sits INSIDE the text flow so it costs no row of its
-       own, and it is a real 24 px-tall target inside a strip the whole width of
-       which is the button. */
-    .alpha-warning-banner.on-table .strip-more {
-      display: inline-block;
-      margin-left: 5px;
-      padding: 1px 6px;
-      border: 1px solid rgba(255, 255, 255, 0.6);
-      border-radius: 999px;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      color: #fef08a;
-      white-space: nowrap;
-    }
-
-    /* Collapsed: the FULL text is one tap away. The words a player must not be
-       able to miss are in `.strip-text` above, on screen, unshortened. */
-    .alpha-warning-banner.on-table:not(.expanded) .banner-content {
-      display: none;
-    }
-
-    /* ---------------- the notice strip, expanded ------------------------- */
-    /* An OVERLAY, not an in-flow expansion: the table is sized from the flow
-       above it, so growing this block in place would resize the felt under the
-       player's thumb mid-hand.
-       `.alpha-warning-banner` is `position: relative; z-index: 100`, which makes
-       it a STACKING CONTEXT -- a child at z-index 2000 is still painted at the
-       100 level, under every dialog scrim in this app. So the z-index goes on the
-       banner ITSELF while it is expanded, and the children order within it. */
-
-    .alpha-warning-banner.on-table.expanded {
-      z-index: 2000;
-    }
-
-    .alpha-warning-banner.on-table.expanded .banner-content {
-      display: block;
-      position: fixed;
-      inset: 0;
-      z-index: 2000;
-      max-width: none;
-      margin: 0;
-      padding: 20px 18px 84px;
-      overflow-y: auto;
-      overscroll-behavior: contain;
-      /* Fully opaque. A translucent scrim let the felt read through the bottom
-         half of the terms, which is the opposite of prominence. */
-      background: linear-gradient(180deg, #9a1616, #580c0c);
-    }
-
-    /* Bigger than the in-flow copy, not smaller: this is the reading view. */
-    .alpha-warning-banner.on-table.expanded .banner-content p {
-      font-size: 13.5px;
-      line-height: 1.6;
-      margin-bottom: 14px;
-    }
-
-    .alpha-warning-banner.on-table.expanded .banner-close {
-      display: block;
-      position: fixed;
-      bottom: 18px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 2001;
-      min-height: 44px;
-      padding: 0 30px;
-      border-radius: 999px;
-      border: 1px solid rgba(255, 255, 255, 0.55);
-      background: rgba(0, 0, 0, 0.5);
-      color: #fff;
-      font-family: inherit;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-
-    /* ---------------- the compact table-view header ---------------------- */
-
-    /* THE GAPS ARE CHROME TOO, AND THEY COST A PLAYER NOTHING.
-       Wave 5 recovered the brand row and the third header row. What it left
-       behind was pure EMPTY SPACE, and on a height-bound felt every pixel of it
-       is felt. Measured on the shipped build at 390x844, table view, with all
-       five protected phrases on screen:
-
-         header.compact padding-block   4 + 4 px   nothing is drawn in it
-         header.compact row gap             3 px   between the two header rows
-         .table-area padding-top            8 px   between the header and a table
-                                                   that is already full-bleed
-         ------------------------------------------------------------------
-                                           19 px
-
-       The 8 px of `.table-area` padding is the clearest of the three: in
-       portrait `.poker-table-wrapper` is `width: 100vw` with a negative margin
-       that cancels the horizontal padding outright, so the top 8 px is the only
-       part of it that has any effect at all, and its whole effect is to make the
-       felt smaller. Nothing here shortens, hides, restyles or moves a notice;
-       the strip above is untouched, and the header keeps both rows, both type
-       steps and every label. */
-    header.compact {
-      flex-wrap: wrap;
-      align-items: center;
-      padding: 2px 8px;
-      gap: 2px;
-    }
-
-    /* The brand mark and the tagline, on the one screen where the player is
-       already inside the product. 44 px of row, recovered. */
-    header.compact .logo {
-      display: none;
-    }
-
-    /* The gutter the table already refuses. `.poker-table-wrapper` is
-       `width: 100vw` with `margin-inline: calc(50% - 50vw)` in portrait, so the
-       left and right padding here is cancelled by the table itself and only the
-       TOP has any effect -- and its whole effect is to push a height-bound felt
-       down. The bottom stays: `measureViewport()` reads it as `--cd-slack` and
-       cancels it deliberately, so changing it would move the wrapper's negative
-       margin rather than free anything. */
-    .table-area {
-      padding-top: 0;
-    }
-
-    /* Two deterministic rows: where you are, then what you can do. Left to the
-       flex-wrap default these two would still land on separate rows (239 px +
-       411.8 px will not share 374), but "still" is not "always" -- pinning the
-       basis to 100% means a shorter table name can never silently reflow the
-       header into one row and change the felt height. */
-    header.compact .header-left,
-    header.compact .header-right {
-      flex: 1 0 100%;
-      min-width: 0;
-      gap: 6px;
-    }
-
-    header.compact .header-left {
-      justify-content: flex-start;
-    }
-
-    /* WRAPPING IS THE FAILURE MODE, NOT CLIPPING. At 390 px this row's content
-       is 338 px of the 374 available, so it never wraps; on a 320 px phone it
-       does, and the table gives up ~30 px of height rather than the wallet
-       button losing its right-hand edge to `overflow-x: hidden` on <body>. A
-       clipped control is unusable and invisible to every DOM assertion in the
-       repo; a third header row is merely a smaller felt. */
-    header.compact .header-right {
-      justify-content: flex-start;
-      flex-wrap: wrap;
-      row-gap: 4px;
-    }
-
-    /* The wallet chip keeps the thumb-reachable right edge; the three tool
-       buttons cluster on the left of the same row. */
-    header.compact .header-right > :global(.wallet-container) {
-      margin-left: auto;
-    }
-
-    header.compact .back-btn {
-      padding: 5px 9px;
-      font-size: 11px;
-      gap: 5px;
-    }
-
-    header.compact .back-btn svg {
-      width: 15px;
-      height: 15px;
-    }
-
-    /* `.current-table-name` is the stakes pill. It stays -- the blinds are the
-       one number in this header a player needs -- and it stays FULL TEXT,
-       because `tools/shots/lib/dom-scrape.mjs` asserts it against the table
-       canister's own config and the token census reads it as money. */
-    header.compact .current-table-name {
-      font-size: 11px;
-      padding: 3px 8px;
-      min-width: 0;
-      white-space: nowrap;
-    }
-
-    header.compact .sound-toggle-btn {
-      padding: 6px;
-    }
-
-    header.compact .sound-toggle-btn svg {
-      width: 16px;
-      height: 16px;
-    }
-
-    /* Labels stay. "Verify Fair" is the one control that names what this product
-       is for, and an unlabelled shield icon does not say it. */
-    header.compact .history-btn,
-    header.compact .verify-btn {
-      padding: 5px 8px;
-      font-size: 11px;
-      gap: 5px;
-    }
-
-    header.compact .history-btn svg,
-    header.compact .verify-btn svg {
-      width: 14px;
-      height: 14px;
-    }
-
-    /* The wallet chip comes down with everything else. The display name is kept
-       and merely narrowed: `.display-name` is a fault-injection target
-       (`SHOTS_INJECT_DRIFT=censusshape` writes a money-shaped token into it to
-       prove the census refuses one), and the census only gates tokens it can
-       SEE, so hiding this element would quietly disarm that self-test. */
-    header.compact :global(.wallet-container),
-    header.compact :global(.wallet-btn) {
-      min-width: 0;
-    }
-
-    header.compact :global(.wallet-btn) {
-      padding: 3px 8px;
-      gap: 6px;
-      font-size: 11px;
-    }
-
-    header.compact :global(.wallet-btn .avatar-img) {
-      width: 20px;
-      height: 20px;
-    }
-
-    /* 8.5em at 11px = 93 px, against 71 px for the generated names this build
-       produces, so the name renders IN FULL and the clamp only exists so a very
-       long one ellipsises instead of pushing the document past 390 px and
-       re-arming the T-19 zoom-out. Measured: this row's content is 343 px of the
-       374 px available. */
-    header.compact :global(.wallet-btn .display-name) {
-      max-width: 8.5em;
-    }
-
-    /* ---------------- the last 4 px above the felt ----------------------- */
-    /* `.table-area` is the table's parent; its top padding is subtracted from
-       the felt as directly as the header is. The wrapper already goes full-bleed
-       horizontally (PokerTable.svelte), so this is only the vertical inset. */
-    main[data-view='table'] .table-area {
-      padding-top: 4px;
-    }
-  }
-
-  /* =========================================================================
-     THE PHONE HELD SIDEWAYS: the same compact header, on ONE row.
-     =========================================================================
-     Height is the scarce axis in a 390 px-tall window and width is not: the two
-     header groups measure 180 + 338 = 518 px of the ~828 available, so they share
-     a row and the table gets the ~34 px back. Portrait keeps two rows, where 374
-     px cannot hold 518.
-     ========================================================================= */
-  @media (min-aspect-ratio: 1/1) and (max-height: 560px) {
-    header.compact .header-left,
-    header.compact .header-right {
-      flex: 0 1 auto;
-    }
-
-    header.compact .header-right {
-      flex-grow: 1;
-      justify-content: flex-end;
-    }
-
-    /* Two lines of strip, not three: the same words on a wider screen. */
-    .alpha-warning-banner.on-table .banner-strip {
-      padding: 5px 10px 6px;
-    }
-  }
+  @include phone.header;
 
   /* Modal Backdrop */
   .modal-backdrop {
@@ -2658,7 +2322,7 @@
     color: rgba(255, 255, 255, 0.9);
   }
 
-  .verify-modal .modal-notices strong { color: #fef08a; }
+  .verify-modal .modal-notices :global(strong) { color: var(--cd-notice-strong); }
   .verify-modal .notice-icon { font-size: 12px; }
 
   .verify-modal h2 {
@@ -2859,20 +2523,33 @@
     display: inline;
     margin-left: 6px;
     padding: 1px 6px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.7);
+    border-radius: var(--cd-radius-pill);
+    background: var(--cd-surface-3);
+    color: var(--cd-ink-2);
     font-size: 9px;
-    font-weight: 700;
+    font-weight: var(--cd-weight-figure);
     letter-spacing: 0.08em;
     white-space: nowrap;
   }
 
-  /* Louder on mainnet, and only on mainnet: this is the state in which a
-     mistake costs the reader money. */
+  /* Mainnet: the same neutral chip with an amber dot. The audit measured the
+     red pill as the loudest thing beside the wordmark on every view; red is
+     for the two things on a poker table that are red, and the trust bar
+     already carries the money warning in words. */
   .net-chip.mainnet {
-    background: rgba(185, 28, 28, 0.75);
-    color: #fecaca;
+    background: var(--cd-surface-4);
+    color: var(--cd-ink-1);
+  }
+
+  .net-chip.mainnet::before {
+    content: '';
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 5px;
+    border-radius: 50%;
+    background: var(--cd-warn);
+    vertical-align: 0.5px;
   }
 
   .net-footer {
@@ -2986,4 +2663,9 @@
     font-weight: 700;
   }
   .hash-row .hash.live-unknown { color: #fcd34d; }
+
+  /* THE PHONE (portrait, or a window under 560 px tall): the one-screen table
+     view, the toast's place and the shell's touch floors. A mixin, included
+     LAST on purpose (see app-phone.scss). */
+  @include app-phone.rules;
 </style>

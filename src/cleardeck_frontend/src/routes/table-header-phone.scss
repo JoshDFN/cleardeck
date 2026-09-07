@@ -1,0 +1,202 @@
+/* ==========================================================================
+   THE TABLE VIEW'S HEADER ON A PHONE (a partial of +page.svelte's style)
+   ==========================================================================
+   Scoped to `header.compact`, i.e. THE TABLE VIEW ONLY, under the same two
+   conditions as the trust bar's phone rules in +page.svelte: portrait, or a
+   window under 560 px tall (the phone held sideways). The felt sizes itself
+   to "the viewport, less everything above me", so every pixel of chrome
+   here is a pixel of felt; the measurements in the comments are from the
+   shipped build at 390x844.
+
+   ONE ROW OF 44 PX CONTROLS (the mobile phase). Wave 5 laid this header out
+   as two 30 px rows (62 px + gaps) and met the 44 px touch floor with
+   invisible pseudo-element hit areas; measured, the two rows' hit areas
+   overlapped by 12 px and the upper row's effective target was 32 px. The
+   header is now ONE row of real 44 px boxes, 48 px tall with its padding:
+   18 px LESS chrome than the two rows, so the felt grows rather than
+   shrinks. The row fits 374 px because the three tool buttons are glyph-only
+   squares (the word is the button's aria-label and title), the sound toggle
+   lives in the dock on the phone (PokerTable's dock-left), and the wallet
+   chip is the avatar alone (the name is its aria-label and title). Measured
+   content at 390 px, signed in: 44 + 4 + 112 (the longest stakes pill,
+   "Heads Up · 0.01/0.02") + 4 + 44 + 4 + 44 + 4 + 44 = 304 of 374. Signed
+   OUT the right group is wider (Connect Wallet, plus Dev Login on a local
+   build) and the row is allowed to wrap to a second one: a spectator's felt
+   is 44 px shorter, a player's never is. */
+
+@mixin header {
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    /* ---------------- the compact table-view header ---------------------- */
+
+    header.compact {
+      flex-wrap: wrap;
+      align-items: center;
+      min-height: 0;
+      padding: calc(var(--cd-space-1) / 2) var(--cd-space-2);
+      gap: calc(var(--cd-space-1) / 2) var(--cd-space-1);
+    }
+
+    /* The brand mark and the tagline, on the one screen where the player is
+       already inside the product. 44 px of row, recovered. */
+    header.compact .logo {
+      display: none;
+    }
+
+    /* The gutter the table already refuses. `.poker-table-wrapper` is
+       `width: 100vw` with `margin-inline: calc(50% - 50vw)` in portrait, so the
+       left and right padding here is cancelled by the table itself and only the
+       TOP has any effect, and its whole effect is to push a height-bound felt
+       down. The bottom stays: `measureViewport()` reads it as `--cd-slack` and
+       cancels it deliberately, so changing it would move the wrapper's negative
+       margin rather than free anything. */
+    .table-area {
+      padding-top: 0;
+    }
+
+    /* Where you are (left, grows), then what you can do (right, its own
+       width). Both nowrap inside; only the header itself may wrap, and only
+       when the signed-out wallet controls do not fit beside the stakes. */
+    header.compact .header-left,
+    header.compact .header-right {
+      min-width: 0;
+      gap: var(--cd-space-1);
+      flex-wrap: nowrap;
+    }
+
+    header.compact .header-left {
+      flex: 1 1 auto;
+      justify-content: flex-start;
+    }
+
+    header.compact .header-right {
+      flex: 0 1 auto;
+      justify-content: flex-end;
+      margin-left: auto;
+    }
+
+    /* THE THREE TOOL BUTTONS: 44 px squares, glyph only. The word is the
+       button's aria-label and its title, so a screen reader and a long press
+       both still say "Verify fair". */
+    header.compact .back-btn,
+    header.compact .history-btn,
+    header.compact .verify-btn {
+      width: var(--cd-touch-min);
+      min-width: var(--cd-touch-min);
+      min-height: var(--cd-touch-min);
+      padding: 0;
+      gap: 0;
+      justify-content: center;
+    }
+
+    header.compact .back-btn .btn-label,
+    header.compact .history-btn .btn-label,
+    header.compact .verify-btn .btn-label {
+      display: none;
+    }
+
+    header.compact .back-btn svg { width: var(--cd-icon-md); height: var(--cd-icon-md); }
+    header.compact .history-btn svg,
+    header.compact .verify-btn svg { width: var(--cd-icon-sm); height: var(--cd-icon-sm); }
+
+    /* The sound toggle rides the dock on the phone (beside Log), where a
+       thumb reaches it; the header has no row to spare for it. */
+    header.compact .sound-toggle-btn {
+      display: none;
+    }
+
+    /* `.current-table-name` is the stakes pill. It stays (the blinds are the
+       one number in this header a player needs) and it stays FULL TEXT,
+       because `tools/shots/lib/dom-scrape.mjs` asserts it against the table
+       canister's own config and the token census reads it as money. Never
+       ellipsised: a money figure lying in pixels. */
+    header.compact .current-table-name {
+      font-size: var(--cd-text-xs);
+      padding: 0 var(--cd-space-2);
+      min-height: var(--cd-touch-min);
+      display: inline-flex;
+      align-items: center;
+      min-width: 0;
+      white-space: nowrap;
+    }
+
+    /* THE WALLET CHIP IS THE AVATAR ALONE: a 44 px square, the way a phone
+       poker client shows the player (GGPoker, PokerStars). The name is the
+       button's aria-label and title (WalletButton.svelte), so a screen reader
+       and a long press still say it; the menu it opens shows it in full. It
+       used to be clamped at 5.5em and ellipsised ("ShadowD..."), which is
+       neither the name nor an avatar. `.display-name` was the census's
+       fault-injection target (`SHOTS_INJECT_DRIFT=censusshape`); the drift
+       injector now takes the first PAINTED match of `.display-name,
+       .player-name`, so on this view a seat's name (excused by the same
+       allowlist rule) carries the fault instead. */
+    header.compact :global(.wallet-container),
+    header.compact :global(.wallet-btn) {
+      min-width: 0;
+    }
+
+    header.compact :global(.wallet-btn.connected) {
+      width: var(--cd-touch-min);
+      min-height: var(--cd-touch-min);
+      padding: 0;
+      gap: 0;
+      justify-content: center;
+      font-size: var(--cd-text-xs);
+    }
+
+    header.compact :global(.wallet-btn .avatar-img) {
+      width: var(--cd-icon-xl);
+      height: var(--cd-icon-xl);
+    }
+
+    header.compact :global(.wallet-btn.connected .display-name) {
+      display: none;
+    }
+
+    /* The caret is 12 px of width the row does not have; the chip is a
+       button and it reads as one. */
+    header.compact :global(.wallet-btn.connected > svg:last-child) {
+      display: none;
+    }
+
+    /* Signed out: the login buttons at the touch floor too. */
+    header.compact :global(.wallet-btn.connect),
+    header.compact :global(.wallet-btn.dev) {
+      min-height: var(--cd-touch-min);
+      padding: 0 var(--cd-space-2);
+      font-size: var(--cd-text-xs);
+    }
+
+    header.compact :global(.login-buttons) {
+      gap: var(--cd-space-1);
+    }
+
+    /* ---------------- the last 4 px above the felt ----------------------- */
+    /* `.table-area` is the table's parent; its top padding is subtracted from
+       the felt as directly as the header is. The wrapper already goes full-bleed
+       horizontally (PokerTable.svelte), so this is only the vertical inset. */
+    main[data-view='table'] .table-area {
+      padding-top: var(--cd-space-1);
+    }
+  }
+
+
+  /* =========================================================================
+     THE PHONE HELD SIDEWAYS: the same compact header, on ONE row.
+     =========================================================================
+     Height is the scarce axis in a 390 px-tall window and width is not, so
+     nothing here differs from portrait except the strip's padding. The table
+     area itself shows the rotate prompt (RotatePrompt.svelte) on a coarse
+     pointer.
+     ========================================================================= */
+  @media (min-aspect-ratio: 1/1) and (max-height: 560px) {
+    header.compact .header-left,
+    header.compact .header-right {
+      flex: 0 1 auto;
+    }
+
+    header.compact .header-right {
+      flex-grow: 1;
+      justify-content: flex-end;
+    }
+  }
+}

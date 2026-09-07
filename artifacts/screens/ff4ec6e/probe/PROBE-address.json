@@ -1,0 +1,304 @@
+[
+  {
+    "viewport": "desktop",
+    "setup": {
+      "walletE8s": "30000",
+      "escrowBeforeE8s": "320000",
+      "arrivedBeforeE8s": "0",
+      "expectedAddress": "3ae862c32316e3d625d3310826c9b6eba20ce5fe4a78c33424b54491b385ad98"
+    },
+    "card": {
+      "file": "artifacts/screens/ff4ec6e/probe/PROBE-address-card-desktop.png",
+      "route": "address",
+      "address": "3ae862c32316e3d625d3310826c9b6eba20ce5fe4a78c33424b54491b385ad98",
+      "qr": true,
+      "limits": "Minimum to this address: 0.0003 ICP; from a connected wallet the lower minimum of 0.0002 ICP applies (network fee 0.0001 ICP, charged twice by the ledger, so you need 0.0004 ICP in your wallet to deposit the minimum). At or below 0.0001 ICP nothing can move it. Why Sweeping pays the network fee out of what you send, so anything less would arrive too small to withdraw again. Sending from a connected wallet instead has a lower minimum of 0.0002 ICP. Send less and it is not swept and it is not lost: above the 0.0001 ICP network fee you can ask for it back to your own wallet at any time, less that one fee. At or below 0.0001 ICP nothing can move it: a transfer costs more than the amount, so it cannot be swept, refunded or withdrawn by anyone. Top the same address up to the minimum and the whole balance comes out together.",
+      "detect": "empty",
+      "button": "Check for my transfer",
+      "notices": "5/5",
+      "touch": null
+    },
+    "detected": {
+      "file": "artifacts/screens/ff4ec6e/probe/PROBE-address-detected-desktop.png",
+      "text": "Detected 0.0005 ICP",
+      "line": "Detected 0.0005 ICP at your address. Sweeping it into your table balance now.",
+      "detect": "ready",
+      "block": "640"
+    },
+    "receipt": {
+      "file": "artifacts/screens/ff4ec6e/probe/PROBE-address-receipt-desktop.png",
+      "title": "Deposit claimed",
+      "rows": [
+        {
+          "id": "arrived",
+          "text": "0.0005 ICP"
+        },
+        {
+          "id": "fee",
+          "text": "0.0001 ICP"
+        },
+        {
+          "id": "credited",
+          "text": "0.0004 ICP"
+        },
+        {
+          "id": "balance",
+          "text": "0.0036 ICP"
+        }
+      ],
+      "statuses": [],
+      "escrowDeltaE8s": "40000",
+      "leftAtAddressE8s": "0"
+    },
+    "ok": true,
+    "problems": [],
+    "figures": {
+      "ok": true,
+      "checked": 6,
+      "mismatches": [],
+      "figures": [
+        {
+          "label": "address route: wallet balance vs ledger",
+          "chain": 30000,
+          "domText": "0.0003 ICP",
+          "agrees": true,
+          "discriminates2x": true,
+          "detectsHalving": true,
+          "ok": true,
+          "detail": "screen \"0.0003 ICP\" == canister 30000 e8s (±5000 e8s)",
+          "window": [
+            24999.999999999996,
+            35000
+          ],
+          "resolution": 10000
+        },
+        {
+          "label": "address route: detected figure vs icrc1_balance_of(subaccount)",
+          "chain": 50000,
+          "domText": "Detected 0.0005 ICP",
+          "agrees": true,
+          "discriminates2x": true,
+          "detectsHalving": true,
+          "ok": true,
+          "detail": "screen \"Detected 0.0005 ICP\" == canister 50000 e8s (±5000 e8s)",
+          "window": [
+            45000,
+            55000
+          ],
+          "resolution": 10000
+        },
+        {
+          "label": "address route: receipt \"balance\" vs get_balance()",
+          "chain": 360000,
+          "domText": "0.0036 ICP",
+          "agrees": true,
+          "discriminates2x": true,
+          "detectsHalving": true,
+          "ok": true,
+          "detail": "screen \"0.0036 ICP\" == canister 360000 e8s (±5000 e8s)",
+          "window": [
+            355000,
+            365000
+          ],
+          "resolution": 10000
+        },
+        {
+          "label": "address route: receipt \"arrived\" vs what the ledger held at the address",
+          "chain": 50000,
+          "domText": "0.0005 ICP",
+          "agrees": true,
+          "discriminates2x": true,
+          "detectsHalving": true,
+          "ok": true,
+          "detail": "screen \"0.0005 ICP\" == canister 50000 e8s (±5000 e8s)",
+          "window": [
+            45000,
+            55000
+          ],
+          "resolution": 10000
+        },
+        {
+          "label": "address route: receipt \"fee\" vs icrc1_fee()",
+          "chain": 10000,
+          "domText": "0.0001 ICP",
+          "agrees": true,
+          "discriminates2x": true,
+          "detectsHalving": false,
+          "ok": true,
+          "detail": "screen \"0.0001 ICP\" == canister 10000 e8s (±5000 e8s); NOTE the client's precision here cannot distinguish 5000 e8s",
+          "window": [
+            5000,
+            15000
+          ],
+          "resolution": 10000
+        },
+        {
+          "label": "address route: receipt \"credited\" vs arrived less one fee",
+          "chain": 40000,
+          "domText": "0.0004 ICP",
+          "agrees": true,
+          "discriminates2x": true,
+          "detectsHalving": true,
+          "ok": true,
+          "detail": "screen \"0.0004 ICP\" == canister 40000 e8s (±5000 e8s)",
+          "window": [
+            35000,
+            45000
+          ],
+          "resolution": 10000
+        }
+      ]
+    }
+  },
+  {
+    "viewport": "mobile",
+    "setup": {
+      "walletE8s": "30000",
+      "escrowBeforeE8s": "360000",
+      "arrivedBeforeE8s": "0",
+      "expectedAddress": "3ae862c32316e3d625d3310826c9b6eba20ce5fe4a78c33424b54491b385ad98"
+    },
+    "card": {
+      "file": "artifacts/screens/ff4ec6e/probe/PROBE-address-card-mobile.png",
+      "route": "address",
+      "address": "3ae862c32316e3d625d3310826c9b6eba20ce5fe4a78c33424b54491b385ad98",
+      "qr": true,
+      "limits": "Minimum to this address: 0.0003 ICP; from a connected wallet the lower minimum of 0.0002 ICP applies (network fee 0.0001 ICP, charged twice by the ledger, so you need 0.0004 ICP in your wallet to deposit the minimum). At or below 0.0001 ICP nothing can move it. Why Sweeping pays the network fee out of what you send, so anything less would arrive too small to withdraw again. Sending from a connected wallet instead has a lower minimum of 0.0002 ICP. Send less and it is not swept and it is not lost: above the 0.0001 ICP network fee you can ask for it back to your own wallet at any time, less that one fee. At or below 0.0001 ICP nothing can move it: a transfer costs more than the amount, so it cannot be swept, refunded or withdrawn by anyone. Top the same address up to the minimum and the whole balance comes out together.",
+      "detect": "empty",
+      "button": "Check for my transfer",
+      "notices": "5/5",
+      "touch": "5 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Close deposit modal\"); document 390x844 in 390x844; type floors met; dialog open, scroll locked"
+    },
+    "detected": {
+      "file": "artifacts/screens/ff4ec6e/probe/PROBE-address-detected-mobile.png",
+      "text": "Detected 0.0005 ICP",
+      "line": "Detected 0.0005 ICP at your address. Sweeping it into your table balance now.",
+      "detect": "ready",
+      "block": "644"
+    },
+    "receipt": {
+      "file": "artifacts/screens/ff4ec6e/probe/PROBE-address-receipt-mobile.png",
+      "title": "Deposit claimed",
+      "rows": [
+        {
+          "id": "arrived",
+          "text": "0.0005 ICP"
+        },
+        {
+          "id": "fee",
+          "text": "0.0001 ICP"
+        },
+        {
+          "id": "credited",
+          "text": "0.0004 ICP"
+        },
+        {
+          "id": "balance",
+          "text": "0.0040 ICP"
+        }
+      ],
+      "statuses": [],
+      "escrowDeltaE8s": "40000",
+      "leftAtAddressE8s": "0"
+    },
+    "ok": true,
+    "problems": [],
+    "figures": {
+      "ok": true,
+      "checked": 6,
+      "mismatches": [],
+      "figures": [
+        {
+          "label": "address route: wallet balance vs ledger",
+          "chain": 30000,
+          "domText": "0.0003 ICP",
+          "agrees": true,
+          "discriminates2x": true,
+          "detectsHalving": true,
+          "ok": true,
+          "detail": "screen \"0.0003 ICP\" == canister 30000 e8s (±5000 e8s)",
+          "window": [
+            24999.999999999996,
+            35000
+          ],
+          "resolution": 10000
+        },
+        {
+          "label": "address route: detected figure vs icrc1_balance_of(subaccount)",
+          "chain": 50000,
+          "domText": "Detected 0.0005 ICP",
+          "agrees": true,
+          "discriminates2x": true,
+          "detectsHalving": true,
+          "ok": true,
+          "detail": "screen \"Detected 0.0005 ICP\" == canister 50000 e8s (±5000 e8s)",
+          "window": [
+            45000,
+            55000
+          ],
+          "resolution": 10000
+        },
+        {
+          "label": "address route: receipt \"balance\" vs get_balance()",
+          "chain": 400000,
+          "domText": "0.0040 ICP",
+          "agrees": true,
+          "discriminates2x": true,
+          "detectsHalving": true,
+          "ok": true,
+          "detail": "screen \"0.0040 ICP\" == canister 400000 e8s (±5000 e8s)",
+          "window": [
+            395000,
+            405000
+          ],
+          "resolution": 10000
+        },
+        {
+          "label": "address route: receipt \"arrived\" vs what the ledger held at the address",
+          "chain": 50000,
+          "domText": "0.0005 ICP",
+          "agrees": true,
+          "discriminates2x": true,
+          "detectsHalving": true,
+          "ok": true,
+          "detail": "screen \"0.0005 ICP\" == canister 50000 e8s (±5000 e8s)",
+          "window": [
+            45000,
+            55000
+          ],
+          "resolution": 10000
+        },
+        {
+          "label": "address route: receipt \"fee\" vs icrc1_fee()",
+          "chain": 10000,
+          "domText": "0.0001 ICP",
+          "agrees": true,
+          "discriminates2x": true,
+          "detectsHalving": false,
+          "ok": true,
+          "detail": "screen \"0.0001 ICP\" == canister 10000 e8s (±5000 e8s); NOTE the client's precision here cannot distinguish 5000 e8s",
+          "window": [
+            5000,
+            15000
+          ],
+          "resolution": 10000
+        },
+        {
+          "label": "address route: receipt \"credited\" vs arrived less one fee",
+          "chain": 40000,
+          "domText": "0.0004 ICP",
+          "agrees": true,
+          "discriminates2x": true,
+          "detectsHalving": true,
+          "ok": true,
+          "detail": "screen \"0.0004 ICP\" == canister 40000 e8s (±5000 e8s)",
+          "window": [
+            35000,
+            45000
+          ],
+          "resolution": 10000
+        }
+      ]
+    }
+  }
+]

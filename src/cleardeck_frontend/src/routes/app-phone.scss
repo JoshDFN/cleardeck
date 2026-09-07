@@ -1,0 +1,74 @@
+/* ==========================================================================
+   THE APP SHELL ON A PHONE (a partial of +page.svelte's style)
+   ==========================================================================
+   Portrait, or a window under 560 px tall (the phone held sideways): the
+   same two conditions as the trust bar's and the table header's phone rules
+   (table-header-phone.scss). Included LAST in +page.svelte's style block on
+   purpose: these outrank the desktop rules of the same specificity above
+   them, and a plain `@use` would emit them at the top instead (measured in
+   phase 1 round 3: the header went to three rows).
+
+   What lives here: the one-screen table view, the toast's place, and the
+   touch floors of the shell's own controls (dialog close buttons, the lobby
+   header's sound toggle, the footer links, the trust bar's FULL TERMS strip).
+   The table header's phone rules are table-header-phone.scss; the money
+   sheets' are lib/components/money-sheet-phone.scss. */
+
+@mixin rules {
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    /* THE TABLE VIEW IS ONE SCREEN. The audit measured the table page at
+       1040 px in an 844 px viewport (the footer in flow under the dock), so a
+       flick on the felt moved the action row under the thumb and a downward
+       flick at the top reloaded a live hand. `overscroll-behavior` (index.scss)
+       stops the reload; this stops the scroll: the shell is exactly the
+       viewport (dvh, so a browser toolbar that comes and goes resizes it
+       rather than hiding the dock), the footer is off this view (its two
+       links ride the Log drawer, ActionFeed.svelte; the lobby keeps the
+       footer), and the table sizes itself to what is left (measureViewport).
+       `documentElement.scrollHeight <= innerHeight` on every table state is
+       gated by tools/shots/touch-targets.mjs. */
+    .app.on-table {
+      height: 100dvh;
+      max-height: 100dvh;
+      overflow: hidden;
+    }
+
+    .app.on-table main {
+      min-height: 0;
+    }
+
+    .app.on-table footer {
+      display: none;
+    }
+
+    /* The table area anchors the sideways-phone panel (RotatePrompt). */
+    .table-area { position: relative; }
+
+    /* The toast's phone placement (under the table header, a bottom
+       snackbar elsewhere, above an open sheet) lives with the toast in
+       lib/components/Toast.svelte. */
+
+    /* Dialog close controls at the touch floor. */
+    .sidebar-header .close-btn,
+    .verify-modal .close-btn {
+      width: var(--cd-touch-min);
+      height: var(--cd-touch-min);
+      min-width: var(--cd-touch-min);
+    }
+
+    /* The lobby header's controls (the table view's are in table-header-phone.scss). */
+    header:not(.compact) .sound-toggle-btn {
+      flex: 0 0 auto;
+      width: var(--cd-touch-min);
+      min-width: var(--cd-touch-min);
+      min-height: var(--cd-touch-min);
+    }
+
+    /* The footer's text links (the lobby keeps the footer) at the touch
+       floor. The trust bar's own touch floor is in TrustBar.svelte. The
+       provenance line's Full terms is its OWN row here, not a 44 px box
+       inside the paragraph (that box opened the line spacing to ~2x). */
+    .footer-link { min-height: var(--cd-touch-min); display: inline-flex; align-items: center; }
+    .footer-link.inline { display: flex; margin: 0; }
+  }
+}

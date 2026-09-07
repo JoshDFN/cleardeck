@@ -1,106 +1,221 @@
-/* Import Inter font from Google Fonts */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-
 /* ==========================================================================
-   ONE SYSTEM
+   ONE SYSTEM: the design tokens the app actually uses.
    ==========================================================================
 
-   Wave 3 restyled four surfaces (lobby, table, fairness/history, evidence) in
-   parallel, by agents who could not see each other's work, into per-component
-   <style> blocks with no shared vocabulary — this file was a 57-line reset and
-   nothing else. Counted across the thirteen components and the route:
+   History, in one paragraph. Wave 3 restyled four surfaces in parallel and left
+   183 hex + 316 rgba colours, 28 font sizes and 16 radii across thirteen
+   components. Wave 4 wrote a token vocabulary into this file and nothing adopted
+   it (`grep -o 'var(--cd-'` over lib/ and routes/ returned 0). The UI/UX wave
+   (docs/DESIGN-BAR.md, the 2026-09-04 audit) makes the tokens load-bearing: the
+   table scene, the cards, the seat pods, the pot module and the table chrome are
+   written against THIS file and carry no colour or size literal of their own.
 
-     border-radius   16 distinct px values  (2 3 4 5 6 7 8 9 10 11 12 14 16 18 20 999)
-     font-size       28 distinct px values  (8 → 44, including 8.5 9.5 10.5 11.5 12.5 13.5 14.5)
-     "our" green      9 distinct hexes      (#00d4aa #2ecc71 #4ecdc4 #7ee2b8 #4ade80
-                                             #22c55e #00b894 #49a16e #7bf0d8)
-     "our" amber      6 distinct hexes      (#fbbf24 #f59e0b #f1c40f #f0b429 #d97706 #e9ff63)
-     muted grey      11 distinct hexes with no scale between them
-     panel tint       8 distinct rgba(255,255,255,0.0x) fills
-     panel border     8 distinct rgba(255,255,255,0.x) strokes
+   THE ROLES, and the rule that keeps them honest:
 
-   Four buttons sit in ONE row on the table header. Measured with
-   getComputedStyle: three heights (38 / 42 / 46 px), two radii (8 / 10 px), two
-   font sizes (13 / 14 px), two weights (400 / 500) and two accent families —
-   "History" is indigo rgb(99,102,241) and "Verify Fair" is teal rgb(0,212,170),
-   for two buttons that do the same job.
+     one money colour        --cd-money      pot, bets, awards, Raise, stakes
+     one hero / positive     --cd-accent     the hero's ring and name, Call/Check
+     one danger              --cd-danger     fold, all-in, errors. Nothing else.
+     one felt family         --cd-felt-*     the playing surface, and only it
+     one rail family         --cd-rail-*     charcoal leather, never wood, never
+                                             recoloured by game state
+     white for names, ink-2 for labels, and every information colour lives in a
+     capsule (a plate, a chip, a module), never on bare felt at low alpha.
 
-   THE TOKENS BELOW ARE THE MAJORITY VALUE ON EACH AXIS, not a new taste. Each
-   was chosen by counting the existing declarations, so adopting a token changes
-   the fewest pixels possible. They are the vocabulary for wave 4; this pass
-   deliberately did NOT rewrite thirteen component stylesheets to use them,
-   because that is a redesign and the brief was a coherence pass. What it did do
-   is write the vocabulary down, in the one file every surface already imports,
-   so the next change has somewhere to point.
-
-   What still disagrees, and what it should become, is listed scene by scene in
-   docs/WAVE-03.md § "Making it one product".
+   A colour that is not one of these roles is drift. Add a role here with a
+   comment saying what it is FOR, not a hex somewhere else.
    ========================================================================== */
 
+/* --- Fonts: self-hosted canister assets, never a third-party fetch ----------
+   docs/DESIGN-BAR.md bar 10: exactly two typefaces on the table. Inter (variable,
+   400-800, latin) for every piece of UI and every figure, Playfair Display 700
+   (latin) for NOTHING but card ranks. A '100% on-chain' page must not block on
+   fonts.googleapis.com, so the files live in static/fonts and ship with the
+   asset canister. `font-display: swap` so the felt never waits on them. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('/fonts/inter-latin.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Playfair Display';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/playfair-700-latin.woff2') format('woff2');
+}
+
 :root {
+  /* --- Type faces ------------------------------------------------------- */
+  --cd-font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --cd-font-rank: 'Playfair Display', Georgia, 'Times New Roman', serif;
+  --cd-font-mono: ui-monospace, 'JetBrains Mono', Menlo, Monaco, Consolas, monospace;
+
   /* --- Surface -----------------------------------------------------------
-     The page is near-black; panels are a white tint on top of it, never a
-     solid fill, so the felt's glow shows through. */
+     The page is near-black; panels are a white tint on top of it. The STAGE
+     (the room the table sits in) is a single overhead pool of light that falls
+     to black within a table-width: one light source, the same one the felt's
+     key light comes from. */
   --cd-bg: #0b0d12;
+  --cd-bg-deep: #06070a;
+  --cd-stage-hi: #171a21;      /* centre of the pool of light */
+  --cd-stage: #0b0c10;         /* mid falloff */
+  --cd-stage-lo: #050609;      /* the edge of the room */
+
   --cd-surface-1: rgba(255, 255, 255, 0.03); /* resting panel */
-  --cd-surface-2: rgba(255, 255, 255, 0.05); /* raised panel, chip  (38 uses) */
-  --cd-surface-3: rgba(255, 255, 255, 0.08); /* hover / active      (24 uses) */
+  --cd-surface-2: rgba(255, 255, 255, 0.05); /* raised panel, chip */
+  --cd-surface-3: rgba(255, 255, 255, 0.08); /* hover / active */
+  --cd-surface-4: rgba(255, 255, 255, 0.12); /* pressed / selected */
   --cd-scrim: rgba(0, 0, 0, 0.72);           /* modal backdrop */
 
-  --cd-line: rgba(255, 255, 255, 0.1);       /* default 1px stroke  (33 uses) */
-  --cd-line-soft: rgba(255, 255, 255, 0.06); /* inside a panel */
-  --cd-line-strong: rgba(255, 255, 255, 0.15);
+  /* Opaque capsules for anything that sits ON the felt or over the surround:
+     a figure on a translucent tint over green is a figure at the mercy of what
+     is behind it. */
+  --cd-plate-hi: #272a33;      /* top of a seat plate */
+  --cd-plate: #181a20;         /* body of a seat plate, the pot module */
+  --cd-plate-lo: #101115;      /* bottom of a seat plate */
+  --cd-capsule: rgba(9, 11, 15, 0.86); /* label capsules on the felt */
+  --cd-panel: rgba(13, 15, 21, 0.96);  /* popovers, sheets, toasts */
+  --cd-sheet: #0d0f15;                  /* a sheet that paints OVER money: opaque, alpha 1 (BetSizer's phone sheet) */
+
+  --cd-line: rgba(255, 255, 255, 0.1);        /* default 1px stroke */
+  --cd-line-soft: rgba(255, 255, 255, 0.06);  /* inside a panel */
+  --cd-line-strong: rgba(255, 255, 255, 0.16);
+  --cd-line-bright: rgba(255, 255, 255, 0.34); /* a lit plate's edge */
+  --cd-line-hot: rgba(255, 255, 255, 0.85);    /* the acting seat */
+  --cd-glow-white: rgba(255, 255, 255, 0.35);  /* the acting seat's halo */
 
   /* --- Ink ---------------------------------------------------------------
-     Four steps, not eleven. Contrast measured against --cd-bg. */
-  --cd-ink: #ffffff;        /* 18.6:1  values, names, headlines */
-  --cd-ink-1: #e6e8ec;      /* 15.7:1  body */
-  --cd-ink-2: #8b93a7;      /*  6.2:1  labels, secondary */
-  --cd-ink-3: #6b7280;      /*  4.0:1  footnotes only — under AA for body text */
+     Three steps. --cd-ink-3 (4.0:1) was retired by the audit: nothing a player
+     reads may sit under AA. Labels on the felt use --cd-ink-felt, which is the
+     floor for text over green. */
+  --cd-ink: #ffffff;                       /* 18.6:1  values, names, headlines */
+  --cd-ink-1: #e6e8ec;                     /* 15.7:1  body */
+  --cd-ink-2: #8b93a7;                     /*  6.2:1  labels, secondary */
+  --cd-ink-felt: rgba(255, 255, 255, 0.74); /* the floor for a label on felt */
+  --cd-ink-on-light: #0d0f14;              /* text on a light chip or button */
 
-  /* --- Accent ------------------------------------------------------------
-     ONE teal. #00d4aa is already the plurality (64 uses) and it is the brand
-     mark, the wallet chip and the primary button. Everything green that is not
-     this is drift: #2ecc71 (the fairness verdict), #4ecdc4 (the hashes),
-     #7ee2b8 (the seat-pod ring), #49a16e (the felt highlight), #4ade80,
-     #22c55e, #00b894, #7bf0d8. */
+  /* --- Accent: ONE teal --------------------------------------------------- */
   --cd-accent: #00d4aa;
+  --cd-accent-ink: #06231a;                 /* text on a teal fill */
   --cd-accent-dim: rgba(0, 212, 170, 0.1);
   --cd-accent-line: rgba(0, 212, 170, 0.3);
+  --cd-accent-line-strong: rgba(0, 212, 170, 0.75);
+  --cd-accent-glow: rgba(0, 212, 170, 0.28);
+  --cd-accent-hi: #7ee2b8;                  /* the hero's name, the phase chip */
 
-  /* Money in motion. #fbbf24 is the plurality (17 uses) and it is what the pot,
-     the bet discs and the history pot already use. */
-  --cd-money: #fbbf24;
-  --cd-money-dim: rgba(251, 191, 36, 0.12);
+  /* --- Money: ONE gold ---------------------------------------------------
+     #EEB441 is WPT Global's measured chip gold (docs/DESIGN-BAR.md). Pot, bet
+     chips, the winner's award and glow, Raise, lobby stakes. The lime #E9FF63,
+     the chartreuse #dfe86a, the pale #f8d97a and the amber #d9a63a are gone. */
+  --cd-money: #eeb441;
+  --cd-money-hi: #f7d27a;                   /* top of a gold gradient */
+  --cd-money-lo: #b8842a;                   /* bottom of a gold gradient */
+  --cd-money-ink: #241a02;                  /* text on a gold fill */
+  --cd-money-dim: rgba(238, 180, 65, 0.14);
+  --cd-money-line: rgba(238, 180, 65, 0.45);
+  --cd-money-glow: rgba(238, 180, 65, 0.55);
 
-  --cd-danger: #ef4444;     /* fold, all-in, error  (13 uses) */
-  --cd-warn: #f59e0b;       /* drift, "record differs" */
-  --cd-btc: #f7931a;        /* Bitcoin brand orange, not ours to change */
+  /* --- Danger, warn, brand oranges --------------------------------------- */
+  --cd-danger: #e8503a;                     /* fold, all-in, errors */
+  --cd-danger-ink: var(--cd-ink-on-light);  /* text ON a danger fill: dark ink is 5.2:1 on it, white was 3.7:1 */
+  --cd-danger-hi: #ff8b6b;                  /* urgent clock digits */
+  --cd-danger-dim: rgba(232, 80, 58, 0.16);
+  --cd-danger-line: rgba(232, 80, 58, 0.5);
+  --cd-warn: #f59e0b;                       /* the notice glyph, drift */
+  --cd-warn-dim: rgba(245, 158, 11, 0.12);
+  --cd-warn-line: rgba(245, 158, 11, 0.35);
+  --cd-notice-strong: #fef08a;              /* the lead phrase of a restated notice inside a dialog */
+  --cd-btc: #f7931a;                        /* Bitcoin brand orange */
+  --cd-btc-dim: rgba(247, 147, 26, 0.1);    /* a BTC chip or panel at rest */
+  --cd-btc-tint: rgba(247, 147, 26, 0.2);   /* a BTC control hovered, a BTC spinner track */
+  --cd-btc-line: rgba(247, 147, 26, 0.3);   /* the 1px stroke on anything BTC */
 
-  /* NOTE: there is no indigo token, on purpose. rgb(99,102,241) / #818cf8 /
-     #a5b4fc are a SECOND accent family that arrived with the deposit modal and
-     the History button. Wave 4 should either promote indigo to a documented
-     "informational" role used everywhere, or delete it. Today it appears in
-     five components meaning five different things. */
+  /* --- The felt ----------------------------------------------------------
+     Darker and less saturated than the old #1f6b45 so white cards and gold
+     chips pop off it; a broadcast felt, not a lawn. Key light above centre. */
+  --cd-felt-hi: #1d6146;
+  --cd-felt: #164b36;
+  --cd-felt-lo: #0d3324;
+  --cd-felt-edge: #082017;
+  --cd-felt-line: rgba(255, 255, 255, 0.10);  /* the betting line */
+  --cd-felt-mark: rgba(255, 255, 255, 0.055); /* the centre mark */
+  --cd-felt-shade: rgba(0, 0, 0, 0.55);       /* vignette under the rail lip */
+  /* The BTC table's felt in a preview: the same key light on a brown baize,
+     so a sats table reads as one at a glance (the lobby's mini map). */
+  --cd-felt-btc-hi: #4a3212;
+  --cd-felt-btc-lo: #2c1e0b;
+
+  /* --- The rail ----------------------------------------------------------
+     Black padded leather with a lit crown, as on every broadcast table. */
+  --cd-rail-hi: #383a44;
+  --cd-rail: #22232b;
+  --cd-rail-lo: #111217;
+  --cd-rail-face: #0a0b0e;                     /* the near rail's front face */
+  --cd-rail-crown: rgba(255, 255, 255, 0.28); /* the specular along the top */
+  --cd-rail-crown-lo: rgba(255, 255, 255, 0.09); /* the roll's rim on the near edge */
+  --cd-rail-seam: rgba(0, 0, 0, 0.8);          /* the dark seam at the felt edge */
+
+  /* --- Cards ------------------------------------------------------------- */
+  --cd-card-face: #ffffff;
+  --cd-card-face-lo: #eef0f3;
+  --cd-card-red: #db3131;                   /* bar 9: measured PokerNow reds */
+  --cd-card-black: #2c2c2c;                 /* never pure black */
+  --cd-card-edge: rgba(0, 0, 0, 0.12);
+  --cd-card-sheen: rgba(255, 255, 255, 0.55);
+  --cd-card-back-hi: #24456c;
+  --cd-card-back: #142b47;
+  --cd-card-back-lo: #0b1a2e;
+  --cd-card-back-gold: rgba(212, 175, 55, 0.6);
+  --cd-card-back-gold-dim: rgba(212, 175, 55, 0.16);
+  --cd-card-slot: rgba(0, 0, 0, 0.14);
+
+  /* --- Chips ------------------------------------------------------------- */
+  --cd-chip-white: #eceef2;
+  --cd-chip-red: #c9382c;
+  --cd-chip-blue: #2c5fb5;
+  --cd-chip-green: #2f8a58;
+  --cd-chip-black: #2a2c34;
+  --cd-chip-gold: var(--cd-money);
+  --cd-chip-notch: rgba(255, 255, 255, 0.85);
+  --cd-chip-rim: rgba(0, 0, 0, 0.45);
+  --cd-chip-ink: #111318;
+
+  /* --- Text on the felt: the size scale is em-based (a ratio of the felt
+     width), so the tokens here are the RATIOS every felt label uses, each
+     floored at 11 px in absolute terms. At the measured desktop --ui of
+     ~19.5 px the ratio wins (0.58em = 11.3 px); on the nine-seat phone (--ui
+     14.5 px) the floor wins, so no label, chip amount or side-pot figure on
+     the felt is ever set under 11 px. */
+  --cd-felt-label: max(0.58em, 11px);
+  --cd-felt-small: max(0.66em, 11px);
+  --cd-felt-body: max(0.76em, 11px);
+  --cd-felt-name: 0.8em;
+  --cd-felt-stack: 1em;
+  --cd-felt-pot: 1.5em;
 
   /* --- Type --------------------------------------------------------------
-     Six steps. The 8.5 / 9.5 / 10.5 / 11.5 / 12.5 / 13.5 / 14.5 half-pixel
-     sizes in the tree are not a system, they are one-offs. */
-  --cd-text-xs: 11px;      /* micro labels, uppercase tracking */
-  --cd-text-sm: 13px;      /* secondary, buttons, table cells  (56 uses) */
-  --cd-text-md: 14px;      /* body                             (28 uses) */
-  --cd-text-lg: 18px;      /* dialog titles                    ( 9 uses) */
+     Six steps, and no half pixels. */
+  --cd-text-xs: 11px;      /* micro labels, uppercase tracking (the floor) */
+  --cd-text-sm: 13px;      /* secondary, buttons, table cells */
+  --cd-text-md: 14px;      /* body */
+  --cd-text-figure: 15px;  /* a money figure or a table's name in a list row or a preview */
+  --cd-text-lg: 18px;      /* dialog titles */
   --cd-text-xl: 24px;      /* section headings */
   --cd-text-display: 34px; /* the pot, the 0% rake figure */
 
   --cd-weight-body: 400;
   --cd-weight-medium: 500;
   --cd-weight-strong: 600;
-  --cd-weight-figure: 700; /* stacks and pots — never 650 or 800 */
+  --cd-weight-figure: 700;   /* stacks, pots, bets */
+  --cd-weight-display: 800;  /* the pot headline, the winner line */
 
-  /* --- Rhythm ------------------------------------------------------------
-     A 4px grid. 8 and 12 are already the two most common gaps (80 and 59
-     declarations); 6 and 10 are next and are off-grid. */
+  --cd-tracking-label: 0.14em;
+  --cd-tracking-wide: 0.22em;
+
+  /* --- Rhythm: a 4 px grid ---------------------------------------------- */
   --cd-space-1: 4px;
   --cd-space-2: 8px;
   --cd-space-3: 12px;
@@ -108,17 +223,86 @@
   --cd-space-5: 24px;
   --cd-space-6: 32px;
 
-  /* --- Radius ------------------------------------------------------------
-     Four steps, from the four most common values in the tree. */
-  --cd-radius-chip: 8px;   /* buttons, inputs, hashes (majority) */
+  /* --- Radius: four steps ------------------------------------------------ */
+  --cd-radius-chip: 8px;   /* buttons, inputs, hashes */
   --cd-radius-card: 12px;  /* cards, rows */
-  --cd-radius-panel: 16px; /* dialogs, side panels, list panes */
-  --cd-radius-pill: 999px; /* filter chips, seat pods */
+  --cd-radius-panel: 16px; /* dialogs, side panels */
+  --cd-radius-pill: 999px; /* filter chips, round objects */
 
-  /* --- Motion ------------------------------------------------------------ */
+  /* --- Controls ---------------------------------------------------------- */
+  --cd-control-sm: 32px;
+  --cd-control-md: 40px;
+  --cd-touch-min: 44px;
+  --cd-toast-w: 560px;     /* the error toast's width budget (Toast.svelte) */
+  /* The deposit address QR (DepositAddressCard.svelte): beside the hex on a
+     wide screen, larger and alone on its row on a phone. */
+  --cd-qr-size: 112px;
+  --cd-qr-size-lg: 132px;
+  /* The action log on the table (PokerTable.svelte): a column the felt yields
+     to in landscape, a shade under the header over the far seats in portrait
+     (26dvh: clear of the winner readout and the board on the 6-max phone). */
+  --cd-log-col-w: 200px;
+  --cd-log-sheet-h: 26dvh;
+
+  /* Glyphs inside controls: a 44 px square carries an 18-20 px glyph, a
+     44 px chip a 28 px avatar. */
+  --cd-icon-sm: 18px;
+  --cd-icon-md: 20px;
+  /* Card glyphs in a list row (MiniCard.svelte `--mini-card-w`): the board
+     beside the hero's pair on a desktop row, the pair and the board on a phone
+     row. */
+  --cd-mini-card-sm: 18px;
+  --cd-mini-card-md: 21px;
+  --cd-mini-card-lg: 24px;
+  --cd-mini-card-xl: 28px;
+  --cd-icon-lg: 24px;
+  --cd-icon-xl: 28px;
+  /* The phone's home-indicator and notch insets (0 everywhere else). Needs
+     `viewport-fit=cover` in app.html to be non-zero on an iPhone. */
+  --cd-safe-top: env(safe-area-inset-top, 0px);
+  --cd-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --cd-safe-left: env(safe-area-inset-left, 0px);
+  --cd-safe-right: env(safe-area-inset-right, 0px);
+
+  /* Layers. The stage's own objects stop at 32 (PokerTable.svelte); a sheet
+     the dock raises over the pot-odds line and the wallet row sits above
+     them, under the page's toasts and modals. */
+  --cd-z-dock-sheet: 40;
+  /* The money dialogs and the history / how-it-works panels (their own
+     styles still carry the literal 200); what must stand over an OPEN
+     dialog reads this. */
+  --cd-z-dialog: 200;
+
+  /* --- Shadows -----------------------------------------------------------
+     One key light, above centre, so every shadow falls DOWN. */
+  --cd-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 14px rgba(0, 0, 0, 0.4);
+  --cd-shadow-chip: 0 1px 0 rgba(0, 0, 0, 0.5), 0 4px 8px rgba(0, 0, 0, 0.45);
+  --cd-shadow-pod: 0 2px 4px rgba(0, 0, 0, 0.4), 0 10px 24px rgba(0, 0, 0, 0.5);
+  --cd-shadow-lift: 0 18px 50px rgba(0, 0, 0, 0.6);
+  --cd-shadow-rail: 0 24px 60px rgba(0, 0, 0, 0.7);
+  --cd-shadow-inset-soft: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* The 1 px lit top edge on a filled primary button (the gloss). */
+  --cd-gloss: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+
+  /* --- Motion ------------------------------------------------------------
+     docs/DESIGN-BAR.md bars 11-13: 500 ms for anything that MOVES an object,
+     150 ms for a card flip, 4 s for the one winner beat. Interface feedback is
+     120 / 200 ms. Never `transition: all`. */
   --cd-fast: 120ms;
   --cd-base: 200ms;
+  --cd-move: 500ms;
+  --cd-flip: 150ms;
+  --cd-acting: 400ms;
+  --cd-glow: 4s;
   --cd-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --cd-ease-move: cubic-bezier(0.4, 0, 0.2, 1);
+  --cd-ease-land: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --cd-ease-spring: cubic-bezier(0.2, 1.25, 0.5, 1);
+
+  /* --- Felt texture: SVG fractal noise, inline, no fetch -------------------
+     Tiled at 160 px, overlaid on the felt so the surface has a nap that reads
+     at 1x (0.32 alpha under soft-light was invisible in a screenshot). */
+  --cd-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.5 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
 }
 
 /* Reset and base styles */
@@ -127,15 +311,17 @@
 }
 
 html {
-  font-size: 16px; /* Base font size - normalized */
+  font-size: 16px;
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--cd-font-ui);
   font-size: 1rem;
   line-height: 1.5;
   margin: 0;
   padding: 0;
+  background: var(--cd-bg);
+  color: var(--cd-ink-1);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -147,133 +333,137 @@ img {
 }
 
 /* MONEY IS TABULAR, EVERYWHERE.
-   The one typographic rule this pass enforces globally, because it is invisible
-   until two figures sit in a column and then it is the whole difference between
-   a poker client and a web page. Every money figure in the app is proportional
-   Inter today, so "11.90" and "50.00" do not align in adjacent seat pods, and
-   the lobby's BUY-IN column does not align down the page.
-
-   This is opt-in by class so it cannot change layout anywhere unexpected; the
-   selectors below are the class names the components ALREADY use for money, so
-   no component had to be edited to get it. */
+   Opt-in by class so it cannot change layout anywhere unexpected; the selectors
+   are the class names the components already use for money. `.cd-money` is the
+   one shared money style: figure weight, tabular digits. Its colour is the
+   role of the figure: --cd-money when it is money in motion (pot, bet, award),
+   --cd-ink when it is a stack. */
+.cd-money,
 .cd-figures,
 .chips,
 .pot-amount,
 .bet-amount,
 .side-pot-amount,
 .stakes-value,
-.balance-amount {
+.balance-amount,
+.balance-value,
+.stack-delta,
+.slider-amount {
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
 }
+
+.cd-money {
+  font-weight: var(--cd-weight-figure);
+  letter-spacing: -0.01em;
+}
+
+/* THE ONE BUTTON PRIMITIVE for chrome (header, dock auxiliaries, sheets).
+   Size: md 40 px (sm 32). Tone: quiet (default), outline, primary, money. */
+.cd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cd-space-2);
+  min-height: var(--cd-control-md);
+  padding: 0 var(--cd-space-4);
+  border-radius: var(--cd-radius-chip);
+  border: 1px solid var(--cd-line);
+  background: var(--cd-surface-2);
+  color: var(--cd-ink-1);
+  font-family: var(--cd-font-ui);
+  font-size: var(--cd-text-sm);
+  font-weight: var(--cd-weight-strong);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--cd-fast) var(--cd-ease),
+              border-color var(--cd-fast) var(--cd-ease),
+              color var(--cd-fast) var(--cd-ease);
+}
+
+.cd-btn:hover { background: var(--cd-surface-3); color: var(--cd-ink); }
+.cd-btn.sm { min-height: var(--cd-control-sm); padding: 0 var(--cd-space-3); font-size: var(--cd-text-xs); }
+.cd-btn.icon { padding: 0; width: var(--cd-control-md); }
+.cd-btn.icon.sm { width: var(--cd-control-sm); }
+.cd-btn.outline { background: var(--cd-accent-dim); border-color: var(--cd-accent-line); color: var(--cd-accent); }
+.cd-btn.outline:hover { background: var(--cd-accent-dim); border-color: var(--cd-accent-line-strong); color: var(--cd-accent); }
+.cd-btn.primary { background: var(--cd-accent); border-color: transparent; color: var(--cd-accent-ink); }
+.cd-btn.primary:hover { filter: brightness(1.08); color: var(--cd-accent-ink); }
+.cd-btn.money { background: linear-gradient(180deg, var(--cd-money-hi), var(--cd-money-lo)); border-color: transparent; color: var(--cd-money-ink); }
+.cd-btn.money:hover { filter: brightness(1.06); color: var(--cd-money-ink); }
+.cd-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* ==========================================================================
    THE FOUR PLAYER-PROTECTION NOTICES RENDER ONCE PER PAGE ON A PHONE
    ==========================================================================
 
-   `routes/+page.svelte` carries the same four notices TWICE, word for word: the
-   unaudited-alpha disclaimer, the jurisdiction warning, the 18+ notice and the
-   no-middleman/no-house statement, once as `.alpha-warning-banner` above the
-   header and again as `.footer-disclaimer` at the foot of the page. On a
-   1440x900 desktop that redundancy is free. On a 390x844 phone it is 268 px --
-   32% of the screen -- and the copy that sits ABOVE the table is subtracted
-   from the playing surface directly, because `PokerTable.svelte` sizes itself
-   to "the viewport, less everything above me in the flow".
+   `routes/+page.svelte` carries the same notices twice, word for word: once
+   as `.alpha-warning-banner` above the header and again as `.footer-disclaimer`
+   at the foot of the page. On a phone that redundancy is 268 px, 32% of the
+   screen, and the copy ABOVE the table is subtracted from the playing surface
+   directly, because `PokerTable.svelte` sizes itself to "the viewport, less
+   everything above me in the flow".
 
    In portrait, therefore, exactly ONE of the two renders, and it is ALWAYS the
-   TOP BANNER -- on every view, the table included.
+   TOP BANNER, on every view, the table included: the footer is the last block
+   of a long document and a phone player never sees it, which is a reduction in
+   prominence the project's rules forbid (measured in wave 4: four of four
+   protected phrases in the DOM and zero on screen).
 
-   WHY IT IS THE BANNER AND NOT THE FOOTER (wave 4 coherence pass, corrected).
-   The first version of this rule kept the FOOTER on the table view and hid the
-   banner, on the reasoning that three of the four reference clients put their
-   compliance text in a bottom strip. Those clients pin that strip to the
-   viewport. This footer does not: it is the last block of a long document.
-   Driven and measured on the shipped build at 390x844 (layout viewport
-   425x918), on the real table view, against the real canisters:
+   THE STANDING RULE. Any collapsed, compact or in-dialog presentation of the
+   notices must be a SUBSET of a copy that is on screen at every viewport, and
+   the copy that replaces it when it opens must be a SUPERSET of it. Both halves
+   are asserted centrally by tools/shots/run.mjs (notices on screen, and the
+   felt area they compete with), on the rendered pixels, not the source.
 
-     .alpha-warning-banner  display:none            0 px on screen
-     .footer-disclaimer     y 931..1166, height 235  0 px on screen,
-                                                     248 px of scroll away
-
-   Four of four protected phrases were in the DOM and ZERO of four were on
-   screen -- including while the Deposit modal was open, which is the screen a
-   player commits real ICP from. That is a reduction in prominence of the
-   unaudited-alpha disclaimer, the 18+ notice and the jurisdiction warning, and
-   the project's rules forbid it: more prominent is always allowed, less never
-   is. `make hygiene` cannot see it, because hygiene greps the SOURCE for the
-   phrases and they were never removed from it.
-
-   The de-duplication itself is kept -- a phone still renders the four notices
-   once, not twice -- but the copy that survives is the one a player cannot miss.
-   Measured after this change, same build, same table: banner y 0..268,
-   fully in the viewport, 4 of 4 phrases on screen, on the table view and behind
-   the Deposit modal.
-
-   WHAT IT COSTS, STATED PLAINLY. The banner is above the table in the flow and
-   `PokerTable.svelte` sizes itself to "the viewport, less everything above me",
-   so the portrait felt gives back what the banner takes. docs/WAVE-04.md carries
-   the before/after felt measurement. The vertical budget has to be recovered
-   from chrome that protects nobody -- the three-row table header and the
-   411.8 px `.header-right` that forces the 0.918 zoom-out -- not from the
-   notices.
-
-   WAVE 5 DID EXACTLY THAT, AND THE ARITHMETIC ABOVE NO LONGER DESCRIBES THE
-   TABLE VIEW. Measured on the same 390x844 device, same replica, one tool, in
-   the only legal configuration (nothing hidden):
-
-                          layout vp   banner  header  above table   6-max felt
-     before (wave 4)       425x918     268     173.5     449.5      18.3%
-     after  (wave 5)       390x844      60      69.0     132.6      60.6%
-
-   Three changes, none of which takes a word away from a player: `initial-scale=1`
-   in app.html (the layout viewport is now the device, so nothing is painted at
-   0.918); a two-row table header whose `.header-right` fits 390 px; and, in
-   PORTRAIT ON THE TABLE VIEW ONLY, the four notices as a 60 px strip that quotes
-   the protected phrases verbatim -- all five literal strings both notice checks
-   in this repo look for -- and opens the full text over the whole screen in one
-   tap. Presentation changed; wording did not. The rules in +page.svelte's
-   stylesheet under "PORTRAIT, TABLE VIEW" carry the detail.
-
-   THE FOOTER RULE BELOW IS UNCHANGED and still matters: the phone still renders
-   the notices once, not twice, and the copy that survives is still the TOP one,
-   the one a player cannot scroll away from.
-
-   WHAT THIS RULE MAY NEVER BECOME. It may not shorten, soften, summarise or
-   restyle either block, it may not hide both, and it may not be the block that
-   is off screen that survives. The wording lives in +page.svelte and is
-   unchanged.
-
-   Desktop is deliberately untouched and still renders BOTH copies: at 1440x900
-   the banner is what keeps the felt height-capped at its measured 2.12 aspect,
-   and removing it there grew the surface from 68% to 79% of the window, outside
-   bar 3's not-felt band.
-
-   ---------------------------------------------------------------------------
-   WAVE 5 COHERENCE PASS: THE TRAP THIS RULE SETS, AND HOW IT WAS SPRUNG.
-
-   The rule above is "one copy per page, and it is the copy a player cannot
-   scroll away from". It says nothing about WHICH WORDS are in that copy, and
-   that is the gap wave 5 fell into.
-
-   The compact portrait strip was given the app's canonical no-rake sentence,
-   "No rake is taken from any pot on any table" -- one of the FIVE phrases
-   tools/shots/lib/protected-notices.mjs hit-tests. The strip is `display: none`
-   at every viewport except portrait-on-the-table-view. So the sentence reached
-   the screen on 4 of the 15 (surface, viewport) pairs a player can reach and on
-   1 of the 7 desktop ones. Worse, `.banner-content` -- the sheet a portrait
-   player OPENS to read the terms -- covered the strip and did not restate the
-   property, so asking to read the terms took a protected notice off the screen.
-   Measured, both viewports, real canisters; see docs/DEFECTS.md T-36.
-
-   THE STANDING RULE THAT FOLLOWS. Any collapsed, compact or in-dialog
-   presentation of the notices must be a SUBSET of a copy that is on screen at
-   every viewport, and the copy that replaces it when it opens must be a
-   SUPERSET of it. A protected phrase living in exactly one conditional carrier
-   is a phrase one media query away from nobody. Both halves of this are now
-   asserted centrally by tools/shots/run.mjs (notices on screen, and the felt
-   area they compete with) rather than by anyone remembering this comment. */
+   THE UI/UX WAVE CHANGED THE CARRIER, NOT THE WORDS. The five phrases now ride a
+   single neutral trust bar on the table view at EVERY viewport (the same
+   `.banner-strip` the phone already shipped), with FULL TERMS opening the
+   complete text. The red gradient was the most saturated element on every
+   screen and it set the mood before the felt was seen; the words are what is
+   protected, and they are unchanged. */
 @media (max-aspect-ratio: 1/1) {
   .footer-disclaimer { display: none; }
+}
+
+/* ==========================================================================
+   TOUCH: NO 300 MS DOUBLE-TAP DELAY, NO ZOOM ON A FAST SECOND TAP.
+   `touch-action: manipulation` keeps pan and pinch-zoom (app.html forbids
+   neither) and removes only the double-tap-to-zoom gesture, which on a poker
+   client turns a quick Call-Call into a zoomed felt. Every control, not a
+   list that the next button forgets to join.
+   ========================================================================== */
+button, [role='button'], input[type='range'], summary, a[href] {
+  touch-action: manipulation;
+}
+
+/* ==========================================================================
+   THE PAGE DOES NOT SCROLL BEHIND A DIALOG, AND THE TABLE DOES NOT PULL TO
+   REFRESH.
+   `lib/scroll-lock.js` puts `cd-scroll-lock` on <html> while any dialog is
+   open (reference-counted), so the document cannot scroll under a sheet on a
+   phone. On the table view a downward flick at the top of the page used to
+   trigger Chrome's pull-to-refresh and reload a live hand; the table view
+   contains its overscroll instead.
+   ========================================================================== */
+html.cd-scroll-lock { overflow: hidden; }
+html:has(.app.on-table) { overscroll-behavior-y: none; }
+
+/* ==========================================================================
+   REDUCED MOTION, GLOBALLY.
+   Every animation and transition in the app collapses to nothing. The table's
+   own rules (PokerTable.svelte) go further where a ghost that never travels
+   would be a duplicate figure, and hide the ghost instead. Nothing here removes
+   information: every moving thing on the table is also stated in place.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Legacy form styles (can be removed if not needed) */
@@ -295,7 +485,7 @@ button[type="submit"] {
 #greeting {
   margin: 10px auto;
   padding: 10px 60px;
-  border: 1px solid #222;
+  border: 1px solid var(--cd-line-strong);
 }
 
 #greeting:empty {

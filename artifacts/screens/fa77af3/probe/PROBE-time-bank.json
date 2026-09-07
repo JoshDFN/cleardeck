@@ -1,0 +1,116 @@
+{
+  "heroPlayer": 1,
+  "results": [
+    {
+      "viewport": "desktop",
+      "pill": {
+        "file": "artifacts/screens/fa77af3/probe/PROBE-time-bank-desktop.png",
+        "pressedFile": "artifacts/screens/fa77af3/probe/PROBE-time-bank-pressed-desktop.png",
+        "before": {
+          "text": "Time bank +30s",
+          "box": {
+            "x": 99.5,
+            "y": 821,
+            "w": 140.7,
+            "h": 32
+          },
+          "timerBox": {
+            "x": 798,
+            "y": 622.3,
+            "w": 30.9,
+            "h": 16.5
+          },
+          "overClockDigits": false,
+          "hitsAtTouchFloor": false,
+          "hitProbes": [
+            true,
+            true,
+            true,
+            true,
+            false
+          ],
+          "inActionRow": false,
+          "onHeroPlate": false,
+          "underTurnIndicator": true,
+          "actionRowCells": 4,
+          "actionRowLabels": [
+            "Fold",
+            "Call 0.10",
+            "Raise to 0.30",
+            "All in"
+          ],
+          "clock": "15s",
+          "turnIndicatorOnBank": false
+        },
+        "after": {
+          "onBank": false,
+          "clock": "29s",
+          "pillStillOffered": false,
+          "pill": null
+        },
+        "placedRight": true,
+        "rowIsFourCells": true,
+        "hitsAtTouchFloor": false,
+        "hitsWhereRequired": true,
+        "clearOfClockDigits": true,
+        "clockWentUp": true
+      }
+    },
+    {
+      "viewport": "mobile",
+      "pill": {
+        "file": "artifacts/screens/fa77af3/probe/PROBE-time-bank-mobile.png",
+        "pressedFile": "artifacts/screens/fa77af3/probe/PROBE-time-bank-pressed-mobile.png",
+        "before": {
+          "text": "Time bank +30s",
+          "box": {
+            "x": 276.1,
+            "y": 588.9,
+            "w": 48.8,
+            "h": 18.5
+          },
+          "timerBox": {
+            "x": 247.4,
+            "y": 580.2,
+            "w": 24.9,
+            "h": 13.4
+          },
+          "overClockDigits": false,
+          "hitsAtTouchFloor": true,
+          "hitProbes": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "inActionRow": false,
+          "onHeroPlate": true,
+          "underTurnIndicator": false,
+          "actionRowCells": 5,
+          "actionRowLabels": [
+            "Fold",
+            "Call 0.10",
+            "Raise 0.30",
+            "",
+            "All in"
+          ],
+          "clock": "15s",
+          "turnIndicatorOnBank": false
+        },
+        "after": {
+          "onBank": false,
+          "clock": "28s",
+          "pillStillOffered": false,
+          "pill": null
+        },
+        "placedRight": true,
+        "rowIsFourCells": true,
+        "hitsAtTouchFloor": true,
+        "hitsWhereRequired": true,
+        "clearOfClockDigits": true,
+        "clockWentUp": true
+      }
+    }
+  ]
+}

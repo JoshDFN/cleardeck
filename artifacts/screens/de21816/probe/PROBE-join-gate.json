@@ -1,0 +1,204 @@
+[
+  {
+    "viewport": "desktop",
+    "anonymous": {
+      "file": "artifacts/screens/de21816/probe/PROBE-join-gate-anonymous-desktop.png",
+      "headerHeightPx": 53,
+      "headerControls": [
+        {
+          "text": "Back to the lobby",
+          "w": 96.9,
+          "h": 40,
+          "ok": false
+        },
+        {
+          "text": "Unmute sounds",
+          "w": 40,
+          "h": 40,
+          "ok": false
+        },
+        {
+          "text": "Hand history",
+          "w": 99.6,
+          "h": 40,
+          "ok": false
+        },
+        {
+          "text": "Verify fair",
+          "w": 118.5,
+          "h": 40,
+          "ok": false
+        },
+        {
+          "text": "Sign-in options",
+          "w": 86,
+          "h": 34,
+          "ok": false
+        },
+        {
+          "text": "Connect Wallet Connect",
+          "w": 152.4,
+          "h": 38,
+          "ok": false
+        }
+      ],
+      "spectatorFelt": {
+        "ok": true,
+        "notes": "felt 1056x502.8 = 41% of frame, aspect 2.1, 6 pods (default), floor 28%",
+        "felt": {
+          "w": 1056,
+          "h": 502.8,
+          "x": 192,
+          "y": 183.3,
+          "viewport": {
+            "w": 1440,
+            "h": 900
+          },
+          "areaPct": 41,
+          "aspect": 2.1,
+          "fullyInViewport": true,
+          "seatPods": 6,
+          "ringClass": "default",
+          "fw": "min(75cqw, 172cqh)",
+          "ar": "2.1",
+          "cdAvail": "781px",
+          "scrollY": 0,
+          "obstructedBy": null
+        }
+      },
+      "joinCallsToTableAfterTap": 0,
+      "popupUrl": null,
+      "toast": "This local build does not know the Internet Identity canister id, so sign-in cannot be started. Export CANISTER_ID_INTERNET_IDENTITY (or VITE_CANISTER_ID_INTERNET_IDENTITY) when building, or bring the stack up with ./scripts/dev.sh local-up. See docs/DEFECTS.md T-39. ×",
+      "canisterErrorShown": false,
+      "loginPathRan": true,
+      "ok": true
+    },
+    "signedIn": {
+      "file": "artifacts/screens/de21816/probe/PROBE-join-gate-signed-in-desktop.png",
+      "table": "table_2",
+      "player": 1,
+      "escrow": "1190000000",
+      "minBuyIn": "1000000000",
+      "chainSays": "seat",
+      "shortfall": "0",
+      "joinCallsToTableAfterTap": 1,
+      "depositSheetOpen": false,
+      "depositField": null,
+      "seatedAsHero": true,
+      "toast": "Joined seat 1!",
+      "exercised": true,
+      "ok": true
+    },
+    "depositBranch": {
+      "file": "artifacts/screens/de21816/probe/PROBE-join-gate-deposit-branch-desktop.png",
+      "table": "table_1",
+      "player": 1,
+      "escrow": "0",
+      "minBuyIn": "200000000",
+      "chainSays": "deposit",
+      "shortfall": "200000000",
+      "joinCallsToTableAfterTap": 0,
+      "depositSheetOpen": true,
+      "depositField": "2",
+      "seatedAsHero": false,
+      "toast": null,
+      "exercised": true,
+      "ok": true
+    }
+  },
+  {
+    "viewport": "mobile",
+    "anonymous": {
+      "file": "artifacts/screens/de21816/probe/PROBE-join-gate-anonymous-mobile.png",
+      "headerHeightPx": 49,
+      "headerControls": [
+        {
+          "text": "Back to the lobby",
+          "w": 44,
+          "h": 44,
+          "ok": true
+        },
+        {
+          "text": "Hand history",
+          "w": 44,
+          "h": 44,
+          "ok": true
+        },
+        {
+          "text": "Verify fair",
+          "w": 44,
+          "h": 44,
+          "ok": true
+        },
+        {
+          "text": "Sign-in options",
+          "w": 60,
+          "h": 44,
+          "ok": true
+        }
+      ],
+      "spectatorFelt": {
+        "ok": true,
+        "notes": "felt 335.4x604.3 = 61.6% of frame, aspect 0.555, 6 pods (default), floor 45%",
+        "felt": {
+          "w": 335.4,
+          "h": 604.3,
+          "x": 27.3,
+          "y": 114.3,
+          "viewport": {
+            "w": 390,
+            "h": 844
+          },
+          "areaPct": 61.6,
+          "aspect": 0.555,
+          "fullyInViewport": true,
+          "seatPods": 6,
+          "ringClass": "default",
+          "fw": "min(86cqw, 55cqh)",
+          "ar": ".555",
+          "cdAvail": "725px",
+          "scrollY": 0,
+          "obstructedBy": null
+        }
+      },
+      "joinCallsToTableAfterTap": 0,
+      "popupUrl": null,
+      "toast": "This local build does not know the Internet Identity canister id, so sign-in cannot be started. Export CANISTER_ID_INTERNET_IDENTITY (or VITE_CANISTER_ID_INTERNET_IDENTITY) when building, or bring the stack up with ./scripts/dev.sh local-up. See docs/DEFECTS.md T-39. ×",
+      "canisterErrorShown": false,
+      "loginPathRan": true,
+      "ok": true
+    },
+    "signedIn": {
+      "file": "artifacts/screens/de21816/probe/PROBE-join-gate-signed-in-mobile.png",
+      "table": "table_2",
+      "player": 1,
+      "escrow": "1190000000",
+      "minBuyIn": "1000000000",
+      "chainSays": "seat",
+      "shortfall": "0",
+      "joinCallsToTableAfterTap": 1,
+      "depositSheetOpen": false,
+      "depositField": null,
+      "seatedAsHero": true,
+      "toast": "Joined seat 1!",
+      "exercised": true,
+      "ok": true
+    },
+    "depositBranch": {
+      "file": "artifacts/screens/de21816/probe/PROBE-join-gate-deposit-branch-mobile.png",
+      "table": "table_1",
+      "player": 1,
+      "escrow": "0",
+      "minBuyIn": "200000000",
+      "chainSays": "deposit",
+      "shortfall": "200000000",
+      "joinCallsToTableAfterTap": 0,
+      "depositSheetOpen": true,
+      "depositField": "2",
+      "seatedAsHero": false,
+      "toast": null,
+      "exercised": true,
+      "ok": true
+    }
+  }
+]

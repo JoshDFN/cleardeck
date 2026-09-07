@@ -1,0 +1,147 @@
+[
+  {
+    "viewport": "desktop",
+    "ok": true,
+    "problems": [],
+    "states": {
+      "toast": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-toast-desktop.png",
+        "rect": {
+          "x": 440,
+          "y": 56,
+          "w": 560,
+          "h": 101,
+          "right": 1000,
+          "bottom": 157
+        },
+        "bannerRect": {
+          "x": 0,
+          "y": 0,
+          "w": 1440,
+          "h": 48,
+          "right": 1440,
+          "bottom": 48
+        },
+        "noticesOnScreen": "5/5"
+      },
+      "realToast": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-real-toast-desktop.png",
+        "message": "Could not reach the tables. Retrying in 12 s. Failed to fetch HTTP request: TypeError: Failed to fetch at window.fetch (http://5uljf-s3777-77775-aaaea-cai.localhost:8077/_app/immutable/chunks/BALpyk6c.js:1:1642) at requestFn (http://5uljf-s3777-77775-aaaea-cai.localhost:8077/_app/immu…",
+        "detail": "Failed to fetch HTTP request: TypeError: Failed to fetch at window.fetch (http://5uljf-s3777-77775-aaaea-cai.localhost:8077/_app/immutable/chunks/BALpyk6c.js:1:1642) at requestFn (http://5uljf-s3777-77775-aaaea-cai.localhost:8077/_app/immu…",
+        "action": "Retry",
+        "rect": {
+          "x": 440,
+          "y": 56,
+          "w": 560,
+          "h": 95
+        },
+        "noticesOnScreen": "5/5",
+        "clearedByRetry": true
+      },
+      "terms": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-terms-desktop.png",
+        "noticesOnScreen": "5/5"
+      },
+      "scrolled": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-scrolled-desktop.png",
+        "scrollY": 168,
+        "barRect": {
+          "x": 0,
+          "y": 0,
+          "w": 1440,
+          "h": 48,
+          "bottom": 48
+        },
+        "noticesOnScreen": "5/5"
+      },
+      "deepLink": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-deeplink-desktop.png",
+        "search": "?table=4fbx2-kt777-77775-aaabq-cai",
+        "onTable": true,
+        "searchAfterBack": ""
+      },
+      "signingIn": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-signing-in-desktop.png",
+        "label": "Sign in with Internet Identity",
+        "errorLine": "Could not reach Internet Identity. Try the Sign in button in the header.",
+        "popupOpened": false,
+        "rect": {
+          "x": 790,
+          "y": 139,
+          "w": 541,
+          "h": 44,
+          "bottom": 183
+        }
+      },
+      "signedIn": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-signed-in-desktop.png"
+      }
+    }
+  },
+  {
+    "viewport": "mobile",
+    "ok": true,
+    "problems": [],
+    "states": {
+      "toast": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-toast-mobile.png",
+        "rect": {
+          "x": 12,
+          "y": 678,
+          "w": 366,
+          "h": 150,
+          "right": 378,
+          "bottom": 828
+        },
+        "bannerRect": {
+          "x": 0,
+          "y": 0,
+          "w": 390,
+          "h": 59,
+          "right": 390,
+          "bottom": 59
+        },
+        "noticesOnScreen": "5/5"
+      },
+      "realToast": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-real-toast-mobile.png",
+        "message": "Could not reach the tables. Retrying in 12 s. Failed to fetch HTTP request: TypeError: Failed to fetch at window.fetch (http://5uljf-s3777-77775-aaaea-cai.localhost:8077/_app/immutable/chunks/BALpyk6c.js:1:1642) at requestFn (http://5uljf-s3777-77775-aaaea-cai.localhost:8077/_app/immu…",
+        "detail": "Failed to fetch HTTP request: TypeError: Failed to fetch at window.fetch (http://5uljf-s3777-77775-aaaea-cai.localhost:8077/_app/immutable/chunks/BALpyk6c.js:1:1642) at requestFn (http://5uljf-s3777-77775-aaaea-cai.localhost:8077/_app/immu…",
+        "action": "Retry",
+        "rect": {
+          "x": 12,
+          "y": 722,
+          "w": 366,
+          "h": 106
+        },
+        "noticesOnScreen": "5/5",
+        "clearedByRetry": true
+      },
+      "terms": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-terms-mobile.png",
+        "noticesOnScreen": "5/5"
+      },
+      "scrolled": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-scrolled-mobile.png",
+        "scrollY": 698,
+        "barRect": {
+          "x": 0,
+          "y": 0,
+          "w": 390,
+          "h": 59,
+          "bottom": 59
+        },
+        "noticesOnScreen": "5/5"
+      },
+      "deepLink": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-deeplink-mobile.png",
+        "search": "?table=4fbx2-kt777-77775-aaabq-cai",
+        "onTable": true,
+        "searchAfterBack": ""
+      },
+      "signedIn": {
+        "file": "artifacts/screens/a6ddd7a/probe/PROBE-lobby-signed-in-mobile.png"
+      }
+    }
+  }
+]

@@ -638,18 +638,27 @@ fn the_frontends_32_byte_derivation_agrees_with_the_canister_for_every_principal
 /// local derivation for the address it *displays* and a fetched one for the
 /// address it *pays*, and every test in this project stayed green.
 ///
-/// So this reads the component and follows the value. It finds the subaccount the
-/// OISY transfer is addressed to and requires that the name it uses was assigned
-/// from the local `depositSubaccount(...)`, never from an `await tableActor.`
-/// call. It goes red the moment a payment destination comes back over the wire
-/// again. docs/SECURITY-FINDINGS.md FINDING 40.
+/// So this reads the source and follows the value. The OISY door lives in
+/// `lib/deposit-flow.js` (`depositViaOisy`) since the cashier phase moved it out
+/// of the modal statement for statement (docs/UI-WAVE.md section 4): the modal
+/// presses it through `lib/deposit-submit.js`. It finds the subaccount the OISY
+/// transfer is addressed to and requires that the name it uses was assigned from
+/// the local `depositSubaccount(...)`, never from an `await tableActor.` call;
+/// then it follows the import chain back to the modal so the door the modal
+/// presses IS this one; and it requires the modal to hold NO copy of the door
+/// (no transfer destination, no `wallet.transfer`, no `icrc1_transfer`, no
+/// `get_deposit_subaccount`), because an unguarded second copy in the component
+/// is how a gate pointed at the right module stays green while the app pays a
+/// fetched address. It goes red the moment a payment destination comes back
+/// over the wire again, or the door grows a copy in the modal.
+/// docs/SECURITY-FINDINGS.md FINDING 40.
 #[test]
 fn the_oisy_transfer_destination_is_derived_locally_and_not_fetched() {
-    let modal = repo_root().join("src/cleardeck_frontend/src/lib/components/DepositModal.svelte");
-    let src = std::fs::read_to_string(&modal)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", modal.display()));
+    let door = repo_root().join("src/cleardeck_frontend/src/lib/deposit-flow.js");
+    let src = std::fs::read_to_string(&door)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", door.display()));
 
-    // The one place this component addresses an ICRC-1 transfer.
+    // The one place the OISY route addresses an ICRC-1 transfer.
     let marker = "subaccount: [";
     let mut destinations: Vec<String> = Vec::new();
     for (i, line) in src.lines().enumerate() {
@@ -657,7 +666,7 @@ fn the_oisy_transfer_destination_is_derived_locally_and_not_fetched() {
             continue;
         };
         // `subaccount: []` is the MAIN account of a wallet being read, not a
-        // destination this component pays.
+        // destination this module pays.
         let Some(name) = rest.split(']').next().map(str::trim) else {
             continue;
         };
@@ -672,14 +681,14 @@ fn the_oisy_transfer_destination_is_derived_locally_and_not_fetched() {
         "no ICRC-1 transfer destination found in {}. If the OISY deposit path was \
          removed this gate must be removed with it, deliberately; a gate that silently \
          stops measuring anything is how FINDING 40 shipped.",
-        modal.display()
+        door.display()
     );
 
     for name in &destinations {
         let derived_here = format!("const {name} = depositSubaccount(");
         assert!(
             src.contains(&derived_here),
-            "DepositModal.svelte pays an ICRC-1 transfer to `subaccount: [{name}]`, but \
+            "deposit-flow.js pays an ICRC-1 transfer to `subaccount: [{name}]`, but \
              `{name}` is not assigned from the local derivation `depositSubaccount(...)`. \
              If it comes from `await tableActor.get_deposit_subaccount()` the destination \
              is an UNCERTIFIED QUERY REPLY: one replica can answer with another player's \
@@ -687,13 +696,80 @@ fn the_oisy_transfer_destination_is_derived_locally_and_not_fetched() {
              canister holds every e8, and no invariant in this project can see it -- only \
              the recipient is wrong. See docs/SECURITY-FINDINGS.md FINDING 40."
         );
+        let fetched_into = format!("{name} = await");
+        assert!(
+            !src.contains(&fetched_into),
+            "deposit-flow.js reassigns the transfer destination `{name}` from an await: \
+             the derived value is being overwritten by a reply. FINDING 40."
+        );
     }
 
-    // And the belt: the fetched value must not be what is handed to the wallet.
+    // The belt: the fetched value must not be what is handed to the wallet.
     assert!(
-        !src.contains("subaccount: [depositSubaccount]"),
+        !src.contains("subaccount: [depositSubaccount]") && !src.contains("subaccount: [reportedSub]"),
         "the OISY branch is addressing its transfer with the value returned by \
          `tableActor.get_deposit_subaccount()`. See docs/SECURITY-FINDINGS.md FINDING 40."
+    );
+    // The canister is asked only to cross-check, and a disagreement REFUSES.
+    assert!(
+        src.contains("get_deposit_subaccount()") && src.contains("Refusing to send"),
+        "deposit-flow.js no longer cross-checks the derived subaccount against the \
+         canister's, or no longer refuses on a disagreement. The check is the only thing \
+         that catches a drift between the two derivations before real money moves."
+    );
+
+    // FOLLOW THE DOOR BACK TO THE MODAL: the component presses THIS module.
+    let submit = repo_root().join("src/cleardeck_frontend/src/lib/deposit-submit.js");
+    let submit_src = std::fs::read_to_string(&submit)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", submit.display()));
+    assert!(
+        submit_src.contains("from './deposit-flow.js'") && submit_src.contains("depositViaOisy("),
+        "deposit-submit.js does not press deposit-flow.js's depositViaOisy: the guarded \
+         door is not the one the sheet uses (the FINDING-41 lesson)."
+    );
+    let modal = repo_root().join("src/cleardeck_frontend/src/lib/components/DepositModal.svelte");
+    // The CODE of the modal, comments stripped: its prose names the calls it no
+    // longer makes, and the scan below is for those names.
+    let modal_src = strip_comments(
+        &std::fs::read_to_string(&modal)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", modal.display())),
+    );
+    assert!(
+        modal_src.contains("from '$lib/deposit-submit.js'") && modal_src.contains("submitDeposit("),
+        "DepositModal.svelte does not press submitDeposit() from lib/deposit-submit.js: \
+         the OISY door this gate reads is not the one the modal uses."
+    );
+
+    // NO COPY OF THE DOOR IN THE MODAL. A second, unguarded transfer in the
+    // component would be invisible to a gate pointed at the module.
+    for forbidden in [
+        "wallet.transfer",
+        "icrc1_transfer",
+        "get_deposit_subaccount",
+        "depositSubaccount(",
+    ] {
+        assert!(
+            !modal_src.contains(forbidden),
+            "DepositModal.svelte contains `{forbidden}`: a copy of the OISY money door \
+             outside lib/deposit-flow.js, which this gate does not read. Every transfer \
+             destination must be derived in the one module that pays it. FINDING 40."
+        );
+    }
+    let modal_destinations = modal_src
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| {
+            l.split_once(marker)
+                .and_then(|(_, r)| r.split(']').next())
+                .is_some_and(|name| !name.trim().is_empty())
+        })
+        .map(|(i, l)| format!("  line {}: {}", i + 1, l.trim()))
+        .collect::<Vec<_>>();
+    assert!(
+        modal_destinations.is_empty(),
+        "DepositModal.svelte addresses an ICRC-1 transfer of its own:\n{}\nThe modal \
+         must hold no transfer destination; the door is lib/deposit-flow.js.",
+        modal_destinations.join("\n")
     );
 }
 
@@ -800,6 +876,41 @@ fn repo_root() -> std::path::PathBuf {
         .and_then(|p| p.parent())
         .expect("repo root")
         .to_path_buf()
+}
+
+/// Source with its `//`, `/* */` and `<!-- -->` comments removed, so a scan for
+/// a money call reads the code and not the prose that explains it. Deliberately
+/// naive (no string or regex parsing); the failure direction is safe: a token
+/// inside a string literal still trips the scan.
+fn strip_comments(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0usize;
+    while i < chars.len() {
+        let two: String = chars[i..chars.len().min(i + 2)].iter().collect();
+        let four: String = chars[i..chars.len().min(i + 4)].iter().collect();
+        if two == "//" {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+        } else if two == "/*" {
+            i += 2;
+            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
+                i += 1;
+            }
+            i = (i + 2).min(chars.len());
+        } else if four == "<!--" {
+            i += 4;
+            while i + 2 < chars.len() && !(chars[i] == '-' && chars[i + 1] == '-' && chars[i + 2] == '>') {
+                i += 1;
+            }
+            i = (i + 3).min(chars.len());
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 // ===========================================================================

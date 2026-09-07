@@ -39,10 +39,13 @@ export const ALLOWLIST = [
     // ---- cards -------------------------------------------------------------
     {
         id: 'card-rank-glyph',
-        selector: '.card .rank, .card .corner-rank, .mini-card .mc-rank, .board-cell, .mini-board',
+        selector: '.card .rank, .card .rank-mirror, .card .corner-rank, .mini-card .mc-rank, '
+            + '.board-cell, .mini-board',
         tokens: '^(?:2|3|4|5|6|7|8|9|10)$',
         why: 'a playing-card rank glyph, not an amount. The felt board is asserted '
-            + 'card-by-card against get_community_cards() as rank+suit',
+            + 'card-by-card against get_community_cards() as rank+suit. `.rank-mirror` is '
+            + 'the same glyph repeated in the card\'s rotated bottom-right index '
+            + '(Card.svelte, aria-hidden); `.rank` is the one the scraper reads',
     },
 
     // ---- clocks ------------------------------------------------------------
@@ -54,27 +57,67 @@ export const ALLOWLIST = [
             + 'stabilises it so stills are deterministic',
     },
     {
+        id: 'deposit-quick-multiple',
+        selector: '.quick-amounts .quick-amount',
+        tokens: '^2$',
+        why: 'the cashier\'s "2x" quick chip (DepositModal.svelte): the FACTOR of the '
+            + 'table\'s minimum buy-in it fills the field with, never a money figure. The '
+            + 'figure it produces lands in the amount field, which is read like any typed '
+            + 'amount; the label is a factor',
+    },
+    {
+        id: 'bet-preset-multiples',
+        selector: '.raise-slider-panel .preset-buttons button',
+        tokens: '^(2\\.5|3|4)$',
+        why: 'the pre-flop preset labels "2.5x", "3x", "4x" (BetSizer.svelte): the '
+            + 'MULTIPLE of the bet in front a preset proposes, never a money figure. The '
+            + 'figure each one produces is asserted by assertBetPresetsAgree when the '
+            + 'preset is clicked; the label itself is a factor',
+    },
+    {
+        id: 'sizer-precision-cue',
+        selector: '.raise-slider-panel .sizer-note',
+        tokens: '^0\\.0*1$',
+        moneyShaped: true,
+        context: '^sizes in 0\\.0*1$',
+        why: 'the typed field\'s cue "sizes in 0.01" (BetSizer.svelte) when a third '
+            + 'decimal was dropped: the DISPLAY UNIT the table sizes in (10^-decimals), '
+            + 'never an amount. Decimal-shaped by nature, so marked; it appears only '
+            + 'while the player is typing past the grid, never in a resting still',
+    },
+    {
+        id: 'keyboard-hint-digits',
+        selector: '.key-hints',
+        tokens: '^[1-6]$',
+        why: 'the hotkey legend under the action row on pointer devices '
+            + '(ActionBar.svelte): "1-5 sizes" (post-flop) or "1-6 sizes" (the pre-flop '
+            + 'row has six presets) names the number keys that pick a bet preset. Key '
+            + 'caps, never chips; a single digit 1 to 6 and nothing else',
+    },
+    {
         id: 'time-bank-button',
-        selector: '.actions .action-btn',
+        selector: '.time-bank-pill',
         tokens: '^\\d{1,3}$',
-        context: '^\\+\\s*\\d+\\s*s$',
-        why: 'the "+30s" time-bank button: seconds added to the clock, never chips. The '
-            + 'context pattern means this rule cannot excuse the Call amount on the '
-            + 'button beside it, which is asserted against call_amount',
+        context: '^(?:Time bank\\s*)?\\+\\s*\\d+\\s*s$',
+        why: 'the "+30s" time-bank pill (TimeBankPill.svelte): seconds added to the '
+            + 'clock, never chips. It stands under the turn indicator on desktop and on '
+            + 'the hero pod clock on the phone, never in the action row; the context '
+            + 'pattern means this rule excuses nothing but "[Time bank] +NNs"',
     },
     {
         id: 'wall-clock-timestamp',
-        selector: '.hand-time, .timestamp, .rung-note, .proof-time, .published-at',
+        selector: '.hand-time, .timestamp, .rung-note, .proof-time, .published-at, .action-time',
         tokens: '^\\d{1,4}$',
         why: 'a date or clock time ("8/5/2026, 3:15:12 AM") saying when a hand was '
-            + 'played or a commitment published',
+            + 'played or a commitment published; `.action-time` is the HH:MM at the head '
+            + 'of every line in the live LOG drawer (ActionFeed.svelte)',
     },
 
     // ---- ordinals and counts ------------------------------------------------
     {
         id: 'seat-ordinal',
         selector: '.sit-seat, .join-seat, .seat-label, .position-badge, .empty-seat, '
-            + '.winner-display, .seated-name, .side-pot-label',
+            + '.winner-display, .seated-name, .side-pot-label, .winner-name',
         tokens: '^\\d{1,2}$',
         why: 'a seat or pot ordinal ("Seat 3", "Side 1"). Seat mapping is asserted '
             + "structurally in mappingChecks(); each side pot's AMOUNT is a figure",
@@ -100,7 +143,7 @@ export const ALLOWLIST = [
     {
         id: 'hands-dealt-count',
         selector: '.hands-value, .c-hands, .hand-number, .hand-counter, .hand-id, .live-note, '
-            + '.gap-note',
+            + '.gap-note, .feed-title',
         tokens: '^#?\\d{1,6}$',
         why: "the canister's hand_number — an ordinal, not an amount. The preview pane's "
             + 'copy of it IS compared with hand_number as a figure',
@@ -159,32 +202,69 @@ export const ALLOWLIST = [
     },
     {
         id: 'static-explainer-copy',
-        selector: '.how-it-works, .how-it-works-modal, .explainer, .steps, .step, .hiw-body',
+        selector: '.how-it-works, .how-it-works-modal, .explainer, .steps, .step, .hiw-body, '
+            + '.lobby-steps',
         tokens: '^\\d{1,4}$',
-        why: 'numbered steps and worked examples in the static "How it works" copy: the '
-            + 'same text for every table, quoting no live state',
+        why: 'numbered steps and worked examples in the static "How it works" copy, and the '
+            + 'lobby\'s three-step strip under the list (LobbySteps.svelte: the step numerals '
+            + '1, 2, 3 and the "SHA-256" of the committed deck): the same text for every '
+            + 'table, quoting no live state',
+    },
+
+    // ---- the failure toast ---------------------------------------------------
+    {
+        id: 'lobby-failure-retry',
+        selector: '.toast.error',
+        tokens: '^\\d{1,3}$',
+        context: '^(?:Could not reach the tables|The table list could not be read)\\. Retrying in \\d{1,3} s\\.',
+        why: 'the seconds until the page re-reads the lobby on its own ("Retrying in 12 s.", '
+            + 'lib/humane-errors.js describeLobbyFailure + retryDelayMs): a wall-clock '
+            + 'interval the client chose, never a canister figure. The context pins the rule '
+            + 'to that sentence, so a number in any other toast is excused by nothing',
+    },
+    {
+        id: 'lobby-failure-detail',
+        selector: '.toast.error .toast-detail',
+        tokens: '^\\d+(?:[.,]\\d+)*$',
+        moneyShaped: true,
+        why: 'the raw agent text under the humane failure sentence (Toast.svelte '
+            + '`.toast-detail`, lib/humane-errors.js detailOf): the gateway URL\'s host and '
+            + 'port digits, an "os error 61", a line:column. MONEY-SHAPED because a URL '
+            + 'carries dotted numbers (127.0.0.1); the element renders only what the agent '
+            + 'threw, never a balance, and only while every canister read is failing',
     },
 
     // ---- how a computed figure was computed ----------------------------------
     {
         id: 'equity-method-counts',
-        selector: '.equity-method',
+        selector: '.equity-method, .replay-equity-method, .equity-line .eq-method',
         tokens: '^\\d{1,3}(?:,\\d{3})*$',
         why: 'the sample size behind the equity badge ("Monte Carlo · 200,000 trials", '
             + '"exact · 990 runouts") and the count of random opponents in the modelled '
-            + 'case ("vs 2 random"). Trial counts and player counts, never chips — and '
+            + 'case ("vs 2 random"); `.replay-equity-method` is the same caption under the '
+            + 'hand replayer\'s board (ReplayTable.svelte), and `.equity-line .eq-method` the '
+            + 'same note under the replayer\'s 4-point equity line (ReplayEquityLine.svelte), '
+            + 'the same non-money shape. '
+            + 'Trial counts and player counts, never chips — and '
             + 'deliberately NOT money-shaped, so a decimal landing in this element could '
             + 'not be excused by this rule. The PERCENTAGE these describe is not '
             + 'allowlisted: it is recomputed by a second evaluator lineage and asserted '
             + '(lib/token-census.mjs, site `equity-badge`)',
     },
+    // (`board-caption-count`, the "Board · 5 to come" caption, was retired here:
+    // BoardStrip.svelte no longer renders a caption tag, so the rule excused
+    // nothing. The list stays at its cap of 25 with the two failure-toast rules
+    // above.)
+
     {
-        id: 'board-caption-count',
-        selector: '.board-caption .caption-tag',
-        tokens: '^\\d$',
-        why: 'how many community cards are still to be dealt ("Board · 5 to come"). A '
-            + 'count of cards; the cards themselves are asserted rank-and-suit against '
-            + 'get_community_cards()',
+        id: 'log-equity-method-counts',
+        selector: '.feed-item .phase-text',
+        tokens: '^\\d{1,3}(?:,\\d{3})*$',
+        why: 'the equity method line the felt no longer paints ("Equity vs 2 random · '
+            + 'Monte Carlo · 200,000 trials") is logged once per computation in the '
+            + 'action log as a phase-style line. Trial counts and opponent counts only, '
+            + 'the same non-money shape as `equity-method-counts`; a decimal here is '
+            + 'not excused',
     },
 
     // ---- identifiers and cryptographic material ------------------------------

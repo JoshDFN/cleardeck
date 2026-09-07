@@ -23,7 +23,11 @@
   //  3. IT NAMES THE NUMBERS AND THE COMMAND. "Somebody should top this up" is
   //     not actionable. `deposit-cycles` on the IC needs no controller rights and
   //     is open to any principal, so the exact command is shown: anybody reading
-  //     this can be the person who fixes it.
+  //     this can be the person who fixes it. The headline, the advice and the
+  //     figures are always on screen; the command and the warning threshold
+  //     stand one tap away under "How to top it up" (the cashier wave's third
+  //     round: on a phone they were what pushed the Deposit button a second
+  //     screen down), the same fold the custody disclosure uses.
 
   import {
     RUNWAY_STATES, severityOf, headlineFor, adviceFor, formatCycles, topUpHint,
@@ -63,7 +67,19 @@
   });
 </script>
 
-{#if visible}
+{#if runway === null}
+  <!-- THE BOX IS RESERVED WHILE THE READ IS IN FLIGHT. The cycle status is a
+       query that lands a beat after the sheet opens; a panel that appears
+       under an already-pinned button row stands under that row (the cashier
+       wave's second round photographed it). This placeholder holds the panel's
+       place in flow, carries the same class so lib/pin-after.js treats it as
+       an unread gate, and renders no figure. -->
+  <div class="runway-notice pending" data-testid="cycle-runway-notice" data-runway-state="pending" role="status" aria-busy="true">
+    <p class="headline">Reading how long this table can keep honouring withdrawals</p>
+    <p class="advice">A canister below its freezing threshold rejects every update call at once, withdrawals included. The answer stands here in a moment.</p>
+    <span class="shimmer" aria-hidden="true"></span>
+  </div>
+{:else if visible}
   <div
     class="runway-notice {severity}"
     data-testid="cycle-runway-notice"
@@ -73,71 +89,149 @@
   >
     <p class="headline">{headline}</p>
     <p class="advice">{advice}</p>
-    {#if detail}
-      <p class="detail">{detail}</p>
-    {/if}
-    <p class="topup">
-      Anyone can top this canister up. It needs no permission and no controller:
-      <code>{topUpHint(canisterId)}</code>
-    </p>
-    {#if state === RUNWAY_STATES.LOW || state === RUNWAY_STATES.CRITICAL}
-      <p class="detail">
-        Warning threshold is {WARN_DAYS} days of measured runway. There is no automatic
-        top-up anywhere in this application.
-      </p>
-    {/if}
+    <div class="detail-row">
+      {#if detail}
+        <p class="detail">{detail}</p>
+      {/if}
+      <details class="more">
+        <summary>How to top it up</summary>
+        <p class="topup">
+          Anyone can top this canister up. It needs no permission and no controller:
+          <code>{topUpHint(canisterId)}</code>
+        </p>
+        {#if state === RUNWAY_STATES.LOW || state === RUNWAY_STATES.CRITICAL}
+          <p class="detail">
+            Warning threshold is {WARN_DAYS} days of measured runway. There is no automatic
+            top-up anywhere in this application.
+          </p>
+        {/if}
+      </details>
+    </div>
   </div>
 {/if}
 
 <style>
   /* NO position, NO z-index, NO transform. See rule 1 in the script block: this
-     element must be incapable of covering the four protected notices, and the
-     cheapest way to guarantee that is to give it nothing to cover them with. */
+     element must be incapable of covering the protected notices, and the
+     cheapest way to guarantee that is to give it nothing to cover them with.
+     The same tokens as the solvency block and the trust bar. */
   .runway-notice {
-    margin: 0.75rem 0;
-    padding: 0.75rem 0.9rem;
-    border-radius: 8px;
+    margin: var(--cd-space-3) 0;
+    padding: var(--cd-space-2) var(--cd-space-3);
+    border-radius: var(--cd-radius-card);
     border: 1px solid;
-    font-size: 0.85rem;
+    border-left-width: 3px;
+    font-size: var(--cd-text-sm);
     line-height: 1.45;
     max-width: 100%;
     overflow-wrap: anywhere;
+    color: var(--cd-ink-1);
   }
 
   .runway-notice.warn {
-    background: rgba(255, 176, 32, 0.08);
-    border-color: rgba(255, 176, 32, 0.55);
-    color: #f5cd7a;
+    background: var(--cd-warn-dim);
+    border-color: var(--cd-warn-line);
+    border-left-color: var(--cd-warn);
   }
 
   .runway-notice.danger {
-    background: rgba(255, 74, 74, 0.10);
-    border-color: rgba(255, 74, 74, 0.6);
-    color: #ffa8a8;
+    background: var(--cd-danger-dim);
+    border-color: var(--cd-danger-line);
+    border-left-color: var(--cd-danger);
+  }
+
+  /* The reserved box: the panel's own padding and border in the neutral
+     surface, tall enough for a headline, its advice and the top-up line
+     (three spacing units of six), so the row under it does not move when
+     the answer lands. */
+  .runway-notice.pending {
+    min-height: calc(var(--cd-space-6) * 3);
+    background: var(--cd-surface-1);
+    border-color: var(--cd-line-soft);
+    border-left-color: var(--cd-line-strong);
+  }
+
+  .runway-notice.pending .headline { color: var(--cd-ink-2); }
+  .runway-notice.pending .advice { color: var(--cd-ink-2); }
+
+  .shimmer {
+    display: block;
+    height: var(--cd-space-2);
+    margin-top: var(--cd-space-2);
+    border-radius: var(--cd-radius-chip);
+    background: var(--cd-surface-3);
+    animation: runway-shimmer 1.2s ease-in-out infinite alternate;
+  }
+
+  @keyframes runway-shimmer { to { opacity: 0.35; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .shimmer { animation: none; }
   }
 
   .headline {
-    margin: 0 0 0.35rem;
-    font-weight: 700;
+    margin: 0 0 var(--cd-space-1);
+    font-weight: var(--cd-weight-figure);
+    color: var(--cd-warn);
   }
 
+  .runway-notice.danger .headline { color: var(--cd-danger-hi); }
+
   .advice {
-    margin: 0 0 0.35rem;
+    margin: 0 0 var(--cd-space-1);
   }
 
   .detail,
   .topup {
-    margin: 0.3rem 0 0;
-    font-size: 0.78rem;
-    opacity: 0.85;
+    margin: var(--cd-space-1) 0 0;
+    font-size: var(--cd-text-xs);
+    color: var(--cd-ink-2);
+  }
+
+  /* The figures on the left, the fold on the right; open, the fold takes its
+     own row under them. */
+  .detail-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0 var(--cd-space-3);
+  }
+
+  .detail-row .detail { flex: 1 1 auto; }
+  .more { flex: 0 0 auto; }
+  .more[open] { flex-basis: 100%; }
+
+  .more summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--cd-control-sm);
+    padding: 0 var(--cd-space-2);
+    margin-left: calc(-1 * var(--cd-space-2));
+    border-radius: var(--cd-radius-chip);
+    color: var(--cd-warn);
+    font-size: var(--cd-text-xs);
+    font-weight: var(--cd-weight-strong);
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .runway-notice.danger .more summary { color: var(--cd-danger-hi); }
+  .more summary::-webkit-details-marker { display: none; }
+  .more summary::after { content: ' \25BE'; }
+  .more[open] summary::after { content: ' \25B4'; }
+  .more summary:hover { background: var(--cd-surface-2); }
+
+  @media (max-aspect-ratio: 1/1), (max-height: 560px) {
+    .more summary { min-height: var(--cd-touch-min); }
   }
 
   code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.75rem;
+    font-family: var(--cd-font-mono);
+    font-size: var(--cd-text-xs);
     padding: 0.1rem 0.3rem;
-    border-radius: 4px;
-    background: rgba(0, 0, 0, 0.3);
-    overflow-wrap: anywhere;
+    border-radius: var(--cd-space-1);
+    background: var(--cd-capsule);
+    color: var(--cd-ink-1);
   }
 </style>

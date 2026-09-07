@@ -24,16 +24,29 @@ export default {
   async verify(ctx, page) {
     const rows = await page.locator('tbody tr').count();
     const namedTables = await page.locator('.table-name').allTextContents();
-    const anonymous = await page.locator('.wallet-btn.connect').isVisible().catch(() => false);
+    // Signed out = a sign-in control in the wallet slot. On a phone a local
+    // build shows ONE button (the dev button reading "Connect", its menu
+    // holding Internet Identity and the dev players; WalletButton.svelte) and
+    // hides the wide Connect Wallet button, so either painted button counts.
+    const anonymous = await page.locator('.login-buttons .wallet-btn:visible').first().isVisible().catch(() => false);
     const disclaimer = await page.locator('.alpha-warning-banner').isVisible().catch(() => false);
     // docs/DEFECTS.md H-09: the spinner and the loaded lobby used to be able to
     // render together. They are now mutually exclusive, and this asserts it, so
     // the defect cannot silently come back.
     const spinnerVisible = await page.locator('.loading-state').isVisible().catch(() => false);
     const lobbyState = await lobbyStateOf(page);
+    // The audit's first metric: where the first table card lands, as a share
+    // of the viewport (docs/DESIGN-BAR.md reference band 26.6-36.1%).
+    const firstCard = await page.evaluate(() => {
+      const tr = document.querySelector('tbody tr');
+      if (!tr) return null;
+      const r = tr.getBoundingClientRect();
+      return { y: Math.round(r.y), pct: Math.round((100 * r.y) / window.innerHeight) };
+    });
     const checks = {
       rows,
       namedTables,
+      firstCardTop: firstCard,
       showsConnectWallet: anonymous,
       disclaimerVisible: disclaimer,
       lobbyState,
@@ -48,7 +61,8 @@ export default {
       checks,
       notes:
         `${rows} live table rows; signed out; lobby state="${lobbyState}"; ` +
-        `loading spinner ${spinnerVisible ? 'VISIBLE (defect H-09 is back)' : 'absent'}`,
+        `loading spinner ${spinnerVisible ? 'VISIBLE (defect H-09 is back)' : 'absent'}; ` +
+        (firstCard ? `first card at y ${firstCard.y} (${firstCard.pct}% of the viewport)` : 'no first card'),
     }, agreement);
   },
 };

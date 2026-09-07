@@ -98,14 +98,74 @@ export async function shoot(page, { scene, viewport, shaDir, latestDir }) {
   await page.screenshot({ path: viewportFile, fullPage: false, animations: 'disabled' });
   files.push(viewportFile);
 
+  // THE FULL STILL OF A DIALOG SCENE SHOWS THE WHOLE SHEET. A money sheet's
+  // body is its own scroller inside a fixed dialog, so fullPage capture (which
+  // grows the page, not the scroller) produced a -full.png byte-identical to
+  // the viewport still and the phone's disclosures column and button row were
+  // never in any evidence. For the capture only, the scroller is let grow
+  // (overflow visible, no max-height on it or its dialog) and the dialog is
+  // taken out of the fixed centring so the page grows with it; every style is
+  // put back before the next check reads the DOM.
   const fullFile = path.join(shaDir, `${base}-full.png`);
-  await page.screenshot({ path: fullFile, fullPage: true, animations: 'disabled' });
+  const expanded = await expandDialogScroller(page);
+  try {
+    await page.screenshot({ path: fullFile, fullPage: true, animations: 'disabled' });
+  } finally {
+    if (expanded) await restoreDialogScroller(page);
+  }
   files.push(fullFile);
 
   for (const f of files) {
     fs.copyFileSync(f, path.join(latestDir, path.basename(f)));
   }
   return files.map((f) => path.relative(REPO_ROOT, f));
+}
+
+/**
+ * Lets an open money sheet's scroller grow to its content so a fullPage
+ * capture shows all of it. Returns false when no such dialog is open.
+ */
+async function expandDialogScroller(page) {
+  return page.evaluate(() => {
+    const dialog = document.querySelector('.modal-content');
+    const body = dialog?.querySelector('.modal-body');
+    if (!dialog || !body) return false;
+    const stash = (el, props) => {
+      el.dataset.shotsStash = JSON.stringify(props.map((p) => [p, el.style.getPropertyValue(p), el.style.getPropertyPriority(p)]));
+    };
+    stash(dialog, ['position', 'top', 'left', 'transform', 'max-height', 'height', 'margin']);
+    stash(body, ['overflow-y', 'overflow', 'max-height', 'height', 'flex']);
+    // The dialog becomes a block in the page's flow, as wide as it was, so the
+    // document grows to fit it; the backdrop stays where it is.
+    const rect = dialog.getBoundingClientRect();
+    dialog.style.setProperty('position', 'absolute', 'important');
+    dialog.style.setProperty('top', `${Math.max(0, rect.top + window.scrollY)}px`, 'important');
+    dialog.style.setProperty('left', `${rect.left}px`, 'important');
+    dialog.style.setProperty('transform', 'none', 'important');
+    dialog.style.setProperty('max-height', 'none', 'important');
+    dialog.style.setProperty('height', 'auto', 'important');
+    body.style.setProperty('overflow-y', 'visible', 'important');
+    body.style.setProperty('overflow', 'visible', 'important');
+    body.style.setProperty('max-height', 'none', 'important');
+    body.style.setProperty('height', 'auto', 'important');
+    body.style.setProperty('flex', '0 0 auto', 'important');
+    document.documentElement.dataset.shotsExpanded = '1';
+    return true;
+  });
+}
+
+async function restoreDialogScroller(page) {
+  await page.evaluate(() => {
+    for (const el of document.querySelectorAll('[data-shots-stash]')) {
+      const props = JSON.parse(el.dataset.shotsStash);
+      for (const [p, value, priority] of props) {
+        if (value) el.style.setProperty(p, value, priority);
+        else el.style.removeProperty(p);
+      }
+      delete el.dataset.shotsStash;
+    }
+    delete document.documentElement.dataset.shotsExpanded;
+  });
 }
 
 /**
@@ -159,7 +219,7 @@ export function writeIndex(shaDir, latestDir, manifest) {
     `- gateway: ${manifest.gateway}`,
     `- frontend asset canister: ${manifest.frontendCanisterId}`,
     ...(manifest.volatileThirdParty
-      ? [`- fiat figures: **${manifest.volatileThirdParty.mode}** — ${manifest.volatileThirdParty.note}`]
+      ? [`- fiat figures: **${manifest.volatileThirdParty.mode}**: ${manifest.volatileThirdParty.note}`]
       : []),
     '',
     ...(manifest.faultInjection

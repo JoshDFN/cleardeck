@@ -1,0 +1,52 @@
+[
+  {
+    "viewport": "desktop",
+    "anonymous": {
+      "file": "artifacts/screens/b5da9af/probe/PROBE-join-gate-anonymous-desktop.png",
+      "joinCallsToTableAfterTap": 0,
+      "popupUrl": null,
+      "toast": "This local build does not know the Internet Identity canister id, so sign-in cannot be started. Export CANISTER_ID_INTERNET_IDENTITY (or VITE_CANISTER_ID_INTERNET_IDENTITY) when building, or bring the stack up with ./scripts/dev.sh local-up. See docs/DEFECTS.md T-39. ×",
+      "canisterErrorShown": false,
+      "loginPathRan": true,
+      "ok": true
+    },
+    "signedIn": {
+      "file": "artifacts/screens/b5da9af/probe/PROBE-join-gate-signed-in-desktop.png",
+      "escrow": "4570000000",
+      "minBuyIn": "1000000000",
+      "chainSays": "seat",
+      "shortfall": "0",
+      "joinCallsToTableAfterTap": 1,
+      "depositSheetOpen": false,
+      "depositField": null,
+      "seatedAsHero": true,
+      "toast": "Joined seat 1!",
+      "ok": true
+    }
+  },
+  {
+    "viewport": "mobile",
+    "anonymous": {
+      "file": "artifacts/screens/b5da9af/probe/PROBE-join-gate-anonymous-mobile.png",
+      "joinCallsToTableAfterTap": 0,
+      "popupUrl": null,
+      "toast": "This local build does not know the Internet Identity canister id, so sign-in cannot be started. Export CANISTER_ID_INTERNET_IDENTITY (or VITE_CANISTER_ID_INTERNET_IDENTITY) when building, or bring the stack up with ./scripts/dev.sh local-up. See docs/DEFECTS.md T-39. ×",
+      "canisterErrorShown": false,
+      "loginPathRan": true,
+      "ok": true
+    },
+    "signedIn": {
+      "file": "artifacts/screens/b5da9af/probe/PROBE-join-gate-signed-in-mobile.png",
+      "escrow": "4570000000",
+      "minBuyIn": "1000000000",
+      "chainSays": "seat",
+      "shortfall": "0",
+      "joinCallsToTableAfterTap": 1,
+      "depositSheetOpen": false,
+      "depositField": null,
+      "seatedAsHero": true,
+      "toast": "Joined seat 1!",
+      "ok": true
+    }
+  }
+]

@@ -1,0 +1,748 @@
+[
+  {
+    "viewport": "desktop",
+    "deposit": {
+      "ok": true,
+      "problems": [],
+      "figures": {
+        "ok": true,
+        "checked": 8,
+        "mismatches": [],
+        "figures": [
+          {
+            "label": "deposit cost row \"send\"",
+            "chain": 50000,
+            "domText": "0.0005 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0005 ICP\" == canister 50000 e8s (±5000 e8s)",
+            "window": [
+              45000,
+              55000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit cost row \"fees\"",
+            "chain": 20000,
+            "domText": "0.0002 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0002 ICP\" == canister 20000 e8s (±5000 e8s)",
+            "window": [
+              15000,
+              25000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit cost row \"total\"",
+            "chain": 70000,
+            "domText": "0.0007 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0007 ICP\" == canister 70000 e8s (±5000 e8s)",
+            "window": [
+              65000,
+              75000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit cost row \"credited\"",
+            "chain": 50000,
+            "domText": "0.0005 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0005 ICP\" == canister 50000 e8s (±5000 e8s)",
+            "window": [
+              45000,
+              55000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit button amount",
+            "chain": 50000,
+            "domText": "Deposit 0.0005 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"Deposit 0.0005 ICP\" == canister 50000 e8s (±5000 e8s)",
+            "window": [
+              45000,
+              55000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit receipt \"sent\"",
+            "chain": 50000,
+            "domText": "0.0005 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0005 ICP\" == canister 50000 e8s (±5000 e8s)",
+            "window": [
+              45000,
+              55000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit receipt \"fees\"",
+            "chain": 20000,
+            "domText": "0.0002 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0002 ICP\" == canister 20000 e8s (±5000 e8s)",
+            "window": [
+              15000,
+              25000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit receipt \"balance\" vs get_balance()",
+            "chain": 1200050000,
+            "domText": "12.0005 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"12.0005 ICP\" == canister 1200050000 e8s (±5000 e8s)",
+            "window": [
+              1200045000,
+              1200055000
+            ],
+            "resolution": 10000
+          }
+        ]
+      },
+      "noticesAtRest": "5/5",
+      "summary": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-deposit-summary-desktop.png",
+        "rows": [
+          {
+            "id": "send",
+            "text": "0.0005 ICP"
+          },
+          {
+            "id": "fees",
+            "text": "0.0002 ICP"
+          },
+          {
+            "id": "total",
+            "text": "0.0007 ICP"
+          },
+          {
+            "id": "credited",
+            "text": "0.0005 ICP"
+          }
+        ],
+        "button": "Deposit 0.0005 ICP",
+        "noticesOnScreen": "5/5",
+        "touch": null,
+        "solvencyAboveButton": true
+      },
+      "steps": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-deposit-steps-desktop.png",
+        "statuses": []
+      },
+      "receipt": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-deposit-receipt-desktop.png",
+        "rows": [
+          {
+            "id": "sent",
+            "text": "0.0005 ICP"
+          },
+          {
+            "id": "fees",
+            "text": "0.0002 ICP"
+          },
+          {
+            "id": "balance",
+            "text": "12.0005 ICP"
+          }
+        ],
+        "statuses": [],
+        "ledgerDeltaE8s": "70000",
+        "escrowDeltaE8s": "50000"
+      }
+    },
+    "withdraw": {
+      "ok": true,
+      "problems": [],
+      "figures": {
+        "ok": true,
+        "checked": 8,
+        "mismatches": [],
+        "figures": [
+          {
+            "label": "withdraw balance vs get_balance()",
+            "chain": 1200050000,
+            "domText": "12.0005 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"12.0005 ICP\" == canister 1200050000 e8s (±5000 e8s)",
+            "window": [
+              1200045000,
+              1200055000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw row \"withdraw\"",
+            "chain": 100000,
+            "domText": "0.0010 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0010 ICP\" == canister 100000 e8s (±5000 e8s)",
+            "window": [
+              95000,
+              105000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw row \"fee\"",
+            "chain": 10000,
+            "domText": "0.0001 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": false,
+            "ok": true,
+            "detail": "screen \"0.0001 ICP\" == canister 10000 e8s (±5000 e8s); NOTE the client's precision here cannot distinguish 5000 e8s",
+            "window": [
+              5000,
+              15000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw row \"net\"",
+            "chain": 90000,
+            "domText": "0.0009 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0009 ICP\" == canister 90000 e8s (±5000 e8s)",
+            "window": [
+              85000,
+              95000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw button amount",
+            "chain": 100000,
+            "domText": "Withdraw 0.0010 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"Withdraw 0.0010 ICP\" == canister 100000 e8s (±5000 e8s)",
+            "window": [
+              95000,
+              105000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw receipt \"withdrawn\"",
+            "chain": 100000,
+            "domText": "0.0010 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0010 ICP\" == canister 100000 e8s (±5000 e8s)",
+            "window": [
+              95000,
+              105000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw receipt \"fee\" vs icrc1_fee()",
+            "chain": 10000,
+            "domText": "0.0001 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": false,
+            "ok": true,
+            "detail": "screen \"0.0001 ICP\" == canister 10000 e8s (±5000 e8s); NOTE the client's precision here cannot distinguish 5000 e8s",
+            "window": [
+              5000,
+              15000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw receipt \"received\"",
+            "chain": 90000,
+            "domText": "0.0009 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0009 ICP\" == canister 90000 e8s (±5000 e8s)",
+            "window": [
+              85000,
+              95000
+            ],
+            "resolution": 10000
+          }
+        ]
+      },
+      "rest": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-withdraw-desktop.png",
+        "balance": "12.0005 ICP",
+        "destination": "2ebedb2c141d8c9eeb9f417b031539a34dd752be1e02756fd35d11dd549c0ae6",
+        "noticesOnScreen": "5/5",
+        "touch": null
+      },
+      "summary": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-withdraw-summary-desktop.png",
+        "rows": [
+          {
+            "id": "withdraw",
+            "text": "0.0010 ICP"
+          },
+          {
+            "id": "fee",
+            "text": "0.0001 ICP"
+          },
+          {
+            "id": "net",
+            "text": "0.0009 ICP"
+          }
+        ],
+        "button": "Withdraw 0.0010 ICP",
+        "touch": null
+      },
+      "steps": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-withdraw-steps-desktop.png",
+        "statuses": []
+      },
+      "receipt": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-withdraw-receipt-desktop.png",
+        "rows": [
+          {
+            "id": "withdrawn",
+            "text": "0.0010 ICP"
+          },
+          {
+            "id": "fee",
+            "text": "0.0001 ICP"
+          },
+          {
+            "id": "received",
+            "text": "0.0009 ICP"
+          },
+          {
+            "id": "block",
+            "text": "570"
+          }
+        ],
+        "lead": "On the ledger. The next withdrawal from this table opens in 1:00.",
+        "statuses": [],
+        "ledgerDeltaE8s": "90000",
+        "escrowDeltaE8s": "100000"
+      }
+    }
+  },
+  {
+    "viewport": "mobile",
+    "deposit": {
+      "ok": true,
+      "problems": [],
+      "figures": {
+        "ok": true,
+        "checked": 8,
+        "mismatches": [],
+        "figures": [
+          {
+            "label": "deposit cost row \"send\"",
+            "chain": 50000,
+            "domText": "0.0005 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0005 ICP\" == canister 50000 e8s (±5000 e8s)",
+            "window": [
+              45000,
+              55000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit cost row \"fees\"",
+            "chain": 20000,
+            "domText": "0.0002 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0002 ICP\" == canister 20000 e8s (±5000 e8s)",
+            "window": [
+              15000,
+              25000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit cost row \"total\"",
+            "chain": 70000,
+            "domText": "0.0007 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0007 ICP\" == canister 70000 e8s (±5000 e8s)",
+            "window": [
+              65000,
+              75000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit cost row \"credited\"",
+            "chain": 50000,
+            "domText": "0.0005 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0005 ICP\" == canister 50000 e8s (±5000 e8s)",
+            "window": [
+              45000,
+              55000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit button amount",
+            "chain": 50000,
+            "domText": "Deposit 0.0005 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"Deposit 0.0005 ICP\" == canister 50000 e8s (±5000 e8s)",
+            "window": [
+              45000,
+              55000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit receipt \"sent\"",
+            "chain": 50000,
+            "domText": "0.0005 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0005 ICP\" == canister 50000 e8s (±5000 e8s)",
+            "window": [
+              45000,
+              55000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit receipt \"fees\"",
+            "chain": 20000,
+            "domText": "0.0002 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0002 ICP\" == canister 20000 e8s (±5000 e8s)",
+            "window": [
+              15000,
+              25000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "deposit receipt \"balance\" vs get_balance()",
+            "chain": 1200000000,
+            "domText": "12.0000 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"12.0000 ICP\" == canister 1200000000 e8s (±5000 e8s)",
+            "window": [
+              1199995000,
+              1200005000
+            ],
+            "resolution": 10000
+          }
+        ]
+      },
+      "noticesAtRest": "5/5",
+      "summary": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-deposit-summary-mobile.png",
+        "rows": [
+          {
+            "id": "send",
+            "text": "0.0005 ICP"
+          },
+          {
+            "id": "fees",
+            "text": "0.0002 ICP"
+          },
+          {
+            "id": "total",
+            "text": "0.0007 ICP"
+          },
+          {
+            "id": "credited",
+            "text": "0.0005 ICP"
+          }
+        ],
+        "button": "Deposit 0.0005 ICP",
+        "noticesOnScreen": "5/5",
+        "touch": "8 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Close deposit modal\"); document 390x844 in 390x844; type floors met; dialog open, scroll locked",
+        "solvencyAboveButton": true
+      },
+      "steps": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-deposit-steps-mobile.png",
+        "statuses": []
+      },
+      "receipt": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-deposit-receipt-mobile.png",
+        "rows": [
+          {
+            "id": "sent",
+            "text": "0.0005 ICP"
+          },
+          {
+            "id": "fees",
+            "text": "0.0002 ICP"
+          },
+          {
+            "id": "balance",
+            "text": "12.0000 ICP"
+          }
+        ],
+        "statuses": [],
+        "ledgerDeltaE8s": "70000",
+        "escrowDeltaE8s": "50000"
+      }
+    },
+    "withdraw": {
+      "ok": true,
+      "problems": [],
+      "figures": {
+        "ok": true,
+        "checked": 8,
+        "mismatches": [],
+        "figures": [
+          {
+            "label": "withdraw balance vs get_balance()",
+            "chain": 1200000000,
+            "domText": "12.0000 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"12.0000 ICP\" == canister 1200000000 e8s (±5000 e8s)",
+            "window": [
+              1199995000,
+              1200005000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw row \"withdraw\"",
+            "chain": 100000,
+            "domText": "0.0010 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0010 ICP\" == canister 100000 e8s (±5000 e8s)",
+            "window": [
+              95000,
+              105000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw row \"fee\"",
+            "chain": 10000,
+            "domText": "0.0001 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": false,
+            "ok": true,
+            "detail": "screen \"0.0001 ICP\" == canister 10000 e8s (±5000 e8s); NOTE the client's precision here cannot distinguish 5000 e8s",
+            "window": [
+              5000,
+              15000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw row \"net\"",
+            "chain": 90000,
+            "domText": "0.0009 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0009 ICP\" == canister 90000 e8s (±5000 e8s)",
+            "window": [
+              85000,
+              95000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw button amount",
+            "chain": 100000,
+            "domText": "Withdraw 0.0010 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"Withdraw 0.0010 ICP\" == canister 100000 e8s (±5000 e8s)",
+            "window": [
+              95000,
+              105000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw receipt \"withdrawn\"",
+            "chain": 100000,
+            "domText": "0.0010 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0010 ICP\" == canister 100000 e8s (±5000 e8s)",
+            "window": [
+              95000,
+              105000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw receipt \"fee\" vs icrc1_fee()",
+            "chain": 10000,
+            "domText": "0.0001 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": false,
+            "ok": true,
+            "detail": "screen \"0.0001 ICP\" == canister 10000 e8s (±5000 e8s); NOTE the client's precision here cannot distinguish 5000 e8s",
+            "window": [
+              5000,
+              15000
+            ],
+            "resolution": 10000
+          },
+          {
+            "label": "withdraw receipt \"received\"",
+            "chain": 90000,
+            "domText": "0.0009 ICP",
+            "agrees": true,
+            "discriminates2x": true,
+            "detectsHalving": true,
+            "ok": true,
+            "detail": "screen \"0.0009 ICP\" == canister 90000 e8s (±5000 e8s)",
+            "window": [
+              85000,
+              95000
+            ],
+            "resolution": 10000
+          }
+        ]
+      },
+      "rest": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-withdraw-mobile.png",
+        "balance": "12.0000 ICP",
+        "destination": "2ebedb2c141d8c9eeb9f417b031539a34dd752be1e02756fd35d11dd549c0ae6",
+        "noticesOnScreen": "5/5",
+        "touch": "5 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Close withdraw modal\"); document 390x844 in 390x844; type floors met; dialog open, scroll locked"
+      },
+      "summary": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-withdraw-summary-mobile.png",
+        "rows": [
+          {
+            "id": "withdraw",
+            "text": "0.0010 ICP"
+          },
+          {
+            "id": "fee",
+            "text": "0.0001 ICP"
+          },
+          {
+            "id": "net",
+            "text": "0.0009 ICP"
+          }
+        ],
+        "button": "Withdraw 0.0010 ICP",
+        "touch": "4 interactive elements, 0 under the 44 px floor; smallest painted box 44 px (\"Close withdraw modal\"); document 390x844 in 390x844; type floors met; dialog open, scroll locked"
+      },
+      "cooldown": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-withdraw-cooldown-mobile.png",
+        "message": "You withdrew less than a minute ago. Try again in 54 s. Nothing moved. Please wait 54 seconds before withdrawing again",
+        "detail": "Please wait 54 seconds before withdrawing again",
+        "humane": true
+      },
+      "steps": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-withdraw-steps-1-mobile.png",
+        "statuses": []
+      },
+      "receipt": {
+        "file": "artifacts/screens/61efc0e/probe/PROBE-cashier-withdraw-receipt-mobile.png",
+        "rows": [
+          {
+            "id": "withdrawn",
+            "text": "0.0010 ICP"
+          },
+          {
+            "id": "fee",
+            "text": "0.0001 ICP"
+          },
+          {
+            "id": "received",
+            "text": "0.0009 ICP"
+          },
+          {
+            "id": "block",
+            "text": "573"
+          }
+        ],
+        "lead": "On the ledger. The next withdrawal from this table opens in 1:00.",
+        "statuses": [],
+        "ledgerDeltaE8s": "90000",
+        "escrowDeltaE8s": "100000"
+      }
+    }
+  }
+]

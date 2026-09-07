@@ -72,6 +72,14 @@ export const CHAIN_SITES = [
         why: 'each side pot, in order, against side_pots[i].amount',
     },
     {
+        id: 'hero-plate-tag',
+        selector: '.player-nameplate.highlight-me .plate-tag',
+        label: /^hero plate tag /,
+        why: "the tag on the hero's plate: an armed \"Call X\" pre-action against "
+            + 'call_amount, or the sent echo ("Raise to X") against the e8s the echo '
+            + 'recorded and will send (data-sent-e8s)',
+    },
+    {
         id: 'seat-stack',
         selector: '.seat .chips, .chips',
         label: /^seat \d+ stack$/,
@@ -126,6 +134,27 @@ export const CHAIN_SITES = [
         why: 'the blinds quoted in the table header pill (docs/DEFECTS.md T-11)',
     },
     {
+        id: 'raise-button',
+        selector: '.actions .action-btn.raise',
+        label: /^action button "Raise to X" vs the value that would be SENT$/,
+        why: 'the figure on the primary "Raise to X" / "Bet X" button: the sizer\'s '
+            + 'value, which the click SENDS, and which is itself asserted against the '
+            + "canister's legal floor at rest and against get_pot() at the presets",
+    },
+    {
+        id: 'raise-sizer-field',
+        selector: '.raise-slider-panel .raise-input',
+        label: /^bet preset .* vs the value that would be SENT$/,
+        why: 'the typed amount field of the dock sizer (BetSizer.svelte): the same '
+            + 'figure the range holds, asserted at rest and at the presets',
+    },
+    {
+        id: 'pre-action-call',
+        selector: '.pre-actions .pre-btn',
+        label: /^pre-action "Call X" vs call_amount$/,
+        why: 'the "Call X" pre-action toggle: the call amount promised in advance',
+    },
+    {
         id: 'call-button',
         selector: '.actions .action-btn',
         label: /^action button "Call X" vs call_amount$/,
@@ -163,6 +192,21 @@ export const CHAIN_SITES = [
         selector: '.raise-slider-panel .slider-amount, .raise-slider-panel .confirm-raise',
         label: /^bet preset .* vs the value that would be SENT$/,
         why: 'what the bet-sizing popover says it will wager',
+    },
+    {
+        // Before lobby-stakes / lobby-buyin / lobby-preview-fact: the hint is
+        // INSIDE those cells, and the first matching selector wins.
+        id: 'lobby-fiat',
+        selector: '.fiat-num',
+        label: /^lobby (".*"|preview) fiat (sb|bb|min|max) vs /,
+        why: 'the dollar hint under a lobby stakes or buy-in figure: the chain figure '
+            + 'times the quote the harness served (assertFiatHints)',
+    },
+    {
+        id: 'lobby-row-clock',
+        selector: 'tbody tr .clock-value',
+        label: /^lobby ".*" clock (action timeout|time bank)$/,
+        why: "the lobby card's clock cell, seconds against the table config",
     },
     {
         id: 'lobby-stakes',
@@ -231,6 +275,45 @@ export const CHAIN_SITES = [
         why: 'the fiat conversion of that balance',
     },
     {
+        id: 'deposit-cost-summary',
+        selector: '.cost-summary dd',
+        label: /^deposit modal cost row "/,
+        why: 'the cost of the typed deposit, row by row (you send / ledger fees / total from '
+            + 'your wallet / the table credits), each recomputed from the field\'s value and the '
+            + 'ledger\'s own icrc1_fee(); rendered only once an amount is typed',
+    },
+    {
+        id: 'deposit-button-amount',
+        selector: '.modal-content .actions .btn-primary',
+        label: /^deposit modal button amount vs/,
+        why: 'the amount the Deposit button names, which is the typed amount',
+    },
+    {
+        id: 'solvency-figures',
+        selector: '.solvency .figures dd, .solvency .advice, .solvency .exact dd',
+        label: /^solvency /,
+        why: 'the money a table owes, holds and is short by (the rounded figure on the row, '
+            + 'the exact e8s integer once under "What the table said"), and the canister\'s own '
+            + 'advice sentence quoting them, against get_solvency() (docs/SECURITY-FINDINGS.md FINDING 35)',
+    },
+    {
+        id: 'deposit-quick-chip',
+        selector: '.quick-amounts .quick-amount .chip-figure',
+        label: /^deposit modal quick chip "/,
+        why: 'the figure on a quick chip\'s face (the table\'s minimum buy-in, twice it), '
+            + 'derived from the TABLE canister\'s config.min_buy_in and asserted against '
+            + 'get_table_view().config by chain-agreement.mjs; the "2x" factor beside it is '
+            + 'the allowlist\'s deposit-quick-multiple',
+    },
+    {
+        id: 'deposit-detected',
+        selector: '.deposit-address-section .detected-amount',
+        label: /^deposit modal detected at the address vs/,
+        why: 'what the address route says has arrived at the derived deposit subaccount '
+            + '("Detected 0.0005 ICP"), read from the ledger every few seconds and swept in by '
+            + 'itself; asserted against icrc1_balance_of on that subaccount',
+    },
+    {
         id: 'deposit-minimum-and-fee',
         selector: '.minimum-notice',
         // The third alternative is the wallet requirement T-30 added ("charged twice
@@ -243,10 +326,22 @@ export const CHAIN_SITES = [
         // different numbers with different consequences (docs/DEFECTS.md E-86). Both
         // are labelled `deposit modal "Minimum deposit"`, disambiguated in the rest
         // of the label, so this pattern still matches all four.
-        label: /^deposit modal "(Minimum deposit|Network fee|you need N in your wallet)"/,
+        label: /^deposit modal "(Minimum deposit|Network fee|above the N network fee|At or below N nothing can move it|you need N in your wallet)"/,
         why: 'the address minimum, the connected-wallet minimum, the network fee, and '
             + 'the wallet balance the modal says is needed to deposit that minimum — '
             + 'all four stated as fact',
+    },
+    {
+        id: 'action-feed-amount',
+        selector: '.action-feed .action-amount',
+        label: /^feed line \d+ amount vs/,
+        why: 'every amount in the live table\'s LOG drawer (ActionFeed.svelte): each blind '
+            + 'post, each action\'s amount and each "won" line. The `table-log` scene matches '
+            + 'every one of them to the table canister\'s own get_hand_history record for the '
+            + 'hand on screen (blinds to get_table_view().config, awards to winners), in '
+            + 'order; a line whose amount matches nothing fails the scene. The drawer is '
+            + 'closed on every other table scene, so before that scene these figures had '
+            + 'never been censused',
     },
     {
         id: 'history-row-pot',
@@ -255,9 +350,22 @@ export const CHAIN_SITES = [
         why: "each hand-history row's pot",
     },
     {
+        id: 'replay-equity',
+        selector: '.replayer .replay-equity',
+        label: /^replay seat \d+ equity/,
+        why: 'the equity percentage on a seat pod in the hand REPLAYER, at the stop on '
+            + 'screen. Shown only when every live hand at that stop is on its face (a '
+            + 'showdown hand; lib/replay-stops.js equityAllowedAt), computed by '
+            + 'lib/equity.js, and recomputed by the handreplay scene with the independent '
+            + 'oracle (lib/equity-oracle.mjs) from the hand record\'s own cards and board. '
+            + 'Never a money figure; listed before the money site because it is inside '
+            + 'the same replayer',
+    },
+    {
         id: 'hand-replay-money',
         selector: '.replayer .replay-money',
-        label: /^replay /,
+        // Every replay figure EXCEPT the equity ones, which the site above owns.
+        label: /^replay (?!seat \d+ equity)/,
         why: 'every amount the hand REPLAYER renders: each blind post, each action\'s '
             + 'amount, the log\'s own sum-vs-pot audit, the final pot, each winner\'s award '
             + 'and each showdown player\'s result. The `handreplay` scene compares every one '

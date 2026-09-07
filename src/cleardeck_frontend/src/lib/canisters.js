@@ -48,7 +48,7 @@ const buildingOrTesting = building || process.env.NODE_ENV === "test";
 //   2. RUNTIME (belt and braces, for a bundle built by some other toolchain).
 //      resolveCanisterId() below refuses a mainnet id on a local build and
 //      refuses a missing id on any build. It throws with an actionable message
-//      instead of silently talking to the wrong canister — or to nothing.
+//      instead of silently talking to the wrong canister, or to nothing.
 //
 // The mainnet ids are still displayed as text in the "Verify the Code" panel;
 // that display is legitimate and comes from ic-config.js MAINNET_CANISTER_IDS.
