@@ -484,7 +484,7 @@ is true.
 | [T-14](#t-14) | high | FIXED | 14 | `assertBundleLocalGateway(GATEWAY_PORT)` in `tools/shots/lib/frontend-build.mjs`, called by `buildFrontend` — so it runs on `dev.sh local-up` and on every screenshot sweep. **Proved RED by building with the PRE-FIX environment** (`buildEnvFor` minus the two keys this fix adds): *`ABORT: the built bundle … contains no reference to the local gateway port 8077`*; green on the fixed build (`port 8077 found in 1 built file(s)`). **And verified on rendered pixels through a plain browser with no shim:** `http://5uljf-…-cai.localhost:8077/` renders *3 tables · 0/17 seats · 0% rake* with no console error, where before it showed a raw fetch stack trace and "The lobby canister is reporting no tables" | `tools/shots/lib/frontend-build.mjs` `buildEnvFor`, `tools/shots/run.mjs`, `tools/shots/perf.mjs` | the deployed local frontend points its agent at **127.0.0.1:4943** while the gateway is on 8077, so the app only works behind the screenshot harness's own shim. Opened in a plain browser it shows a raw fetch stack trace and "The lobby canister is reporting no tables" |
 | [D-03](#d-03) | medium | OPEN | — | — | every component `<style>` block | 16 border radii, 28 font sizes, 9 greens, 6 ambers, 11 greys, 8 panel tints, 8 panel strokes; four buttons in one header row with three heights, two radii, two font sizes and two accent families |
 | [D-06](#d-06) | medium | OPEN | — | — | `README.md` lines 95-125, `docs/SHUFFLE-SPEC.md` | two claims a stranger reads as stronger than they are: *"the commitment is published before the deal"* (true only inside a single message, `start_new_hand` commits and deals atomically, so no outsider can observe the commitment before cards exist), and *"You can verify that the deployed canisters match this source code"* (addressed to people who by construction cannot run the procedure) |
-| [D-07](#d-07) | medium | OPEN | — | — | `README.md` §Verify the Code, the "⚠️ The mainnet canisters do not satisfy this yet" box | two trust surfaces of the same product make opposite claims about the same fact, which is [T-21](#t-21) again on the page a stranger reads first. The README box says the deployed mainnet modules **predate** the reproducible pipeline, carry no `git:revision`, and that a verifier should expect `NOT VERIFIED`. The wave-11 handover states all six backend canisters and the frontend run this tree and the hashes match a reproducible build **6 of 6**. One of the two is false and the README is the one a player reads |
+| [D-07](#d-07) | medium | FIXED-NO-GATE | 15 | none | `README.md` §Verify the Code: the box (now "What mainnet runs today, and how far behind `main` it is") and the "can you check it today" table row | two trust surfaces of the same product make opposite claims about the same fact, which is [T-21](#t-21) again on the page a stranger reads first. The README box says the deployed mainnet modules **predate** the reproducible pipeline, carry no `git:revision`, and that a verifier should expect `NOT VERIFIED`. The wave-11 handover states all six backend canisters and the frontend run this tree and the hashes match a reproducible build **6 of 6**. One of the two is false and the README is the one a player reads |
 | [E-08](#e-08) | medium | FIXED | 11 | CI `candid-check` → `./scripts/check-candid.sh --declarations` (self-tests that it can go red before it judges) | `src/table_canister/table_canister.did` | the published Candid does not describe the deployed code (241 diff lines) |
 | [E-10](#e-10) | medium | OPEN | — | — | `PENDING_WITHDRAWALS`, `LAST_WITHDRAWAL` | not in `PersistentState`, so the withdrawal cooldown resets on every upgrade |
 | [E-33](#e-33) | medium | OPEN | — | — | `join_table` / `start_new_hand` | no post-or-wait-for-the-big-blind rule, so a player can cycle in and out taking free non-blind hands |
@@ -9152,7 +9152,27 @@ discovered. 7 files, 7 run, including `test-solvency.mjs`, which the repo's prim
 never executed.
 
 <a id="d-07"></a>
-### D-07 — medium — the README tells a stranger the deployed code is unverified; the handover says it matches 6 of 6 — STATUS: OPEN
+### D-07 — medium — the README tells a stranger the deployed code is unverified; the handover says it matches 6 of 6 — STATUS: FIXED-NO-GATE (wave 15)
+
+**FIXED 2026-09-16 (wave 15 here = the September README pass), by reading the canisters and
+rewriting the box to say only what they say.** The daily *Deployed drift* job
+(`scripts/check-deployed.sh --network ic --require-clean`, run 35090414556) reads `git:revision`
+and `git:dirty` off all six mainnet canisters: every one answers `134550ea4ebd`, five answer
+`clean`, `table_1` answers `dirty`. The README box now states exactly that, names the drift job
+and [issue #3](https://github.com/JoshDFN/cleardeck/issues/3) as the live status, and tells a
+verifier to check out `134550e` before building, because `main` is 78 commits past it
+(`7e553fc` on 2026-09-16). The "can you check it today" table row was changed from **No, not
+yet** to the same instruction.
+
+**The hash half was not re-run here.** Docker was not running on the machine that made this
+change, so the box makes no claim about whether the hashes match, in either direction: it tells
+the reader to build and compare, which is what the rest of the section is for. If the wave-11
+handover's **6 of 6** is re-run and holds, the box can say so; if it does not hold,
+[T-33](#t-33) is not closed and this entry reopens. **No gate**: nothing automatic compares the
+README's prose against the labels the canisters publish. The obvious one is a line in
+`scripts/check-deployed.sh` that fails when the short sha the README names is not the one the
+fleet reports; it is not written, so this is FIXED-NO-GATE and says so.
+
 
 **Status: executed 2026-08-06, by reading both surfaces.** `README.md` §"Verify the Code" carries
 a boxed warning:

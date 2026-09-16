@@ -14,14 +14,35 @@ anything. The shuffle needs no trust. The custody does.
 
 ## Screenshots
 
+Taken by the screenshot harness in [`tools/shots`](tools/shots/README.md) against a local replica
+running this tree. Nothing is mocked: every card, pot, balance and price on these screens came out
+of a canister, and a shot fails if a figure on the screen disagrees with the chain.
+
 <p align="center">
-  <img src="docs/screenshots/lobby.png" alt="Lobby - Browse Tables" width="800"/>
-  <br/><em>Lobby - Browse available tables with different stakes</em>
+  <img src="docs/screenshots/lobby.png" alt="Lobby: three cash tables, every figure read live from its table contract" width="800"/>
+  <br/><em>Lobby. Blinds, buy-ins, seats and clocks are read from the table contracts, not from a list.</em>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/table.png" alt="Poker Table" width="800"/>
-  <br/><em>Poker Table - Real-time gameplay with BTC stakes</em>
+  <img src="docs/screenshots/table.png" alt="6-Max ICP table with the hero to act: pot odds, sizing presets and the sealed deck" width="800"/>
+  <br/><em>6-Max ICP table, your turn: pot odds, sizing presets, the sealed deck, and the notices that never leave the screen.</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/proof.png" alt="Fairness proof after a hand: 7 of 7 cards re-derived in the browser from the committed seed" width="800"/>
+  <br/><em>After the hand: the fairness proof re-derives every card you saw from the revealed seed, in your browser.</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/replay.png" alt="Hand replay with the action log and equity at every street" width="800"/>
+  <br/><em>Hand replay from the archive: every action and amount, with equity at every street.</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/lobby-mobile.png" alt="Lobby on a 390 px phone" width="300"/>
+  &nbsp;&nbsp;&nbsp;
+  <img src="docs/screenshots/table-mobile.png" alt="6-Max table on a 390 px phone, hero to act" width="300"/>
+  <br/><em>The same lobby and table on a phone.</em>
 </p>
 
 ## Demo
@@ -210,8 +231,8 @@ argument, no role and no emergency in which it emits one. It also closes the tab
   `deposit_cycles` is callable by *any* principal, so anybody can top the canisters up.
 * **The NNS.** Subnet replica software is chosen by NNS proposal and no application canister binds
   it.
-* **Bugs in the table canister.** Run `./scripts/register-stats.sh` for today's count (69 open
-  across both registers at the close of wave 12), and the guardian touches none of them.
+* **Bugs in the table canister.** Run `./scripts/register-stats.sh` for today's count (67 open
+  across both registers on 2026-09-16), and the guardian touches none of them.
 
 **And what it would cost.** Once the guardian holds the seat, the operator's key stops reaching
 every `require_controller()` method on the table — including the *audit* ones
@@ -306,26 +327,29 @@ the build was not reproducible (the same source at two different directories pro
 different hashes), and there was no way to ask a canister which commit it was. All three are
 fixed below, and CI now fails if any of them regresses.
 
-> ### ⚠️ The mainnet canisters do not satisfy this yet
+> ### ⚠️ What mainnet runs today, and how far behind `main` it is
 >
-> The build pipeline described here is new. **The modules currently deployed to the mainnet
-> canister IDs listed above were built before it existed**, on a developer's laptop, with the
-> old non-reproducible recipe. Concretely, if you run the procedure below against mainnet
-> today you should expect:
+> The fleet was last deployed on 2026-08-06 through this pipeline. All six backend canisters
+> answer `icp canister metadata <id> git:revision -e ic` with commit `134550e`. Five of them
+> report `git:dirty = clean`. **`table_1` reports `dirty`**: that module was built from a tree
+> with uncommitted changes, so no commit reproduces it and nobody outside the machine that built
+> it can verify it. Treat that one canister as unverified until it is redeployed from a clean
+> tree.
 >
-> - `icp canister metadata … git:revision` to fail or return nothing, because the deployed
->   modules carry no such metadata; and
-> - the hashes to **not** match, and the script to print `NOT VERIFIED`.
+> `main` has moved on since that deploy. The daily read-only job
+> [Deployed drift (mainnet vs main)](.github/workflows/deployed-drift.yml) reads those labels,
+> diffs the interface each canister publishes against the committed `.did`, and checks every
+> running table config against `icp.yaml` and every lobby row against its table contract. It
+> reports on [issue #3](https://github.com/JoshDFN/cleardeck/issues/3) and has been red since
+> 2026-08-07; it stays red until the fleet is redeployed. So if you run `--mainnet` from a
+> checkout of `main`, expect the LABEL line to say the canisters claim a commit you did not
+> build. Check out `134550e` first, then build and compare.
 >
-> That is the honest current state, not a bug in these instructions. It becomes a real match
-> the first time the fleet is redeployed with a module built by this image
-> (`./scripts/verify-build.sh --emit <dir>` produces exactly those bytes). Until that happens,
-> treat the deployed mainnet code as **unverified**, which, given the disclaimer above about
-> unaudited alpha software and funds not being safe, is one more reason not to deposit.
->
-> Everything else in this section is checkable right now: the build is reproducible today
-> (`--two-paths`), and the metadata mechanism has been demonstrated end to end on a local
-> replica, including a non-controller identity reading `git:revision` off a running canister.
+> An earlier version of this box said the deployed modules carried no `git:revision` and were
+> built with the old recipe. That stopped being true on 2026-08-06 and the box was left standing
+> for six weeks ([docs/DEFECTS.md D-07](docs/DEFECTS.md#d-07)). This box makes no claim about
+> whether the hashes match, in either direction. Read both numbers yourself, with the procedure
+> below.
 
 ### What a verifier can and cannot check today
 
@@ -338,14 +362,14 @@ reader to work it out and one of them worked out something false.
 | Does a local replica run a build of this source tree? | **Yes** | `./scripts/dev.sh local-up` then `./scripts/verify-build.sh --local` |
 | Does a local replica run the *container* build, byte for byte — the same check mainnet needs? | **Yes** | `./scripts/dev.sh local-up --docker` then `./scripts/verify-build.sh --local` |
 | Which commit does a canister claim to be? | **Yes**, for any canister deployed by this pipeline, without a key | `icp canister metadata <id> git:revision -e ic` |
-| Does the **mainnet** fleet run a build of this source? | **No, not yet** | the deployed modules predate this pipeline — see the box below |
+| Does the **mainnet** fleet run a build of this source? | **Ask the canister, then build that commit** | all six report `git:revision = 134550e`; five `clean`, `table_1` `dirty` and so unverifiable. Check out `134550e` and run `--mainnet`. Details in the box below |
 | Is the deployed code *correct*, or safe, or audited? | **No.** Nothing here is an audit | — |
 
 The last row is not a formality. Verification answers "is this the code in the repository?"
 and nothing else. This code is unaudited alpha software with known bugs, listed in
 [docs/DEFECTS.md](docs/DEFECTS.md) and [docs/SECURITY-FINDINGS.md](docs/SECURITY-FINDINGS.md);
-the most recent wave's accounting, including every gate's result, is
-[docs/WAVE-10.md](docs/WAVE-10.md).
+the most recent engine wave's accounting, including every gate's result, is
+[docs/WAVE-11.md](docs/WAVE-11.md), and the UI/UX wave's is [docs/UI-WAVE.md](docs/UI-WAVE.md).
 A perfect `VERIFIED` on a canister full of defects verifies the defects.
 
 ### What you need
@@ -613,15 +637,15 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add wasm32-unknown-unknown
 ```
 
-**Node.js 18+**
+**Node.js 20+**
 ```bash
 # Using nvm
-nvm install 18 && nvm use 18
+nvm install 20 && nvm use 20
 ```
 
 **icp-cli (Internet Computer SDK)**
 ```bash
-npm i -g @icp-sdk/icp-cli@1.0.0
+npm i -g @icp-sdk/icp-cli@1.0.2
 # Local canister builds also need ic-wasm:
 cargo install ic-wasm
 ```
@@ -1020,7 +1044,7 @@ This project is designed to be forked, studied, and extended. **Everything was b
 | **Rust** | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | **Wasm target** | `rustup target add wasm32-unknown-unknown` |
 | **Node.js 20+** | `nvm install 20` |
-| **icp-cli** | `npm i -g @icp-sdk/icp-cli@1.0.0` (local builds also need `cargo install ic-wasm`) |
+| **icp-cli** | `npm i -g @icp-sdk/icp-cli@1.0.2` (local builds also need `cargo install ic-wasm`) |
 | **Claude Code** | [Download](https://claude.ai/download) (optional, for AI development) |
 
 ### Quick Start (Local)
