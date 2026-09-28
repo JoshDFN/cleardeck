@@ -1,67 +1,64 @@
-# claude-seat-1: task 1790632429 ("The ckBTC deposit door checks the owner and not the subaccount, so one ckBTC deposit can be credited twice")
+# claude-seat-1: task 1790632440 ("A deal that leaves fewer than two seats able to act runs the board out, and the clock never folds a seat that cannot act")
 
-Closes: 1790632429 (done)
+Closes: 1790632440 (done)
 
-## What landed (branch claude/seat-1, on top of main bad97fa)
+## What landed (branch claude/seat-1, on top of main c773fca)
 
-- e308964 fix: the ckBTC block-index door refuses deposit subaccounts and decodes the ledger's reply, gated by the first harness that runs it against the real ICRC-1 ledger (FINDING 46, E-104, E-105; task 1790632429)
-  - src/table_canister/src/lib.rs `verify_ckbtc_deposit`: (1) refuses, before any claim or credit, a transfer whose `to.subaccount` is present and non-zero; the caller's own deposit subaccount gets the ICP door's wording ("went to YOUR OWN deposit address ... call claim_external_deposit()"), any other subaccount is told which principal's door it is; the all-zero subaccount is treated as the main account (ICRC-1 semantics) and still credited. (2) Two dead decodes fixed, found by the new test's first run: the reply was declared `Vec<TransactionWithId>` (the INDEX canister's shape; the ledger sends `vec Transaction`) and decoded with `Response::candid::<(T,)>()`, which in ic-cdk 0.19 is `decode_one` of a one-field record. Either alone failed every reply, so `notify_deposit` on a BTC table has never credited anything. The door now also checks `first_index` is the block it asked about. No change to the ICP path, the `from` check, the spender check or the anti-replay record. No Candid change.
-  - tests/money_safety/src/wasms.rs: `ckbtc_ledger_wasm()`, the real ICRC-1 ledger module pinned by sha256 d10aba5d6391b3f1245df04822cfc3398010264d9875686f5780fe1aaa0467eb from the SAME immutable commit as the ICP ledger (`$CKBTC_LEDGER_WASM`, cache `target/money-safety/ic-icrc1-ledger.wasm.gz`, then curl). The ICP and ckBTC pins share one resolver (`PinnedLedger`), so the 1790622959 cold-cache fix covers both. The ICP ledger module cannot stand in for ckBTC: it does not export `get_transactions`.
-  - tests/money_safety/src/ledger.rs: `CKBTC_LEDGER_ID`, `CKBTC_TRANSFER_FEE = 10`, the ICRC-1 ledger's `LedgerArg::Init` payload (shapes from the module's own embedded Candid).
-  - tests/money_safety/src/world.rs: a `currency = BTC` world adds a fiduciary subnet and installs the ICRC-1 ledger at mxzaz-hqaaa-aaaar-qaada-cai alongside the ICP ledger; `world.ledger` is the currency's ledger; `transfer_fee()` replaces the hardcoded ICP fee in every helper; `transfer_to_deposit_subaccount_of(from, beneficiary, amount)`.
-  - tests/money_safety/src/table_api.rs: `TableConfig::heads_up_btc()`, btc_table_1's exact init args.
-  - tests/money_safety/tests/ckbtc_door.rs (new, 6 tests): cb00 the ledger is the one the canister names; cb01 the reproducer; cb02 a main-account transfer credited by block index once, refused on replay and across an upgrade; cb03 the explicit zero subaccount; cb04 a stranger's payment into another player's address; cb05 the ICRC-2 pull the canister made itself.
-  - tests/money_safety/Cargo.toml `[[test]] ckbtc_door`; scripts/test-suites.list fast row; scripts/dev.sh `run_ms ckbtc_door -- --test-threads=2` in the money-safety fast subset.
-  - docs/SECURITY-FINDINGS.md: FINDING 46 (fund-theft, FIXED) row and body; FINDING 10's "coverage gap" paragraph gets a CLOSED note. docs/DEFECTS.md: E-104 (fund-theft, FIXED) and E-105 (high, FIXED) rows and bodies; T-35 body gets a note (stays OPEN: the local replica still has no ckBTC ledger).
+- d114a0a fix: a deal that leaves fewer than two seats able to act runs the board out, and the clock never folds a seat that cannot act (E-106, review gap 4; task 1790632440)
+  - src/table_canister/src/lib.rs: `start_new_hand`'s in-lock body is now `pub fn deal_hand(state, deck, &proof, now)` (post antes and blinds, deal, set `action_on`, NO clock) and `pub fn open_the_action(state, now)`, with this hand's history push between them. The order matters: `record_local_hand_result` writes the LAST history entry and `reveal_seed_on_hand_end` looks its entry up by hand number, so a settlement inside the deal had to follow the push or it would have written this hand's result into the previous hand's record. Same message, no await between the steps.
+  - `open_the_action`: when `the_posts_closed_the_betting(state)` (fewer than two seats can act AND none of them owes a call) it runs the board out through `advance_to_next_street`, the rule that function already applies at every later street; otherwise it arms the clock exactly as before. The second clause is a refinement of the task's one-line rule: heads-up with the big blind all-in for 15 and the small blind holding 1,000, ONE seat can act and it owes 5, so it must be asked (test `a_deal_that_leaves_one_seat_owing_a_call_still_asks_it`, green before and after).
+  - `resolve_expired_action_timer`: after the `hand_in_progress` guard, a clock pointed at a seat for which `!can_still_act` is dropped and the hand is moved on through `advance_game` (a closed round runs the board out; an open one moves the clock to the next seat that can act). Returns `None`: nobody timed out, no fold, no timeout charged. This is what heals a table dealt on the old engine and upgraded mid-hand. It routes through `advance_game`, so task 1790632441's executor (leave_table on action) should know the clock path now reaches `advance_game` from one more place.
+  - No settlement arithmetic changed; the run-out is the existing path. Saturating arithmetic unchanged. No check weakened. No Candid change (`deal_hand`, `open_the_action` are host-test `pub fn`s, not canister methods; `table_canister.did` untouched). No TableState field added.
+  - src/table_canister/tests/betting_rules.rs section 6: six tests on the REAL deal (`deal_hand` + `open_the_action` over a stacked deck), asserting the WINNER, not conservation: heads-up both posts all-in; ante table where the antes take everyone all-in (layered side pots by hand strength); one seat owing a call is asked; the only seat that can act and owes nothing gets its uncalled 15 back and the board runs out; the clock never folds an all-in seat (three-handed, action moves on, the seat stays eligible for the nuts); a clock left pointing at an all-in seat heads-up runs the board out.
+  - docs/DEFECTS.md: E-106 (high, FIXED, task 1790632440) register row and write-up naming the gate. docs/CODEBASE-REVIEW-2026-09-28.md gap 4's "Register: not recorded" now points at E-106.
 
-## Red, then green (the new target, POCKET_IC_BIN + ICP_LEDGER_WASM set, `cargo test --test ckbtc_door -- --test-threads=2`)
+## Red, then green (`cargo test -p table_canister --test betting_rules`)
 
-1. Unfixed tree (wasm 9fa2573e): 0 passed; 6 failed. Every `notify_deposit` on the BTC table returned
-   `Failed to decode ckBTC ledger response: CandidDecodeFailed { type_name: "(...GetTransactionsResponse,)", candid_error: "Fail to decode argument 0" }`.
-   This is E-105: the door was dead, so the double credit was latent on mainnet.
-2. Decodes fixed, refusal absent (wasm eda2550d): 4 passed; 2 failed. The double credit itself:
+1. Refactor only (deal split out, clock armed unconditionally as before): 31 passed, 0 failed. Behaviour unchanged.
+2. Tests added, engine unfixed: 32 passed, 5 failed (the sixth, the refinement guard, passes by design):
    ```
-   sent 50000 sats to alice's deposit subaccount (block 2)
-     notify_deposit -> Ok(50000)
-     claim_external_deposit -> Ok(99990)
-     alice's escrow: 99990 sats; ledger holds 49990 sats for the table
-   cb01 panicked: the sweep is the door for a subaccount arrival and must credit it once, minus the fee
-     left: Some(99990)  right: Some(49990)
-
-   bob -> alice's address, 40000 sats (block 2)
-     notify_deposit as bob -> Ok(40000)
-     notify_deposit as alice -> Err(Err("This deposit has already been credited"))
-     alice's sweep -> Ok(39990)
-     escrow: bob 40000 alice 39990; ledger holds 39990
-   cb04 panicked: bob was credited for a transfer that went to alice's deposit address: Ok(40000)
+   a_heads_up_deal_where_the_posts_leave_both_seats_all_in_runs_the_board_out
+     seat 0, all-in for 15 from the big blind holding aces, must end with 25 (the 20 contested + its 5 uncalled).
+     Instead: the deal armed Some(ActionTimer { player_seat: 0, started_at: 1000000000000, expires_at: 1030000000000, using_time_bank: false }),
+     the clock folded Some(0), phase HandComplete, board []
+       left: [5, 20]   right: [25, 0]
+   an_ante_table_whose_posts_leave_every_seat_all_in_runs_the_board_out_and_pays_by_hand_strength
+     aces take the 90 main pot and kings the 40 side pot. Instead: the deal armed Some(ActionTimer { player_seat: 0, .. }), the clock folded Some(0)
+       left: [0, 130, 0]   right: [90, 40, 0]
+   a_deal_where_the_only_seat_that_can_act_is_owed_nothing_runs_the_board_out
+     the deal armed Some(ActionTimer { player_seat: 0, .. }), the clock folded Some(0)   (the aces, all-in for 5, were folded out of their 10)
+   the_clock_never_folds_a_seat_that_cannot_act
+     panicked: a seat that cannot act cannot be folded by its clock (resolved as Some(0))
+   a_clock_left_pointing_at_an_all_in_seat_runs_the_board_out_instead_of_folding_it
+     the clock folded Some(0); left: [5, 20]  right: [25, 0]
    ```
-3. Refusal added (wasm efbd0a3b): `test result: ok. 6 passed; 0 failed`.
+3. Fix applied: 37 passed, 0 failed. Whole crate: lib 57, betting_rules 37, coherence_regressions 7, hand_membership 6, integration_test 2, money_safety 6, unit_tests 7, all green.
 
 ## Verified (this worktree, no replica started, no icp command run, machine default identity untouched)
 
 - `gh pr list --repo JoshDFN/cleardeck --state open`: one open PR (#6, docs/readme-refresh); it does not do this task.
-- `make selftest`: guard selftest passed.
-- `make hygiene`: repo hygiene clean.
-- `./scripts/check-declarations.sh`: all 4 pinned versions agree.
-- `./scripts/check-suite-wiring.sh`: exit 0, 54 rows, every target run by something (the new row included).
+- `make selftest`: exit 0, guard selftest passed.
+- `make hygiene`: exit 0, repo hygiene clean.
+- `./scripts/check-declarations.sh`: exit 0, all 4 pinned versions agree.
+- `./scripts/check-suite-wiring.sh`: exit 0 (no new cargo target; the tests live in the existing `betting_rules` target, `workspace` tier).
 - `./scripts/register-stats.sh --check`: exit 0, register consistent.
-- `POCKET_IC_BIN=$HOME/.cache/dfinity/versions/0.31.0/pocket-ic ICP_LEDGER_WASM=/Users/josh/Desktop/cleardeck/target/money-safety/ledger-canister.wasm.gz make test`: exit 0, wall 1677 s (28 min), "all fast gates green"; money-safety fast subset 1421 s with ckbtc_door 6/6 inside it; workspace 16 s, differential 3 s, settlement 99 s + 11 s, shots 5 s, archive 80 s, no-peeking 37 s. Run once, in the foreground, after the cheap gates, on commit 3033023 (amended to e308964 only to drop an `unused mut` warning in the new test; `cargo test --test ckbtc_door --no-run` is warning-free after it, no behaviour change).
-- The pinned ICRC-1 ledger module was downloaded once into this worktree's `target/money-safety/` by the harness's own curl path and hash-checked; its exports were checked with `wasm-objdump` (get_transactions, icrc1_transfer, icrc2_approve, icrc2_transfer_from, icrc1_balance_of, icrc3_get_blocks all present).
+- `make known-defects`: exit 0, the one marker (E-13 straight) still red as expected; nothing turned green.
+- `POCKET_IC_BIN=$HOME/.cache/dfinity/versions/0.31.0/pocket-ic ICP_LEDGER_WASM=/Users/josh/Desktop/cleardeck/target/money-safety/ledger-canister.wasm.gz make test`: exit 0, wall 1612 s (27 min), "all fast gates green", run once in the foreground on commit d114a0a after the cheap gates. Steps: suite wiring 17 s, candid bindings 1 s, workspace 12 s (betting_rules 37/37 inside it), wasm build 9 s, differential 3 s, money-safety fast subset 1343 s (all 23 targets green, the previous-release upgrade test included), settlement oracle 93 s + pinned reproducers 11 s, screenshot self-tests, archive analyser, no-peeking harness all green.
 
 ## Skipped
 
-- `./scripts/check-candid.sh --declarations`: no public interface or `.did` change (the fix is inside `verify_ckbtc_deposit`'s body; `table_canister.did` untouched).
+- `./scripts/check-candid.sh --declarations`: no public interface or `.did` change.
 - Frontend steps 4 and 5: `src/cleardeck_frontend` untouched.
-- `./scripts/verify-build.sh --two-paths`: no build input changed (Cargo.toml/Cargo.lock of the root workspace, recipes, toolchain, Dockerfile, icp.yaml all untouched; tests/money_safety/Cargo.toml is the detached harness crate and gained only a `[[test]]` stanza).
-- `make diff-full`, `make known-defects`, live screenshots: not applicable (no evaluator or engine-defect change; rule 3 paths).
-- No replica was needed and none was started; nothing to recycle.
+- `./scripts/verify-build.sh --two-paths`: no build input changed.
+- `make diff-full`: no evaluator change.
+- Live screenshots / replica: not needed; rule 3 paths; nothing started, nothing to recycle.
 
 ## DEFERRED
 
-- Mainnet upgrade of `btc_table_1` (and the rest of the fleet) with this fix: operator lane. Covered by the already-queued 1790632499 ("The six mainnet backends run one reproducible build, and check-fleet-coherence exits 0", `lane: operator`, `after: 1790632453`), which redeploys all six backends from a clean main with `IDENTITY=<operator's mainnet identity> ./scripts/deploy-mainnet.sh`. No duplicate filed. Until it runs, `notify_deposit` on `btc_table_1` stays as it is today: a dead door (E-105), so the double credit is not reachable on the shipped module, but ckBTC sent to the table's main account cannot be credited either.
+- Mainnet upgrade of the four table canisters with this fix: operator lane. Covered by the already-queued 1790632499 ("The six mainnet backends run one reproducible build, and check-fleet-coherence exits 0", `lane: operator`), which redeploys the fleet from one build. No duplicate filed. Until it runs, a mainnet table whose posts leave every seat all-in still folds the big blind on its clock; a table upgraded while sitting in that state is healed by the clock guard on its next tick.
 
 ## Not in scope, left as it was
 
-- The ckBTC minter and the native-BTC path (`get_btc_deposit_address`, `update_balance`) are still executed by no test; T-35 (the local REPLICA has no ckBTC ledger) stays OPEN. FINDING 46's "What is still open" says so.
+- Auto-check on expiry (1790622948) and leave_table on action skipping `is_betting_round_complete` (1790632441): not widened into. Note for 1790632441: the clock guard reaches `advance_game` from `resolve_expired_action_timer` with the timer already cleared.
 
-help: no user-facing change (a refusal message on a door that could not answer at all before; no frontend change).
+help: no user-facing change (engine only; no frontend change).
