@@ -462,6 +462,7 @@ column.
 **Sorted worst-first: everything `OPEN` before everything closed, by severity inside that.**
 | finding | sev | status | wave | gate — what would catch it coming back | DEFECTS.md | one line |
 |---|---|---|---|---|---|---|
+| [FINDING 46](#finding-46) | fund-theft | FIXED | task 1790632429 | `cd tests/money_safety && cargo test --test ckbtc_door -- --test-threads=2` (`dev.sh test` step 4, `scripts/test-suites.list` fast tier) — `cb01` and `cb04` verified RED on the tree with E-105 fixed and the refusal absent: *"notify_deposit -> Ok(50000) / claim_external_deposit -> Ok(99990) / alice's escrow: 99990 sats; ledger holds 49990"* and *"escrow: bob 40000 alice 39990; ledger holds 39990"*, `4 passed; 2 failed`; green with it, `6 passed; 0 failed` | [E-104](DEFECTS.md#e-104), [E-105](DEFECTS.md#e-105) | **one ckBTC deposit credited twice.** `verify_ckbtc_deposit` accepted any transfer whose `to.owner` was this canister and never read `to.subaccount`, so a transfer to a player's own deposit address was credited by `notify_deposit(block)` AND by `claim_external_deposit()`'s sweep: 50,000 sats in, 99,990 sats owed, and the same shape credits a stranger for money paid into somebody else's address. The ICP door compares the whole 32-byte account identifier; the ckBTC door compared the owner. **Latent on the shipped module**, because [E-105](DEFECTS.md#e-105) had killed the door first: both of its ledger decodes were wrong, so `notify_deposit` on `btc_table_1` has never credited anything and could not have been used for this either. The first test ever to run the door against the real ICRC-1 ledger found E-105 in its first run and this in its second; the two are fixed in one commit because fixing the decode alone would have opened the theft |
 | [FINDING 45](#finding-45) | fund-theft | FIXED | 14 | `cd tests/money_safety && cargo test --test deposit_trust_root -- every_money_door_in_the_modal_refuses_an_unpinned_table` — verified RED by removing the two guards on the tree that has them: *"loadBtcDepositAddress() asks an unpinned canister for a Bitcoin address (guard at 6033, fetch at 1110)"*, `6 passed; 1 failed`; green with them, `7 passed; 0 failed` | [T-47](DEFECTS.md#t-47) | **[FINDING 42](#finding-42) closed three money doors in the deposit modal and there were four.** The native-Bitcoin address is not derived from the pinned canister id — `loadBtcDepositAddress()` calls `get_btc_deposit_address()` on the id `lobby.get_tables()` supplied and the template renders whatever comes back under **"Your Bitcoin Deposit Address"** with a Copy Address button, with no trust check anywhere in that subtree. That is [FINDING 40](#finding-40) unfixed, on a chain where a transfer cannot be reversed. The attacker picks the branch as well: `currency` comes off the same uncertified reply, so a substituted registry naming a hostile canister with `currency = variant { BTC }` selects the flow. **The gate that missed it is named `every_money_door_in_the_modal_refuses_an_unpinned_table`**, and the browser reproducer exited 0 printing `✓ REFUSED` while this door stood open — it scrapes the Claim button and never looks at the BTC panel. Found by wave 14's critic pass, closed by its coherence pass |
 | [FINDING 39](#finding-39) | high | FIXED | 13 | `dev.sh test` step 4 -> `cargo test --test regressions` -> `reg39_a_settled_hand_is_never_settled_a_second_time`, both legs verified red on the unfixed build; plus `dev.sh test` step 1 -> `cargo test --workspace` -> `payout_tests::e41_*`, one test per guard, each verified red when its own guard alone is removed | [E-41](DEFECTS.md#e-41) | **the canister owed 4,000,000 e8s it did not hold, because A HAND SETTLED TWICE.** `finish_hand` empties `state.pot` and leaves `total_bet_this_hand` standing, so between hands the table holds a complete payout basis over an empty pot. `use_time_bank` never asked whether a hand was in progress and armed an action clock on a finished one; the clock then folded a seat out of a hand already paid, and `advance_game` handed the finished hand to `end_hand_single_winner`, which paid the whole basis again. `plan.conserves()` was TRUE at every step, so nothing trapped. Shrunk from 400 steps x 2 seeds to **one limped heads-up hand and five ordinary player calls** |
 | [FINDING 23](#finding-23) | fund-theft | OPEN | — | — | [E-84](DEFECTS.md#e-84) | `uninstall_code` and `install_code --mode reinstall` are FINDING 07 at full scale and the wave-7 audit does not cover them. **The fifth auditor EXECUTED it** — 5 ICP deposited as a player, one `icp canister install --mode reinstall` with the same wasm and no code change, and her balance read 0 while the ledger still held her 5 ICP at the canister's account. **Wave 12: reproduced at 40.00000000 ICP by `./scripts/dev.sh custody`, given the DEFECTS.md id it never had ([E-84](DEFECTS.md#e-84)), disclosed in the README and on the deposit screen ([D-13](DEFECTS.md#d-13)), and mitigated by `src/guardian_canister/` — which is BUILT AND GATED BUT NOT DEPLOYED, so mainnet is unchanged and this stays OPEN.** The gate column stays `—` on purpose: the tests measure the defect, they do not stop it. **WAVE 12, AFTER THE DISCLOSURE LANDED: THE WORST CASE IS THEFT, NOT DESTRUCTION.** The disclosure told a depositor the operator could not pay the money to themselves. A controller is not bound to the ClearDeck wasm: a 500-byte module installed with the SAME verb as the wipe moved **39.99990000 ICP** of player deposits into a wallet the operator owns ([FINDING 23c](#finding-23), `finding23c_*`, [D-14](DEFECTS.md#d-14)) |
@@ -2108,6 +2109,14 @@ Closing it means pinning a real ckBTC ledger wasm (and, for the native-BTC path,
 the way `wasms.rs` pins the ICP ledger, and giving `TableConfig` a BTC constructor. That is a
 harness change, in a file with a different owner, and is the largest remaining untested surface on
 the money paths.
+
+> **CLOSED, task 1790632429 (2026-09-28).** `tests/money_safety/tests/ckbtc_door.rs` installs the
+> real ICRC-1 ledger module (the ckBTC ledger's code, pinned by sha256 in `wasms.rs`) at
+> `mxzaz-hqaaa-aaaar-qaada-cai` on a table with `btc_table_1`'s exact init args, and drives every
+> branch of `verify_ckbtc_deposit`. The paragraph above was right to be uneasy: the door's first
+> execution found it could not decode a single ledger reply ([E-105](DEFECTS.md#e-105)), and its
+> second found the double credit ([FINDING 46](#finding-46)). The ckBTC minter and the native-BTC
+> path remain unexecuted.
 
 ### A residual weakness this fix INTRODUCES: the watermark can be pushed up on purpose
 
@@ -7342,3 +7351,109 @@ the one its own minter would produce. That is the BTC analogue of
 also remains unverifiable ([FINDING 42](#finding-42)'s own open leftover): a
 substituted `get_tables()` now yields a table you cannot deposit to, rather than an
 address that takes your money.
+
+---
+
+<a id="finding-46"></a>
+## FINDING 46 — fund-theft — one ckBTC deposit credited twice: the block-index door checked the owner of the account and not the account — STATUS: FIXED (task 1790632429)
+
+### What was true
+
+An ICRC-1 account is `(owner, subaccount)`. Every deposit address this canister
+publishes is `(canister, sha256("cleardeck-deposit:" || principal))`, so its owner
+is the canister. `verify_ckbtc_deposit`, the ckBTC branch of `notify_deposit`,
+checked
+
+```text
+lib.rs:4728   if transfer.to.owner != canister { return Err(...) }
+lib.rs:4733   if transfer.from.owner != caller { return Err(...) }
+```
+
+and never read `transfer.to.subaccount`. A transfer to a player's own deposit
+address therefore passed both checks, was claimed in the per-block anti-replay
+record, and was credited in full. The satoshis were still at the deposit address,
+which is `claim_external_deposit()`'s to sweep, and the sweep writes a NEW block,
+so the record saw no repeat and credited them again, minus the fee.
+
+The ICP branch compares the whole 32-byte account identifier
+(`compute_account_identifier`) against the canister's MAIN account, so a transfer to
+a deposit subaccount is refused there with a message that names
+`claim_external_deposit()` ([FINDING 34](#finding-34)). The two doors had different
+rules for the same question.
+
+### Executed
+
+`tests/money_safety/tests/ckbtc_door.rs`, on a heads-up table with `btc_table_1`'s
+init args, against the real ICRC-1 ledger module at the ckBTC id. On the tree with
+[E-105](DEFECTS.md#e-105) fixed and this refusal absent:
+
+```text
+sent 50000 sats to alice's deposit subaccount (block 2)
+  notify_deposit -> Ok(50000)
+  claim_external_deposit -> Ok(99990)
+  alice's escrow: 99990 sats; ledger holds 49990 sats for the table
+
+bob -> alice's address, 40000 sats (block 2)
+  notify_deposit as bob -> Ok(40000)
+  notify_deposit as alice -> Err(Err("This deposit has already been credited"))
+  alice's sweep -> Ok(39990)
+  escrow: bob 40000 alice 39990; ledger holds 39990
+
+test result: FAILED. 4 passed; 2 failed
+```
+
+The second shape is the one to read twice: bob paid into alice's address and was
+credited for it, alice was told the block was already spent, and her sweep
+credited it again. Everything the table owes above what it holds is another
+player's ckBTC, withdrawable through `withdraw`.
+
+### Why it was latent on mainnet, and why that is not comfort
+
+`btc_table_1` runs this code and holds real ckBTC. The door was nevertheless not
+usable for this, or for anything: [E-105](DEFECTS.md#e-105) had it decoding the
+ledger's reply as the INDEX canister's shape (`vec TransactionWithId`) and as a
+one-tuple record, so every `notify_deposit` on a BTC table returned *"Failed to
+decode ckBTC ledger response"*. That is [FINDING 06](#finding-06) again on the
+other ledger, and it means nobody has been credited twice on mainnet through this
+path.
+
+It also means the double credit was one honest fix away. Anybody repairing E-105
+on its own — which its symptom, a stranded main-account deposit, would eventually
+have demanded — would have shipped this. The two are fixed in one commit, and the
+gate holds both: `cb02` fails if the decode breaks, `cb01` and `cb04` fail if the
+refusal goes.
+
+### The fix
+
+`verify_ckbtc_deposit` now refuses, before any claim or credit, a transfer whose
+`to.subaccount` is present and non-zero. The all-zero subaccount IS the main
+account under ICRC-1 and some wallets always send it spelled out, so it is credited
+(`cb03` pins that). The caller's own deposit subaccount gets the ICP door's
+wording — the money is at the right place and the wrong door, nothing is lost,
+call `claim_external_deposit()` — and any other subaccount is told which
+principal's door it is. No change to the ICP path, the `from` check, the spender
+check or the anti-replay record.
+
+### The gate, and how it was proved
+
+`cargo test --test ckbtc_door -- --test-threads=2`, in `dev.sh test` step 4 and in
+`scripts/test-suites.list`'s fast tier. Six tests: the ledger is the one the
+canister names (`cb00`), the reproducer (`cb01`), the door's legitimate case
+credited once and refused on replay and across an upgrade (`cb02`), the zero
+subaccount (`cb03`), the stranger's payment (`cb04`), and the ICRC-2 pull the
+canister made itself (`cb05`). Red above; green after the fix, `6 passed; 0 failed`.
+
+The harness change that made this executable: `wasms.rs` pins
+`ic-icrc1-ledger.wasm.gz` from the same immutable commit as the ICP ledger (sha256
+`d10aba5d…`), because the ICP ledger module does not export `get_transactions` and
+so cannot stand in for ckBTC; `World::new` installs it at the ckBTC id on a
+fiduciary subnet whenever the table's currency is BTC, alongside the ICP ledger;
+`TableConfig::heads_up_btc()` is `btc_table_1`'s shape.
+
+### What is still open
+
+The ckBTC MINTER and the native-BTC path (`get_btc_deposit_address`,
+`update_balance`) are still executed by no test. [T-35](DEFECTS.md#t-35) is
+unchanged: the LOCAL REPLICA still has no ckBTC ledger, so nothing about a BTC
+table can be seen on a rendered page. The mainnet upgrade of `btc_table_1` is the
+operator's (task 1790632499 redeploys the fleet from one build).

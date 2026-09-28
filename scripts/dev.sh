@@ -1066,6 +1066,15 @@ money_safety_fast_subset() {
     # "dust is visible and recoverable by topping up" -- was outside every target
     # that anyone runs. Named explicitly for the deposit_replay reason above.
     run_ms deposit_subaccount_anchor  -- --test-threads=2
+    # ckbtc_door is the gate on THE ckBTC DEPOSIT DOOR (docs/SECURITY-FINDINGS.md
+    # FINDING 46, docs/DEFECTS.md E-104). `verify_ckbtc_deposit` accepted any
+    # transfer whose `to.owner` was the canister and never read `to.subaccount`,
+    # so one transfer to a deposit address was credited by block index AND by the
+    # sweep, on the table that holds real ckBTC. FINDING 10 had recorded the door
+    # as "executed by no test" for three waves: the ICP ledger module has no
+    # `get_transactions`, so this target is the first to install the real ICRC-1
+    # ledger at the ckBTC id. Named explicitly for the deposit_replay reason above.
+    run_ms ckbtc_door  -- --test-threads=2
     # wave6_coherence carries probe1 (the first auditor's fund lock, reached by real
     # silence), probe4 (docs/SECURITY-FINDINGS.md FINDING 17: the fold-out winner
     # must be PAID the pot -- an OUTCOME assertion, because the totals were exact

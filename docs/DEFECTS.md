@@ -435,6 +435,8 @@ is true.
 
 | id | sev | status | wave | gate — what would catch it coming back | where | one line |
 |---|---|---|---|---|---|---|
+| [E-104](#e-104) | fund-theft | FIXED | task 1790632429 | `cd tests/money_safety && cargo test --test ckbtc_door -- --test-threads=2` (`dev.sh test` step 4; fast tier of `scripts/test-suites.list`), `cb01` + `cb04`, both verified RED on the tree without the refusal: *"alice's escrow: 99990 sats; ledger holds 49990"* | `verify_ckbtc_deposit` (`notify_deposit` on a BTC table) | **one ckBTC deposit credited twice.** The door checked `to.owner == canister` and never `to.subaccount`, so a transfer to a player's deposit address was credited by block index AND by `claim_external_deposit()`'s sweep, which is its own new block the anti-replay record has never seen. 50,000 sats in, 99,990 owed; a stranger paying into somebody else's address is credited too. The ICP door compares the full account identifier; this one compared the owner. Latent on mainnet only because [E-105](#e-105) had killed the door first; fixed together. [FINDING 46](SECURITY-FINDINGS.md#finding-46) |
+| [E-105](#e-105) | high | FIXED | task 1790632429 | the same `ckbtc_door` target, `cb02` and `cb03`: a main-account ckBTC transfer credited by block index exactly once; 6 of 6 failed with *"Failed to decode ckBTC ledger response"* on the unfixed tree | `verify_ckbtc_deposit`, the `get_transactions` decode | **the ckBTC block-index door never decoded one ledger reply.** It declared the reply as `vec TransactionWithId` (the INDEX canister's shape; the ledger sends `vec Transaction`) and decoded it with `Response::candid::<(T,)>()`, which is `decode_one` of a one-field record, not the argument tuple. Either alone fails every reply, so `notify_deposit` on `btc_table_1` has returned a decode error since the door was written and ckBTC at the table's MAIN account had no door that could credit it: [FINDING 06](SECURITY-FINDINGS.md#finding-06) on the other ledger, found the same way, by the first test to run the door against the real module |
 | [E-102](#e-102) | high | OPEN | — | — (**the gate exists and is RED**: `./scripts/check-fleet-coherence.sh --network ic`, committed at `eb819a8`. The row stays gateless because the DEFECT is live on mainnet: a gate that reports a split fleet does not un-split it. It flips to FIXED when the fleet is redeployed from one build and the same command exits 0) | the mainnet deployment itself; `scripts/check-deployed.sh` and `scripts/check-deployed-config.sh`, which are both per-canister | **two different engines are running on mainnet right now, and no gate in this repository could ever have said so.** `table_1`, `table_2`, `table_3` and `btc_table_1` are four instances of ONE package, `table_canister`. They differ only in `init_args`, which are install-time arguments and not part of the module, so all four **must** report the same module hash. Certified state says `table_1` is `4511ab187cff8b90…` and the other three are `9c0ed3a138a3753d…`. Whoever sits at the older table plays with every money defect closed since that build. It happened when a deploy went out from a tree that was being edited ([E-79](#e-79)) and it survived every wave since, because `check-deployed.sh` compares each canister against an expectation and `check-deployed-config.sh` compares each canister against `icp.yaml` — **both are per-canister, so a fleet that is individually plausible and collectively incoherent passes both.** It also breaks the only trust story this project has: `README.md` tells a stranger to build the Docker image and compare hashes, that image builds `table_canister` once, so a verifier following our own instructions matches one canister of four and correctly concludes the rest are not the code we published |
 | [E-103](#e-103) | high | FIXED | 14 | `./scripts/check-fleet-coherence.sh --network ic` reads CERTIFIED state via `dfx canister info --identity anonymous`, and its `module_hash()` carries the measurement that retired the dashboard. Verified by construction: the dashboard path is gone, so it cannot be silently reintroduced without editing a function whose comment is the incident | `README.md` "Verify the Code"; any verifier who reads `https://ic-api.internetcomputer.org` | **the source we point a stranger at for "what the IC reports" served a hash that was silently stale, and it changed the answer.** Building [E-102](#e-102)'s gate on the public dashboard API looked right — it needs no key, so anyone on earth can run it. Within one hour the same endpoint returned two different module hashes for `table_3` (`511c9d0e6d508d62…` then `9c0ed3a138a3753d…`) with **nothing deployed in between**: every deploy in that window was `-e local`, confirmed by scanning the five builders' transcripts. The dashboard is an INDEX over the IC, it lags, and it is not certified. The first reading of [E-102](#e-102) was consequently wrong in public — reported as three engines when certified state says two — and the error direction is the dangerous one in both senses: a verifier can read fraud where there is none, or all-clear over a split fleet. **A trust instrument may not rest on an uncertified cache.** This is [FINDING 42](SECURITY-FINDINGS.md#finding-42)'s lesson (*the wire is not the trust root*) arriving at the verification path instead of the deposit path, one wave later, found by an instrument written for a different defect |
 | [D-14](#d-14) | fund-theft | FIXED | 12 | `dev.sh hygiene` -> `the retracted custody claim has not come back (FINDING 23c)` (an INVERTED check: the two retracted sentences must be absent from `README.md` and the frontend) + `dev.sh custody` -> `finding23c_the_operator_can_pay_the_ledger_balance_to_themselves`, which executes the theft | `DepositModal.svelte` `.custody-notice`; `README.md` "What that means for a deposit" | **the custody disclosure understated a fund-THEFT capability as destruction, on the screen a player deposits from.** It promised that the money would be "unreachable by anybody, including the operator", and the README's decision table answered "Can the operator take the ICP out of the canister to their own wallet?" with **No**. Both false. A controller is not bound to the ClearDeck wasm: a 500-byte module installed with the SAME verb as the wipe moved **39.99990000 ICP** into a wallet the operator owns. Every presence check in [D-13](#d-13)'s gate was GREEN while the paragraph lied, which is why the retraction needed an inverted gate of its own |
@@ -6527,6 +6529,15 @@ minimum ([T-26](#t-26)) is right in the canister and in the source and **has nev
 rendered page**, because there is no BTC row in the local lobby and Withdraw is disabled at zero
 balance. Deploying a local ckBTC ledger is the one change that makes both verifiable.
 
+**Partly answered from the other side, task 1790632429 (2026-09-28).** The money-safety
+harness now installs the real ICRC-1 ledger module at `mxzaz-hqaaa-aaaar-qaada-cai` on
+PocketIC whenever a world's table is `currency = BTC` (`tests/money_safety/src/wasms.rs`,
+`ckbtc_ledger_wasm`; `World::new`), so the BTC deposit, claim and block-index paths ARE
+executed — and the first run found [E-105](#e-105) and [E-104](#e-104). This entry stays OPEN
+because it is about the local REPLICA: the rendered-page half is still unverifiable, and
+`icp canister status mxzaz-… -e local` still says not found. The pinned module and its init
+payload in `ledger.rs` are what a local deploy would use.
+
 <a id="t-38"></a>
 ### T-38, high, the "Deployed Canister Hashes" the app has been showing are three upgrades stale, and nothing in the repository compared them to anything — STATUS: FIXED (wave 9)
 
@@ -11778,3 +11789,53 @@ This is [FINDING 42](SECURITY-FINDINGS.md#finding-42)'s lesson — *the wire is 
 trust root* — arriving at the verification path one wave after it arrived at the
 deposit path, and found by an instrument that was being written for a different
 defect entirely.
+
+<a id="e-104"></a>
+### E-104 — fund-theft — one ckBTC deposit credited twice: `verify_ckbtc_deposit` checked `to.owner` and never `to.subaccount` — STATUS: FIXED (task 1790632429)
+
+The index entry for [FINDING 46](SECURITY-FINDINGS.md#finding-46), which holds the
+evidence. In one sentence: on a BTC table, a transfer to a player's deposit
+subaccount passed `notify_deposit`'s destination check (the subaccount's owner IS
+the canister) and was credited by block index, then swept and credited again by
+`claim_external_deposit()`, whose sweep is its own new block. 50,000 sats in,
+99,990 sats owed. The same shape credits a stranger for money paid into somebody
+else's address.
+
+Latent on the shipped module because [E-105](#e-105) had killed the door first;
+fixed in the same commit as E-105 because fixing E-105 alone would have opened it.
+Gate: `cd tests/money_safety && cargo test --test ckbtc_door -- --test-threads=2`,
+`cb01` and `cb04`, both verified red on the tree without the refusal.
+
+<a id="e-105"></a>
+### E-105 — high — the ckBTC block-index door never decoded a single ledger reply — STATUS: FIXED (task 1790632429)
+
+`verify_ckbtc_deposit` reads the block back with the ICRC-1 ledger's
+`get_transactions` and was wrong about the reply twice over:
+
+```text
+lib.rs:4695   transactions: Vec<TransactionWithId>,     // the ledger sends vec Transaction
+lib.rs:4709   response.candid::<(GetTransactionsResponse,)>()   // candid() is decode_one:
+                                                        // this asks for record { 0 : ... }
+```
+
+`vec TransactionWithId` (`{ id; transaction }`) is what the ckBTC INDEX canister's
+`get_account_transactions` returns; the ledger's `get_transactions` returns the
+bare `Transaction` records with `first_index` alongside. And `Response::candid::<R>`
+in ic-cdk 0.19 is `decode_one`, so `R = (GetTransactionsResponse,)` is a one-field
+record, not the argument tuple (`candid_tuple` is). Either alone fails every reply.
+Result: `notify_deposit` on `btc_table_1` has returned *"Failed to decode ckBTC
+ledger response: CandidDecodeFailed { … Fail to decode argument 0 }"* since the
+door was written, so ckBTC sent to the table's MAIN account had no door that could
+credit it — [FINDING 06](SECURITY-FINDINGS.md#finding-06) on the other ledger,
+found the same way: by the first test that ran the door against the real module.
+
+Verified against the pinned `ic-icrc1-ledger.wasm.gz` on PocketIC: the six-test
+`ckbtc_door` target failed 6 of 6 with that decode error on the unfixed tree, and
+`cb02` (a main-account transfer credited by block index exactly once, refused on
+replay and across an upgrade) and `cb03` (the explicit zero subaccount) pass with
+it fixed. The reply is now decoded as the ledger's shape and the door checks that
+`first_index` is the block it asked about before reading the record.
+
+The decode had been dead for as long as [FINDING 46](SECURITY-FINDINGS.md#finding-46)
+had been possible, and it was the only thing standing between the two. Gate: the
+same `ckbtc_door` target, `cb02`.
