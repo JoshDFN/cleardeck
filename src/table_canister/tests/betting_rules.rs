@@ -26,9 +26,10 @@
 
 use candid::Principal;
 use table_canister::{
-    apply_player_action, can_still_act, is_betting_round_complete, is_in_hand, plan_payouts,
-    resolve_expired_action_timer, ActionTimer, Card, Currency, GamePhase, Player, PlayerAction,
-    PlayerStatus, Rank, Suit, TableConfig, TableState,
+    apply_player_action, can_still_act, deal_hand, is_betting_round_complete, is_in_hand,
+    open_the_action, plan_payouts, resolve_expired_action_timer, ActionTimer, Card, Currency,
+    GamePhase, Player, PlayerAction, PlayerStatus, Rank, ShuffleProof, Suit, TableConfig,
+    TableState,
 };
 
 // =============================================================================
@@ -1281,4 +1282,317 @@ fn the_free_showdown_was_worth_about_a_big_blind_a_hand() {
         (wins as f64 / HANDS as f64) > 0.25,
         "and it converts on roughly a third of deals, measured {wins}/{HANDS}"
     );
+}
+
+// =============================================================================
+// 6. A DEAL THAT LEAVES FEWER THAN TWO SEATS ABLE TO ACT RUNS THE BOARD OUT, AND
+//    THE CLOCK NEVER FOLDS A SEAT THAT CANNOT ACT
+//
+// docs/DEFECTS.md E-106 (docs/CODEBASE-REVIEW-2026-09-28.md gap 4). Posting a
+// blind or an ante can take a seat to zero and mark it all-in, and when that
+// leaves nobody owed an action the hand has nothing to wait for: the board runs
+// out and the pot goes by hand strength. The deal used to arm the clock
+// unconditionally, `find_next_active_seat_with_chips` handed it the big blind
+// when no seat had chips, and `resolve_expired_action_timer` folded whatever
+// seat the clock named without asking whether that seat could act. So two short
+// stacks all-in from the posts became: the big blind is folded by its own clock
+// and the small blind takes the whole pot. Conservation holds, so the
+// money-safety invariants could not see it. These tests assert the WINNER.
+//
+// They drive `deal_hand` + `open_the_action`, which is `start_new_hand` with the
+// platform pulled out, on a deck stacked so the winner is known.
+// =============================================================================
+
+/// A table between hands: the seats are occupied and funded, nobody holds cards,
+/// the button has never moved. What `start_new_hand` finds on the first hand.
+fn waiting_table(stacks: &[u64], ante: u64) -> TableState {
+    let mut state = flop_table(stacks, 0);
+    for p in state.players.iter_mut().flatten() {
+        p.hole_cards = None;
+    }
+    state.config.ante = ante;
+    state.phase = GamePhase::WaitingForPlayers;
+    state.community_cards.clear();
+    state.deck_index = 0;
+    state.action_timer = None;
+    state.hand_number = 0;
+    state.first_hand = true;
+    state.dealer_seat = 0;
+    state.small_blind_seat = 0;
+    state.big_blind_seat = 0;
+    state.current_bet = 0;
+    state
+}
+
+/// A deck with `top` on top, in that order, and the rest of the pack after it.
+/// `deal_hand` deals seat by seat in seat order (two cards each), then burns one
+/// and deals the flop, burns one and deals the turn, burns one and deals the
+/// river.
+fn stacked_deck(top: &[Card]) -> Vec<Card> {
+    let mut deck: Vec<Card> = top.to_vec();
+    for c in poker_core::create_deck() {
+        if !deck.iter().any(|d| d.rank == c.rank && d.suit == c.suit) {
+            deck.push(c);
+        }
+    }
+    assert_eq!(deck.len(), 52, "the stacked deck is still one pack");
+    deck
+}
+
+/// The real deal, as `start_new_hand` runs it: post, deal, then open the action.
+fn run_the_deal(state: &mut TableState, deck: Vec<Card>, now: u64) {
+    let proof = ShuffleProof {
+        seed_hash: "test".to_string(),
+        revealed_seed: None,
+        timestamp: now,
+    };
+    deal_hand(state, deck, &proof, now).expect("the deal is legal");
+    open_the_action(state, now);
+}
+
+/// `A♠ A♥` for one seat, `7♣ 2♦` for the other, over `3♦ 8♣ J♥ 4♠ 9♦`: no
+/// straight, no flush, nothing on board that beats a pair of aces.
+const BOARD_BLANKS: [(Rank, Suit); 5] = [
+    (Rank::Three, Suit::Diamonds),
+    (Rank::Eight, Suit::Clubs),
+    (Rank::Jack, Suit::Hearts),
+    (Rank::Four, Suit::Spades),
+    (Rank::Nine, Suit::Diamonds),
+];
+const ACES: [(Rank, Suit); 2] = [(Rank::Ace, Suit::Spades), (Rank::Ace, Suit::Hearts)];
+const KINGS: [(Rank, Suit); 2] = [(Rank::King, Suit::Spades), (Rank::King, Suit::Hearts)];
+const SEVEN_DEUCE: [(Rank, Suit); 2] = [(Rank::Seven, Suit::Clubs), (Rank::Two, Suit::Diamonds)];
+
+fn cards(spec: &[&[(Rank, Suit)]], burn: (Rank, Suit)) -> Vec<Card> {
+    // hole cards, seat by seat; then burn, flop; burn, turn; burn, river.
+    let hole: Vec<Card> = spec.iter().flat_map(|h| h.iter().map(|&(r, s)| card(r, s))).collect();
+    let board: Vec<Card> = BOARD_BLANKS.iter().map(|&(r, s)| card(r, s)).collect();
+    let burn = card(burn.0, burn.1);
+    let mut top = hole;
+    top.push(burn);
+    top.extend_from_slice(&board[0..3]);
+    top.push(burn);
+    top.extend_from_slice(&board[3..4]);
+    top.push(burn);
+    top.extend_from_slice(&board[4..5]);
+    // the burn card repeats in `top`; stacked_deck keeps its first appearance and
+    // the later ones are replaced by whatever the pack holds next, which is fine:
+    // burns are never read.
+    let spare: Vec<Card> = poker_core::create_deck()
+        .into_iter()
+        .filter(|c| !top.iter().any(|t| t.rank == c.rank && t.suit == c.suit))
+        .collect();
+    let mut spare = spare.into_iter();
+    let mut dedup: Vec<Card> = Vec::new();
+    for c in top {
+        if dedup.iter().any(|d| d.rank == c.rank && d.suit == c.suit) {
+            dedup.push(spare.next().expect("pack has a spare card"));
+        } else {
+            dedup.push(c);
+        }
+    }
+    stacked_deck(&dedup)
+}
+
+fn chips(state: &TableState) -> Vec<u64> {
+    state.players.iter().flatten().map(|p| p.chips).collect()
+}
+
+/// HEADS-UP, first hand, so the button lands on seat 1 (small blind) and seat 0
+/// posts the big blind. Seat 1 has 10 and seat 0 has 15: the posts leave BOTH
+/// all-in. Seat 0 holds aces. Nobody can act, so the board runs out and seat 0
+/// wins the 20 that was contested; its uncalled 5 comes back.
+///
+/// Before the fix the deal armed a clock on seat 0 (the one `find_next_active_
+/// seat_with_chips` falls back to when no seat has chips), and the clock folded
+/// them: the 7-2 took everything.
+#[test]
+fn a_heads_up_deal_where_the_posts_leave_both_seats_all_in_runs_the_board_out() {
+    let now = 1_000 * SEC;
+    let mut state = waiting_table(&[15, 10], 0);
+    run_the_deal(&mut state, cards(&[&ACES, &SEVEN_DEUCE], (Rank::Six, Suit::Clubs)), now);
+
+    assert_eq!((state.small_blind_seat, state.big_blind_seat), (1, 0), "sanity: heads-up, button on seat 1");
+    assert_eq!(seat(&state, 1).total_bet_this_hand, 10, "sanity: the small blind posted its whole 10");
+    assert!(seat(&state, 0).total_bet_this_hand >= 10, "sanity: the big blind posted at least that");
+
+    // THE DEFECT, played out: whatever the deal left, let the clock expire on it.
+    let armed = state.action_timer.clone();
+    let folded = resolve_expired_action_timer(&mut state, now + TIMEOUT_SECS * SEC + 1);
+
+    assert_eq!(
+        chips(&state),
+        vec![25, 0],
+        "seat 0, all-in for 15 from the big blind holding aces, must end with 25 \
+         (the 20 contested + its 5 uncalled). Instead: the deal armed {armed:?}, the \
+         clock folded {folded:?}, phase {:?}, board {:?}",
+        state.phase,
+        state.community_cards
+    );
+    assert!(armed.is_none(), "the deal must not arm a clock when no seat can act: {armed:?}");
+    assert_eq!(folded, None, "and so there was nothing for the clock to fold");
+    assert_eq!(state.phase, GamePhase::HandComplete);
+    assert_eq!(state.community_cards.len(), 5, "the board ran out");
+    assert!(!seat(&state, 0).has_folded && !seat(&state, 1).has_folded, "nobody was folded");
+    assert_eq!(seat(&state, 0).timeout_count, 0, "and nobody was charged a timeout");
+}
+
+/// ANTE TABLE, three-handed, ante 50 over 10/20 blinds. Stacks 30, 50, 50: the
+/// antes take every seat all-in before a blind is posted (the blinds then post
+/// zero). Seat 0 is short with aces, seat 1 has kings, seat 2 has 7-2. Main pot
+/// 90 (30 x 3) to the aces, side pot 40 (20 x 2) to the kings, 7-2 nothing.
+#[test]
+fn an_ante_table_whose_posts_leave_every_seat_all_in_runs_the_board_out_and_pays_by_hand_strength() {
+    let now = 1_000 * SEC;
+    let mut state = waiting_table(&[30, 50, 50], 50);
+    run_the_deal(&mut state, cards(&[&ACES, &KINGS, &SEVEN_DEUCE], (Rank::Six, Suit::Clubs)), now);
+
+    assert!(state.players.iter().flatten().all(|p| p.is_all_in), "sanity: the antes took everyone all-in");
+
+    let armed = state.action_timer.clone();
+    let folded = resolve_expired_action_timer(&mut state, now + TIMEOUT_SECS * SEC + 1);
+
+    assert_eq!(
+        chips(&state),
+        vec![90, 40, 0],
+        "aces take the 90 main pot and kings the 40 side pot. Instead: the deal \
+         armed {armed:?}, the clock folded {folded:?}, phase {:?}, board {:?}",
+        state.phase,
+        state.community_cards
+    );
+    assert!(armed.is_none(), "no seat can act, so no clock: {armed:?}");
+    assert_eq!(folded, None);
+    assert_eq!(state.phase, GamePhase::HandComplete);
+    assert_eq!(state.community_cards.len(), 5);
+    assert!(state.players.iter().flatten().all(|p| !p.has_folded && p.timeout_count == 0));
+}
+
+/// THE REFINEMENT. "Fewer than two can act" is not the whole rule: the one seat
+/// that can still act may OWE a call, and then it must be asked. Heads-up, seat 0
+/// (big blind) has 15 and is all-in from the post; seat 1 (small blind) has 1,000,
+/// posted 10 and owes 5 more. Seat 1 gets a clock and a decision, and calling runs
+/// the board out.
+#[test]
+fn a_deal_that_leaves_one_seat_owing_a_call_still_asks_it() {
+    let now = 1_000 * SEC;
+    let mut state = waiting_table(&[15, 1_000], 0);
+    run_the_deal(&mut state, cards(&[&ACES, &SEVEN_DEUCE], (Rank::Six, Suit::Clubs)), now);
+
+    assert_eq!(state.phase, GamePhase::PreFlop, "seat 1 still owes 5, so the hand waits");
+    assert_eq!(state.action_on, 1);
+    let timer = state.action_timer.as_ref().expect("a clock on the seat that owes the call");
+    assert_eq!(timer.player_seat, 1);
+    assert!(!is_betting_round_complete(&state));
+
+    act(&mut state, 1, now, PlayerAction::Call).expect("seat 1 calls the 5");
+    assert_eq!(state.phase, GamePhase::HandComplete, "nobody can act after the call");
+    assert_eq!(state.community_cards.len(), 5);
+    assert_eq!(chips(&state), vec![30, 985], "aces take 30; the 7-2 paid 15");
+}
+
+/// And the mirror: the one seat that can still act is owed NOTHING. Seat 1 (small
+/// blind) has 5 and is all-in from the post; seat 0 (big blind) has 1,000 and
+/// posted 20. Nobody can call anything, so the big blind has no decision: its 15
+/// uncalled comes back and the board runs out for the 10, so it ends on 995.
+#[test]
+fn a_deal_where_the_only_seat_that_can_act_is_owed_nothing_runs_the_board_out() {
+    let now = 1_000 * SEC;
+    let mut state = waiting_table(&[1_000, 5], 0);
+    run_the_deal(&mut state, cards(&[&SEVEN_DEUCE, &ACES], (Rank::Six, Suit::Clubs)), now);
+
+    let armed = state.action_timer.clone();
+    let folded = resolve_expired_action_timer(&mut state, now + TIMEOUT_SECS * SEC + 1);
+
+    assert_eq!(
+        chips(&state),
+        vec![995, 10],
+        "the aces, all-in for 5, take 10; the big blind's 15 uncalled comes back. \
+         Instead: the deal armed {armed:?}, the clock folded {folded:?}, phase {:?}",
+        state.phase
+    );
+    assert!(armed.is_none(), "{armed:?}");
+    assert_eq!(folded, None);
+    assert_eq!(state.phase, GamePhase::HandComplete);
+    assert_eq!(state.community_cards.len(), 5);
+}
+
+/// THE CLOCK HALF. Three-handed on the flop, seat 0 is all-in (it cannot act) and
+/// the clock is pointed at it: the shape every table dealt before this fix can be
+/// sitting in when the fix is upgraded in. Expiring it folds nobody, charges no
+/// timeout, and moves the action to the next seat that can act. Seat 0 holds the
+/// nuts and is still eligible for the pot.
+#[test]
+fn the_clock_never_folds_a_seat_that_cannot_act() {
+    let now = 1_000 * SEC;
+    let mut state = flop_table(&[0, 5_000, 5_000], now);
+    for s in 0..3usize {
+        state.players[s].as_mut().unwrap().total_bet_this_hand = 300;
+    }
+    state.pot = 900;
+    state.players[0].as_mut().unwrap().is_all_in = true;
+    deal(&mut state, 0, (card(Rank::Ace, Suit::Hearts), card(Rank::Ace, Suit::Diamonds)));
+    deal(&mut state, 1, (card(Rank::Six, Suit::Clubs), card(Rank::Four, Suit::Hearts)));
+    deal(&mut state, 2, (card(Rank::Six, Suit::Diamonds), card(Rank::Four, Suit::Spades)));
+    assert!(!can_still_act(seat(&state, 0)), "sanity: seat 0 is all-in");
+    assert_eq!(state.action_timer.as_ref().map(|t| t.player_seat), Some(0), "sanity: the clock names seat 0");
+
+    let folded = resolve_expired_action_timer(&mut state, now + TIMEOUT_SECS * SEC + 1);
+
+    assert!(
+        !seat(&state, 0).has_folded,
+        "a seat that cannot act cannot be folded by its clock (resolved as {folded:?})"
+    );
+    assert_eq!(folded, None, "nobody timed out");
+    assert_eq!(seat(&state, 0).timeout_count, 0);
+    assert_eq!(seat(&state, 0).status, PlayerStatus::Active);
+    assert_eq!(state.phase, GamePhase::Flop, "the street is still open: seats 1 and 2 have not acted");
+    assert_eq!(state.action_on, 1, "the action moved to the next seat that can act");
+    let timer = state.action_timer.as_ref().expect("a fresh clock on seat 1");
+    assert_eq!(timer.player_seat, 1);
+    assert_eq!(timer.started_at, now + TIMEOUT_SECS * SEC + 1, "started now, not back-dated");
+
+    let mut showdown = state.clone();
+    board_to_the_river(&mut showdown);
+    let plan = plan_payouts(&showdown);
+    assert_eq!(
+        plan.amount_for_principal(seat_principal(0)),
+        900,
+        "and the all-in seat is still paid for the nuts: {:?}",
+        plan.payouts
+    );
+    assert!(plan.conserves());
+}
+
+/// The same stale shape heads-up with BOTH seats all-in from the posts, as a
+/// table dealt on the old engine is left when the fix is upgraded in: the clock
+/// on the big blind expires, and instead of folding it the board runs out.
+#[test]
+fn a_clock_left_pointing_at_an_all_in_seat_runs_the_board_out_instead_of_folding_it() {
+    let now = 1_000 * SEC;
+    // Build the pre-fix state by hand: both posts all-in, clock on the big blind.
+    let mut state = waiting_table(&[15, 10], 0);
+    let deck = cards(&[&ACES, &SEVEN_DEUCE], (Rank::Six, Suit::Clubs));
+    let proof = ShuffleProof { seed_hash: "test".to_string(), revealed_seed: None, timestamp: now };
+    deal_hand(&mut state, deck, &proof, now).expect("the deal is legal");
+    state.action_on = state.big_blind_seat;
+    state.action_timer = Some(ActionTimer {
+        player_seat: state.big_blind_seat,
+        started_at: now,
+        expires_at: now + TIMEOUT_SECS * SEC,
+        using_time_bank: false,
+    });
+
+    let folded = resolve_expired_action_timer(&mut state, now + TIMEOUT_SECS * SEC + 1);
+
+    assert_eq!(
+        chips(&state),
+        vec![25, 0],
+        "the aces, all-in from the big blind, take the pot. Instead the clock folded \
+         {folded:?}; phase {:?}",
+        state.phase
+    );
+    assert_eq!(folded, None);
+    assert_eq!(state.phase, GamePhase::HandComplete);
+    assert_eq!(state.community_cards.len(), 5);
+    assert!(state.action_timer.is_none());
 }

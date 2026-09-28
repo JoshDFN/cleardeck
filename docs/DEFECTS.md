@@ -435,6 +435,7 @@ is true.
 
 | id | sev | status | wave | gate — what would catch it coming back | where | one line |
 |---|---|---|---|---|---|---|
+| [E-106](#e-106) | high | FIXED | task 1790632440 | `cargo test -p table_canister --test betting_rules` (`make test` step 2, `cargo test --workspace`; the `workspace` tier of `scripts/test-suites.list`), section 6 — six tests, five verified RED on the unfixed engine: *"the deal armed Some(ActionTimer { player_seat: 0 … }), the clock folded Some(0)"*, `left: [5, 20] right: [25, 0]`; the sixth (`a_deal_that_leaves_one_seat_owing_a_call_still_asks_it`) guards the refinement | `open_the_action` (the deal's last step, split out of `start_new_hand` with `deal_hand`), `the_posts_closed_the_betting`, `resolve_expired_action_timer` | **the deal armed the clock on a seat that could not act, and the clock folded it.** A blind or ante posts `min(chips)`, so a short seat is dealt in and left all-in by its own post. When that left nobody owed an action, the deal still armed the timer on whatever `find_next_active_seat_with_chips` fell back to (the big blind, when no seat had chips) and `resolve_expired_action_timer` folded that seat with no `can_still_act` check, so `advance_game` saw one claimant and paid the small blind the whole pot. Heads-up, aces all-in for 15 in the big blind against 7-2 all-in for 10: the 7-2 ended with 20 and the aces with 5. On an ante table the same clock fold gave the side-pot seat the 90 main pot the short stack had the best hand for. Conservation held throughout, so the money-safety invariants were silent: correct totals, wrong recipient. Now the deal runs the board out when fewer than two seats can act and none of them owes a call (a seat that still owes a call is asked), and the clock never folds a seat that cannot act: it drops the timer and moves the hand on through `advance_game`, which is also what heals a table dealt on the old engine and upgraded mid-hand. The history push in `start_new_hand` now precedes the opening of the action, because `record_local_hand_result` writes the LAST history entry and a run-out at the deal settles inside the same message. [Review 2026-09-28, gap 4](CODEBASE-REVIEW-2026-09-28.md) |
 | [E-104](#e-104) | fund-theft | FIXED | task 1790632429 | `cd tests/money_safety && cargo test --test ckbtc_door -- --test-threads=2` (`dev.sh test` step 4; fast tier of `scripts/test-suites.list`), `cb01` + `cb04`, both verified RED on the tree without the refusal: *"alice's escrow: 99990 sats; ledger holds 49990"* | `verify_ckbtc_deposit` (`notify_deposit` on a BTC table) | **one ckBTC deposit credited twice.** The door checked `to.owner == canister` and never `to.subaccount`, so a transfer to a player's deposit address was credited by block index AND by `claim_external_deposit()`'s sweep, which is its own new block the anti-replay record has never seen. 50,000 sats in, 99,990 owed; a stranger paying into somebody else's address is credited too. The ICP door compares the full account identifier; this one compared the owner. Latent on mainnet only because [E-105](#e-105) had killed the door first; fixed together. [FINDING 46](SECURITY-FINDINGS.md#finding-46) |
 | [E-105](#e-105) | high | FIXED | task 1790632429 | the same `ckbtc_door` target, `cb02` and `cb03`: a main-account ckBTC transfer credited by block index exactly once; 6 of 6 failed with *"Failed to decode ckBTC ledger response"* on the unfixed tree | `verify_ckbtc_deposit`, the `get_transactions` decode | **the ckBTC block-index door never decoded one ledger reply.** It declared the reply as `vec TransactionWithId` (the INDEX canister's shape; the ledger sends `vec Transaction`) and decoded it with `Response::candid::<(T,)>()`, which is `decode_one` of a one-field record, not the argument tuple. Either alone fails every reply, so `notify_deposit` on `btc_table_1` has returned a decode error since the door was written and ckBTC at the table's MAIN account had no door that could credit it: [FINDING 06](SECURITY-FINDINGS.md#finding-06) on the other ledger, found the same way, by the first test to run the door against the real module |
 | [E-102](#e-102) | high | OPEN | — | — (**the gate exists and is RED**: `./scripts/check-fleet-coherence.sh --network ic`, committed at `eb819a8`. The row stays gateless because the DEFECT is live on mainnet: a gate that reports a split fleet does not un-split it. It flips to FIXED when the fleet is redeployed from one build and the same command exits 0) | the mainnet deployment itself; `scripts/check-deployed.sh` and `scripts/check-deployed-config.sh`, which are both per-canister | **two different engines are running on mainnet right now, and no gate in this repository could ever have said so.** `table_1`, `table_2`, `table_3` and `btc_table_1` are four instances of ONE package, `table_canister`. They differ only in `init_args`, which are install-time arguments and not part of the module, so all four **must** report the same module hash. Certified state says `table_1` is `4511ab187cff8b90…` and the other three are `9c0ed3a138a3753d…`. Whoever sits at the older table plays with every money defect closed since that build. It happened when a deploy went out from a tree that was being edited ([E-79](#e-79)) and it survived every wave since, because `check-deployed.sh` compares each canister against an expectation and `check-deployed-config.sh` compares each canister against `icp.yaml` — **both are per-canister, so a fleet that is individually plausible and collectively incoherent passes both.** It also breaks the only trust story this project has: `README.md` tells a stranger to build the Docker image and compare hashes, that image builds `table_canister` once, so a verifier following our own instructions matches one canister of four and correctly concludes the rest are not the code we published |
@@ -11839,3 +11840,67 @@ it fixed. The reply is now decoded as the ledger's shape and the door checks tha
 The decode had been dead for as long as [FINDING 46](SECURITY-FINDINGS.md#finding-46)
 had been possible, and it was the only thing standing between the two. Gate: the
 same `ckbtc_door` target, `cb02`.
+
+<a id="e-106"></a>
+### E-106 — high — the deal armed the clock on a seat that could not act, and the clock folded it — STATUS: FIXED (task 1790632440)
+
+docs/CODEBASE-REVIEW-2026-09-28.md gap 4, read there and reproduced here on the
+real deal. The two halves:
+
+```text
+start_new_hand   action_on = find_next_active_seat_with_chips(state, big_blind_seat)
+                 // returns from_seat (the big blind) when NO seat has chips left
+                 state.action_timer = Some(ActionTimer { player_seat: action_on, .. })
+                 // armed unconditionally
+
+resolve_expired_action_timer
+                 player.has_folded = true;            // no can_still_act check
+                 advance_game(state, now);            // one claimant left -> pays the other seat
+```
+
+`will_be_dealt_in` needs only `chips > 0` BEFORE the posts, and a blind or ante is
+posted with `min(chips)`, so a seat with fewer chips than its blind is dealt in and
+left all-in at zero by its own post — correctly, that seat has money in and a claim
+(E-36). What was wrong is what happened next when EVERY dealt seat was all-in
+(heads-up with two short stacks; an ante table whose antes cover the stacks): nothing
+called `run_out_board`, the clock was armed on the big blind, it expired, the big
+blind was folded, and the small blind took the contested layer. Measured on the real
+deal (`deal_hand`, which is `start_new_hand`'s body with the platform pulled out):
+
+```text
+a_heads_up_deal_where_the_posts_leave_both_seats_all_in_runs_the_board_out
+  seat 0, all-in for 15 from the big blind holding aces, must end with 25.
+  Instead: the deal armed Some(ActionTimer { player_seat: 0, .. }), the clock folded
+  Some(0), phase HandComplete, board []
+  left: [5, 20]   right: [25, 0]
+
+an_ante_table_whose_posts_leave_every_seat_all_in_runs_the_board_out_and_pays_by_hand_strength
+  aces take the 90 main pot and kings the 40 side pot.
+  left: [0, 130, 0]   right: [90, 40, 0]
+```
+
+Every chip is accounted for in both lines, which is why `tests/money_safety`'s
+conservation invariants never saw it, and why the new tests assert the WINNER.
+
+**The fix, three parts.** (1) `open_the_action`, now the deal's last step: when
+[`the_posts_closed_the_betting`] — fewer than two seats can act AND none of them owes
+a call — it runs the board out through `advance_to_next_street`, the same rule that
+function already applies at every later street; otherwise it arms the clock as
+before. The second clause is the refinement the review's one-line rule needed: heads-up
+with the big blind all-in for 15 and the small blind holding 1,000, ONE seat can act
+and it owes 5, so it must be asked (`a_deal_that_leaves_one_seat_owing_a_call_still_asks_it`,
+green before and after). (2) `resolve_expired_action_timer` refuses to fold a seat for
+which `!can_still_act`: it drops the clock and hands the hand to `advance_game`, which
+runs out a closed round or moves the clock to the next seat that can act, and returns
+`None` because nobody timed out. That is also what heals a table dealt on the old
+engine and upgraded in this state. (3) `start_new_hand` is reordered: deal, push this
+hand's history entry, THEN open the action. `record_local_hand_result` writes into the
+last history entry and `reveal_seed_on_hand_end` looks its entry up by hand number, so
+a settlement inside the deal had to come after the push or it would have written this
+hand's result into the previous hand's record. Same message, no await between the
+steps.
+
+No settlement arithmetic changed; the run-out is the existing path. No Candid change
+(`deal_hand` and `open_the_action` are `pub fn`s for the host tests, not methods).
+Queued task 1790622948 (auto-check on expiry) would have masked the heads-up case and
+not the cause. Gate: `cargo test -p table_canister --test betting_rules`, section 6.

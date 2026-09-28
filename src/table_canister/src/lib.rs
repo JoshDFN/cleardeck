@@ -7579,178 +7579,8 @@ async fn start_new_hand() -> Result<ShuffleProof, String> {
     let result_proof = TABLE.with(|t| {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
-
-        // Double-check phase inside the lock (in case of race)
-        if state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete {
-            return Err("Cannot start new hand: a hand is already in progress".to_string());
-        }
-
-        // Handle players who wanted to sit out next hand
-        for player in state.players.iter_mut().flatten() {
-            if player.is_sitting_out_next_hand {
-                player.status = PlayerStatus::SittingOut;
-                player.sitting_out_since = Some(timestamp);
-                player.is_sitting_out_next_hand = false;
-            }
-        }
-
-        // Auto-sit out players with no chips (busted)
-        for player in state.players.iter_mut().flatten() {
-            if player.status == PlayerStatus::Active && player.chips == 0 {
-                player.status = PlayerStatus::SittingOut;
-                player.sitting_out_since = Some(timestamp);
-            }
-        }
-
-        // Count active players (not sitting out)
-        let active_count = state.players.iter()
-            .filter(|p| p.as_ref().map(will_be_dealt_in).unwrap_or(false))
-            .count();
-
-        if active_count < 2 {
-            return Err("Need at least 2 active players with chips".to_string());
-        }
-
-        // Move dealer button - on first hand, find first active player
-        if state.first_hand {
-            // Find first active player to be dealer
-            state.dealer_seat = find_next_active_seat_with_chips(state, 0);
-            state.first_hand = false;
-        } else {
-            state.dealer_seat = find_next_active_seat_with_chips(state, state.dealer_seat);
-        }
-
-        // Set blinds positions
-        if active_count == 2 {
-            // Heads up: dealer is small blind
-            state.small_blind_seat = state.dealer_seat;
-            state.big_blind_seat = find_next_active_seat_with_chips(state, state.dealer_seat);
-        } else {
-            state.small_blind_seat = find_next_active_seat_with_chips(state, state.dealer_seat);
-            state.big_blind_seat = find_next_active_seat_with_chips(state, state.small_blind_seat);
-        }
-
-        // Reset state
-        state.deck = deck;
-        state.deck_index = 0;
-        state.community_cards.clear();
-        state.pot = 0;
-        state.side_pots.clear();
-        // Nothing has left this hand yet. Entries are tagged with the hand number
-        // as well, so a leftover could not join this pot even if one survived.
-        state.clear_departed_stakes();
-        state.current_bet = state.config.big_blind;
-        state.min_raise = state.config.big_blind;
-        state.phase = GamePhase::PreFlop;
-        state.shuffle_proof = Some(proof.clone());
-        state.hand_number += 1;
-        state.last_aggressor = None;
-        state.bb_has_option = true; // BB gets option to raise if limped to
-        state.auto_deal_at = None; // Clear auto-deal timer since hand is starting
-
-        // Reset players and track starting chips for history
-        STARTING_CHIPS.with(|s| s.borrow_mut().clear());
-        for (i, player) in state.players.iter_mut().enumerate() {
-            if let Some(ref mut p) = player {
-                // Save starting chips before any deductions
-                STARTING_CHIPS.with(|s| {
-                    s.borrow_mut().insert(i as u8, p.chips);
-                });
-                p.hole_cards = None;
-                p.current_bet = 0;
-                p.total_bet_this_hand = 0;
-                p.has_folded = false;
-                p.has_acted_this_round = false;
-                p.is_all_in = false;
-            }
-        }
-
-        // Post antes if configured (with overflow protection)
-        if state.config.ante > 0 {
-            for player in state.players.iter_mut().flatten() {
-                if will_be_dealt_in(player) {
-                    let ante_amount = state.config.ante.min(player.chips);
-                    player.chips = player.chips.saturating_sub(ante_amount);
-                    player.total_bet_this_hand = player.total_bet_this_hand.saturating_add(ante_amount);
-                    state.pot = state.pot.saturating_add(ante_amount);
-                    if player.chips == 0 {
-                        player.is_all_in = true;
-                    }
-                }
-            }
-        }
-
-        // Post small blind (with overflow protection)
-        if let Some(ref mut sb_player) = state.players[state.small_blind_seat as usize] {
-            let sb_amount = state.config.small_blind.min(sb_player.chips);
-            sb_player.chips = sb_player.chips.saturating_sub(sb_amount);
-            sb_player.current_bet = sb_amount;
-            sb_player.total_bet_this_hand = sb_player.total_bet_this_hand.saturating_add(sb_amount);
-            state.pot = state.pot.saturating_add(sb_amount);
-            if sb_player.chips == 0 {
-                sb_player.is_all_in = true;
-            }
-        }
-
-        // Post big blind (with overflow protection)
-        if let Some(ref mut bb_player) = state.players[state.big_blind_seat as usize] {
-            let bb_amount = state.config.big_blind.min(bb_player.chips);
-            bb_player.chips = bb_player.chips.saturating_sub(bb_amount);
-            bb_player.current_bet = bb_amount;
-            bb_player.total_bet_this_hand = bb_player.total_bet_this_hand.saturating_add(bb_amount);
-            state.pot = state.pot.saturating_add(bb_amount);
-            // BB has technically "acted" by posting but still gets option
-            // We track this with bb_has_option, not has_acted_this_round
-            if bb_player.chips == 0 {
-                bb_player.is_all_in = true;
-                state.bb_has_option = false; // Can't raise if all-in
-            }
-        }
-
-        // DEAL. This loop is the only writer of the fact `is_in_hand` reads, so it
-        // is the only thing that decides who is in this hand. See
-        // [`deals_in_this_hand`] for why it does NOT ask for chips: the blinds have
-        // already been posted above and can have left a seat all-in at zero.
-        //
-        // It is therefore also the only place that can state, truthfully, WHO WAS
-        // DEALT IN AND IN WHAT ORDER -- the fact docs/SHUFFLE-SPEC.md section 4
-        // needs to offset the board, and the fact the permanent record was
-        // guessing at from the seats at settlement (FINDING 30). It is written
-        // down here, as it happens, and never re-derived.
-        DEALT_IN.with(|d| d.borrow_mut().clear());
-        for (seat, player) in state.players.iter_mut().enumerate() {
-            let Some(player) = player.as_mut() else { continue };
-            if deals_in_this_hand(player) {
-                // Check we have enough cards (need 2 cards, so index+2 must be <= len)
-                if state.deck_index + 2 <= state.deck.len() {
-                    let card1 = state.deck[state.deck_index];
-                    let card2 = state.deck[state.deck_index + 1];
-                    player.hole_cards = Some((card1, card2));
-                    state.deck_index += 2;
-                    DEALT_IN.with(|d| {
-                        d.borrow_mut().push(DealtInSeat {
-                            seat: seat as u8,
-                            principal: player.principal,
-                        })
-                    });
-                }
-            }
-        }
-
-        // Action starts left of big blind
-        state.action_on = find_next_active_seat_with_chips(state, state.big_blind_seat);
-
-        // Start action timer using config timeout
-        let now = ic_cdk::api::time();
-        let timeout_ns = state.config.action_timeout_secs * 1_000_000_000;
-        state.action_timer = Some(ActionTimer {
-            player_seat: state.action_on,
-            started_at: now,
-            expires_at: now + timeout_ns,
-            using_time_bank: false,
-        });
-
-        Ok(proof.clone())
+        deal_hand(state, deck, &proof, timestamp)?;
+        Ok::<ShuffleProof, String>(proof.clone())
     })?;
 
     // Clear shown cards from previous hand
@@ -7789,12 +7619,241 @@ async fn start_new_hand() -> Result<ShuffleProof, String> {
         });
     });
 
+    // OPEN THE ACTION ONLY NOW, after this hand's history entry exists. The posts
+    // can close the betting before anyone is asked (both blinds all-in, or an ante
+    // table where the posts leave every seat all-in), and then the hand settles
+    // right here: `record_local_hand_result` writes into the LAST history entry
+    // and `reveal_seed_on_hand_end` looks its entry up by hand number, so a
+    // settlement that ran before the push above would write this hand's result
+    // into the previous hand's record. Same message, no await in between, so the
+    // gap is unobservable from outside.
+    TABLE.with(|t| {
+        if let Some(state) = t.borrow_mut().as_mut() {
+            open_the_action(state, timestamp);
+        }
+    });
+
     // A new hand means a brand-new action clock. Aim the on-chain wake at it, so a
     // table that goes silent the instant the cards are dealt still resolves on its
     // own clock and not on the watchdog's grid.
     schedule_next_wake();
 
     Ok(result_proof)
+}
+
+/// Post the antes and blinds and deal the hole cards: the body of [`start_new_hand`]
+/// with the platform pulled out, so `tests/betting_rules.rs` can drive the SAME
+/// deal the canister runs (docs/DEFECTS.md H-04) instead of a fixture's idea of it.
+///
+/// `deck` is already shuffled and `proof` is its commitment; `now` is the message
+/// time. Leaves the hand at `PreFlop` with `action_on` set and NO CLOCK: the caller
+/// decides whether anyone is owed an action with [`open_the_action`], once this
+/// hand's history entry exists (see the note in [`start_new_hand`]).
+pub fn deal_hand(
+    state: &mut TableState,
+    deck: Vec<Card>,
+    proof: &ShuffleProof,
+    now: u64,
+) -> Result<(), String> {
+    // Double-check phase inside the lock (in case of race)
+    if state.phase != GamePhase::WaitingForPlayers && state.phase != GamePhase::HandComplete {
+        return Err("Cannot start new hand: a hand is already in progress".to_string());
+    }
+
+    // Handle players who wanted to sit out next hand
+    for player in state.players.iter_mut().flatten() {
+        if player.is_sitting_out_next_hand {
+            player.status = PlayerStatus::SittingOut;
+            player.sitting_out_since = Some(now);
+            player.is_sitting_out_next_hand = false;
+        }
+    }
+
+    // Auto-sit out players with no chips (busted)
+    for player in state.players.iter_mut().flatten() {
+        if player.status == PlayerStatus::Active && player.chips == 0 {
+            player.status = PlayerStatus::SittingOut;
+            player.sitting_out_since = Some(now);
+        }
+    }
+
+    // Count active players (not sitting out)
+    let active_count = state.players.iter()
+        .filter(|p| p.as_ref().map(will_be_dealt_in).unwrap_or(false))
+        .count();
+
+    if active_count < 2 {
+        return Err("Need at least 2 active players with chips".to_string());
+    }
+
+    // Move dealer button - on first hand, find first active player
+    if state.first_hand {
+        // Find first active player to be dealer
+        state.dealer_seat = find_next_active_seat_with_chips(state, 0);
+        state.first_hand = false;
+    } else {
+        state.dealer_seat = find_next_active_seat_with_chips(state, state.dealer_seat);
+    }
+
+    // Set blinds positions
+    if active_count == 2 {
+        // Heads up: dealer is small blind
+        state.small_blind_seat = state.dealer_seat;
+        state.big_blind_seat = find_next_active_seat_with_chips(state, state.dealer_seat);
+    } else {
+        state.small_blind_seat = find_next_active_seat_with_chips(state, state.dealer_seat);
+        state.big_blind_seat = find_next_active_seat_with_chips(state, state.small_blind_seat);
+    }
+
+    // Reset state
+    state.deck = deck;
+    state.deck_index = 0;
+    state.community_cards.clear();
+    state.pot = 0;
+    state.side_pots.clear();
+    // Nothing has left this hand yet. Entries are tagged with the hand number
+    // as well, so a leftover could not join this pot even if one survived.
+    state.clear_departed_stakes();
+    state.current_bet = state.config.big_blind;
+    state.min_raise = state.config.big_blind;
+    state.phase = GamePhase::PreFlop;
+    state.shuffle_proof = Some(proof.clone());
+    state.hand_number += 1;
+    state.last_aggressor = None;
+    state.bb_has_option = true; // BB gets option to raise if limped to
+    state.auto_deal_at = None; // Clear auto-deal timer since hand is starting
+
+    // Reset players and track starting chips for history
+    STARTING_CHIPS.with(|s| s.borrow_mut().clear());
+    for (i, player) in state.players.iter_mut().enumerate() {
+        if let Some(ref mut p) = player {
+            // Save starting chips before any deductions
+            STARTING_CHIPS.with(|s| {
+                s.borrow_mut().insert(i as u8, p.chips);
+            });
+            p.hole_cards = None;
+            p.current_bet = 0;
+            p.total_bet_this_hand = 0;
+            p.has_folded = false;
+            p.has_acted_this_round = false;
+            p.is_all_in = false;
+        }
+    }
+
+    // Post antes if configured (with overflow protection)
+    if state.config.ante > 0 {
+        for player in state.players.iter_mut().flatten() {
+            if will_be_dealt_in(player) {
+                let ante_amount = state.config.ante.min(player.chips);
+                player.chips = player.chips.saturating_sub(ante_amount);
+                player.total_bet_this_hand = player.total_bet_this_hand.saturating_add(ante_amount);
+                state.pot = state.pot.saturating_add(ante_amount);
+                if player.chips == 0 {
+                    player.is_all_in = true;
+                }
+            }
+        }
+    }
+
+    // Post small blind (with overflow protection)
+    if let Some(ref mut sb_player) = state.players[state.small_blind_seat as usize] {
+        let sb_amount = state.config.small_blind.min(sb_player.chips);
+        sb_player.chips = sb_player.chips.saturating_sub(sb_amount);
+        sb_player.current_bet = sb_amount;
+        sb_player.total_bet_this_hand = sb_player.total_bet_this_hand.saturating_add(sb_amount);
+        state.pot = state.pot.saturating_add(sb_amount);
+        if sb_player.chips == 0 {
+            sb_player.is_all_in = true;
+        }
+    }
+
+    // Post big blind (with overflow protection)
+    if let Some(ref mut bb_player) = state.players[state.big_blind_seat as usize] {
+        let bb_amount = state.config.big_blind.min(bb_player.chips);
+        bb_player.chips = bb_player.chips.saturating_sub(bb_amount);
+        bb_player.current_bet = bb_amount;
+        bb_player.total_bet_this_hand = bb_player.total_bet_this_hand.saturating_add(bb_amount);
+        state.pot = state.pot.saturating_add(bb_amount);
+        // BB has technically "acted" by posting but still gets option
+        // We track this with bb_has_option, not has_acted_this_round
+        if bb_player.chips == 0 {
+            bb_player.is_all_in = true;
+            state.bb_has_option = false; // Can't raise if all-in
+        }
+    }
+
+    // DEAL. This loop is the only writer of the fact `is_in_hand` reads, so it
+    // is the only thing that decides who is in this hand. See
+    // [`deals_in_this_hand`] for why it does NOT ask for chips: the blinds have
+    // already been posted above and can have left a seat all-in at zero.
+    //
+    // It is therefore also the only place that can state, truthfully, WHO WAS
+    // DEALT IN AND IN WHAT ORDER -- the fact docs/SHUFFLE-SPEC.md section 4
+    // needs to offset the board, and the fact the permanent record was
+    // guessing at from the seats at settlement (FINDING 30). It is written
+    // down here, as it happens, and never re-derived.
+    DEALT_IN.with(|d| d.borrow_mut().clear());
+    for (seat, player) in state.players.iter_mut().enumerate() {
+        let Some(player) = player.as_mut() else { continue };
+        if deals_in_this_hand(player) {
+            // Check we have enough cards (need 2 cards, so index+2 must be <= len)
+            if state.deck_index + 2 <= state.deck.len() {
+                let card1 = state.deck[state.deck_index];
+                let card2 = state.deck[state.deck_index + 1];
+                player.hole_cards = Some((card1, card2));
+                state.deck_index += 2;
+                DEALT_IN.with(|d| {
+                    d.borrow_mut().push(DealtInSeat {
+                        seat: seat as u8,
+                        principal: player.principal,
+                    })
+                });
+            }
+        }
+    }
+
+    // Action starts left of big blind
+    state.action_on = find_next_active_seat_with_chips(state, state.big_blind_seat);
+
+    Ok(())
+}
+
+/// Ask the first seat for its action, or, when the posts have already closed
+/// the betting, run the board out.
+///
+/// Split from [`deal_hand`] so the deal, the history push and this can run in
+/// that order inside one message; see [`start_new_hand`].
+///
+/// # The posts can close the round before anyone is asked (docs/DEFECTS.md E-106)
+///
+/// A blind or an ante is posted with `min(chips)`, so a short seat is dealt in
+/// and left all-in by its own post. When that leaves nobody owed an action there
+/// is nothing to wait for, and the rule [`advance_to_next_street`] applies at
+/// every later street -- fewer than two can act, run the board out -- applies here
+/// too. This used to arm the clock unconditionally, on whatever seat
+/// `find_next_active_seat_with_chips` fell back to (the big blind, when no seat had
+/// chips), and the clock then folded that seat: two short stacks all-in from the
+/// posts became "the small blind takes the pot". Conservation held, so the
+/// money-safety invariants could not see it.
+///
+/// "Fewer than two can act" is NOT the whole rule. The one seat that can still act
+/// may owe a call (heads-up, big blind all-in for more than the small blind
+/// posted): that seat must be asked, and it is. The round is closed by the posts
+/// only when fewer than two seats can act AND none of them owes anything.
+pub fn open_the_action(state: &mut TableState, now: u64) {
+    if the_posts_closed_the_betting(state) {
+        advance_to_next_street(state, now);
+        return;
+    }
+
+    // Start action timer using config timeout
+    let timeout_ns = state.config.action_timeout_secs * 1_000_000_000;
+    state.action_timer = Some(ActionTimer {
+        player_seat: state.action_on,
+        started_at: now,
+        expires_at: now + timeout_ns,
+        using_time_bank: false,
+    });
 }
 
 /// Reveal the seed and update both table state and history
@@ -8063,6 +8122,22 @@ fn count_players_can_act(state: &TableState) -> usize {
     state.players.iter()
         .filter(|p| p.as_ref().map(can_still_act).unwrap_or(false))
         .count()
+}
+
+/// Did the antes and blinds close the pre-flop betting before anyone was asked?
+///
+/// True when fewer than two seats can still act and none of them owes a call:
+/// nobody can bet, nobody can call, so there is no decision left on this street.
+/// See [`open_the_action`]. Distinct from [`is_betting_round_complete`], which
+/// asks whether every seat has ACTED and no seat has acted yet at this point.
+fn the_posts_closed_the_betting(state: &TableState) -> bool {
+    let can_act: Vec<&Player> = state
+        .players
+        .iter()
+        .flatten()
+        .filter(|p| can_still_act(p))
+        .collect();
+    can_act.len() < 2 && can_act.iter().all(|p| p.current_bet >= state.current_bet)
 }
 
 // ============================================================================
@@ -11307,6 +11382,28 @@ pub fn resolve_expired_action_timer(state: &mut TableState, now: u64) -> Option<
     // for the clock to trust that it is.
     if !hand_in_progress(state) {
         state.action_timer = None;
+        return None;
+    }
+
+    // THE CLOCK NEVER FOLDS A SEAT THAT CANNOT ACT (docs/DEFECTS.md E-106).
+    //
+    // A seat that is all-in, folded, or holding no cards owes nothing, so a clock
+    // pointed at it is a clock pointed at nobody. Folding it anyway is how the
+    // deal's unconditional timer paid the small blind a pot the big blind was
+    // all-in for: `advance_game` counted the fold, saw one claimant, and settled.
+    // The clock is dropped and the hand is moved on by the same `advance_game`
+    // every action ends with: a closed round runs the board out, an open one
+    // moves the clock to the next seat that can act. `None`, because nobody timed
+    // out: no fold, no timeout charged, nothing to tell the caller's message
+    // about. `open_the_action` no longer produces this shape, but a hand dealt
+    // before it existed can still be sitting in it when this code is upgraded in.
+    let seat_can_act = state.players[seat as usize]
+        .as_ref()
+        .map(can_still_act)
+        .unwrap_or(false);
+    if !seat_can_act {
+        state.action_timer = None;
+        advance_game(state, now);
         return None;
     }
 
