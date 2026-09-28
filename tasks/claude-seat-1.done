@@ -1,35 +1,41 @@
-# claude-seat-1: task 1790622956 ("local-up pins the deployer identity, so E-74 cannot recur on a machine whose default identity is another project's")
+# claude-seat-1: task 1790622959 ("The money-safety wasm download uses one temp file for every concurrent test, so a cold cache fails the fast gate once")
 
-Closes: 1790622956 (done)
+Closes: 1790622959 (done)
 
-## What landed (branch claude/seat-1, on top of main 5e0b935)
+## What landed (branch claude/seat-1, on top of main 45b193d)
 
-- 49a982d fix: local-up pins the deployer identity (DEFECTS E-74 root cause)
-  - scripts/dev.sh: `up_identities` is step [1/7]: it creates `cd-local-deployer` and the four players when missing (`icp identity new --storage plaintext`, before the network starts, because the managed network funds the identities that exist at start), reads the machine default for the report and never changes it. `up_deploy` passes `--identity "$CONTROLLER"` to `icp deploy`, pre-checks an existing stack's controller before touching it, and asserts every backend canister's controller after the deploy. `resolve_controller_identity` signs its `canister status` read per candidate (the read is controller-only, so unsigned it ran as the default identity, the very drift being detected; stdin closed so a password-protected identity fails instead of prompting). `die_foreign_controller` prints the hand-over (`icp canister settings update <c> --add-controller <principal> --identity <holder>` per canister plus `lobby set_admin`) and the `--reset` alternative, worded differently for a network this run rebuilt (the pin did not take) and for leftover state. `up_wire` dies, not warns, on a controller that is not `$CONTROLLER`; reads `get_admin` before the lobby calls and dies on a foreign admin; `set_admin` and `init_microstakes_tables` go through `call_or_die` (both are Ok and idempotent for the admin). `--reset` on a RUNNING network stops it first (`icp network stop` on this project's descriptor; nothing killed by name or port; dies pointing at `factory.sh replica-recycle` if the gateway still answers after 30 s), then deletes the state and marks the network fresh. `up_fund` reads balances with `--of-principal` (the old `--owner` is not an icp 1.3.0 flag, so every balance read 0 and every local-up transferred another 1000 ICP per player), dies when the funder cannot cover the players, and the transfers go through `call_or_die`. `cmd_selftest` gains "the deployer identity is pinned, never inherited": every `icp_local deploy` line carries `--identity "$CONTROLLER"`, and nothing under scripts/ runs `icp identity use <name>` or `icp identity default <name>`. `cmd_doctor` gains an identities step. `icp network start` takes no `--identity` in icp 1.3.0, so the pin lives on the deploy and the controller calls, said in a comment.
-  - tools/shots/lib/ids.mjs: `resolveControllerIdentity` signs its status read per candidate (after the backend pin, an unsigned read on this machine would throw IC0542 before consulting any candidate, and local-up would die at the frontend step). Same return shape.
-  - tools/shots/lib/frontend-build.mjs: `deployFrontend` creates a not-yet-existing asset canister as `CONTROLLER_IDENTITY` instead of the default identity; an existing one is still resolved.
-  - tools/shots/README.md: the controller section says what local-up now does and that the resolver is the harness's own belt.
-  - docs/DEFECTS.md: E-74's table row and long-form entry carry the root cause, the fix and the verification. STATUS stays OPEN until a full sweep on a hostile-default machine records it (1790622955).
+- 756db45 fix: the ledger wasm download gets a per-call temp file and a rename into place, and is resolved once per test binary
+  - tests/money_safety/src/wasms.rs: `icp_ledger_wasm()` is now a `OnceLock` around `resolve_icp_ledger_wasm()`, so the tests of one binary (cargo runs them on several threads; the fast gate uses `--test-threads=2`) wait for one fetch instead of each reaching `download` on a cold cache. `download(url)` curls into `unique_temp_path(cache_dir, "download")` = `download.<pid>.<nanos>.<seq>.tmp` (pid separates processes, an `AtomicU64` counter separates threads, nanos separates a restarted pid from a leftover), reads it and removes it; on a curl failure it removes its own temp file and panics with the same "Fetch it by hand into target/money-safety/ledger-canister.wasm.gz, or point $ICP_LEDGER_WASM at it" message. The hash-checked bytes go through `install_verified(dest, bytes)`: written to a unique sibling in the cache dir, then `rename`d over `ledger-canister.wasm.gz`, so a concurrent reader (another thread, another process, the settlement oracle's fallback to this cache) sees either no file or the whole file, never a partial write. The cache-hit path's "hash mismatch, remove and re-fetch" branch is kept; the comment says it can no longer be a half-written file.
+  - tests/settlement/src/wasms.rs: same helper shape, same fix (`OnceLock`, `unique_temp_path`, `install_verified` into `target/settlement-oracle/ledger-canister.wasm.gz`, the "Fetch it by hand into target/settlement-oracle/..." message kept). Its fallback read of `target/money-safety/ledger-canister.wasm.gz` is unchanged and is now safe because that file is only ever renamed into place.
+  - tests/no_peeking has no download helper (its only "download" is a canister snapshot download through PocketIC), so nothing to change there.
+  - The old-release tree (`old-release-801aa79`) is not fetched by `download`; it is `git archive | tar -x` under its own `OnceLock`, once per binary, and the fast gate runs the money-safety binaries one after another, so it was not touched.
 
-Canisters untouched: nothing under src/*_canister, Cargo.*, icp.yaml, .icp/ changed. No fund-moving code touched.
+Canisters untouched: nothing under src/, Cargo.*, icp.yaml, .icp/, the frontend or scripts/ changed. No fund-moving code touched. `scripts/test-suites.list` unchanged (no new target).
 
-## Verified (on this seat's own replica, port 8077, with the machine's default identity `cyclepay-hotwallet`, i.e. another project's; no `icp identity use` was run)
+## Verified (this worktree, no replica started, machine default identity untouched, no icp command run)
 
-- `./scripts/dev.sh local-up --reset --no-frontend`: exit 0 in 30 s. It stopped the foreign-controlled network left by task 1790621370, deleted the state, restarted, deployed as cd-local-deployer, printed "every backend canister is controlled by cd-local-deployer", wired the archive, "lobby lists 3 table record(s)", refreshed the records, funded (all five identities read 1000000 ICP: the managed network funds every local identity at start).
-- `icp canister call lobby get_admin '()' --query -e local --identity cd-local-deployer` -> `opt principal "sg3sw-...-6qe"` = cd-local-deployer's principal; `icp canister status lobby --identity cd-local-deployer` -> Controllers: sg3sw-...-6qe. `icp identity default` still prints cyclepay-hotwallet afterwards.
-- `./scripts/dev.sh local-up --no-frontend` a second time (no reset): exit 0, idempotent (existing-network pre-check passed, set_admin Ok, 3 tables).
-- `./scripts/dev.sh local-up` (full, with the frontend): exit 0; the asset canister (5uljf-s3777-77775-aaaea-cai) is controlled by cd-local-deployer, so the pinned create in frontend-build.mjs ran live.
-- `./scripts/dev.sh selftest`: exit 0 (new step green; the regex was tuned twice so a read-only `icp identity default 2>/dev/null` is not a switch and `default cd-alice` / `use cd-alice` are).
-- `make hygiene`: exit 0. `make shots-selftest`: all 13 green. `./scripts/dev.sh doctor`: the identities step prints the pinned deployer and the machine default.
-- `bash -n scripts/dev.sh`, `node --check` on both .mjs files.
+- `gh pr list --repo JoshDFN/cleardeck --state open`: one open PR (#6, docs/readme-refresh), unrelated; nothing supersedes this task.
+- `cargo check --tests` in tests/money_safety and tests/settlement: exit 0, no warning from either wasms.rs (the pre-existing warnings in solvency/controller_custody/invariants are untouched). `rustfmt --check` on both files: my hunks clean; the one remaining diff in money_safety's wasms.rs is a pre-existing line in the thief builder, left alone.
+- `make selftest`: exit 0. `make hygiene`: exit 0. `./scripts/check-declarations.sh`: exit 0 (all 4 pinned versions agree). `./scripts/check-suite-wiring.sh`: exit 0, unchanged ("every test target in this repository is run by something").
+- COLD run, the task's Verify: `rm -rf target/money-safety && POCKET_IC_BIN="$HOME/.cache/dfinity/versions/0.31.0/pocket-ic" make test` (ICP_LEDGER_WASM deliberately NOT set, per the overlay): exit 0 on the FIRST run, 1578 s wall (20:27:41Z to 20:53:59Z). Step 5 "money-safety: all 22 cargo targets green" in 1317 s; `archive::an_upgrade_in_the_middle_of_a_hand_does_not_lose_the_deal_record ... ok` (the test that failed on the cold seat); the cache was rebuilt from nothing (ledger-canister.wasm.gz, old-release-801aa79, guardian-variant, the two E-02 variants); no `*.tmp` left in target/money-safety or target/settlement-oracle. Settlement oracle 92 s, no-peeking 36 s, "all fast gates green".
+- WARM run, same command: exit 0, 1662 s wall (20:54:16Z to 21:21:58Z). Money-safety 1413 s, all 22 targets green, the archive test ok, no temp files left.
+- `./scripts/pocket-ic.sh` with POCKET_IC_BIN set prints the 0.31.0 path back (server 11.0.0).
 
-## NOT verified
+## Skipped
 
-- The identity-CREATION branch of `up_identities` (all five identities already exist on this machine; creating a throwaway identity on the machine-global store just to test it was not done). The `pre` branch of `assert_pinned_controller` for a canister no local identity can read, and `die_foreign_controller` against a live foreign stack (the only such stack was the one `--reset` replaced; the message rendering was exercised by evaluating the function with stub values). `make test` was not rerun: nothing under the canisters, tests/ or the frontend changed.
-- The task text's verify says to switch the default identity with `icp identity use <other>` in a subshell: NOT done on purpose (the default is shared mutable state across every session on this machine); the hostile condition was already live and is what the runs above ran under.
+- `./scripts/verify-build.sh --two-paths`: no build input changed (no Cargo.toml/Cargo.lock/recipes/Dockerfile/icp.yaml).
+- `./scripts/check-candid.sh --declarations`: no canister interface changed.
+- Frontend steps 4 and 5: src/cleardeck_frontend untouched.
+- `make diff-full`, `make known-defects`, `register-stats.sh`: no poker_core, engine defect or register row changed.
+- A separate cold `cargo test --test invariants` before the full run: not run; the full cold `make test` is the required evidence and runs invariants first.
+- Live screenshots / any replica: none needed; none started.
 
-## Follow-ups filed (scripts/factory.sh new, producer claude-seat-1)
+## Note for the operator (no action needed)
 
-1790626845 the README's Quick Start deploys the local stack unpinned (`icp deploy -e local` with no identity, the E-74 shape); point it at local-up.
+The overlay's "Gates" section still says a cold cache "can fail once ... (task 1790622959); a rerun passes. Leave it off only for task 1790622959 itself". That is now stale: ICP_LEDGER_WASM only saves a fresh worktree one download. I edited the seat's copy, found it is a symlink to the primary's untracked `.antler/factory-overlay.md`, and restored the original text so the primary was not changed outside factory.sh. Suggested replacement for those lines: "It saves a fresh worktree one download; without it the harness fetches the pinned module into its own target/money-safety/ cache. (Until task 1790622959 landed, a cold cache could fail the money-safety step once; fixed on main.)"
 
-help: no user-facing change (scripts/, tools/shots and docs only; the poker UI is untouched).
+## Follow-ups filed
+
+None. Nothing out of scope was found.
+
+help: no user-facing change (tests/ only).
