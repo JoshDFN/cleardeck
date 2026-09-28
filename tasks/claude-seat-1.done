@@ -1,42 +1,67 @@
-# claude-seat-1: task 1790621714 ("Review entire codebase, how do we make the best possible poker software")
+# claude-seat-1: task 1790632429 ("The ckBTC deposit door checks the owner and not the subaccount, so one ckBTC deposit can be credited twice")
 
-Closes: 1790621714 (done)
+Closes: 1790632429 (done)
 
-## What landed (branch claude/seat-1, on top of main cc84eb6)
+## What landed (branch claude/seat-1, on top of main bad97fa)
 
-- 6344722 docs: the 2026-09-28 codebase review, 28 ranked gaps with pointers, and the 44 queue tasks that close them
-  - docs/CODEBASE-REVIEW-2026-09-28.md (new, 513 lines, no em-dash): what is strong, 28 ranked gaps each with file:line evidence, the recommended change and the task id that closes it, what the review did not do, the table of filed tasks, and the five-things list.
-  - Nothing else in the tree changed. No code, no register row, no script, no frontend file. The task was review-and-produce; the deliverable is the document and the filed tasks.
+- e308964 fix: the ckBTC block-index door refuses deposit subaccounts and decodes the ledger's reply, gated by the first harness that runs it against the real ICRC-1 ledger (FINDING 46, E-104, E-105; task 1790632429)
+  - src/table_canister/src/lib.rs `verify_ckbtc_deposit`: (1) refuses, before any claim or credit, a transfer whose `to.subaccount` is present and non-zero; the caller's own deposit subaccount gets the ICP door's wording ("went to YOUR OWN deposit address ... call claim_external_deposit()"), any other subaccount is told which principal's door it is; the all-zero subaccount is treated as the main account (ICRC-1 semantics) and still credited. (2) Two dead decodes fixed, found by the new test's first run: the reply was declared `Vec<TransactionWithId>` (the INDEX canister's shape; the ledger sends `vec Transaction`) and decoded with `Response::candid::<(T,)>()`, which in ic-cdk 0.19 is `decode_one` of a one-field record. Either alone failed every reply, so `notify_deposit` on a BTC table has never credited anything. The door now also checks `first_index` is the block it asked about. No change to the ICP path, the `from` check, the spender check or the anti-replay record. No Candid change.
+  - tests/money_safety/src/wasms.rs: `ckbtc_ledger_wasm()`, the real ICRC-1 ledger module pinned by sha256 d10aba5d6391b3f1245df04822cfc3398010264d9875686f5780fe1aaa0467eb from the SAME immutable commit as the ICP ledger (`$CKBTC_LEDGER_WASM`, cache `target/money-safety/ic-icrc1-ledger.wasm.gz`, then curl). The ICP and ckBTC pins share one resolver (`PinnedLedger`), so the 1790622959 cold-cache fix covers both. The ICP ledger module cannot stand in for ckBTC: it does not export `get_transactions`.
+  - tests/money_safety/src/ledger.rs: `CKBTC_LEDGER_ID`, `CKBTC_TRANSFER_FEE = 10`, the ICRC-1 ledger's `LedgerArg::Init` payload (shapes from the module's own embedded Candid).
+  - tests/money_safety/src/world.rs: a `currency = BTC` world adds a fiduciary subnet and installs the ICRC-1 ledger at mxzaz-hqaaa-aaaar-qaada-cai alongside the ICP ledger; `world.ledger` is the currency's ledger; `transfer_fee()` replaces the hardcoded ICP fee in every helper; `transfer_to_deposit_subaccount_of(from, beneficiary, amount)`.
+  - tests/money_safety/src/table_api.rs: `TableConfig::heads_up_btc()`, btc_table_1's exact init args.
+  - tests/money_safety/tests/ckbtc_door.rs (new, 6 tests): cb00 the ledger is the one the canister names; cb01 the reproducer; cb02 a main-account transfer credited by block index once, refused on replay and across an upgrade; cb03 the explicit zero subaccount; cb04 a stranger's payment into another player's address; cb05 the ICRC-2 pull the canister made itself.
+  - tests/money_safety/Cargo.toml `[[test]] ckbtc_door`; scripts/test-suites.list fast row; scripts/dev.sh `run_ms ckbtc_door -- --test-threads=2` in the money-safety fast subset.
+  - docs/SECURITY-FINDINGS.md: FINDING 46 (fund-theft, FIXED) row and body; FINDING 10's "coverage gap" paragraph gets a CLOSED note. docs/DEFECTS.md: E-104 (fund-theft, FIXED) and E-105 (high, FIXED) rows and bodies; T-35 body gets a note (stays OPEN: the local replica still has no ckBTC ledger).
 
-## Method
+## Red, then green (the new target, POCKET_IC_BIN + ICP_LEDGER_WASM set, `cargo test --test ckbtc_door -- --test-threads=2`)
 
-Five parallel read-only sweeps (game engine and rules; money safety and custody; fairness and provability; player experience and frontend health; operations, release engineering, tests and code health), each told to grep the registers before claiming anything new. Every claim that became a security-class task was re-read at the cited lines by the executor before filing (the ckBTC subaccount check at lib.rs:4728-4733, the HandComplete reveal at 12690-12713, the deal's action_on helper at 7681 and 7968-7982 with the timer's fold at 11254-11257, leave_table at 8226-8242, the withdraw refusal at 4893-4925 with the lease at 2880-2892, the CONTROLLERS check at 739-751, the lobby and history pre_upgrade at 921-925 and 1435-1438, auth.js:73, canisters.js:201 and :253, +page.svelte:782-790). Nothing was reproduced on a replica; the document says so in section 3.
+1. Unfixed tree (wasm 9fa2573e): 0 passed; 6 failed. Every `notify_deposit` on the BTC table returned
+   `Failed to decode ckBTC ledger response: CandidDecodeFailed { type_name: "(...GetTransactionsResponse,)", candid_error: "Fail to decode argument 0" }`.
+   This is E-105: the door was dead, so the double credit was latent on mainnet.
+2. Decodes fixed, refusal absent (wasm eda2550d): 4 passed; 2 failed. The double credit itself:
+   ```
+   sent 50000 sats to alice's deposit subaccount (block 2)
+     notify_deposit -> Ok(50000)
+     claim_external_deposit -> Ok(99990)
+     alice's escrow: 99990 sats; ledger holds 49990 sats for the table
+   cb01 panicked: the sweep is the door for a subaccount arrival and must credit it once, minus the fee
+     left: Some(99990)  right: Some(49990)
+
+   bob -> alice's address, 40000 sats (block 2)
+     notify_deposit as bob -> Ok(40000)
+     notify_deposit as alice -> Err(Err("This deposit has already been credited"))
+     alice's sweep -> Ok(39990)
+     escrow: bob 40000 alice 39990; ledger holds 39990
+   cb04 panicked: bob was credited for a transfer that went to alice's deposit address: Ok(40000)
+   ```
+3. Refusal added (wasm efbd0a3b): `test result: ok. 6 passed; 0 failed`.
 
 ## Verified (this worktree, no replica started, no icp command run, machine default identity untouched)
 
-- `gh pr list --repo JoshDFN/cleardeck --state open`: one open PR (#6, docs/readme-refresh, a README refresh); it does not do this task.
-- `make selftest`: exit 0.
-- `make hygiene`: exit 0 (no large or binary file added; protected notices intact; no em-dash in the frontend tree). The new document itself was checked for em-dashes separately: 0.
-- `git merge main` into claude/seat-1: already up to date (main did not move during the task).
+- `gh pr list --repo JoshDFN/cleardeck --state open`: one open PR (#6, docs/readme-refresh); it does not do this task.
+- `make selftest`: guard selftest passed.
+- `make hygiene`: repo hygiene clean.
+- `./scripts/check-declarations.sh`: all 4 pinned versions agree.
+- `./scripts/check-suite-wiring.sh`: exit 0, 54 rows, every target run by something (the new row included).
+- `./scripts/register-stats.sh --check`: exit 0, register consistent.
+- `POCKET_IC_BIN=$HOME/.cache/dfinity/versions/0.31.0/pocket-ic ICP_LEDGER_WASM=/Users/josh/Desktop/cleardeck/target/money-safety/ledger-canister.wasm.gz make test`: exit 0, wall 1677 s (28 min), "all fast gates green"; money-safety fast subset 1421 s with ckbtc_door 6/6 inside it; workspace 16 s, differential 3 s, settlement 99 s + 11 s, shots 5 s, archive 80 s, no-peeking 37 s. Run once, in the foreground, after the cheap gates, on commit 3033023 (amended to e308964 only to drop an `unused mut` warning in the new test; `cargo test --test ckbtc_door --no-run` is warning-free after it, no behaviour change).
+- The pinned ICRC-1 ledger module was downloaded once into this worktree's `target/money-safety/` by the harness's own curl path and hash-checked; its exports were checked with `wasm-objdump` (get_transactions, icrc1_transfer, icrc2_approve, icrc2_transfer_from, icrc1_balance_of, icrc3_get_blocks all present).
 
 ## Skipped
 
-- `./scripts/register-stats.sh --check`: no row in docs/DEFECTS.md or docs/SECURITY-FINDINGS.md was changed. (It was run read-only at the start of the review to get the open counts and passed.)
-- `./scripts/check-declarations.sh`, `make test`, frontend steps 4 and 5, check-candid, verify-build, diff-full, known-defects, live screenshots: nothing outside docs/ changed.
+- `./scripts/check-candid.sh --declarations`: no public interface or `.did` change (the fix is inside `verify_ckbtc_deposit`'s body; `table_canister.did` untouched).
+- Frontend steps 4 and 5: `src/cleardeck_frontend` untouched.
+- `./scripts/verify-build.sh --two-paths`: no build input changed (Cargo.toml/Cargo.lock of the root workspace, recipes, toolchain, Dockerfile, icp.yaml all untouched; tests/money_safety/Cargo.toml is the detached harness crate and gained only a `[[test]]` stanza).
+- `make diff-full`, `make known-defects`, live screenshots: not applicable (no evaluator or engine-defect change; rule 3 paths).
 - No replica was needed and none was started; nothing to recycle.
-
-## Follow-ups filed (44, producer claude-seat-1; every one referenced from the document's gap)
-
-security-high: 1790632429 (ckBTC subaccount double credit), 1790632440 (all-in seat on the clock), 1790632499 (operator: fleet redeploy, after 1790632453), 1790632498 (operator: guardian handover, after 1790632451 and 1790632483), 1790632482 (operator: freezing reserve and cycles top-up).
-security-medium: 1790632438, 1790632441, 1790632442, 1790632443, 1790632444, 1790632445, 1790632447, 1790632448, 1790632449, 1790632450, 1790632453, 1790632483.
-architecture: 1790632469, 1790632470, 1790632476, 1790632464, 1790632477.
-feature: 1790632457, 1790632460, 1790632458, 1790632461, 1790632462, 1790632466, 1790632467, 1790632468, 1790632472, 1790632473, 1790632475 (after 1790622948).
-hygiene: 1790632451 (docs), 1790632454, 1790632455, 1790632495 (after 1790632455), 1790632496 (operator, after 1790632495), 1790632456, 1790632463, 1790632474, 1790632479 (docs), 1790632480, 1790632481.
-
-Cited instead of duplicated: 1790622948, 1790622949, 1790622950, 1790622951, 1790622952, 1790622955, 1790622957, 1790622958, 3090622953, 3090622954, 3090626845.
 
 ## DEFERRED
 
-Nothing in this task's own scope. Every mainnet action the review calls for is an operator-lane task above (1790632499, 1790632498, 1790632482, 1790632496), each with the operator's command and the identity left as a placeholder.
+- Mainnet upgrade of `btc_table_1` (and the rest of the fleet) with this fix: operator lane. Covered by the already-queued 1790632499 ("The six mainnet backends run one reproducible build, and check-fleet-coherence exits 0", `lane: operator`, `after: 1790632453`), which redeploys all six backends from a clean main with `IDENTITY=<operator's mainnet identity> ./scripts/deploy-mainnet.sh`. No duplicate filed. Until it runs, `notify_deposit` on `btc_table_1` stays as it is today: a dead door (E-105), so the double credit is not reachable on the shipped module, but ckBTC sent to the table's main account cannot be credited either.
 
-help: no user-facing change (docs only).
+## Not in scope, left as it was
+
+- The ckBTC minter and the native-BTC path (`get_btc_deposit_address`, `update_balance`) are still executed by no test; T-35 (the local REPLICA has no ckBTC ledger) stays OPEN. FINDING 46's "What is still open" says so.
+
+help: no user-facing change (a refusal message on a door that could not answer at all before; no frontend change).
