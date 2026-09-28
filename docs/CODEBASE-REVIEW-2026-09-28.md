@@ -141,7 +141,7 @@ Conservation holds, so the money invariants are silent: correct totals, wrong re
 this project's signature shape. Read, not reproduced; the recommended change (run out the
 board when fewer than two can act; never fold a seat that cannot act) is right either way.
 
-Register: not recorded. Task: 1790632440 (security-high).
+Register: [E-106](DEFECTS.md#e-106), FIXED by task 1790632440 (security-high); the reproduction is `tests/betting_rules.rs` section 6.
 
 ### Gap 5. Leaving from the seat on action hands a closed street to a player who already matched
 
