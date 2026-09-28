@@ -8,6 +8,7 @@
   import logger from '$lib/logger.js';
   import { readTurnAlertPref, writeTurnAlertPref } from '$lib/turn-alert.js';
   import { hotkeysPref } from '$lib/hotkeys-pref.svelte.js';
+  import { bbDisplay } from '$lib/bb-display.svelte.js';
   import { playSound } from '$lib/sounds.js';
 
   // Props
@@ -706,6 +707,19 @@
             <label class="pref-row">
               <span class="pref-box"><input type="checkbox" checked={hotkeysPref.enabled} onchange={() => hotkeysPref.toggle()} /></span>
               <span>Keyboard shortcuts at the table: F fold, C check or call, R raise, A twice for all in, the number keys for sizes</span>
+            </label>
+          </div>
+
+          <!-- Table display -->
+          <div class="dropdown-section">
+            <span class="section-title">Table display</span>
+            <!-- OFF BY DEFAULT ($lib/bb-display.js): the felt's live figures
+                 as multiples of the big blind. Only the stacks, the bets and
+                 the pot change; the buttons, the sizer and the balances stay
+                 in the currency, because those figures are sent or settled. -->
+            <label class="pref-row">
+              <span class="pref-box"><input type="checkbox" checked={bbDisplay.enabled} onchange={() => bbDisplay.toggle()} /></span>
+              <span>Stacks, bets and the pot in big blinds. The buttons, the bet sizer and your balance stay in the table's currency.</span>
             </label>
           </div>
 

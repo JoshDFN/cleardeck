@@ -38,6 +38,14 @@
     isHandComplete = false,
     currencySymbol = 'ICP',
     fmt = (v) => String(v),
+    // THE WINNER LINE IS A SETTLEMENT and stays in the currency whatever
+    // the felt reads in ($lib/bb-display.js): `fmtSettled` writes it; when
+    // absent it is `fmt`, so a caller that knows no other mode is unchanged.
+    fmtSettled = null,
+    // Big-blind mode: the unit tag after the pot figures, and the exact
+    // currency figure on the headline's title. Null by default.
+    unit = null,
+    exactFmt = null,
     seatLabel = (i) => `Seat ${Number(i) + 1}`,
     /** The seat's display name, or null when the table does not know one. */
     seatName = () => null,
@@ -49,6 +57,8 @@
    *  (tools/shots/lib/dom-scrape.mjs reads it; the amount is the number after
    *  "wins"). */
   const winnerName = (seat) => seatName(seat) || seatLabel(seat);
+  const settled = $derived(fmtSettled ?? fmt);
+  const potTitle = $derived(unit && exactFmt && totalPot > 0 ? exactFmt(totalPot) : null);
 
   const showWinner = $derived(isHandComplete && winners.length > 0);
   const breakdown = $derived(liveBets > 0 ? `${fmt(collectedPot)} collected + ${fmt(liveBets)} betting` : '');
@@ -68,13 +78,13 @@
   <div class="winner-display" class:you-won={!!myWinInfo} class:split={winners.length > 1}>
     <span class="winner-line">
       {#if myWinInfo}
-        <span class="winner-text" data-seat={Number(myWinInfo.seat)}>You won {fmt(Number(myWinInfo.amount))} {currencySymbol}</span>
+        <span class="winner-text" data-seat={Number(myWinInfo.seat)}>You won {settled(Number(myWinInfo.amount))} {currencySymbol}</span>
         {#if handRankWords(myWinInfo.hand_rank)}
           <span class="winner-hand-rank">{handRankWords(myWinInfo.hand_rank)}</span>
         {/if}
       {:else}
         <span class="winner-text" data-seat={Number(winners[0].seat)}>
-          {winnerName(winners[0].seat)} wins {fmt(Number(winners[0].amount))} {currencySymbol}
+          {winnerName(winners[0].seat)} wins {settled(Number(winners[0].amount))} {currencySymbol}
         </span>
         {#if handRankWords(winners[0].hand_rank)}
           <span class="winner-hand-rank">{handRankWords(winners[0].hand_rank)}</span>
@@ -105,7 +115,7 @@
         </span>
         <span class="phase-indicator">{streetLabel}</span>
       </span>
-      <span class="pot-amount cd-money">{totalPot > 0 ? fmt(totalPot) : '--'}</span>
+      <span class="pot-amount cd-money" title={potTitle}>{totalPot > 0 ? fmt(totalPot) : '--'}{#if unit && totalPot > 0}<span class="unit-tag">{unit}</span>{/if}</span>
     </div>
     {#if sidePots.length > 0}
       <!-- index 0 is the MAIN pot (docs/DEFECTS.md T-12). One pot alone is
@@ -115,7 +125,7 @@
         {#each sidePots as sidePot, i}
           <div class="side-pot">
             <span class="side-pot-label">{i === 0 ? 'Main' : `Side ${i}`}</span>
-            <span class="side-pot-amount cd-money">{fmt(sidePot.amount)}</span>
+            <span class="side-pot-amount cd-money">{fmt(sidePot.amount)}{#if unit}<span class="unit-tag">{unit}</span>{/if}</span>
           </div>
         {/each}
       </div>
@@ -215,6 +225,14 @@
     letter-spacing: -0.01em;
     color: var(--cd-money);
     line-height: 1;
+  }
+
+  .unit-tag {
+    margin-left: 0.18em;
+    font-size: 0.55em;
+    font-weight: var(--cd-weight-figure);
+    letter-spacing: 0.04em;
+    color: var(--cd-ink-2);
   }
 
   .main-pot.has-chips {

@@ -45,6 +45,9 @@
   import { compactHandName } from '$lib/hand-names.js';
   import { playSound } from '$lib/sounds.js';
   import { computeEquity, describeHand, formatEquity, cardCodes } from '$lib/equity.js';
+  import { BB_UNIT, canShowBB, formatBB } from '$lib/bb-display.js';
+  import { bbDisplay } from '$lib/bb-display.svelte.js';
+  import { streetActionsOf } from '$lib/street-actions.js';
   // Importing this module installs the app-wide BigInt/JSON guard (see the
   // header of $lib/utils.js). This component is where the class of defect that
   // guard exists for was found (docs/DEFECTS.md T-10), so it names it.
@@ -125,6 +128,27 @@
   // Names kept for readability at the call sites.
   const formatChips = fmt;
   const formatWithUnit = fmtWithUnit;
+
+  /**
+   * THE FELT IN BIG BLINDS ($lib/bb-display.js), an opt-in per viewer.
+   *
+   * `feltFmt` is the formatter for the LIVE OBJECTS on the felt: the stacks,
+   * the bet discs, the pot and its side pots, and the two chip flights. In
+   * the default state it IS `fmt`, so every figure the harness asserts is
+   * written exactly as before. With the preference on and a big blind known
+   * it writes multiples ("12.5") and the components paint a "BB" tag after
+   * them, with the exact currency figure on the element's title.
+   *
+   * `fmt` keeps everything that is SENT or SETTLED: the action buttons and
+   * the sizer (the figure on the button is the figure sent), the pot-odds
+   * line, the wallet panel, the winner line and the award chip.
+   */
+  const bbMode = $derived(bbDisplay.enabled && canShowBB(bigBlindRaw));
+  const feltUnit = $derived(bbMode ? BB_UNIT : null);
+  function feltFmt(value) {
+    if (!bbMode) return fmt(value);
+    return formatBB(value, bigBlindRaw) ?? fmt(value);
+  }
 
   // ---------------------------------------------------------------------------
   // 2. Table state
@@ -949,17 +973,6 @@
     Showdown: 'Showdown', HandComplete: 'Hand Complete'
   };
 
-  $effect(() => {
-    if (phaseKey && phaseKey !== lastTrackedPhase && phaseKey !== 'WaitingForPlayers') {
-      if (PHASE_NAMES[phaseKey] && lastTrackedPhase !== null) {
-        actionFeed = [...actionFeed, {
-          type: 'phase', text: PHASE_NAMES[phaseKey], timestamp: Date.now()
-        }];
-      }
-      lastTrackedPhase = phaseKey;
-    }
-  });
-
   /**
    * Identity of a `last_action` record, as a string.
    *
@@ -1008,6 +1021,33 @@
     }
     lastTrackedAction = key;
   });
+
+  /**
+   * THE STREET LINE, appended AFTER the action that closed the street.
+   *
+   * The canister advances the street in the same update as the closing
+   * action, so one poll carries both the new phase and that action as
+   * `last_action`. Effects run in declaration order, and this one used to
+   * sit above the action effect: every closing call or check was logged
+   * UNDER the next street's header ("Turn", then "Seat 2 called"), and the
+   * plates' street words ($lib/street-actions.js) would have read it as
+   * the first action of the new street. It now runs after, and marks the
+   * line `street: true` so the plates reset on a street and not on the
+   * equity method line, which is also a phase-style entry.
+   */
+  $effect(() => {
+    if (phaseKey && phaseKey !== lastTrackedPhase && phaseKey !== 'WaitingForPlayers') {
+      if (PHASE_NAMES[phaseKey] && lastTrackedPhase !== null) {
+        actionFeed = [...actionFeed, {
+          type: 'phase', text: PHASE_NAMES[phaseKey], street: true, timestamp: Date.now()
+        }];
+      }
+      lastTrackedPhase = phaseKey;
+    }
+  });
+
+  /** Each seat's last action this street, for the plates. */
+  const streetWords = $derived(streetActionsOf(actionFeed));
 
   /**
    * SHOWDOWN LINES. Every hand the engine turned up, named in words, in the log
@@ -1282,6 +1322,30 @@
   // 9. Panels
   // ---------------------------------------------------------------------------
 
+  /**
+   * LEAVING MID-HAND TAKES TWO PRESSES. `leave_table` while the hero is
+   * dealt in and live gives up the hand and whatever is already in the pot
+   * (the wallet panel then says "You have left this table and this is still
+   * yours in hand N"), and the button sits one cell from Sit out. The first
+   * press arms and the button asks; the second within the window leaves.
+   * Between hands, or once folded, one press leaves as before.
+   */
+  let leaveArmedAt = $state(0);
+  const LEAVE_CONFIRM_MS = 3000;
+  const leaveNeedsGuard = $derived(gameInProgress && myPlayer !== null && isInHand(myPlayer));
+  const leaveArmed = $derived(leaveArmedAt > 0 && leaveNeedsGuard);
+  $effect(() => {
+    if (!leaveArmedAt) return undefined;
+    const id = setTimeout(() => { leaveArmedAt = 0; }, LEAVE_CONFIRM_MS);
+    return () => clearTimeout(id);
+  });
+  $effect(() => { if (!leaveNeedsGuard) leaveArmedAt = 0; });
+  function pressLeave() {
+    if (leaveNeedsGuard && !leaveArmed) { leaveArmedAt = Date.now(); return; }
+    leaveArmedAt = 0;
+    onAction('leave');
+  }
+
   let walletCollapsed = $state(
     typeof localStorage !== 'undefined' && localStorage.getItem('poker_wallet_collapsed') === 'true'
   );
@@ -1521,7 +1585,10 @@
             {myWinInfo}
             {isHandComplete}
             {currencySymbol}
-            {fmt}
+            fmt={feltFmt}
+            fmtSettled={fmt}
+            unit={feltUnit}
+            exactFmt={fmtWithUnit}
             {seatLabel}
             seatName={winnerSeatName}
             {handRankWords}
@@ -1616,7 +1683,10 @@
               awardOnSpoke={point.awardOnSpoke}
               spokeY={point.rdy !== 0}
               spokeEnds={point.spokeEnds}
-              {fmt}
+              fmt={feltFmt}
+              {feltUnit}
+              exactFmt={fmtWithUnit}
+              actedWord={gameInProgress && !isShowdown ? (streetWords.get(i) ?? null) : null}
               onJoin={(seat) => onAction('join', seat)}
             />
           </div>
@@ -1637,7 +1707,7 @@
               style:--by={point.by}
               onanimationend={() => dropSweep(ghost.seat)}
               aria-hidden="true"
-            >{fmt(ghost.amount)}</div>
+            >{feltFmt(ghost.amount)}</div>
           {/if}
         {/each}
 
@@ -1648,7 +1718,7 @@
             style:--wsn={flight.sn}
             onanimationend={() => dropPotFlight(flight.seat)}
             aria-hidden="true"
-          >{fmt(flight.amount)}</div>
+          >{feltFmt(flight.amount)}</div>
         {/each}
 
         <!-- sitting-out notice sits over the surround, never over the felt -->
@@ -1767,7 +1837,13 @@
             <button class="control-btn" onclick={() => onAction(isSittingOut ? 'sitIn' : 'sitOut')}>
               {isSittingOut ? 'Sit in' : 'Sit out'}
             </button>
-            <button class="control-btn destructive" onclick={() => onAction('leave')}>Leave</button>
+            <button
+              class="control-btn destructive"
+              class:armed={leaveArmed}
+              aria-pressed={leaveArmed ? 'true' : undefined}
+              onclick={pressLeave}
+              title={leaveNeedsGuard ? (leaveArmed ? 'Press again to leave this hand and the table' : 'You are in this hand. Leaving takes two presses.') : 'Leave the table'}
+            >{leaveArmed ? 'Leave anyway?' : 'Leave'}</button>
           </div>
         {/if}
       </div>

@@ -315,6 +315,9 @@
 
   .control-btn:hover { color: var(--cd-ink); }
   .control-btn.destructive:hover { color: var(--cd-danger-hi); border-color: var(--cd-danger-line); }
+  /* The armed Leave (PokerTable.svelte pressLeave): the hero is in a hand and
+     the button is asking; the second press leaves. */
+  .control-btn.destructive.armed { color: var(--cd-danger-ink); background: var(--cd-danger); border-color: var(--cd-danger); }
 
   /* ==========================================================================
      PORTRAIT: a two-row dock, the action row at the bottom for the thumb.

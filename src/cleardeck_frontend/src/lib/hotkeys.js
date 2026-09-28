@@ -65,6 +65,7 @@ export function dialogIsOpen(doc) {
  * @property {boolean} canRaise
  * @property {boolean} raiseDisabled
  * @property {boolean} allInArmed    the first "A" press is standing
+ * @property {boolean} [foldArmed]   the first "F" press is standing (only asked for when a check is free)
  * @property {boolean} compact
  * @property {boolean} sizerOpen
  * @property {ReadonlyArray<{id: string, key: string}>} presets
@@ -73,6 +74,7 @@ export function dialogIsOpen(doc) {
 /**
  * @typedef {{ type: 'action', action: 'fold'|'check'|'call'|'allin' }
  *   | { type: 'arm-allin' }
+ *   | { type: 'arm-fold' }
  *   | { type: 'commit-raise' }
  *   | { type: 'preset', id: string }
  *   | { type: 'step', delta: 1|-1 }
@@ -93,7 +95,13 @@ export function resolveHotkey(key, ctx) {
   if (key === 'Enter' || key === ' ' || key === 'Spacebar') return null;
 
   const lower = typeof key === 'string' && key.length === 1 ? key.toLowerCase() : key;
-  if (lower === 'f') return { type: 'action', action: 'fold' };
+  // FOLDING WHEN A CHECK IS FREE takes two presses, like all in: a fold with
+  // nothing owed is nearly always a slip, and every reference client asks
+  // first. Facing a bet, one press folds as before.
+  if (lower === 'f') {
+    if (ctx.canCheck && ctx.foldArmed !== true) return { type: 'arm-fold' };
+    return { type: 'action', action: 'fold' };
+  }
   if (lower === 'c') return { type: 'action', action: ctx.canCheck ? 'check' : 'call' };
   if (lower === 'r') return ctx.raiseDisabled ? null : { type: 'commit-raise' };
   if (lower === 'a') return ctx.allInArmed ? { type: 'action', action: 'allin' } : { type: 'arm-allin' };

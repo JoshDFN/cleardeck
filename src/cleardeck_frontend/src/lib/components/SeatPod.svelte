@@ -64,8 +64,22 @@
     spokeY = false,
     spokeEnds = false,
     fmt = (v) => String(v),
+    // THE BIG-BLIND MODE ($lib/bb-display.js): `fmt` then writes multiples,
+    // `feltUnit` is the "BB" tag painted after the figure, and `exactFmt`
+    // writes the exact currency figure that rides the figure's title. All
+    // null in the default state, so the DOM the harness reads is unchanged.
+    feltUnit = null,
+    exactFmt = null,
+    // The seat's last action THIS STREET, in one word ($lib/street-actions.js):
+    // Check, Call, Bet or Raise beside the stack, where the plate already
+    // writes Fold. Null when the seat has not acted, or the plate says it
+    // another way (the fold word, the all-in disc).
+    actedWord = null,
     onJoin = () => {}
   } = $props();
+
+  const stackTitle = $derived(feltUnit && exactFmt ? exactFmt(player?.chips ?? 0) : null);
+  const betTitle = $derived(feltUnit && exactFmt ? exactFmt(betAmount) : null);
 
   const avatar = $derived(player?.principal ? avatarFor(player.principal.toString(), name) : null);
   const arc = $derived(clockArcDegrees(clockFraction));
@@ -75,7 +89,7 @@
   <HoleCards {isHero} {showCards} {live} {winner} {heroCards} {revealed} />
 
   {#if betAmount > 0}
-    <BetStack amount={betAmount} allIn={betAllIn} {bigBlind} {fmt} />
+    <BetStack amount={betAmount} allIn={betAllIn} {bigBlind} {fmt} unit={feltUnit} title={betTitle} />
   {/if}
 
   <!-- the plate: a broadcast lower-third -->
@@ -103,8 +117,8 @@
     <div class="pod-text">
       <span class="player-name" class:is-me={isHero}>{name}</span>
       <span class="stack-row">
-        <span class="chips cd-money">{fmt(player.chips)}</span>
-        {#if folded}<span class="fold-word">Fold</span>{/if}
+        <span class="chips cd-money" title={stackTitle}>{fmt(player.chips)}{#if feltUnit}<span class="unit-tag">{feltUnit}</span>{/if}</span>
+        {#if folded}<span class="fold-word">Fold</span>{:else if actedWord}<span class="acted-word">{actedWord}</span>{/if}
       </span>
     </div>
     {#if acting && timeRemaining !== null && plateTag?.tone !== 'sent'}
@@ -325,11 +339,40 @@
     min-width: 0;
   }
 
-  /* The stack is the largest text on the table after the pot. */
+  /* The stack is the largest text on the table after the pot. It never
+     yields to the word beside it: the money figure is the row's fixed
+     item, the word the one that may clip. */
   .chips {
+    flex: 0 0 auto;
     font-size: var(--cd-felt-stack);
     font-weight: var(--cd-weight-display);
     color: var(--cd-ink);
+    white-space: nowrap;
+  }
+
+  /* The "BB" tag after a big-blind figure: a unit, quieter than the figure. */
+  .unit-tag {
+    margin-left: 0.18em;
+    font-size: 0.58em;
+    font-weight: var(--cd-weight-figure);
+    letter-spacing: 0.04em;
+    color: var(--cd-ink-2);
+  }
+
+  /* THE STREET WORD: Check, Call, Bet, Raise in the fold word's slot and at
+     its size. It shrinks and clips before the stack figure moves a pixel
+     (flex 0 1 auto, min-width 0, overflow hidden): a plate at the phone's
+     type floor may lose the word's tail, never a digit of the stack. */
+  .acted-word {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    font-size: var(--cd-felt-label);
+    font-weight: var(--cd-weight-display);
+    letter-spacing: var(--cd-tracking-label);
+    text-transform: uppercase;
+    color: var(--cd-ink-2);
+    line-height: 1;
     white-space: nowrap;
   }
 

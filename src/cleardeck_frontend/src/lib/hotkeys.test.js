@@ -69,6 +69,17 @@ describe('resolveHotkey: the keys that do work', () => {
     expect(resolveHotkey('a', { ...base, allInArmed: true })).toEqual({ type: 'action', action: 'allin' });
   });
 
+  it('F folds at once facing a bet, but arms first when a check is free', () => {
+    expect(resolveHotkey('f', base)).toEqual({ type: 'action', action: 'fold' });
+    expect(resolveHotkey('f', { ...base, canCheck: true })).toEqual({ type: 'arm-fold' });
+    expect(resolveHotkey('F', { ...base, canCheck: true })).toEqual({ type: 'arm-fold' });
+    expect(resolveHotkey('f', { ...base, canCheck: true, foldArmed: true })).toEqual({ type: 'action', action: 'fold' });
+    // the standing arm only matters while a check is free
+    expect(resolveHotkey('f', { ...base, canCheck: false, foldArmed: true })).toEqual({ type: 'action', action: 'fold' });
+    // anything but the literal true is not armed
+    expect(resolveHotkey('f', { ...base, canCheck: true, foldArmed: 'true' })).toEqual({ type: 'arm-fold' });
+  });
+
   it('presets and steps need canRaise', () => {
     expect(resolveHotkey('4', base)).toEqual({ type: 'preset', id: 'pot' });
     expect(resolveHotkey('+', base)).toEqual({ type: 'step', delta: 1 });
