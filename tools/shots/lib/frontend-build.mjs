@@ -180,13 +180,18 @@ export function buildFrontend({ log = console.log } = {}) {
  *
  * Same fix as the table driver: read the controller list off the canister and
  * use an identity that is actually in it. A fresh machine, where the canister
- * does not exist yet, has no controller list to read -- there the deploy runs
- * with the default identity and creates it, which is correct.
+ * does not exist yet, has no controller list to read -- there the deploy is
+ * PINNED to `CONTROLLER_IDENTITY`, the identity `scripts/dev.sh local-up` pins
+ * the backend to (docs/DEFECTS.md E-74, root cause). Creating it as the
+ * default identity instead is how the three-identity stack above came to be.
  */
 export function deployFrontend({ log = console.log } = {}) {
   const existing = readLocalIds().frontend;
   const idFlag = [];
-  if (existing) {
+  if (!existing) {
+    idFlag.push('--identity', CONTROLLER_IDENTITY);
+    log(`  frontend canister does not exist yet: creating it as ${CONTROLLER_IDENTITY}`);
+  } else {
     const found = resolveControllerIdentity(existing, {
       preferred: CONTROLLER_IDENTITY,
       candidates: FUNDER_IDENTITIES,
