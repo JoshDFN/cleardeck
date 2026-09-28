@@ -28,8 +28,9 @@
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Pinned build of the mainnet ICP ledger (`ledger-canister.wasm.gz`).
 ///
@@ -309,7 +310,19 @@ pub fn assert_fresh(wasm: &Path) {
 // the ICP ledger
 // ---------------------------------------------------------------------------
 
+static ICP_LEDGER: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// The REAL ICP ledger module, resolved ONCE per test binary.
+///
+/// Same shape as `tests/money_safety`, and the same fix (task 1790622959): a
+/// binary's tests run on several threads, and on a cold cache every one of them
+/// reached the download at the same moment. Concurrent callers now wait for the
+/// one fetch instead of racing it.
 pub fn icp_ledger_wasm() -> Vec<u8> {
+    ICP_LEDGER.get_or_init(resolve_icp_ledger_wasm).clone()
+}
+
+fn resolve_icp_ledger_wasm() -> Vec<u8> {
     if let Ok(path) = std::env::var("ICP_LEDGER_WASM") {
         let bytes = std::fs::read(&path)
             .unwrap_or_else(|e| panic!("ICP_LEDGER_WASM={path} could not be read: {e}"));
@@ -319,8 +332,12 @@ pub fn icp_ledger_wasm() -> Vec<u8> {
 
     // Share the money-safety cache when it is already populated: the bytes are
     // hash-checked either way, so there is nothing to gain from downloading twice.
+    // Both caches are filled by rename-into-place, so a file that exists is a
+    // whole file; a hash mismatch is a corrupt or superseded entry, not a
+    // half-written one.
+    let own = cache_dir().join("ledger-canister.wasm.gz");
     for cached in [
-        cache_dir().join("ledger-canister.wasm.gz"),
+        own.clone(),
         repo_root().join("target/money-safety/ledger-canister.wasm.gz"),
     ] {
         if cached.exists() {
@@ -334,9 +351,40 @@ pub fn icp_ledger_wasm() -> Vec<u8> {
 
     let bytes = download(ICP_LEDGER_URL);
     assert_pinned(&bytes, ICP_LEDGER_URL);
-    std::fs::write(cache_dir().join("ledger-canister.wasm.gz"), &bytes)
-        .expect("cannot write ledger wasm cache");
+    install_verified(&own, &bytes);
     bytes
+}
+
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// A path in `dir` that no other call, thread or process is using: pid, nanos
+/// and a per-process counter. `tests/money_safety/src/wasms.rs` says why each
+/// part is there (task 1790622959: one shared `download.tmp`, removed by the
+/// first finisher from under the second's read).
+fn unique_temp_path(dir: &Path, stem: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    dir.join(format!("{stem}.{}.{nanos}.{seq}.tmp", std::process::id()))
+}
+
+/// Put hash-verified bytes at `dest` so a concurrent reader sees either no file
+/// or the complete file: write to a unique sibling, then `rename` (atomic on one
+/// filesystem, and it replaces an existing `dest` in one step).
+fn install_verified(dest: &Path, bytes: &[u8]) {
+    let dir = dest.parent().expect("cache path has a parent");
+    let tmp = unique_temp_path(dir, "ledger-canister.wasm.gz");
+    std::fs::write(&tmp, bytes)
+        .unwrap_or_else(|e| panic!("cannot write ledger wasm cache {}: {e}", tmp.display()));
+    if let Err(e) = std::fs::rename(&tmp, dest) {
+        let _ = std::fs::remove_file(&tmp);
+        panic!(
+            "cannot move the ledger wasm into the cache at {}: {e}",
+            dest.display()
+        );
+    }
 }
 
 fn assert_pinned(bytes: &[u8], origin: &str) {
@@ -348,20 +396,26 @@ fn assert_pinned(bytes: &[u8], origin: &str) {
     );
 }
 
+/// Fetch `url` into a temp file that is this call's alone, read it, remove it.
+/// Nothing here touches the cache path: the caller verifies the bytes and then
+/// `install_verified` moves them in.
 fn download(url: &str) -> Vec<u8> {
-    let out = cache_dir().join("download.tmp");
+    let out = unique_temp_path(&cache_dir(), "download");
     let status = Command::new("curl")
         .args(["-sSL", "--fail", "--max-time", "180", "-o"])
         .arg(&out)
         .arg(url)
         .status()
         .unwrap_or_else(|e| panic!("could not run curl to fetch {url}: {e}"));
-    assert!(
-        status.success(),
-        "curl failed to fetch {url}. Fetch it by hand into \
-         target/settlement-oracle/ledger-canister.wasm.gz, or point $ICP_LEDGER_WASM at it."
-    );
-    let bytes = std::fs::read(&out).expect("download produced no file");
+    if !status.success() {
+        let _ = std::fs::remove_file(&out);
+        panic!(
+            "curl failed to fetch {url}. Fetch it by hand into \
+             target/settlement-oracle/ledger-canister.wasm.gz, or point $ICP_LEDGER_WASM at it."
+        );
+    }
+    let bytes = std::fs::read(&out)
+        .unwrap_or_else(|e| panic!("download produced no file at {}: {e}", out.display()));
     let _ = std::fs::remove_file(&out);
     bytes
 }

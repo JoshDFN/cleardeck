@@ -12,7 +12,9 @@ use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Pinned build of the mainnet ICP ledger (`ledger-canister.wasm.gz`).
 ///
@@ -54,6 +56,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+static ICP_LEDGER: OnceLock<Vec<u8>> = OnceLock::new();
+
 /// The REAL ICP ledger module, gzipped exactly as published.
 ///
 /// Resolution order:
@@ -62,7 +66,16 @@ fn sha256_hex(bytes: &[u8]) -> String {
 ///      different ledger build on purpose).
 ///   2. the cache under `target/money-safety/`.
 ///   3. download from the pinned immutable URL.
+///
+/// Resolved ONCE per test binary. Cargo runs the tests of one binary on several
+/// threads, and on a cold cache every one of them used to reach step 3 at the
+/// same moment (task 1790622959, below). Concurrent callers now wait for the one
+/// fetch instead of racing it.
 pub fn icp_ledger_wasm() -> Vec<u8> {
+    ICP_LEDGER.get_or_init(resolve_icp_ledger_wasm).clone()
+}
+
+fn resolve_icp_ledger_wasm() -> Vec<u8> {
     if let Ok(path) = std::env::var("ICP_LEDGER_WASM") {
         let bytes = std::fs::read(&path)
             .unwrap_or_else(|e| panic!("ICP_LEDGER_WASM={path} could not be read: {e}"));
@@ -79,13 +92,56 @@ pub fn icp_ledger_wasm() -> Vec<u8> {
             return bytes;
         }
         // A corrupt or superseded cache entry is not a reason to fail; re-fetch.
+        // It cannot be a half-written one: `install_verified` renames a complete
+        // file into place, so a reader sees the whole file or no file.
         let _ = std::fs::remove_file(&cached);
     }
 
     let bytes = download(ICP_LEDGER_URL);
     assert_pinned(&bytes, ICP_LEDGER_URL);
-    std::fs::write(&cached, &bytes).expect("cannot write ledger wasm cache");
+    install_verified(&cached, &bytes);
     bytes
+}
+
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// A path in `dir` that no other call, thread or process is using.
+///
+/// Task 1790622959: every `download` used to write to the one
+/// `target/money-safety/download.tmp`. Cargo runs a binary's tests on several
+/// threads, so on a cold cache two tests both curl'd into that one file and
+/// whichever finished first removed it from under the other's read: "download
+/// produced no file", 63 of 64 green, and green again on the rerun once the cache
+/// held the module. The pid keeps two harness processes apart (the settlement
+/// oracle shares the shape and can fall back to this cache), the counter keeps
+/// two threads of one process apart, and the nanos keep a restarted pid apart
+/// from a file its predecessor left behind.
+fn unique_temp_path(dir: &Path, stem: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    dir.join(format!("{stem}.{}.{nanos}.{seq}.tmp", std::process::id()))
+}
+
+/// Put hash-verified bytes at `dest` so that a concurrent reader sees either no
+/// file or the complete file: write to a unique sibling, then `rename`, which is
+/// atomic on the same filesystem and replaces an existing `dest` in one step.
+/// Only bytes that passed `assert_pinned` come through here, so the cache path
+/// never holds anything but the pinned module.
+fn install_verified(dest: &Path, bytes: &[u8]) {
+    let dir = dest.parent().expect("cache path has a parent");
+    let tmp = unique_temp_path(dir, "ledger-canister.wasm.gz");
+    std::fs::write(&tmp, bytes)
+        .unwrap_or_else(|e| panic!("cannot write ledger wasm cache {}: {e}", tmp.display()));
+    if let Err(e) = std::fs::rename(&tmp, dest) {
+        let _ = std::fs::remove_file(&tmp);
+        panic!(
+            "cannot move the ledger wasm into the cache at {}: {e}",
+            dest.display()
+        );
+    }
 }
 
 fn assert_pinned(bytes: &[u8], origin: &str) {
@@ -99,20 +155,26 @@ fn assert_pinned(bytes: &[u8], origin: &str) {
     );
 }
 
+/// Fetch `url` into a temp file that is this call's alone (see
+/// `unique_temp_path`), read it, and remove it. Nothing here touches the cache
+/// path: the caller verifies the bytes and then `install_verified` moves them in.
 fn download(url: &str) -> Vec<u8> {
-    let out = cache_dir().join("download.tmp");
+    let out = unique_temp_path(&cache_dir(), "download");
     let status = Command::new("curl")
         .args(["-sSL", "--fail", "--max-time", "180", "-o"])
         .arg(&out)
         .arg(url)
         .status()
         .unwrap_or_else(|e| panic!("could not run curl to fetch {url}: {e}"));
-    assert!(
-        status.success(),
-        "curl failed to fetch {url}. Fetch it by hand into \
-         target/money-safety/ledger-canister.wasm.gz, or point $ICP_LEDGER_WASM at it."
-    );
-    let bytes = std::fs::read(&out).expect("download produced no file");
+    if !status.success() {
+        let _ = std::fs::remove_file(&out);
+        panic!(
+            "curl failed to fetch {url}. Fetch it by hand into \
+             target/money-safety/ledger-canister.wasm.gz, or point $ICP_LEDGER_WASM at it."
+        );
+    }
+    let bytes = std::fs::read(&out)
+        .unwrap_or_else(|e| panic!("download produced no file at {}: {e}", out.display()));
     let _ = std::fs::remove_file(&out);
     bytes
 }
