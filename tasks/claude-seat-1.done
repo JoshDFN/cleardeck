@@ -1,41 +1,42 @@
-# claude-seat-1: task 1790622959 ("The money-safety wasm download uses one temp file for every concurrent test, so a cold cache fails the fast gate once")
+# claude-seat-1: task 1790621714 ("Review entire codebase, how do we make the best possible poker software")
 
-Closes: 1790622959 (done)
+Closes: 1790621714 (done)
 
-## What landed (branch claude/seat-1, on top of main 45b193d)
+## What landed (branch claude/seat-1, on top of main cc84eb6)
 
-- 756db45 fix: the ledger wasm download gets a per-call temp file and a rename into place, and is resolved once per test binary
-  - tests/money_safety/src/wasms.rs: `icp_ledger_wasm()` is now a `OnceLock` around `resolve_icp_ledger_wasm()`, so the tests of one binary (cargo runs them on several threads; the fast gate uses `--test-threads=2`) wait for one fetch instead of each reaching `download` on a cold cache. `download(url)` curls into `unique_temp_path(cache_dir, "download")` = `download.<pid>.<nanos>.<seq>.tmp` (pid separates processes, an `AtomicU64` counter separates threads, nanos separates a restarted pid from a leftover), reads it and removes it; on a curl failure it removes its own temp file and panics with the same "Fetch it by hand into target/money-safety/ledger-canister.wasm.gz, or point $ICP_LEDGER_WASM at it" message. The hash-checked bytes go through `install_verified(dest, bytes)`: written to a unique sibling in the cache dir, then `rename`d over `ledger-canister.wasm.gz`, so a concurrent reader (another thread, another process, the settlement oracle's fallback to this cache) sees either no file or the whole file, never a partial write. The cache-hit path's "hash mismatch, remove and re-fetch" branch is kept; the comment says it can no longer be a half-written file.
-  - tests/settlement/src/wasms.rs: same helper shape, same fix (`OnceLock`, `unique_temp_path`, `install_verified` into `target/settlement-oracle/ledger-canister.wasm.gz`, the "Fetch it by hand into target/settlement-oracle/..." message kept). Its fallback read of `target/money-safety/ledger-canister.wasm.gz` is unchanged and is now safe because that file is only ever renamed into place.
-  - tests/no_peeking has no download helper (its only "download" is a canister snapshot download through PocketIC), so nothing to change there.
-  - The old-release tree (`old-release-801aa79`) is not fetched by `download`; it is `git archive | tar -x` under its own `OnceLock`, once per binary, and the fast gate runs the money-safety binaries one after another, so it was not touched.
+- 6344722 docs: the 2026-09-28 codebase review, 28 ranked gaps with pointers, and the 44 queue tasks that close them
+  - docs/CODEBASE-REVIEW-2026-09-28.md (new, 513 lines, no em-dash): what is strong, 28 ranked gaps each with file:line evidence, the recommended change and the task id that closes it, what the review did not do, the table of filed tasks, and the five-things list.
+  - Nothing else in the tree changed. No code, no register row, no script, no frontend file. The task was review-and-produce; the deliverable is the document and the filed tasks.
 
-Canisters untouched: nothing under src/, Cargo.*, icp.yaml, .icp/, the frontend or scripts/ changed. No fund-moving code touched. `scripts/test-suites.list` unchanged (no new target).
+## Method
 
-## Verified (this worktree, no replica started, machine default identity untouched, no icp command run)
+Five parallel read-only sweeps (game engine and rules; money safety and custody; fairness and provability; player experience and frontend health; operations, release engineering, tests and code health), each told to grep the registers before claiming anything new. Every claim that became a security-class task was re-read at the cited lines by the executor before filing (the ckBTC subaccount check at lib.rs:4728-4733, the HandComplete reveal at 12690-12713, the deal's action_on helper at 7681 and 7968-7982 with the timer's fold at 11254-11257, leave_table at 8226-8242, the withdraw refusal at 4893-4925 with the lease at 2880-2892, the CONTROLLERS check at 739-751, the lobby and history pre_upgrade at 921-925 and 1435-1438, auth.js:73, canisters.js:201 and :253, +page.svelte:782-790). Nothing was reproduced on a replica; the document says so in section 3.
 
-- `gh pr list --repo JoshDFN/cleardeck --state open`: one open PR (#6, docs/readme-refresh), unrelated; nothing supersedes this task.
-- `cargo check --tests` in tests/money_safety and tests/settlement: exit 0, no warning from either wasms.rs (the pre-existing warnings in solvency/controller_custody/invariants are untouched). `rustfmt --check` on both files: my hunks clean; the one remaining diff in money_safety's wasms.rs is a pre-existing line in the thief builder, left alone.
-- `make selftest`: exit 0. `make hygiene`: exit 0. `./scripts/check-declarations.sh`: exit 0 (all 4 pinned versions agree). `./scripts/check-suite-wiring.sh`: exit 0, unchanged ("every test target in this repository is run by something").
-- COLD run, the task's Verify: `rm -rf target/money-safety && POCKET_IC_BIN="$HOME/.cache/dfinity/versions/0.31.0/pocket-ic" make test` (ICP_LEDGER_WASM deliberately NOT set, per the overlay): exit 0 on the FIRST run, 1578 s wall (20:27:41Z to 20:53:59Z). Step 5 "money-safety: all 22 cargo targets green" in 1317 s; `archive::an_upgrade_in_the_middle_of_a_hand_does_not_lose_the_deal_record ... ok` (the test that failed on the cold seat); the cache was rebuilt from nothing (ledger-canister.wasm.gz, old-release-801aa79, guardian-variant, the two E-02 variants); no `*.tmp` left in target/money-safety or target/settlement-oracle. Settlement oracle 92 s, no-peeking 36 s, "all fast gates green".
-- WARM run, same command: exit 0, 1662 s wall (20:54:16Z to 21:21:58Z). Money-safety 1413 s, all 22 targets green, the archive test ok, no temp files left.
-- `./scripts/pocket-ic.sh` with POCKET_IC_BIN set prints the 0.31.0 path back (server 11.0.0).
+## Verified (this worktree, no replica started, no icp command run, machine default identity untouched)
+
+- `gh pr list --repo JoshDFN/cleardeck --state open`: one open PR (#6, docs/readme-refresh, a README refresh); it does not do this task.
+- `make selftest`: exit 0.
+- `make hygiene`: exit 0 (no large or binary file added; protected notices intact; no em-dash in the frontend tree). The new document itself was checked for em-dashes separately: 0.
+- `git merge main` into claude/seat-1: already up to date (main did not move during the task).
 
 ## Skipped
 
-- `./scripts/verify-build.sh --two-paths`: no build input changed (no Cargo.toml/Cargo.lock/recipes/Dockerfile/icp.yaml).
-- `./scripts/check-candid.sh --declarations`: no canister interface changed.
-- Frontend steps 4 and 5: src/cleardeck_frontend untouched.
-- `make diff-full`, `make known-defects`, `register-stats.sh`: no poker_core, engine defect or register row changed.
-- A separate cold `cargo test --test invariants` before the full run: not run; the full cold `make test` is the required evidence and runs invariants first.
-- Live screenshots / any replica: none needed; none started.
+- `./scripts/register-stats.sh --check`: no row in docs/DEFECTS.md or docs/SECURITY-FINDINGS.md was changed. (It was run read-only at the start of the review to get the open counts and passed.)
+- `./scripts/check-declarations.sh`, `make test`, frontend steps 4 and 5, check-candid, verify-build, diff-full, known-defects, live screenshots: nothing outside docs/ changed.
+- No replica was needed and none was started; nothing to recycle.
 
-## Note for the operator (no action needed)
+## Follow-ups filed (44, producer claude-seat-1; every one referenced from the document's gap)
 
-The overlay's "Gates" section still says a cold cache "can fail once ... (task 1790622959); a rerun passes. Leave it off only for task 1790622959 itself". That is now stale: ICP_LEDGER_WASM only saves a fresh worktree one download. I edited the seat's copy, found it is a symlink to the primary's untracked `.antler/factory-overlay.md`, and restored the original text so the primary was not changed outside factory.sh. Suggested replacement for those lines: "It saves a fresh worktree one download; without it the harness fetches the pinned module into its own target/money-safety/ cache. (Until task 1790622959 landed, a cold cache could fail the money-safety step once; fixed on main.)"
+security-high: 1790632429 (ckBTC subaccount double credit), 1790632440 (all-in seat on the clock), 1790632499 (operator: fleet redeploy, after 1790632453), 1790632498 (operator: guardian handover, after 1790632451 and 1790632483), 1790632482 (operator: freezing reserve and cycles top-up).
+security-medium: 1790632438, 1790632441, 1790632442, 1790632443, 1790632444, 1790632445, 1790632447, 1790632448, 1790632449, 1790632450, 1790632453, 1790632483.
+architecture: 1790632469, 1790632470, 1790632476, 1790632464, 1790632477.
+feature: 1790632457, 1790632460, 1790632458, 1790632461, 1790632462, 1790632466, 1790632467, 1790632468, 1790632472, 1790632473, 1790632475 (after 1790622948).
+hygiene: 1790632451 (docs), 1790632454, 1790632455, 1790632495 (after 1790632455), 1790632496 (operator, after 1790632495), 1790632456, 1790632463, 1790632474, 1790632479 (docs), 1790632480, 1790632481.
 
-## Follow-ups filed
+Cited instead of duplicated: 1790622948, 1790622949, 1790622950, 1790622951, 1790622952, 1790622955, 1790622957, 1790622958, 3090622953, 3090622954, 3090626845.
 
-None. Nothing out of scope was found.
+## DEFERRED
 
-help: no user-facing change (tests/ only).
+Nothing in this task's own scope. Every mainnet action the review calls for is an operator-lane task above (1790632499, 1790632498, 1790632482, 1790632496), each with the operator's command and the identity left as a placeholder.
+
+help: no user-facing change (docs only).
