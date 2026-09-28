@@ -195,6 +195,7 @@ fn mid_hand(stakes: &[(u64, u64, bool)]) -> TableState {
         auto_deal_at: None,
         last_action: None,
         departed_stakes: None,
+        last_hand_went_to_showdown: None,
     }
 }
 

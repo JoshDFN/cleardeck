@@ -179,6 +179,7 @@ fn table(players: Vec<Option<Player>>) -> TableState {
         first_hand: false,
         auto_deal_at: None,
         departed_stakes: None,
+        last_hand_went_to_showdown: None,
     }
 }
 

@@ -125,8 +125,8 @@ hand starts. The archive is right (`push_winner`, `:9863-9872`, withholds the ca
 live view contradicts the engine's own "takes the pot without showing a hand" rule. At a
 real-money table this is a strategic leak every hand that ends by folds.
 
-Register: not recorded (DEFECTS.md:5929 "mucked cards stay hidden" covers folded seats,
-not the winner). Task: 1790632438.
+Register: **[E-107](DEFECTS.md#e-107)** (FIXED, task 1790632438; before it, DEFECTS.md's
+"mucked cards stay hidden" covered folded seats, not the winner). Task: 1790632438.
 
 ### Gap 4. The clock can be armed on a seat that cannot act, and then fold it
 

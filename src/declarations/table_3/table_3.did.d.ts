@@ -344,6 +344,7 @@ export interface TableState {
   'hand_number' : bigint,
   'deck' : Array<Card>,
   'big_blind_seat' : number,
+  'last_hand_went_to_showdown' : [] | [boolean],
   'auto_deal_at' : [] | [bigint],
   'last_action' : [] | [LastActionInfo],
   'players' : Array<[] | [Player]>,

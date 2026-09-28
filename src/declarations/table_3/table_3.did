@@ -250,6 +250,7 @@ type TableState = record {
   config : TableConfig;
   side_pots : vec SidePot;
   shuffle_proof : opt ShuffleProof;
+  last_hand_went_to_showdown : opt bool;
 };
 type TableView = record {
   id : nat64;

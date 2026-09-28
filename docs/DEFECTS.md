@@ -435,6 +435,7 @@ is true.
 
 | id | sev | status | wave | gate — what would catch it coming back | where | one line |
 |---|---|---|---|---|---|---|
+| [E-107](#e-107) | medium | FIXED | task 1790632438 | `cargo test -p table_canister --test betting_rules` (`make test` step 2, `cargo test --workspace`; the `workspace` tier of `scripts/test-suites.list`), section 7 — four tests over `build_table_view` from every seat's point of view and a stranger's at every phase, three verified RED on the unfixed view: *"after the fold-out, between hands: seat 0 looking at seat 2 (phase HandComplete, folded false) left: Some((7♣, 2♦)) right: None"*, *"seat 0 folded on the flop and the hand is live at Turn: its show must be refused, got Ok((A♠, A♥))"*; the fourth (`a_showdown_still_turns_every_unfolded_hand_face_up`) guards the other ending. Client: `npm --workspace src/cleardeck_frontend test` → `showdown.test.js` | `build_table_view` (was inline in `get_table_view`), `finish_hand`, `record_voluntary_show` (was inline in `show_cards`), `TableState::last_hand_went_to_showdown`, `PokerTable.svelte` `isShowdown` via `$lib/showdown.js` | **a pot won because everybody folded showed the winner's hole cards to the whole table until the next deal.** `get_table_view` read `HandComplete` as a showdown and revealed every unfolded seat; after a fold-out the winner is exactly the one unfolded seat, still holding cards until `start_new_hand` clears them, so every viewer (seated or not) saw the hand the engine had just paid "without showing a hand" (`end_hand_single_winner`). The archive was right all along (`push_winner` withholds the cards off a showdown). `show_cards` also let a FOLDED seat turn its cards up mid-hand, telling the seats still playing what was out of the deck. Now `finish_hand` writes `last_hand_went_to_showdown` (`opt bool`, FINDING 14's rule; `None` reads as hidden) in the one place that writes `HandComplete`, the view reveals at `HandComplete` only when it is true, and a voluntary show is accepted only once the hand is over. The client reads the same fact off the winner record (`cards` present only at a showdown), so no `TableView` field was added; `TableState` gained the `opt` field on the `.did`. [Review 2026-09-28, gap 3](CODEBASE-REVIEW-2026-09-28.md) |
 | [E-106](#e-106) | high | FIXED | task 1790632440 | `cargo test -p table_canister --test betting_rules` (`make test` step 2, `cargo test --workspace`; the `workspace` tier of `scripts/test-suites.list`), section 6 — six tests, five verified RED on the unfixed engine: *"the deal armed Some(ActionTimer { player_seat: 0 … }), the clock folded Some(0)"*, `left: [5, 20] right: [25, 0]`; the sixth (`a_deal_that_leaves_one_seat_owing_a_call_still_asks_it`) guards the refinement | `open_the_action` (the deal's last step, split out of `start_new_hand` with `deal_hand`), `the_posts_closed_the_betting`, `resolve_expired_action_timer` | **the deal armed the clock on a seat that could not act, and the clock folded it.** A blind or ante posts `min(chips)`, so a short seat is dealt in and left all-in by its own post. When that left nobody owed an action, the deal still armed the timer on whatever `find_next_active_seat_with_chips` fell back to (the big blind, when no seat had chips) and `resolve_expired_action_timer` folded that seat with no `can_still_act` check, so `advance_game` saw one claimant and paid the small blind the whole pot. Heads-up, aces all-in for 15 in the big blind against 7-2 all-in for 10: the 7-2 ended with 20 and the aces with 5. On an ante table the same clock fold gave the side-pot seat the 90 main pot the short stack had the best hand for. Conservation held throughout, so the money-safety invariants were silent: correct totals, wrong recipient. Now the deal runs the board out when fewer than two seats can act and none of them owes a call (a seat that still owes a call is asked), and the clock never folds a seat that cannot act: it drops the timer and moves the hand on through `advance_game`, which is also what heals a table dealt on the old engine and upgraded mid-hand. The history push in `start_new_hand` now precedes the opening of the action, because `record_local_hand_result` writes the LAST history entry and a run-out at the deal settles inside the same message. [Review 2026-09-28, gap 4](CODEBASE-REVIEW-2026-09-28.md) |
 | [E-104](#e-104) | fund-theft | FIXED | task 1790632429 | `cd tests/money_safety && cargo test --test ckbtc_door -- --test-threads=2` (`dev.sh test` step 4; fast tier of `scripts/test-suites.list`), `cb01` + `cb04`, both verified RED on the tree without the refusal: *"alice's escrow: 99990 sats; ledger holds 49990"* | `verify_ckbtc_deposit` (`notify_deposit` on a BTC table) | **one ckBTC deposit credited twice.** The door checked `to.owner == canister` and never `to.subaccount`, so a transfer to a player's deposit address was credited by block index AND by `claim_external_deposit()`'s sweep, which is its own new block the anti-replay record has never seen. 50,000 sats in, 99,990 owed; a stranger paying into somebody else's address is credited too. The ICP door compares the full account identifier; this one compared the owner. Latent on mainnet only because [E-105](#e-105) had killed the door first; fixed together. [FINDING 46](SECURITY-FINDINGS.md#finding-46) |
 | [E-105](#e-105) | high | FIXED | task 1790632429 | the same `ckbtc_door` target, `cb02` and `cb03`: a main-account ckBTC transfer credited by block index exactly once; 6 of 6 failed with *"Failed to decode ckBTC ledger response"* on the unfixed tree | `verify_ckbtc_deposit`, the `get_transactions` decode | **the ckBTC block-index door never decoded one ledger reply.** It declared the reply as `vec TransactionWithId` (the INDEX canister's shape; the ledger sends `vec Transaction`) and decoded it with `Response::candid::<(T,)>()`, which is `decode_one` of a one-field record, not the argument tuple. Either alone fails every reply, so `notify_deposit` on `btc_table_1` has returned a decode error since the door was written and ckBTC at the table's MAIN account had no door that could credit it: [FINDING 06](SECURITY-FINDINGS.md#finding-06) on the other ledger, found the same way, by the first test to run the door against the real module |
@@ -11904,3 +11905,84 @@ No settlement arithmetic changed; the run-out is the existing path. No Candid ch
 (`deal_hand` and `open_the_action` are `pub fn`s for the host tests, not methods).
 Queued task 1790622948 (auto-check on expiry) would have masked the heads-up case and
 not the cause. Gate: `cargo test -p table_canister --test betting_rules`, section 6.
+
+<a id="e-107"></a>
+### E-107 — medium — a pot won because everybody folded showed the winner's cards to the table — STATUS: FIXED (task 1790632438)
+
+docs/CODEBASE-REVIEW-2026-09-28.md gap 3, read there and reproduced here on the
+real engine. The rule and its two readers:
+
+```text
+end_hand_single_winner   "Everybody folded except one player: they take the pot
+                          without showing a hand."
+push_winner              cards: if state.phase == GamePhase::Showdown { shown } else { None }
+                         // the ARCHIVE keeps the rule
+get_table_view           let is_showdown = phase == Showdown || phase == HandComplete;
+                         let can_see_cards = is_self || (is_showdown && !player.has_folded) || ..
+                         // the LIVE VIEW did not
+```
+
+`finish_hand` sets `HandComplete` for every ending, and `start_new_hand` is what
+clears `hole_cards`. So between a fold-out and the next deal, the winner is the
+one seat with `has_folded == false` and cards still `Some`, and the view handed
+that hand to every caller — the other seats, the lobby, anyone who can make a
+query. At a real-money table that is a free read on every hand that ends by
+folds, which is most of them. Measured on the real deal (`deal_hand` +
+`open_the_action`, three seats checked to the river, a bet and two folds), from
+every seat's point of view and a stranger's:
+
+```text
+a_pot_won_because_everybody_folded_does_not_show_the_winners_cards
+  after the fold-out, between hands: seat 0 looking at seat 2 (phase HandComplete,
+  folded false, revealed set [])
+  left: Some((Card { suit: Clubs, rank: Seven }, Card { suit: Diamonds, rank: Two }))
+  right: None
+
+show_cards_is_refused_while_the_hand_is_live_and_reveals_to_everyone_once_it_is_over
+  seat 0 folded on the flop and the hand is live at Turn: its show must be refused,
+  got Ok((Card { suit: Spades, rank: Ace }, Card { suit: Hearts, rank: Ace }))
+
+a_table_restored_without_the_flag_at_hand_complete_hides_every_hand
+  after a showdown, restored from state without the flag: seat 0 looking at seat 1
+  left: Some((Card { suit: Spades, rank: King }, Card { suit: Hearts, rank: King }))
+  right: None
+```
+
+The second line is the smaller leak the same review line named: `show_cards`
+refused only an UNFOLDED seat mid-hand, so a folded seat could turn its cards up
+while two others were still playing — the table talk every card room forbids,
+and a channel to a confederate.
+
+**The fix, three parts, no settlement change.** (1) `TableState` carries
+`last_hand_went_to_showdown: Option<bool>`, written by `finish_hand` — the one
+function that writes `HandComplete` — from the same bool its callers already
+hand `record_hand_to_history`: `true` from `determine_winners`, `false` from
+`end_hand_single_winner` and `settle_unmovable_hand`. `opt` per FINDING 14
+(`TableState` sits inside `opt TableState`; a bare addition wipes the table on
+upgrade), and `None` reads as `false`: a table upgraded between hands hides
+rather than shows until the next deal clears the cards anyway. (2)
+`build_table_view` — `get_table_view` with `msg_caller()`, `time()` and the
+`TABLE` borrow pulled out, so it is testable from any principal on the host —
+reveals at `HandComplete` only when the flag is true. (3) `record_voluntary_show`
+(`show_cards` minus the platform) accepts a show only at `Showdown` or
+`HandComplete`, folded or not; the shown seat is then face up to everyone
+through the existing `SHOWN_CARDS` path.
+
+**The client.** `PokerTable.svelte` mirrored the same `HandComplete == showdown`
+reading into `isShowdown`, which gates the showdown drama (lit seats, equity
+badges, the "shows a pair" log line). It now reads `$lib/showdown.js`:
+`handsAreFaceUp(phase, last_hand_winners)`, true at `Showdown` and at
+`HandComplete` only if some winner record carries `cards` — which `push_winner`
+attaches only at a showdown. That is the same fact the canister persists,
+derived from a field the view already carried, so `TableView` gained no field;
+the regenerated bindings (`check-declarations-js.sh --write`) carry only the
+`TableState` field. Your own cards and the live seat's card backs stay up
+through the whole `HandComplete` pause (`isHandComplete`, not `isShowdown`);
+after a fold-out the live seat is the winner record's seat, because `status`
+has the sit-out hazard documented at `isInHand`.
+
+Candid: `TableState` gained `last_hand_went_to_showdown : opt bool` on
+`table_canister.did` (it is the `get_table_state` reply, controller-only);
+`TableView` is unchanged. Gate: `cargo test -p table_canister --test
+betting_rules`, section 7, and `showdown.test.js` under the frontend's vitest.
+The previous-release upgrade test (money_safety M7) exercises the `opt` field.
