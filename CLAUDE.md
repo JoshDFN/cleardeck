@@ -5,6 +5,8 @@
 Every function that touches BALANCES, transfers tokens, or modifies player chips is security-critical.
 **Never** use `--mode reinstall` on production canisters (destroys all state including user balances).
 
+**Factory seats: read .antler/factory-overlay.md after docs/skills/software-factory/SKILL.md; it says what differs in this repository.**
+
 ## Secure Deposit Patterns on ICP
 
 ### 1. ICRC-2 Approve + Transfer_from (Primary - `deposit()`)
