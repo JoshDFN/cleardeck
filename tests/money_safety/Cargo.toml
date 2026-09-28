@@ -163,3 +163,13 @@ path = "tests/controller_custody.rs"
 [[test]]
 name = "cycles_runway"
 path = "tests/cycles_runway.rs"
+
+# THE ckBTC DEPOSIT DOOR (docs/SECURITY-FINDINGS.md FINDING 46, docs/DEFECTS.md
+# E-104). Named explicitly for the reason `admin_custody` and `deposit_replay`
+# are: an auto-discovered target is a target no human ever types. This is the
+# first target that installs the real ICRC-1 ledger module at the ckBTC id, so it
+# is the only gate on `verify_ckbtc_deposit` -- which FINDING 10 recorded as
+# "executed by no test" for three waves while `btc_table_1` held real ckBTC.
+[[test]]
+name = "ckbtc_door"
+path = "tests/ckbtc_door.rs"

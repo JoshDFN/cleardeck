@@ -4682,17 +4682,22 @@ async fn verify_ckbtc_deposit(block_index: u64, caller: Principal, canister: Pri
         timestamp: u64,
     }
 
-    #[derive(CandidType, Deserialize, Debug, Clone)]
-    struct TransactionWithId {
-        id: Nat,
-        transaction: Transaction,
-    }
-
+    // THE LEDGER'S SHAPE, NOT THE INDEX CANISTER'S (docs/DEFECTS.md E-105).
+    //
+    // `get_transactions` on the ICRC-1 ledger returns `transactions : vec
+    // Transaction` -- the bare records, with the index of the first one in
+    // `first_index`. `vec TransactionWithId` (`{ id; transaction }`) is the reply
+    // of the ckBTC INDEX canister's `get_account_transactions`, a different
+    // canister with a different method. Declared here as the index's shape, this
+    // decode failed on every reply the real ledger ever sent, so the ckBTC
+    // block-index door could never credit anything: FINDING 06 again, on the
+    // other ledger, and found the same way -- by the first test that ran the
+    // door against the real module (tests/money_safety/tests/ckbtc_door.rs).
     #[derive(CandidType, Deserialize, Debug)]
     struct GetTransactionsResponse {
         log_length: Nat,
         first_index: Nat,
-        transactions: Vec<TransactionWithId>,
+        transactions: Vec<Transaction>,
         archived_transactions: candid::Reserved,
     }
 
@@ -4705,9 +4710,13 @@ async fn verify_ckbtc_deposit(block_index: u64, caller: Principal, canister: Pri
         .with_arg(request)
         .await;
 
+    // `Response::candid::<R>` is `decode_one`: R is the reply's ONE value, not
+    // the argument tuple. Written as `candid::<(GetTransactionsResponse,)>()` it
+    // asked for a record `{ 0 : GetTransactionsResponse }` and failed on every
+    // reply too -- the second of E-105's two dead decodes in this one call.
     let response = match call_result {
-        Ok(response) => match response.candid::<(GetTransactionsResponse,)>() {
-            Ok((r,)) => r,
+        Ok(response) => match response.candid::<GetTransactionsResponse>() {
+            Ok(r) => r,
             Err(e) => return Err(format!("Failed to decode ckBTC ledger response: {:?}", e)),
         },
         Err(e) => return Err(format!("Failed to query ckBTC ledger: {:?}", e)),
@@ -4717,8 +4726,18 @@ async fn verify_ckbtc_deposit(block_index: u64, caller: Principal, canister: Pri
         return Err("Transaction not found. It may be archived or not yet finalized.".to_string());
     }
 
-    let tx_with_id = &response.transactions[0];
-    let tx = &tx_with_id.transaction;
+    // The ledger may answer with any sub-range of what was asked for. The record
+    // credited below must be THE block the caller named, so the range has to
+    // start there; a reply starting elsewhere is not an answer about this block.
+    if response.first_index != Nat::from(block_index) {
+        return Err(format!(
+            "The ckBTC ledger answered about block {} instead of block {}. Nothing was \
+             credited; try again.",
+            response.first_index, block_index
+        ));
+    }
+
+    let tx = &response.transactions[0];
 
     // Check if this is a transfer to our canister
     let transfer = tx.transfer.as_ref()
@@ -4727,6 +4746,47 @@ async fn verify_ckbtc_deposit(block_index: u64, caller: Principal, canister: Pri
     // Verify destination is our canister
     if transfer.to.owner != canister {
         return Err("This transaction was not sent to this table".to_string());
+    }
+
+    // THE ACCOUNT, NOT JUST ITS OWNER (docs/SECURITY-FINDINGS.md FINDING 46,
+    // docs/DEFECTS.md E-104).
+    //
+    // An ICRC-1 account is (owner, subaccount). Every deposit subaccount this
+    // canister publishes has `owner == canister`, so the check above is true of
+    // a transfer to a player's deposit address as well as of one to the shared
+    // main account -- and a deposit address is `claim_external_deposit`'s to
+    // credit, by sweeping it. Crediting it here too meant one arrival of X sats
+    // was worth X here and X - fee there, each through its own door, each
+    // writing its own block, so the anti-replay record (which is per block)
+    // never saw a repeat. The ICP door compares the full 32-byte account
+    // identifier and refuses exactly this; this is the same refusal, in the
+    // ckBTC ledger's own account shape, and it fires BEFORE anything is claimed
+    // or credited. The all-zero subaccount IS the main account under ICRC-1
+    // (some wallets always send it spelled out), so only a non-zero subaccount
+    // is a deposit address.
+    let to_subaccount = transfer
+        .to
+        .subaccount
+        .as_ref()
+        .filter(|s| s.iter().any(|b| *b != 0));
+    if let Some(sub) = to_subaccount {
+        if sub.as_slice() == compute_deposit_subaccount(&caller) {
+            return Err(format!(
+                "This transfer went to YOUR OWN deposit address (owner {}, subaccount \
+                 get_deposit_subaccount()), which is the right place and the wrong door: \
+                 notify_deposit only credits the canister's shared main account. Nothing is \
+                 lost and no block index is needed -- call claim_external_deposit(), which \
+                 sweeps that address into your balance.",
+                canister
+            ));
+        }
+        return Err(
+            "Transfer was not to the shared main account of this canister. notify_deposit \
+             credits only that account; money at a deposit address is claimed with \
+             claim_external_deposit() by the principal the address belongs to, and by nobody \
+             else. Check the destination against get_deposit_subaccount()."
+                .to_string(),
+        );
     }
 
     // Verify sender matches caller

@@ -32,6 +32,29 @@ pub const ICP_LEDGER_SHA256: &str =
 
 pub const ICP_LEDGER_URL: &str = "https://download.dfinity.systems/ic/6dcfafb491092704d374317d9a72a7ad2475d7c9/canisters/ledger-canister.wasm.gz";
 
+/// Pinned build of the ICRC-1 ledger (`ic-icrc1-ledger.wasm.gz`), the module the
+/// mainnet ckBTC ledger `mxzaz-hqaaa-aaaar-qaada-cai` runs. Same immutable commit
+/// as the ICP ledger above, so the two pins cannot drift apart.
+///
+/// Provenance:
+///   URL    https://download.dfinity.systems/ic/6dcfafb491092704d374317d9a72a7ad2475d7c9/canisters/ic-icrc1-ledger.wasm.gz
+///   sha256 d10aba5d6391b3f1245df04822cfc3398010264d9875686f5780fe1aaa0467eb
+///
+/// WHY A SECOND LEDGER MODULE, AND WHY NOT THE ICP ONE TWICE. The table canister's
+/// ckBTC door (`verify_ckbtc_deposit`) reads the block back with
+/// `get_transactions`, the ICRC ledger's own log endpoint. The ICP ledger module
+/// does not export it (checked: `wasm-objdump -x -j Export` lists `query_blocks`
+/// and no `get_transactions`), so a second instance of the ICP ledger standing in
+/// for ckBTC would make every `notify_deposit` on a BTC table fail at the ledger
+/// call and prove nothing about the door. Exports verified to include
+/// `icrc1_transfer`, `icrc2_approve`, `icrc2_transfer_from`, `icrc1_balance_of`,
+/// `get_transactions` and `icrc3_get_blocks` -- every ledger method the table
+/// canister calls on a ckBTC table. docs/SECURITY-FINDINGS.md FINDING 46.
+pub const CKBTC_LEDGER_SHA256: &str =
+    "d10aba5d6391b3f1245df04822cfc3398010264d9875686f5780fe1aaa0467eb";
+
+pub const CKBTC_LEDGER_URL: &str = "https://download.dfinity.systems/ic/6dcfafb491092704d374317d9a72a7ad2475d7c9/canisters/ic-icrc1-ledger.wasm.gz";
+
 /// Repo root, derived from this crate's manifest dir (`<repo>/tests/money_safety`).
 pub fn repo_root() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -57,6 +80,39 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 static ICP_LEDGER: OnceLock<Vec<u8>> = OnceLock::new();
+static CKBTC_LEDGER: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// One pinned, downloadable ledger module: where it may come from and what its
+/// bytes must hash to. The ICP ledger and the ckBTC stand-in are two values of
+/// this and share every line of the resolution below, so the cold-cache race
+/// task 1790622959 closed for one cannot be reopened for the other.
+struct PinnedLedger {
+    /// Human name for messages.
+    what: &'static str,
+    /// Env var naming an explicit path (`$ICP_LEDGER_WASM`), and the `_SKIP_HASH`
+    /// variant that lets a reader try a different build on purpose.
+    env: &'static str,
+    /// File name under `target/money-safety/`.
+    cache_name: &'static str,
+    url: &'static str,
+    sha256: &'static str,
+}
+
+const ICP_LEDGER_PIN: PinnedLedger = PinnedLedger {
+    what: "ICP ledger",
+    env: "ICP_LEDGER_WASM",
+    cache_name: "ledger-canister.wasm.gz",
+    url: ICP_LEDGER_URL,
+    sha256: ICP_LEDGER_SHA256,
+};
+
+const CKBTC_LEDGER_PIN: PinnedLedger = PinnedLedger {
+    what: "ICRC-1 (ckBTC) ledger",
+    env: "CKBTC_LEDGER_WASM",
+    cache_name: "ic-icrc1-ledger.wasm.gz",
+    url: CKBTC_LEDGER_URL,
+    sha256: CKBTC_LEDGER_SHA256,
+};
 
 /// The REAL ICP ledger module, gzipped exactly as published.
 ///
@@ -72,23 +128,33 @@ static ICP_LEDGER: OnceLock<Vec<u8>> = OnceLock::new();
 /// same moment (task 1790622959, below). Concurrent callers now wait for the one
 /// fetch instead of racing it.
 pub fn icp_ledger_wasm() -> Vec<u8> {
-    ICP_LEDGER.get_or_init(resolve_icp_ledger_wasm).clone()
+    ICP_LEDGER.get_or_init(|| resolve_pinned(&ICP_LEDGER_PIN)).clone()
 }
 
-fn resolve_icp_ledger_wasm() -> Vec<u8> {
-    if let Ok(path) = std::env::var("ICP_LEDGER_WASM") {
+/// The REAL ICRC-1 ledger module -- the ckBTC ledger's code -- gzipped exactly as
+/// published. Same resolution as [`icp_ledger_wasm`], with `$CKBTC_LEDGER_WASM`
+/// (and `$CKBTC_LEDGER_WASM_SKIP_HASH=1`) in place of the ICP variables and
+/// `target/money-safety/ic-icrc1-ledger.wasm.gz` as the cache path. Only a world
+/// whose table is `currency = BTC` asks for it, so an ICP-only run never fetches it.
+pub fn ckbtc_ledger_wasm() -> Vec<u8> {
+    CKBTC_LEDGER.get_or_init(|| resolve_pinned(&CKBTC_LEDGER_PIN)).clone()
+}
+
+fn resolve_pinned(pin: &PinnedLedger) -> Vec<u8> {
+    if let Ok(path) = std::env::var(pin.env) {
         let bytes = std::fs::read(&path)
-            .unwrap_or_else(|e| panic!("ICP_LEDGER_WASM={path} could not be read: {e}"));
-        if std::env::var("ICP_LEDGER_WASM_SKIP_HASH").as_deref() != Ok("1") {
-            assert_pinned(&bytes, &path);
+            .unwrap_or_else(|e| panic!("{}={path} could not be read: {e}", pin.env));
+        if std::env::var(format!("{}_SKIP_HASH", pin.env)).as_deref() != Ok("1") {
+            assert_pinned(pin, &bytes, &path);
         }
         return bytes;
     }
 
-    let cached = cache_dir().join("ledger-canister.wasm.gz");
+    let cached = cache_dir().join(pin.cache_name);
     if cached.exists() {
-        let bytes = std::fs::read(&cached).expect("cached ledger wasm unreadable");
-        if sha256_hex(&bytes) == ICP_LEDGER_SHA256 {
+        let bytes = std::fs::read(&cached)
+            .unwrap_or_else(|e| panic!("cached {} wasm unreadable: {e}", pin.what));
+        if sha256_hex(&bytes) == pin.sha256 {
             return bytes;
         }
         // A corrupt or superseded cache entry is not a reason to fail; re-fetch.
@@ -97,8 +163,8 @@ fn resolve_icp_ledger_wasm() -> Vec<u8> {
         let _ = std::fs::remove_file(&cached);
     }
 
-    let bytes = download(ICP_LEDGER_URL);
-    assert_pinned(&bytes, ICP_LEDGER_URL);
+    let bytes = download(pin.url, pin.cache_name);
+    assert_pinned(pin, &bytes, pin.url);
     install_verified(&cached, &bytes);
     bytes
 }
@@ -132,7 +198,11 @@ fn unique_temp_path(dir: &Path, stem: &str) -> PathBuf {
 /// never holds anything but the pinned module.
 fn install_verified(dest: &Path, bytes: &[u8]) {
     let dir = dest.parent().expect("cache path has a parent");
-    let tmp = unique_temp_path(dir, "ledger-canister.wasm.gz");
+    let stem = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .expect("cache path has a file name");
+    let tmp = unique_temp_path(dir, stem);
     std::fs::write(&tmp, bytes)
         .unwrap_or_else(|e| panic!("cannot write ledger wasm cache {}: {e}", tmp.display()));
     if let Err(e) = std::fs::rename(&tmp, dest) {
@@ -144,21 +214,22 @@ fn install_verified(dest: &Path, bytes: &[u8]) {
     }
 }
 
-fn assert_pinned(bytes: &[u8], origin: &str) {
+fn assert_pinned(pin: &PinnedLedger, bytes: &[u8], origin: &str) {
     let got = sha256_hex(bytes);
     assert_eq!(
-        got, ICP_LEDGER_SHA256,
-        "ICP ledger wasm from {origin} does not match the pinned sha256. \
+        got, pin.sha256,
+        "{} wasm from {origin} does not match the pinned sha256. \
          The harness refuses to run against an unidentified ledger, because a \
          ledger that does not enforce real allowance/fee/balance semantics would \
-         silently invalidate every M2 (LEDGER REALITY) result."
+         silently invalidate every M2 (LEDGER REALITY) result.",
+        pin.what
     );
 }
 
 /// Fetch `url` into a temp file that is this call's alone (see
 /// `unique_temp_path`), read it, and remove it. Nothing here touches the cache
 /// path: the caller verifies the bytes and then `install_verified` moves them in.
-fn download(url: &str) -> Vec<u8> {
+fn download(url: &str, cache_name: &str) -> Vec<u8> {
     let out = unique_temp_path(&cache_dir(), "download");
     let status = Command::new("curl")
         .args(["-sSL", "--fail", "--max-time", "180", "-o"])
@@ -170,7 +241,8 @@ fn download(url: &str) -> Vec<u8> {
         let _ = std::fs::remove_file(&out);
         panic!(
             "curl failed to fetch {url}. Fetch it by hand into \
-             target/money-safety/ledger-canister.wasm.gz, or point $ICP_LEDGER_WASM at it."
+             target/money-safety/{cache_name}, or point the matching *_LEDGER_WASM \
+             variable at it."
         );
     }
     let bytes = std::fs::read(&out)

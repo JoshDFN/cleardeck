@@ -130,6 +130,25 @@ impl TableConfig {
         }
     }
 
+    /// Heads-up ckBTC table, 100/200 sats, buy-in 10,000..100,000 sats: the exact
+    /// `init_args` of the deployed `btc_table_1` (icp.yaml). A world built on this
+    /// installs the real ICRC-1 ledger at the ckBTC id, so the ckBTC deposit door
+    /// runs against a ledger for the first time (docs/SECURITY-FINDINGS.md
+    /// FINDING 46; before it, FINDING 10 recorded the door as executed by no test).
+    pub fn heads_up_btc() -> Self {
+        Self {
+            small_blind: 100,
+            big_blind: 200,
+            min_buy_in: 10_000,
+            max_buy_in: 100_000,
+            max_players: 2,
+            action_timeout_secs: 30,
+            ante: 0,
+            time_bank_secs: 30,
+            currency: Currency::BTC,
+        }
+    }
+
     /// With an ante, so the ante branch of `start_new_hand` is exercised.
     pub fn six_max_with_ante() -> Self {
         Self {

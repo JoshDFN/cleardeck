@@ -191,6 +191,10 @@ impl World {
         let mut builder = PocketIcBuilder::new()
             .with_nns_subnet() // ryjl3-... lives in the NNS canister range
             .with_application_subnet();
+        if config.currency == Currency::BTC {
+            // mxzaz-... (the ckBTC ledger) lives in the fiduciary canister range.
+            builder = builder.with_fiduciary_subnet();
+        }
         if let Some(bin) = wasms::pocket_ic_binary() {
             builder = builder.with_server_binary(bin);
         }
@@ -224,6 +228,30 @@ impl World {
             ledger::init_payload(minter, &initial, controller),
             Some(controller),
         );
+
+        // --- on a ckBTC table, the real ICRC-1 ledger at the ckBTC id too ---
+        //
+        // The ICP ledger stays installed as well: the table's currency is what
+        // picks the ledger every money path talks to, and a BTC world with the
+        // ICP ledger absent would turn "the canister asked the wrong ledger" into
+        // a reject instead of the wrong answer. `self.ledger` is the ledger the
+        // table's currency names; every helper below reads it, so the same test
+        // text drives either door.
+        let ledger_id = if config.currency == Currency::BTC {
+            let ckbtc = ledger::ckbtc_ledger_principal();
+            pic.create_canister_with_id(Some(controller), None, ckbtc)
+                .expect("could not create the ckBTC ledger canister at mxzaz-hqaaa-aaaar-qaada-cai");
+            pic.add_cycles(ckbtc, 100_000_000_000_000);
+            pic.install_canister(
+                ckbtc,
+                wasms::ckbtc_ledger_wasm(),
+                ledger::ckbtc_init_payload(minter, &initial, controller),
+                Some(controller),
+            );
+            ckbtc
+        } else {
+            ledger_id
+        };
 
         // --- the table canister under test ----------------------------------
         let module = wasms::table_canister_module();
@@ -384,6 +412,17 @@ impl World {
         ledger::decode_balance(&bytes)
     }
 
+    /// The fee the ledger this world's table uses charges per transfer: 10,000
+    /// e8s on the ICP ledger, 10 sats on the ckBTC stand-in. Every helper that
+    /// names a fee reads this, so a BTC world is not silently paying (and being
+    /// refused for) the ICP fee.
+    pub fn transfer_fee(&self) -> u64 {
+        match self.config.currency {
+            Currency::ICP => ledger::TRANSFER_FEE,
+            Currency::BTC => ledger::CKBTC_TRANSFER_FEE,
+        }
+    }
+
     /// `icrc2_approve`: let the table canister pull `amount` from `who`.
     pub fn approve(&self, who: Principal, amount: u64) -> Result<u64, String> {
         let args = ApproveArgs {
@@ -395,7 +434,7 @@ impl World {
             amount: Nat::from(amount),
             expected_allowance: None,
             expires_at: None,
-            fee: Some(Nat::from(ledger::TRANSFER_FEE)),
+            fee: Some(Nat::from(self.transfer_fee())),
             memo: None,
             created_at_time: None,
         };
@@ -425,7 +464,7 @@ impl World {
                 subaccount: None,
             },
             amount: Nat::from(amount),
-            fee: Some(Nat::from(ledger::TRANSFER_FEE)),
+            fee: Some(Nat::from(self.transfer_fee())),
             memo: None,
             created_at_time: None,
         };
@@ -458,14 +497,28 @@ impl World {
         who: Principal,
         amount: u64,
     ) -> Result<u64, String> {
+        self.transfer_to_deposit_subaccount_of(who, who, amount)
+    }
+
+    /// The same raw `icrc1_transfer`, from `from`'s wallet into ANOTHER
+    /// principal's deposit subaccount on the table canister. What a friend paying
+    /// on your behalf does, and what an attacker probing the block-index door
+    /// with somebody else's address does (docs/SECURITY-FINDINGS.md FINDING 46).
+    /// The amount is recorded against `beneficiary`, whose address now holds it.
+    pub fn transfer_to_deposit_subaccount_of(
+        &mut self,
+        from: Principal,
+        beneficiary: Principal,
+        amount: u64,
+    ) -> Result<u64, String> {
         let args = TransferArg {
             from_subaccount: None,
             to: Account {
                 owner: self.table,
-                subaccount: Some(ledger::deposit_subaccount(&who).to_vec()),
+                subaccount: Some(ledger::deposit_subaccount(&beneficiary).to_vec()),
             },
             amount: Nat::from(amount),
-            fee: Some(Nat::from(ledger::TRANSFER_FEE)),
+            fee: Some(Nat::from(self.transfer_fee())),
             memo: None,
             created_at_time: None,
         };
@@ -473,7 +526,7 @@ impl World {
             .pic
             .update_call(
                 self.ledger,
-                who,
+                from,
                 "icrc1_transfer",
                 Encode!(&args).expect("transfer arg encode"),
             )
@@ -483,7 +536,7 @@ impl World {
             .block()?;
         let entry = self
             .unobserved_subaccount_deposits
-            .entry(who)
+            .entry(beneficiary)
             .or_insert(0);
         *entry = entry.saturating_add(amount);
         Ok(block)
@@ -554,7 +607,7 @@ impl World {
     /// Approve then deposit, the way the frontend does it. The allowance covers
     /// the amount plus the ledger fee the transfer_from will charge.
     pub fn fund_escrow(&self, who: Principal, amount: u64) -> Outcome<u64> {
-        self.approve(who, amount.saturating_add(ledger::TRANSFER_FEE))
+        self.approve(who, amount.saturating_add(self.transfer_fee()))
             .map_err(OpError::Err)?;
         self.deposit(who, amount)
     }

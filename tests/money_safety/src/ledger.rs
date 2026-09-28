@@ -20,6 +20,119 @@ pub fn ledger_principal() -> Principal {
     Principal::from_text(ICP_LEDGER_ID).expect("ICP ledger id constant is malformed")
 }
 
+/// The canister id the table canister hardcodes as `CKBTC_LEDGER_CANISTER`. A
+/// `currency = BTC` world installs the real ICRC-1 ledger module at exactly this
+/// id, so `verify_ckbtc_deposit` and `claim_external_deposit` reach it unmodified.
+pub const CKBTC_LEDGER_ID: &str = "mxzaz-hqaaa-aaaar-qaada-cai";
+
+/// Must equal `table_canister::CKBTC_TRANSFER_FEE`: 10 satoshis.
+pub const CKBTC_TRANSFER_FEE: u64 = 10;
+
+pub fn ckbtc_ledger_principal() -> Principal {
+    Principal::from_text(CKBTC_LEDGER_ID).expect("ckBTC ledger id constant is malformed")
+}
+
+// ---------------------------------------------------------------------------
+// ICRC-1 ledger init payload (the ckBTC ledger's module)
+// ---------------------------------------------------------------------------
+//
+// Shapes from the `icp:public candid:service` section of the pinned
+// `ic-icrc1-ledger.wasm.gz` itself (`LedgerArg = variant { Init; Upgrade }`), not
+// from a hand-maintained copy.
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub enum MetadataValue {
+    Nat(Nat),
+    Int(candid::Int),
+    Text(String),
+    Blob(Vec<u8>),
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub struct IcrcArchiveOptions {
+    pub num_blocks_to_archive: u64,
+    pub max_transactions_per_response: Option<u64>,
+    pub trigger_threshold: u64,
+    pub max_message_size_bytes: Option<u64>,
+    pub cycles_for_archive_creation: Option<u64>,
+    pub node_max_memory_size_bytes: Option<u64>,
+    pub controller_id: Principal,
+    pub more_controller_ids: Option<Vec<Principal>>,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub struct IcrcInitArgs {
+    pub minting_account: Account,
+    pub fee_collector_account: Option<Account>,
+    pub transfer_fee: Nat,
+    pub decimals: Option<u8>,
+    pub max_memo_length: Option<u16>,
+    pub token_symbol: String,
+    pub token_name: String,
+    pub metadata: Vec<(String, MetadataValue)>,
+    pub initial_balances: Vec<(Account, Nat)>,
+    pub feature_flags: Option<FeatureFlags>,
+    pub maximum_number_of_accounts: Option<u64>,
+    pub accounts_overflow_trim_quantity: Option<u64>,
+    pub archive_options: IcrcArchiveOptions,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub enum IcrcLedgerArg {
+    Init(IcrcInitArgs),
+    Upgrade(Option<()>),
+}
+
+/// Build an init payload for the ICRC-1 ledger standing in for ckBTC: funds
+/// `initial` (in satoshis), enables ICRC-2 (the table's `deposit` pulls), charges
+/// the real 10-sat fee, and never archives, so `get_transactions` can always see
+/// every block the table asks about.
+pub fn ckbtc_init_payload(
+    minter: Principal,
+    initial: &[(Principal, u64)],
+    archive_controller: Principal,
+) -> Vec<u8> {
+    let args = IcrcInitArgs {
+        minting_account: Account {
+            owner: minter,
+            subaccount: None,
+        },
+        fee_collector_account: None,
+        transfer_fee: Nat::from(CKBTC_TRANSFER_FEE),
+        decimals: Some(8),
+        max_memo_length: None,
+        token_symbol: "ckBTC".to_string(),
+        token_name: "ckBTC".to_string(),
+        metadata: vec![],
+        initial_balances: initial
+            .iter()
+            .map(|(p, sats)| {
+                (
+                    Account {
+                        owner: *p,
+                        subaccount: None,
+                    },
+                    Nat::from(*sats),
+                )
+            })
+            .collect(),
+        feature_flags: Some(FeatureFlags { icrc2: true }),
+        maximum_number_of_accounts: None,
+        accounts_overflow_trim_quantity: None,
+        archive_options: IcrcArchiveOptions {
+            num_blocks_to_archive: 1,
+            max_transactions_per_response: None,
+            trigger_threshold: 1_000_000_000,
+            max_message_size_bytes: None,
+            cycles_for_archive_creation: Some(0),
+            node_max_memory_size_bytes: None,
+            controller_id: archive_controller,
+            more_controller_ids: None,
+        },
+    };
+    Encode!(&IcrcLedgerArg::Init(args)).expect("ckBTC ledger init payload encode")
+}
+
 // ---------------------------------------------------------------------------
 // init payload
 // ---------------------------------------------------------------------------
