@@ -88,15 +88,22 @@ run's `UNVERIFIED-` one.
 ## The controller identity is resolved, not assumed
 
 Controller-only calls (`reset_table`, which is what makes a run idempotent) used to be
-signed as a hardcoded `cd-local-deployer`. That is an assumption, and on this machine it is
-false: `./scripts/dev.sh local-up` runs `icp deploy` with no `--identity`, so the canisters
-end up controlled by whatever identity happens to be the machine's **current default** —
-which may belong to an entirely unrelated project. `resolveControllerIdentity()` in
-`lib/ids.mjs` reads the real controller list off a local canister with
-`icp canister status` and picks a local identity that is actually in it — preferring
-`CONTROLLER_IDENTITY`, then the funders, then **every name in `icp identity list`**, then the
-current default — and fails with an explicit message listing what it tried if none qualifies.
-The identity actually used is recorded in the manifest as `controllerIdentity`.
+signed as a hardcoded `cd-local-deployer`. That is an assumption, and on this machine it was
+false: until 2026-09-28 `./scripts/dev.sh local-up` ran `icp deploy` with no `--identity`, so
+the canisters ended up controlled by whatever identity happened to be the machine's
+**current default** — which may belong to an entirely unrelated project.
+`resolveControllerIdentity()` in `lib/ids.mjs` reads the real controller list off a local
+canister with `icp canister status` and picks a local identity that is actually in it —
+preferring `CONTROLLER_IDENTITY`, then the funders, then **every name in `icp identity
+list`**, then the current default — and fails with an explicit message listing what it tried
+if none qualifies. Each candidate signs its own status read (`icp canister status` is
+controller-only, so an unsigned read is a read as the default identity, and works only while
+that is a controller). The identity actually used is recorded in the manifest as
+`controllerIdentity`.
+
+Since 2026-09-28 `local-up` pins `--identity cd-local-deployer` on the backend deploy, asserts
+the controller after it, and dies (printing the hand-over) on a foreign controller or lobby
+admin — docs/DEFECTS.md E-74, root cause. The resolver here stays as the harness's own belt.
 
 That name enumeration is the wave-7 half of the fix (docs/DEFECTS.md E-53). Resolving from a
 four-name allowlist plus whatever was selected was still an assumption: on this machine the
@@ -109,9 +116,10 @@ fund-adjacent gates at once and reported it as a setup error rather than a red g
 `lib/frontend-build.mjs` ran `icp deploy -e local frontend` with no identity at all, and
 `icp deploy` starts with a controller-only `update_settings` call. On this machine that is a
 third identity again — the asset canister belongs to `oms-port-trial` — so `local-up` died in
-step `[6/6]` with `IC0512` *after* a successful backend deploy. It now resolves the controller
-the same way, and skips the lookup when the canister does not exist yet, because a canister
-that has never been created has no controller list and the deploy is what creates it.
+step `[6/6]` (today `[7/7]`) with `IC0512` *after* a successful backend deploy. It now
+resolves the controller the same way, and when the canister does not exist yet it creates it
+pinned to `CONTROLLER_IDENTITY`, because a canister that has never been created has no
+controller list and creating it as the default identity is how the three-identity stack arose.
 
 ## An aborted run does not delete the previous run's evidence
 

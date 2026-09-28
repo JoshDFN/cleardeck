@@ -114,17 +114,30 @@ function localIdentityList() {
  * Resolves which local icp identity ACTUALLY controls a local canister.
  *
  * The harness used to hardcode `cd-local-deployer` as the controller. That is an
- * assumption, not a fact: `./scripts/dev.sh local-up` runs `icp deploy` with no
- * `--identity`, so the canisters end up controlled by whatever identity happens
- * to be the machine's current default — which on this machine is a completely
- * unrelated project's identity. Every controller-only call (`reset_table`, the
- * thing that makes a screenshot run idempotent) then fails, and the lobby ends up
- * with zero registered tables.
+ * assumption, not a fact: until 2026-09-28 `./scripts/dev.sh local-up` ran
+ * `icp deploy` with no `--identity`, so the canisters ended up controlled by
+ * whatever identity happened to be the machine's current default — which on
+ * this machine is a completely unrelated project's identity. Every
+ * controller-only call (`reset_table`, the thing that makes a screenshot run
+ * idempotent) then failed, and the lobby ended up with zero registered tables.
+ * `local-up` now pins `--identity cd-local-deployer` on the deploy and dies on a
+ * foreign controller (docs/DEFECTS.md E-74, root cause); this resolver stays as
+ * the harness's own belt, so the two cannot disagree about who the controller is.
  *
  * So: read the real controller list off the canister and pick a local identity
  * that is in it. Preference order is `preferred` first, then the rest of the
  * candidates, then EVERY identity `icp identity list` knows about, then the
  * current default identity.
+ *
+ * THE STATUS READ IS SIGNED, PER CANDIDATE. `icp canister status` is itself
+ * controller-only (IC0542 for anyone else), so an unsigned read runs as the
+ * machine's default identity and only works while THAT is a controller — the
+ * very drift this function exists to detect. Once `local-up` pins the deploy
+ * to `cd-local-deployer`, an unsigned read on a machine whose default is
+ * another project's identity throws before the candidate list is even
+ * consulted. So each candidate signs its own status read: a read that succeeds
+ * proves the identity is a controller, and the Controllers line it prints
+ * confirms it.
  *
  * docs/DEFECTS.md E-53. The version before this one stopped at "candidates, then
  * the default", which is a four-name allowlist plus whatever happened to be
@@ -146,13 +159,22 @@ function localIdentityList() {
  */
 export function resolveControllerIdentity(canisterId, { preferred, candidates = [] } = {}) {
   assertNotMainnet(canisterId, 'canister id for controller lookup');
-  const status = icp(['canister', 'status', canisterId, '-e', 'local']);
-  const line = status.split('\n').find((l) => /^\s*Controllers:/.test(l)) || '';
-  const controllers = line
-    .replace(/^\s*Controllers:\s*/, '')
-    .split(/[\s,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+
+  /** @returns {string[]|null} the Controllers line as read by `identityArgs`, null when refused */
+  const controllersAs = (identityArgs) => {
+    let status;
+    try {
+      status = icp(['canister', 'status', canisterId, '-e', 'local', ...identityArgs]);
+    } catch {
+      return null; // IC0542: not a controller (or no such canister / identity)
+    }
+    const line = status.split('\n').find((l) => /^\s*Controllers:/.test(l)) || '';
+    return line
+      .replace(/^\s*Controllers:\s*/, '')
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  };
 
   // One `icp identity list` gives every name AND its principal, so the loop
   // below spawns a subprocess only for names the list did not already answer.
@@ -165,6 +187,7 @@ export function resolveControllerIdentity(canisterId, { preferred, candidates = 
   }
 
   const checked = [];
+  let controllers = [];
   for (const name of names) {
     let principal = principalOf.get(name);
     if (!principal) {
@@ -174,7 +197,9 @@ export function resolveControllerIdentity(canisterId, { preferred, candidates = 
         continue; // identity does not exist on this machine
       }
     }
-    const isController = controllers.includes(principal);
+    const seen = controllersAs(['--identity', name]);
+    if (seen && seen.length) controllers = seen;
+    const isController = seen !== null && seen.includes(principal);
     checked.push({ identity: name, principal, isController });
     if (isController) return { identity: name, controllers, checked };
   }
@@ -182,7 +207,9 @@ export function resolveControllerIdentity(canisterId, { preferred, candidates = 
   // Last resort: the current default identity, whatever it is called.
   try {
     const principal = icp(['identity', 'principal']).trim();
-    const isController = controllers.includes(principal);
+    const seen = controllersAs([]);
+    if (seen && seen.length) controllers = seen;
+    const isController = seen !== null && seen.includes(principal);
     checked.push({ identity: '(default)', principal, isController });
     if (isController) return { identity: null, controllers, checked };
   } catch { /* nothing else to try */ }

@@ -24,6 +24,12 @@ ICP_LEDGER_ID="ryjl3-tyaaa-aaaaa-aaaba-cai"
 # Local throwaway identities. cd-local-deployer is the controller and the funder.
 CONTROLLER="cd-local-deployer"
 PLAYERS=(cd-alice cd-bob cd-carol cd-attacker)
+# Filled by up_identities (the first local-up step): $CONTROLLER's principal.
+CONTROLLER_PRINCIPAL=""
+# Set by up_replica when THIS run rebuilt the network from nothing, so a foreign
+# controller after the deploy is named for what it is (the pin did not take)
+# rather than as state an earlier, unpinned deploy left behind.
+NETWORK_IS_FRESH=0
 # Target local ICP balance per player after `local-up`.
 PLAYER_FUND_ICP="${CLEARDECK_PLAYER_FUND_ICP:-1000}"
 
@@ -188,6 +194,15 @@ cmd_doctor() {
     warn "no pocket-ic server binary; the money-safety harness needs one (POCKET_IC_BIN)"
   fi
 
+  step "identities"
+  local p
+  if p="$(icp identity principal --identity "$CONTROLLER" 2>/dev/null </dev/null)"; then
+    ok "$CONTROLLER = $p (the pinned deployer; local-up creates it when missing)"
+  else
+    warn "$CONTROLLER MISSING: 'local-up' creates it (step 1)"
+  fi
+  info "machine default identity: $(icp identity default 2>/dev/null </dev/null || echo '?') (local-up never uses or changes it)"
+
   step "local network"
   info "gateway from icp.yaml: $GATEWAY_ORIGIN"
   if gateway_is_up; then
@@ -283,23 +298,45 @@ announce_wasm() {
 # was verified to deal a real hand on this machine; it is written down here so
 # nobody has to rediscover it.
 
+# `icp network start` takes no `--identity` (icp 1.3.0): the network has no
+# deployer, only the canisters do, which is why the pin lives on `icp deploy`
+# and on every controller call (up_deploy, up_wire) and not here.
 up_replica() {
-  local do_reset="$1"
+  local do_reset="$1" waited=0
   if gateway_is_up; then
-    ok "gateway already answering at $GATEWAY_ORIGIN (not restarting)"
-    return 0
-  fi
-  if ! state_is_resumable >/dev/null 2>&1; then
-    warn "the on-disk state of the managed network cannot be resumed:"
-    state_is_resumable 2>&1 | sed 's/^/      /' || true
     if [ "$do_reset" = "0" ]; then
-      die "refusing to start. Re-run with '--reset' to DELETE .icp/cache/networks/${ENV_NAME} \
-(this destroys the local ledger, every deployed local canister and every local balance), \
-or restore the state directory from a copy."
+      ok "gateway already answering at $GATEWAY_ORIGIN (not restarting)"
+      return 0
     fi
-    warn "--reset given: deleting .icp/cache/networks/${ENV_NAME}"
+    # `--reset` on a RUNNING network used to be a no-op: the reset branch below
+    # only ran when the on-disk state was unresumable, so a stack whose
+    # canisters belong to a foreign identity (docs/DEFECTS.md E-74) could not be
+    # rebuilt without a stop by hand -- and an unattended seat is denied the raw
+    # `icp network stop`. Stop THIS project's network (the descriptor under
+    # .icp/cache/networks/local; nothing is killed by name or by port), then
+    # fall through to the delete.
+    warn "--reset given: stopping the running network at $GATEWAY_ORIGIN"
+    icp_local network stop || warn "icp network stop exited non-zero; checking the gateway anyway"
+    while gateway_is_up; do
+      waited=$((waited+1))
+      [ "$waited" -gt 30 ] && die "the gateway at $GATEWAY_ORIGIN still answers 30s after 'icp network stop'. \
+Nothing is killed by name from here: on a factory seat run 'scripts/factory.sh replica-recycle' \
+(it stops ONLY this worktree's replica, by state-dir attribution), then re-run '$0 local-up --reset'."
+      sleep 1
+    done
+    ok "network stopped"
+  fi
+  if [ "$do_reset" = "1" ]; then
+    warn "--reset given: deleting .icp/cache/networks/${ENV_NAME} (the local ledger, every local canister, every local balance)"
     rm -rf "$REPO_ROOT/.icp/cache/networks/${ENV_NAME}" \
            "$REPO_ROOT/.icp/cache/mappings/${ENV_NAME}.ids.json"
+    NETWORK_IS_FRESH=1
+  elif ! state_is_resumable >/dev/null 2>&1; then
+    warn "the on-disk state of the managed network cannot be resumed:"
+    state_is_resumable 2>&1 | sed 's/^/      /' || true
+    die "refusing to start. Re-run with '--reset' to DELETE .icp/cache/networks/${ENV_NAME} \
+(this destroys the local ledger, every deployed local canister and every local balance), \
+or restore the state directory from a copy."
   fi
   info "icp network start -e $ENV_NAME --background"
   icp_local network start --background
@@ -359,19 +396,38 @@ write_provenance() {
 up_deploy() {
   local builder="${1:-host}" emitted name
 
+  # Canisters that already exist must already be $CONTROLLER's: `icp deploy`
+  # UPGRADES them, which only a controller may do. Naming the foreign controller
+  # here, with the hand-over, beats the management canister's IC0512 a minute
+  # later (docs/DEFECTS.md E-74). A canister no local identity can read is let
+  # through: the deploy itself will say.
+  if [ "$NETWORK_IS_FRESH" = "0" ] && local_ids_file >/dev/null 2>&1; then
+    assert_pinned_controller lobby pre
+  fi
+
   # Always run the ordinary deploy first: it creates the canisters, applies the
   # init args from icp.yaml and installs a working module. The container path
   # then UPGRADES each canister to the container-built bytes, which keeps the
   # init-arg handling in exactly one place (the manifest) instead of duplicating
   # it here where it would drift.
-  icp_local deploy "${BACKEND_CANISTERS[@]}" --mode auto -y
+  #
+  # PINNED TO $CONTROLLER. Without `--identity` this ran as the machine's default
+  # identity, and on a shared dev machine that is another project's: every
+  # canister, and the lobby admin (its init() is `ADMIN = msg_caller`), then
+  # belonged to a principal this project never names. docs/DEFECTS.md E-74.
+  icp_local deploy "${BACKEND_CANISTERS[@]}" --mode auto -y --identity "$CONTROLLER"
+
+  # POSTCONDITION, READ BACK, AND FATAL: $CONTROLLER controls every backend
+  # canister. On a network this run rebuilt, anything else means the pin did not
+  # take, which is a bug here and not a condition to warn past.
+  for name in "${BACKEND_CANISTERS[@]}"; do
+    assert_pinned_controller "$name" post
+  done
+  ok "every backend canister is controlled by $CONTROLLER ($CONTROLLER_PRINCIPAL)"
 
   if [ "$builder" = docker ]; then
-    step "[3b/6] swap in container-built modules"
-    local ctl ctl_flag=()
-    ctl="$(resolve_controller_identity lobby)" \
-      || die "no local icp identity controls the backend canisters, so they cannot be upgraded"
-    ctl_flag=(--identity "$ctl")
+    step "[4b/7] swap in container-built modules"
+    local ctl_flag=(--identity "$CONTROLLER")
     emitted="$(mktemp -d -t cleardeck-emit)"
     "$REPO_ROOT/scripts/verify-build.sh" --emit "$emitted" \
       || die "the container build failed; the local stack is up on host-built modules"
@@ -382,7 +438,7 @@ up_deploy() {
       info "$name <- $(basename "$emitted")/$name.wasm"
     done
     rm -rf "$emitted"
-    ok "every backend canister is running the linux/amd64 container build (as $ctl)"
+    ok "every backend canister is running the linux/amd64 container build (as $CONTROLLER)"
   fi
 
   write_provenance "$builder"
@@ -414,28 +470,111 @@ call_or_die() {
   printf '%s' "$out"
 }
 
-# Which local identity actually controls $1.
+# Which local identity actually controls $1. Read-only; prints the name.
 #
 # `$CONTROLLER` is a documented claim, and on this machine it was false: the
 # backend was deployed by the default identity, so every
 # `--identity cd-local-deployer` controller call returned
 # `Err("Unauthorized: controller access required")` and exited 0. Resolve it
-# from the canister instead of asserting it. `icp identity list` prints
-# name and principal on one line, so one call maps them all.
+# from the canister instead of asserting it.
+#
+# The read is SIGNED, per candidate. `icp canister status` is itself
+# controller-only (IC0542 for anyone else), so an unsigned read runs as the
+# machine's default identity and only works while THAT is a controller, which
+# is the very drift being detected. A status that succeeds as `--identity X`
+# proves X is a controller; the Controllers line it prints confirms it. Stdin
+# is closed so a password-protected identity fails instead of prompting.
 resolve_controller_identity() {
-  local canister="$1" controllers name principal
-  controllers="$(icp_local canister status "$canister" 2>/dev/null \
-                 | awk -F': ' '/^[[:space:]]*Controllers:/ {print $2}')"
-  [ -n "$controllers" ] || return 1
-  # Prefer the documented identity when it really is a controller.
+  local canister="$1" name principal status seen=" "
   for name in "$CONTROLLER" $(icp identity list 2>/dev/null \
                               | sed 's/^\*\{0,1\}[[:space:]]*//' | awk 'NF>=2 {print $1}'); do
-    principal="$(icp identity principal --identity "$name" 2>/dev/null)" || continue
-    case " $controllers " in
+    case "$seen" in *" $name "*) continue ;; esac
+    seen="$seen$name "
+    principal="$(icp identity principal --identity "$name" 2>/dev/null </dev/null)" || continue
+    status="$(icp_local canister status "$canister" --identity "$name" 2>/dev/null </dev/null)" || continue
+    case " $(printf '%s' "$status" | awk -F': ' '/^[[:space:]]*Controllers:/ {print $2}') " in
       *" $principal "*) printf '%s' "$name"; return 0 ;;
     esac
   done
   return 1
+}
+
+# The hand-over, printed once, from the one place that knows the shape of it.
+# $1 = canister, $2 = the identity that holds it.
+die_foreign_controller() {
+  local canister="$1" ctl="$2" why c handover
+  if [ "$NETWORK_IS_FRESH" = "1" ]; then
+    why="This run rebuilt the network and deployed with --identity $CONTROLLER, so the pin did not take: a bug in local-up, not in your setup."
+  else
+    why="These canisters were left by a deploy that did not pin its identity (docs/DEFECTS.md E-74); '$ctl' is the machine's default, or was."
+  fi
+  local handover=""
+  for c in "${BACKEND_CANISTERS[@]}"; do
+    handover="$handover$(printf '        icp canister settings update %s --add-controller %s --identity %s -e %s' "$c" "$CONTROLLER_PRINCIPAL" "$ctl" "$ENV_NAME")
+"
+  done
+  handover="$handover        icp canister call lobby set_admin \"(principal \\\"$CONTROLLER_PRINCIPAL\\\")\" --identity $ctl -e $ENV_NAME"
+  die "$canister is controlled by '$ctl', NOT the pinned '$CONTROLLER' ($CONTROLLER_PRINCIPAL).
+      $why
+      Either hand the stack over from the identity that holds it (signs as '$ctl'; do this yourself, an unattended seat cannot):
+$handover
+      or rebuild the local network under the pin (destroys local state):
+        $0 local-up --reset"
+}
+
+# $1 = canister, $2 = pre | post. Returns 0 iff $CONTROLLER controls it.
+# `pre` (before a deploy on an existing network): a canister no local identity
+# can read is let through, the deploy will say. `post`: fatal either way.
+assert_pinned_controller() {
+  local canister="$1" when="$2" ctl
+  if ctl="$(resolve_controller_identity "$canister")"; then
+    [ "$ctl" = "$CONTROLLER" ] && return 0
+    die_foreign_controller "$canister" "$ctl"
+  fi
+  if [ "$when" = "pre" ]; then
+    warn "no local identity can read $canister's status (not created yet, or a foreign controller with no local key); letting the deploy decide"
+    return 0
+  fi
+  die "$canister is controlled by no local identity after a deploy pinned to $CONTROLLER. \
+Controllers as $CONTROLLER sees them: $(icp_local canister status "$canister" --identity "$CONTROLLER" 2>&1 </dev/null | grep -i 'controllers\|IC05' | head -2 | tr '\n' ' ')"
+}
+
+# THE DEPLOYER IDENTITY IS PINNED, NEVER INHERITED. docs/DEFECTS.md E-74 (root cause).
+#
+# The machine-global default icp identity is shared mutable state: on a shared
+# dev machine it is whatever another project last selected (`cyclepay-hotwallet`
+# on 2026-09-28), and `icp deploy` with no `--identity` runs as it. The lobby's
+# init() makes its deployer the admin, so every canister AND the lobby admin then
+# belonged to a principal this project never names; `set_admin` and
+# `init_microstakes_tables` as $CONTROLLER were refused; up_wire died with its
+# E-74 message on a stack deployed a minute earlier; and the recovery needed a
+# write signed as the foreign identity, which an unattended seat is denied. The
+# stack was unrunnable by construction.
+#
+# So: $CONTROLLER (and the players) exist BEFORE anything starts, every deploy
+# and controller call names $CONTROLLER, and the default identity is read for
+# the report only -- never used, never changed (`icp identity use` is not
+# called anywhere in this file, and must not be: it is every session's default).
+#
+# Order: this is step 1. A managed network funds the local identities that exist
+# when it STARTS (observed 2026-09-28: 1,000,000 ICP each), so an identity
+# created after the start has no local ICP and up_fund would have nothing to
+# fund from.
+up_identities() {
+  local id default_id
+  for id in "$CONTROLLER" "${PLAYERS[@]}"; do
+    if icp identity principal --identity "$id" >/dev/null 2>&1 </dev/null; then continue; fi
+    info "creating local throwaway identity $id (plaintext storage: it never holds real funds)"
+    icp identity new "$id" --storage plaintext >/dev/null 2>&1 </dev/null \
+      || die "could not create the local identity '$id' (icp identity new $id --storage plaintext)"
+  done
+  CONTROLLER_PRINCIPAL="$(icp identity principal --identity "$CONTROLLER" 2>/dev/null </dev/null)" \
+    || die "the identity '$CONTROLLER' exists but its principal cannot be read"
+  default_id="$(icp identity default 2>/dev/null </dev/null || echo '?')"
+  ok "deployer $CONTROLLER = $CONTROLLER_PRINCIPAL (pinned on every deploy and controller call)"
+  if [ "$default_id" != "$CONTROLLER" ]; then
+    info "the machine's default identity is '$default_id'; local-up neither uses it nor changes it"
+  fi
 }
 
 # Wiring the archive is TWO calls in opposite directions, and shipping only one
@@ -456,15 +595,17 @@ resolve_controller_identity() {
 # afterwards. A silent archive is worth less than no archive, because no archive
 # does not claim to be one.
 up_wire() {
-  local history_id t principal count table_principal authorized ctl
+  local history_id t principal count table_principal authorized ctl admin
   history_id="$(local_id history)"
 
   ctl="$(resolve_controller_identity table_1)" \
     || die "no local icp identity controls table_1, so the archive cannot be wired. \
-Controllers: $(icp_local canister status table_1 2>/dev/null | awk -F': ' '/Controllers:/{print $2}')"
-  if [ "$ctl" != "$CONTROLLER" ]; then
-    warn "the controller is '$ctl', NOT the documented '$CONTROLLER'. Using '$ctl'."
-  fi
+Rebuild under the pin: $0 local-up --reset"
+  # DIES, does not warn. up_deploy asserted this already; this is the belt for
+  # a `local-up` that skipped the deploy on an older stack. A stack signed by
+  # any identity but $CONTROLLER is the E-74 root cause, and "using '$ctl'"
+  # instead was the identity drift that made the harness unrunnable.
+  [ "$ctl" = "$CONTROLLER" ] || die_foreign_controller table_1 "$ctl"
 
   for t in "${TABLE_CANISTERS[@]}"; do
     table_principal="$(local_id "$t")"
@@ -499,46 +640,51 @@ Controllers: $(icp_local canister status table_1 2>/dev/null | awk -F': ' '/Cont
     icp_local canister call "$t" flush_unrecorded_hands '()' --identity "$ctl" >/dev/null 2>&1 || true
   done
 
-  # The lobby wiring below is left exactly as it was, including its use of
-  # $CONTROLLER and its `|| warn`. The same blind spot applies to it -- an
-  # Err in the reply still exits 0 -- but the lobby is another agent's file
-  # this wave and a silent behaviour change here would be worse than a
-  # documented one. Filed in docs/DEFECTS.md.
-  principal="$(icp identity principal --identity "$CONTROLLER")"
-  icp_local canister call lobby set_admin "(principal \"$principal\")" \
-    --identity "$CONTROLLER" >/dev/null || warn "lobby set_admin non-zero (already set?)"
-  icp_local canister call lobby init_microstakes_tables \
-    "(principal \"$(local_id table_1)\", principal \"$(local_id table_2)\", principal \"$(local_id table_3)\")" \
-    --identity "$CONTROLLER" >/dev/null || warn "lobby init_microstakes_tables non-zero (already initialised?)"
+  # THE LOBBY ADMIN, READ FIRST. docs/DEFECTS.md E-74, the root cause.
+  #
+  # The lobby's init() makes its deployer the admin, and `set_admin` /
+  # `init_microstakes_tables` refuse anyone else. With the deploy pinned to
+  # $CONTROLLER (up_deploy) the admin IS $CONTROLLER on a fresh stack, and
+  # `set_admin($CONTROLLER)` as $CONTROLLER is an Ok no-op. An admin that is
+  # some other principal is a stack an unpinned deploy left behind: name it and
+  # print the hand-over, instead of two refusals that exit 0 (E-50) and a green
+  # tick on a count of zero -- which is what took the screenshot harness offline
+  # for two waves.
+  principal="$CONTROLLER_PRINCIPAL"
+  [ -n "$principal" ] || principal="$(icp identity principal --identity "$CONTROLLER" </dev/null)"
+  admin="$(icp_local canister call lobby get_admin '()' --query 2>/dev/null | tr -d '\n ' || true)"
+  case "$admin" in
+    *"$principal"*|"(null)"|"") : ;;   # ours, unset (set_admin recovers it), or unreadable (set_admin will say)
+    *) die "the lobby admin is $admin, NOT $CONTROLLER ($principal): an unpinned deploy left it \
+(docs/DEFECTS.md E-74). Hand it over from the identity that holds it, or rebuild under the pin:
+        icp canister call lobby set_admin \"(principal \\\"$principal\\\")\" --identity <that identity> -e $ENV_NAME
+        $0 local-up --reset" ;;
+  esac
+  call_or_die "lobby set_admin($CONTROLLER)" \
+    icp_local canister call lobby set_admin "(principal \"$principal\")" \
+      --identity "$CONTROLLER" >/dev/null
+  call_or_die "lobby init_microstakes_tables" \
+    icp_local canister call lobby init_microstakes_tables \
+      "(principal \"$(local_id table_1)\", principal \"$(local_id table_2)\", principal \"$(local_id table_3)\")" \
+      --identity "$CONTROLLER" >/dev/null
   count="$(icp_local canister call lobby get_tables '()' --query 2>/dev/null | grep -c 'canister_id' || true)"
   # POSTCONDITION, READ BACK, AND FATAL. docs/DEFECTS.md E-74.
   #
-  # The two calls above are `|| warn`, and `icp canister call` exits 0 on a
-  # `variant { Err }` (docs/DEFECTS.md E-50), so BOTH can fail and this function
-  # still reported success. It did: on 2026-08-06 `local-up` printed
+  # The two calls above used to be `|| warn`, and `icp canister call` exits 0 on
+  # a `variant { Err }` (docs/DEFECTS.md E-50), so BOTH could fail and this
+  # function still reported success. It did: on 2026-08-06 `local-up` printed
   # `✓ lobby lists 0 table record(s)` and exited 0, and the ENTIRE screenshot
   # harness -- the only gate in this project that measures the four protected
   # notices on rendered pixels -- failed all 24 scenes with "Lobby has no
   # registered name for table_N". A gate that cannot run is a gate that is off,
-  # and this one was off silently.
-  #
-  # Root cause when it happens: `set_admin` above is called AS $CONTROLLER, but
-  # the lobby's admin is whoever initialised it first. If that was a different
-  # identity, `set_admin` is refused ("Only current admin can set new admin") and
-  # `init_microstakes_tables` is then refused ("Only admin can initialize
-  # tables"). Recover by handing the admin over from the identity that holds it:
-  #
-  #   icp canister call lobby get_admin '()' --query -e local
-  #   icp canister call lobby set_admin "(principal \"<$CONTROLLER's principal>\")" \
-  #     --identity <the identity get_admin named> -e local
-  #
-  # then run this again.
+  # and this one was off silently. The calls now go through call_or_die and the
+  # admin is read before them; this count is the belt.
   if [ "${count:-0}" -lt 1 ]; then
     icp_local canister call lobby get_admin '()' --query 2>/dev/null \
       | sed 's/^/      lobby admin: /' >&2 || true
     die "the lobby lists NO tables. local-up used to report success here; it does not any \
 more, because an empty lobby makes the whole screenshot harness unrunnable and nothing else \
-notices. See the recovery in up_wire (docs/DEFECTS.md E-74)."
+notices (docs/DEFECTS.md E-74). Rebuild under the pin: $0 local-up --reset"
   fi
   ok "lobby lists $count table record(s)"
   # THE RECORDS SAY WHAT THE CONTRACTS CHARGE. docs/DEFECTS.md T-11.
@@ -576,17 +722,39 @@ cmd_local_lobby_sync() {
     | grep -E 'name|small_blind|big_blind|min_buy_in|max_buy_in' | sed 's/^/      /'
 }
 
+# Local ICP balance of principal $1, whole-ICP integer part (0 when unreadable).
+# `icp token balance` takes `--of-principal` (icp 1.3.0); the `--owner` this used
+# to pass is not a flag, so every balance read 0 and every local-up transferred
+# another 1000 ICP per player.
+local_icp_whole() {
+  local bal
+  bal="$(icp_local token balance --of-principal "$1" --identity "$CONTROLLER" -q 2>/dev/null </dev/null \
+         | grep -oE '[0-9][0-9_.]*' | head -1 | tr -d '_' || true)"
+  printf '%s' "${bal%%.*}"
+}
+
 up_fund() {
-  local id p bal
+  local id p bal need
+  # The funder must be able to fund. A managed network funds the identities that
+  # exist when it starts, so a $CONTROLLER created after the start (up_identities
+  # on a network that was already running) holds nothing: say so, do not warn
+  # past four failed transfers and print "players funded".
+  need=$(( ${#PLAYERS[@]} * PLAYER_FUND_ICP ))
+  bal="$(local_icp_whole "$CONTROLLER_PRINCIPAL")"
+  info "$CONTROLLER ($CONTROLLER_PRINCIPAL) balance=${bal:-0} ICP (funder)"
+  if [ "${bal:-0}" -lt "$need" ] 2>/dev/null; then
+    die "$CONTROLLER holds ${bal:-0} ICP on the local ledger; funding ${#PLAYERS[@]} players to \
+${PLAYER_FUND_ICP} ICP each needs ${need}. The managed network funds the identities that exist when it \
+STARTS, so an identity created after the start is empty: rebuild with '$0 local-up --reset'."
+  fi
   for id in "${PLAYERS[@]}"; do
-    p="$(icp identity principal --identity "$id")"
-    bal="$(icp_local token balance --owner "$p" 2>/dev/null \
-           | grep -oE '[0-9][0-9_.]*' | head -1 | tr -d '_' || echo 0)"
-    info "$id ($p) balance=${bal:-0}"
-    if [ "${bal%%.*}" -lt "$PLAYER_FUND_ICP" ] 2>/dev/null; then
+    p="$(icp identity principal --identity "$id" </dev/null)"
+    bal="$(local_icp_whole "$p")"
+    info "$id ($p) balance=${bal:-0} ICP"
+    if [ "${bal:-0}" -lt "$PLAYER_FUND_ICP" ] 2>/dev/null; then
       info "  topping up to ${PLAYER_FUND_ICP} ICP from $CONTROLLER"
-      icp_local token transfer "$PLAYER_FUND_ICP" "$p" --identity "$CONTROLLER" >/dev/null \
-        || warn "  top-up failed (is $CONTROLLER funded? managed networks pre-fund the default identity)"
+      call_or_die "$id top-up from $CONTROLLER" \
+        icp_local token transfer "$PLAYER_FUND_ICP" "$p" --identity "$CONTROLLER" >/dev/null
     fi
   done
   ok "players funded"
@@ -628,12 +796,13 @@ cmd_local_up() {
   [ "$builder" = docker ] && { require_cmd docker; docker info >/dev/null 2>&1 \
     || die "--docker needs the Docker daemon running"; }
 
-  step "[1/6] replica";              up_replica "$do_reset"
-  step "[2/6] ICP ledger";           up_ledger
-  step "[3/6] deploy backend";       up_deploy "$builder"
-  step "[4/6] wire history + lobby"; up_wire
-  step "[5/6] fund local players";   up_fund
-  step "[6/6] frontend"
+  step "[1/7] identities";           up_identities
+  step "[2/7] replica";              up_replica "$do_reset"
+  step "[3/7] ICP ledger";           up_ledger
+  step "[4/7] deploy backend";       up_deploy "$builder"
+  step "[5/7] wire history + lobby"; up_wire
+  step "[6/7] fund local players";   up_fund
+  step "[7/7] frontend"
   if [ "$skip_frontend" = "1" ]; then info "skipped (--no-frontend)"; else up_frontend; fi
 
   step "local stack is up"
@@ -1681,6 +1850,31 @@ cmd_selftest() {
   must_allow "a local id"             canister call "$(jq -r '.lobby' "$(local_ids_file)" 2>/dev/null || echo aaaaa-aa)" get_tables
   must_allow "the local ICP ledger"   canister call "$ICP_LEDGER_ID" icrc1_symbol
   must_allow "the word ic in a path"  deploy --project-root-override /tmp/ic-thing
+
+  # THE DEPLOYER PIN, AS A GATE. docs/DEFECTS.md E-74 (root cause). Every deploy
+  # line in this file names $CONTROLLER, and nothing under scripts/ ever changes
+  # the machine's default identity: it is shared mutable state across every
+  # session on the machine, and inheriting it is how the lobby admin became
+  # another project's principal.
+  step "the deployer identity is pinned, never inherited"
+  local unpinned
+  unpinned="$(grep -nE '^[^#]*icp_local deploy ' "$0" | grep -v -- '--identity "\$CONTROLLER"' || true)"
+  if [ -n "$unpinned" ]; then
+    printf '    %sUNPINNED DEPLOY%s in %s (add --identity "$CONTROLLER"):\n%s\n' "$E" "$R" "$0" "$unpinned" >&2
+    fails=$((fails+1))
+  else
+    ok "every 'icp_local deploy' in $(basename "$0") passes --identity \"\$CONTROLLER\""
+  fi
+  local switches
+  # A bare `icp identity default` READS the name (the doctor and up_identities do);
+  # one followed by a name SETS it, and `icp identity use <name>` is the other spelling.
+  switches="$(grep -rnE '^[^#]*icp identity (use[[:space:]]+[^[:space:]]|default[[:space:]]+[A-Za-z_])' "$REPO_ROOT/scripts" 2>/dev/null || true)"
+  if [ -n "$switches" ]; then
+    printf '    %sDEFAULT IDENTITY SWITCH%s under scripts/ (the default is every session'"'"'s):\n%s\n' "$E" "$R" "$switches" >&2
+    fails=$((fails+1))
+  else
+    ok "nothing under scripts/ switches the machine's default identity"
+  fi
 
   step "mainnet id list is non-empty"
   local n; n="$(mainnet_ids | grep -c . || true)"
