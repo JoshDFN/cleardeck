@@ -13,7 +13,11 @@
     amount = 0,
     allIn = false,
     bigBlind = 0,
-    fmt = (v) => String(v)
+    fmt = (v) => String(v),
+    // Big-blind mode ($lib/bb-display.js): the unit tag after the figure and
+    // the exact currency figure on the capsule's title. Null by default.
+    unit = null,
+    title = null
   } = $props();
 
   const band = $derived(chipBand(amount, bigBlind));
@@ -26,7 +30,7 @@
       <i class="chip" style:--k={k}></i>
     {/each}
   </span>
-  <span class="bet-amount">{fmt(amount)}</span>
+  <span class="bet-amount" {title}>{fmt(amount)}{#if unit}<span class="unit-tag">{unit}</span>{/if}</span>
 </div>
 
 <style>
@@ -107,6 +111,14 @@
   }
 
   .bet-chip.all-in .bet-amount { color: var(--cd-ink); border-color: var(--cd-danger-line); }
+
+  .unit-tag {
+    margin-left: 0.18em;
+    font-size: 0.7em;
+    font-weight: var(--cd-weight-figure);
+    letter-spacing: 0.04em;
+    opacity: 0.8;
+  }
 
   @media (max-aspect-ratio: 1/1) {
     .chip-stack { --chip: calc(var(--fw) * 0.05); }

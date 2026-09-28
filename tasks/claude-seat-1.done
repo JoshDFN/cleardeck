@@ -1,0 +1,36 @@
+# claude-seat-1: task 1790621370 ("What else can we do to improve this, make the best poker UI/UX possible")
+
+Closes: 1790621370 (done)
+
+## What landed (branch claude/seat-1, on top of main 7e553fc)
+
+- 72edf0d feat: the felt reads in big blinds on request, every plate says what it did this street, and a free-check fold or a mid-hand leave takes two presses
+  - src/cleardeck_frontend/src/lib/bb-display.js, bb-display.svelte.js (+ bb-display.test.js): the big-blind display preference (off by default, `poker_bb_display`), `formatBB`, and the rune the felt and the wallet menu share
+  - src/cleardeck_frontend/src/lib/street-actions.js (+ street-actions.test.js): each seat's last action this street as one word, from the action feed since the last street line
+  - src/cleardeck_frontend/src/lib/hotkeys.js (+ hotkeys.test.js): `arm-fold`; F arms first when a check is free
+  - src/cleardeck_frontend/src/lib/components/ActionBar.svelte: the free-check fold guard (button and key, "Fold anyway?" / "Fold?", 2.5 s, Escape disarms); the legend reads "F F fold" while a check is free
+  - src/cleardeck_frontend/src/lib/components/SeatPod.svelte, BetStack.svelte, PotModule.svelte: the `.acted-word` beside the stack; the BB `.unit-tag` and the exact currency `title` in big-blind mode; the winner line written by `fmtSettled` (currency) whatever the felt reads in
+  - src/cleardeck_frontend/src/lib/components/PokerTable.svelte: `feltFmt` for the live objects (stacks, bets, pot, side pots, chip flights) and `fmt` for everything sent or settled; the street line appended AFTER the action that closed the street and marked `street: true`; the mid-hand Leave guard ("Leave anyway?", 3 s)
+  - src/cleardeck_frontend/src/lib/components/WalletButton.svelte: the "Table display" section with the big-blind toggle; poker-table-dock.scss: the armed Leave fill
+  - src/cleardeck_frontend/src/lib/felt-markup.ssr.test.js: SeatPod, PotModule and ActionBar rendered with Svelte's server build; the default plate and pot markup pinned byte for byte (what tools/shots reads), and the big-blind variants
+- 0a54c08 docs: UI-WAVE.md section 9 (what this task built, what it could not photograph)
+
+Canisters untouched: nothing under src/*_canister, Cargo.*, icp.yaml, .icp/ changed. No fund-moving code touched.
+
+## Verified
+
+- `npx vitest run` in src/cleardeck_frontend: 446 of 446 in 42 files (baseline 418 in 39)
+- `npm run check`: 0 errors, the 4 pre-existing warnings (+page.svelte, WalletButton.svelte)
+- `make hygiene` 0 (no em-dash, notices intact and not weakened); `make declarations` 0; `make shots-selftest` 0 (13 self-tests); `make shots-verdict` 0 (the recorded 213cdc2 sweep, 8 of 8)
+- `POCKET_IC_BIN=~/.cache/dfinity/versions/0.31.0/pocket-ic make test`: exit 0, all nine steps green, on the SECOND run. The first run (cold `target/money-safety/` cache) failed step 5 on ONE test, `archive::an_upgrade_in_the_middle_of_a_hand_does_not_lose_the_deal_record`, panicking at tests/money_safety/src/wasms.rs:115 "download produced no file": every concurrent test downloads the ledger wasm into the same `download.tmp` and one removes it under the other. The test passed alone on rerun (1 passed) and the full gate passed once the cache held `ledger-canister.wasm.gz`. Filed as 1790622959.
+
+## NOT verified
+
+- The screenshot harness (`./scripts/dev.sh shots`) was NOT run: the seat's `./scripts/dev.sh local-up --no-frontend` started the replica and deployed, then died in `up_wire` with the E-74 message ("FATAL: the lobby lists NO tables"), because the backend deployed under the machine's default identity `cyclepay-hotwallet` (the script warned: "the controller is 'cyclepay-hotwallet', NOT the documented 'cd-local-deployer'") and the lobby admin is that principal. The recovery `icp canister call lobby set_admin ... --identity cyclepay-hotwallet -e local` was DENIED by the auto-mode classifier (another project's identity), so the seat did not pursue it. The live evidence for the plate word at the crowded phone ring, the armed labels' widths and the big-blind mode is task 1790622955; pinning the deployer identity in local-up is 1790622956. The seat's replica is left running (port 8077) with the canisters deployed and the lobby empty.
+- In the default state the markup the harness reads is unchanged (pinned by felt-markup.ssr.test.js), the new elements carry no digit (no token-census rule needed; the allowlist is untouched at its cap of 25), and the street word is `flex: 0 1 auto; min-width: 0; overflow: hidden` beside a `flex: 0 0 auto` stack figure so it can clip but never move a money figure. That is reasoning and a server-render test, not a photograph.
+
+## Follow-ups filed (scripts/factory.sh new, producer claude-seat-1)
+
+1790622948 the canister half of the decision loop (auto-check, auto time bank, sit out after three); 1790622949 buy-in step and rebuy; 1790622950 sampled sounds; 1790622951 landscape phone layout + scene; 1790622952 lobby proof rail, named waiting player, dock fiat hint; 1790622953 colour literals / transition-all / dicebear residue; 1790622954 harness gaps (BTC scene, drift probe, probes in run.mjs, title probe); 1790622955 photograph this task's felt changes live; 1790622956 local-up pins the deployer identity (E-74 root cause); 1790622957 [operator] own domain + branded sign-in; 1790622958 SB/BB seat labels; 1790622959 the money-safety download race.
+
+help: no user-facing help surface in this repo (no Help library or uxmap; HowItWorks.svelte does not describe the action row). The changed controls explain themselves in place: the fold cell's title names the two presses, the Leave button's title says why it asks, the wallet-menu toggle's sentence says what the big-blind mode does and does not change, and docs/UI-WAVE.md section 9 records all four.

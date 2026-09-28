@@ -17,10 +17,10 @@
    *                the hero cannot act this hand.
    *   no game      "Waiting for players" / "Hand complete".
    *
-   * Keyboard (desktop): F fold, C check or call, R raise at the sizer's
-   * figure, A twice for all in, 1-5 (1-6 pre-flop) presets, + and - a big
-   * blind, Esc cancels; never Enter or Space, which belong to whatever has
-   * focus. Inactive while any field has focus ($lib/hotkeys.js), and OFF
+   * Keyboard (desktop): F fold (twice when a check is free), C check or
+   * call, R raise at the sizer's figure, A twice for all in, 1-5 (1-6
+   * pre-flop) presets, + and - a big blind, Esc cancels; never Enter or
+   * Space, which belong to whatever has focus. Inactive while any field has focus ($lib/hotkeys.js), and OFF
    * until the player turns the shortcuts on in the wallet menu
    * ($lib/hotkeys-pref.js): the legend under the row says where while
    * they are off, and lists the keys once they are on.
@@ -101,6 +101,34 @@
     return () => clearTimeout(id);
   });
 
+  // FOLDING WHEN A CHECK IS FREE NEEDS TWO PRESSES, by click or by key: a
+  // fold with nothing owed is nearly always a slip (the wrong cell under a
+  // thumb, a stray F), and PokerStars, GGPoker and WPT Global all ask
+  // first. The first press arms, the button reads "Fold anyway?", the
+  // second within the window folds; Escape, the window, or the turn ending
+  // disarm it. Facing a bet, one press folds as before: there the fold is
+  // the ordinary decision. The window is longer than all-in's because the
+  // second press here is a considered one, not a confirmation reflex.
+  let foldArmedAt = $state(0);
+  const FOLD_CONFIRM_MS = 2500;
+  const foldArmed = $derived(foldArmedAt > 0 && canCheck);
+  $effect(() => {
+    if (!foldArmedAt) return undefined;
+    const id = setTimeout(() => { foldArmedAt = 0; }, FOLD_CONFIRM_MS);
+    return () => clearTimeout(id);
+  });
+  $effect(() => {
+    // The guard is only for a free check; when a bet arrives or the turn
+    // passes, whatever was armed is stale.
+    if (!canCheck || !live) foldArmedAt = 0;
+  });
+
+  function pressFold() {
+    if (canCheck && !foldArmed) { foldArmedAt = Date.now(); return; }
+    foldArmedAt = 0;
+    onAction('fold');
+  }
+
   // The dock's root, so a focused button INSIDE it can be told apart from a
   // modal's Close or the header's wallet ($lib/hotkeys.js has the rules).
   let dockEl = $state(null);
@@ -118,20 +146,22 @@
       // clicked Log and presses F means fold. Letters never activate a button.
       focusKind: focusKindOf(document.activeElement, dockEl?.closest('.action-dock') || dockEl),
       dialogOpen: dialogIsOpen(document),
-      canCheck, canRaise, raiseDisabled, allInArmed, compact, sizerOpen,
+      canCheck, canRaise, raiseDisabled, allInArmed, foldArmed, compact, sizerOpen,
       presets,
     });
     if (!decision) return;
     switch (decision.type) {
       case 'action':
         if (decision.action === 'allin') allInArmedAt = 0;
+        if (decision.action === 'fold') foldArmedAt = 0;
         onAction(decision.action);
         break;
       case 'arm-allin': allInArmedAt = Date.now(); break;
+      case 'arm-fold': foldArmedAt = Date.now(); break;
       case 'commit-raise': onCommitRaise(); break;
       case 'preset': onPreset(decision.id); break;
       case 'step': onStep(decision.delta); break;
-      case 'escape': allInArmedAt = 0; if (compact && sizerOpen) onToggleSizer(); break;
+      case 'escape': allInArmedAt = 0; foldArmedAt = 0; if (compact && sizerOpen) onToggleSizer(); break;
       default: return;
     }
     event.preventDefault();
@@ -184,8 +214,19 @@
         <div class="not-your-turn">Waiting for {waitingFor}</div>
       {/if}
     {:else}
-      <button type="button" class="action-btn secondary" onclick={() => onAction('fold')} title="Fold (F)">
-        <u>F</u>old
+      <!-- THE FREE-CHECK FOLD GUARD: with nothing owed the first press arms
+           and the button asks; the second folds. The cell keeps its class
+           and its place, so the row's rhythm and the harness's four-cell
+           contract are untouched. -->
+      <button
+        type="button"
+        class="action-btn secondary"
+        class:armed={foldArmed}
+        aria-pressed={foldArmed ? 'true' : undefined}
+        onclick={pressFold}
+        title={canCheck ? (foldArmed ? 'Press again to fold (F)' : 'Check is free. Fold takes two presses (F F)') : 'Fold (F)'}
+      >
+        {#if foldArmed}{compact ? 'Fold?' : 'Fold anyway?'}{:else}<u>F</u>old{/if}
       </button>
       <!-- THE SECONDS ON THE PRIMARY BUTTON in the last ten seconds ("Call
            0.10 · 8s"): painted by a pseudo-element from `data-secs`, so the
@@ -263,7 +304,7 @@
   {#if keyHints && live}
     {#if hotkeysPref.enabled}
       <div class="key-hints" aria-hidden="true">
-        <span><kbd>F</kbd> fold</span>
+        {#if canCheck}<span><kbd>F</kbd><kbd>F</kbd> fold</span>{:else}<span><kbd>F</kbd> fold</span>{/if}
         <span><kbd>C</kbd> {canCheck ? 'check' : 'call'}</span>
         {#if canRaise}<span><kbd>R</kbd> raise</span><span><kbd>1</kbd>-<kbd>{presets.length}</kbd> sizes</span><span><kbd>+</kbd><kbd>-</kbd> blind</span>{/if}
         <span><kbd>A</kbd><kbd>A</kbd> all in</span>
@@ -430,6 +471,13 @@
   }
 
   .action-btn.danger.armed { animation: urgent-pulse 0.4s ease-in-out infinite; }
+  /* The armed fold: the same cell, asking. Warm-toned so it reads as a
+     question, not as the danger button's red. */
+  .action-btn.secondary.armed {
+    border-color: var(--cd-warn-line);
+    background: var(--cd-warn-dim);
+    color: var(--cd-warn);
+  }
 
   .raise-word, .raise-amt { white-space: nowrap; }
   /* Two lines on the phone: the word over the money. */

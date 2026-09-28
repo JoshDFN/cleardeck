@@ -730,3 +730,71 @@ The verifier read round 1 and found two things left over; both are fixed on
   tree, or the tree mentions the protection keywords fewer times than the
   baseline did (72 today against 6 at the baseline); the "notices intact"
   step still asserts every sentence on its own.
+
+## 9. After the wave: task 1790621370 (2026-09-28, claude-seat-1)
+
+The brief was "what else can we do to improve this", so this pass surveyed
+the table against what a serious player expects of a client and built the
+four things the felt still lacked that need no canister change, each with
+the test that pins it. Everything the survey found and did not build is a
+queue task (`scripts/factory.sh list`; the ids are in
+`tasks/claude-seat-1.done`).
+
+- **The felt in big blinds** (`lib/bb-display.js`, `lib/bb-display.svelte.js`,
+  the wallet menu's new "Table display" section). Every reference client
+  lets a player read the live money as a multiple of the big blind, because
+  that is the unit decisions are made in. Off by default per viewer
+  (`poker_bb_display`, only the literal `true` enables it, like the
+  shortcuts), so the harness photographs the default and its chain
+  assertions on `.chips`, `.bet-amount` and `.pot-amount` read the currency
+  as before. With it on, `PokerTable.svelte`'s `feltFmt` writes multiples
+  ("12.5", "250", one decimal below 100 BB) for the LIVE objects only: the
+  stacks, the bet discs, the pot and its side pots, the two chip flights;
+  each carries a small `.unit-tag` BB and the exact currency figure on its
+  `title`. Never re-labelled: the action buttons and the sizer (the figure on
+  the button is the figure sent), the pot-odds line, the wallet panel, the
+  winner line (`PotModule` takes `fmtSettled`) and the award chip. Pinned by
+  `bb-display.test.js` (the rounding: 99.95 BB reads "100", not "100.0") and
+  `felt-markup.ssr.test.js`.
+- **The street word on every plate** (`lib/street-actions.js`, `SeatPod.svelte`
+  `.acted-word`). A CHECK left no trace on the felt: a seat that had checked
+  looked like one still to act. Now Check / Call / Bet / Raise stands beside
+  the stack in the fold word's slot, derived from the client's own action
+  feed since the last street line, never invented (a seat whose action this
+  client did not see gets no word); the fold and the all-in keep their own
+  chain-painted marks and clear the word. The word is `flex: 0 1 auto;
+  min-width: 0; overflow: hidden` and the stack figure `flex: 0 0 auto`, so
+  at the phone's type floor the word may clip and the stack may not move.
+  Two things fell out of building it: the street line in the log used to be
+  appended BEFORE the action that closed the street (the two effects'
+  declaration order; the canister advances the street in the same update, so
+  one poll carries both), which put every closing call under the next
+  street's header; it is appended after now, and marked `street: true` so
+  the equity method line, also a phase-style entry, does not reset the
+  plates.
+- **A free-check fold takes two presses** (`ActionBar.svelte`, `lib/hotkeys.js`
+  `arm-fold`). Folding with nothing owed is nearly always a slip and every
+  reference client asks first: the first press (button or F) arms, the cell
+  reads "Fold anyway?" ("Fold?" on the phone) in the warn tone, the second
+  within 2.5 s folds; Escape, the window or the turn ending disarm. Facing
+  a bet one press folds as before. The legend reads "F F fold" while a check
+  is free. Pinned in `hotkeys.test.js` and the ssr test.
+- **Leaving mid-hand takes two presses** (`PokerTable.svelte` `pressLeave`).
+  `leave_table` while dealt in acts as a fold with the contributions left in
+  the pot (`src/table_canister/src/lib.rs`, the function's own comment), and
+  the button sits one cell from Sit out. Armed, it reads "Leave anyway?" in
+  the danger fill; between hands or once folded, one press leaves.
+
+**Gates.** vitest 446 of 446 in 42 files (the four new files:
+`bb-display.test.js`, `street-actions.test.js`, `felt-markup.ssr.test.js`,
+which renders SeatPod, PotModule and ActionBar with Svelte's server build
+and asserts the default markup byte for byte, and the fold cases in
+`hotkeys.test.js`); svelte-check 0 errors, the 4 pre-existing warnings;
+`make hygiene`, `make declarations`, `make shots-selftest` and
+`make shots-verdict` exit 0. NOT photographed: the seat's `make local-up`
+hit E-74 (the backend deployed under the machine's default identity, so
+the lobby admin was not `cd-local-deployer` and `up_wire` died), and the
+recovery `set_admin` must be signed as that identity, which an auto-mode
+seat is denied; the live evidence for the plate word at the phone's crowded
+ring, the armed labels' widths and the BB mode is its own queue task, and
+so is pinning the deployer identity in `local-up`.
