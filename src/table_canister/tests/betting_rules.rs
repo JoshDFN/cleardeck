@@ -22,7 +22,7 @@
 //! Scope note: sections 1 to 5 stay inside one betting round on purpose. Since
 //! E-106 the settlement runs on the host too (`deal_hand` + `open_the_action`
 //! is the deal, `apply_player_action` closes a hand through the real payout,
-//! and an unwired archive buffers the record), so sections 6 and 7 play hands
+//! and an unwired archive buffers the record), so sections 6 to 8 play hands
 //! to completion; the money side of the pot award is still `tests/money_safety`
 //! on PocketIC.
 
@@ -30,8 +30,8 @@ use candid::Principal;
 use table_canister::{
     apply_player_action, build_table_view, can_still_act, deal_hand, is_betting_round_complete,
     is_in_hand, open_the_action, plan_payouts, record_voluntary_show,
-    resolve_expired_action_timer, ActionTimer, Card, Currency, GamePhase, Player, PlayerAction,
-    PlayerStatus, Rank, ShuffleProof, Suit, TableConfig, TableState, TableView,
+    resolve_expired_action_timer, vacate_seat, ActionTimer, Card, Currency, GamePhase, Player,
+    PlayerAction, PlayerStatus, Rank, ShuffleProof, Suit, TableConfig, TableState, TableView,
 };
 
 // =============================================================================
@@ -1858,4 +1858,253 @@ fn a_table_restored_without_the_flag_at_hand_complete_hides_every_hand() {
 
     state.last_hand_went_to_showdown = None;
     assert_visibility(&state, now, &[], "after a showdown, restored from state without the flag");
+}
+
+// =============================================================================
+// 8. LEAVING FROM THE SEAT ON ACTION MOVES THE HAND ON THE WAY AN ACTION WOULD
+//
+// docs/DEFECTS.md E-108 (docs/CODEBASE-REVIEW-2026-09-28.md gap 5). `leave_table`
+// marks the leaver folded and vacates the chair; when the clock was pointing at
+// that chair it used to hand the clock to the next seat unconditionally, without
+// asking `is_betting_round_complete` the way every action does through
+// `advance_game`. A bets, B calls, C leaves on action: the street is closed, but
+// the clock landed on A, whose only legal replies were Check or Fold on a bet
+// they had made themselves -- and if A was away, the clock folded A out of a pot
+// they had fully matched. Conservation holds, so the money-safety invariants
+// could not see it. These tests assert WHAT THE HAND IS WAITING FOR after a
+// departure, and drive `vacate_seat`, which is `leave_table` with the platform
+// pulled out, on a hand dealt and bet through the real engine.
+//
+// Three-handed first hand: dealer seat 1, small blind seat 2, big blind seat 0,
+// so the flop action runs 2, 0, 1. Seat 2 is "A", seat 0 "B", seat 1 "C".
+// =============================================================================
+
+/// Three seats of 1,000, pre-flop closed by two calls and the big blind's check:
+/// the flop is out, the pot is 60, and seat 2 is first to act.
+fn flop_three_handed(now: u64) -> TableState {
+    let mut state = three_handed_deal(now);
+    for _ in 0..2 {
+        act_in_turn(&mut state, now, PlayerAction::Call);
+    }
+    act_in_turn(&mut state, now, PlayerAction::Check);
+    assert_eq!(state.phase, GamePhase::Flop, "sanity: pre-flop closed");
+    assert_eq!(state.pot, 60, "sanity: three big blinds in the middle");
+    assert_eq!(state.action_on, 2, "sanity: first to act on the flop is left of the button");
+    state
+}
+
+/// Leave as seat `s`, asserting the chair is empty afterwards.
+fn leave(state: &mut TableState, s: u8, now: u64) -> u64 {
+    let chips = vacate_seat(state, seat_principal(s), now)
+        .unwrap_or_else(|e| panic!("seat {s} leaving at {:?}: {e}", state.phase));
+    assert!(state.players[s as usize].is_none(), "seat {s} has left the table");
+    chips
+}
+
+/// A bets 40, B calls, and C -- on action, owing 40 -- leaves. Every seat still
+/// holding cards has matched the bet, so the flop betting is CLOSED: the turn is
+/// dealt, the pot is the 140 that was put in, and nobody is asked to act on the
+/// flop again.
+///
+/// Before the fix the clock was handed to A on the flop with A's own 40 still
+/// standing as the bet: A could only Check or Fold, and an expiry folded A out of
+/// a pot A had matched. The last line is the general statement of the rule: a
+/// clock is never armed on a closed street.
+#[test]
+fn a_leaver_on_action_after_the_street_closed_does_not_hand_the_street_back() {
+    let now = 1_000 * SEC;
+    let mut state = flop_three_handed(now);
+    let a = act_in_turn(&mut state, now, PlayerAction::Bet(40));
+    let b = act_in_turn(&mut state, now, PlayerAction::Call);
+    assert_eq!((a, b), (2, 0));
+    assert_eq!(state.action_on, 1, "sanity: the action is on C");
+    assert!(!is_betting_round_complete(&state), "sanity: C still owes 40, the street is open");
+
+    let left_with = leave(&mut state, 1, now);
+    assert_eq!(left_with, 980, "C leaves with the stack behind; the 20 posted stays in the pot");
+
+    assert_eq!(
+        state.phase,
+        GamePhase::Turn,
+        "A bet, B called, C left on action: the flop betting is closed and the turn is dealt. \
+         Instead the hand is at {:?} with the clock on {:?}, current bet {}",
+        state.phase,
+        state.action_timer.as_ref().map(|t| t.player_seat),
+        state.current_bet
+    );
+    assert_eq!(state.community_cards.len(), 4, "the turn card is out");
+    assert_eq!(state.pot, 140, "60 pre-flop, 40 from A, 40 from B: nothing came back and nothing vanished");
+    assert_eq!(state.current_bet, 0, "a fresh street");
+    for s in [a, b] {
+        let p = seat(&state, s);
+        assert!(!p.has_folded && !p.is_all_in, "seat {s} is still in the hand");
+        assert_eq!(p.current_bet, 0, "seat {s} has nothing in front of them on the turn");
+        assert!(!p.has_acted_this_round, "seat {s} has not acted on the turn");
+        assert_eq!(p.chips, 940, "seat {s} paid 20 pre-flop and 40 on the flop");
+    }
+    // THE RULE. Whatever the phase, a clock is never armed on a closed street.
+    assert!(
+        !(is_betting_round_complete(&state) && state.action_timer.is_some()),
+        "the clock {:?} is armed on a street the engine itself says is closed",
+        state.action_timer
+    );
+    // On the turn the first seat after the (now empty) button is A, by position.
+    // That is a fresh street, not the flop handed back: A may BET, which was
+    // refused on the flop where A's own bet already stood.
+    let timer = state.action_timer.as_ref().expect("the turn is open for betting");
+    assert_eq!((state.action_on, timer.player_seat), (a, a));
+    act(&mut state, a, now, PlayerAction::Bet(40)).expect("a bet opens the turn");
+    assert_eq!(state.action_on, b, "and B is asked to answer it");
+}
+
+/// A bets 40 and B -- on action, owing 40 -- leaves. C has not acted, so the
+/// street is still OPEN: the clock moves to C, A's bet stays standing, and the
+/// hand waits for C exactly as it would after B folded.
+///
+/// Green before and after: this is the case the old branch handled. It is here
+/// so the fix cannot be "always deal the next street".
+#[test]
+fn a_leaver_on_action_with_the_street_still_open_hands_the_clock_to_the_seat_that_owes_action() {
+    let now = 1_000 * SEC;
+    let mut state = flop_three_handed(now);
+    let a = act_in_turn(&mut state, now, PlayerAction::Bet(40));
+    assert_eq!(state.action_on, 0, "sanity: the action is on B");
+
+    let left_with = leave(&mut state, 0, now);
+    assert_eq!(left_with, 980);
+
+    assert_eq!(state.phase, GamePhase::Flop, "C has not answered the bet: the flop is still open");
+    assert_eq!(state.action_on, 1, "the clock moved to C");
+    let timer = state.action_timer.as_ref().expect("C is on the clock");
+    assert_eq!((timer.player_seat, timer.expires_at), (1, now + TIMEOUT_SECS * SEC));
+    assert_eq!(state.current_bet, 40, "A's bet stands");
+    assert_eq!(seat(&state, a).current_bet, 40, "A's 40 is still in front of A, not returned: C can still call it");
+    assert_eq!(state.pot, 100, "60 pre-flop and A's 40");
+    assert!(!is_betting_round_complete(&state), "C owes 40");
+
+    // C calls: the street closes and the turn is dealt, as after any call.
+    act(&mut state, 1, now, PlayerAction::Call).expect("C may call");
+    assert_eq!(state.phase, GamePhase::Turn);
+    assert_eq!(state.pot, 140);
+}
+
+/// A bets 40, B folds, and C -- on action -- leaves. A is the only seat holding
+/// cards: the hand ends by fold-out, A takes the pot without showing a hand
+/// (docs/DEFECTS.md E-107), the clock is retired and the table waits for the
+/// next deal.
+///
+/// Green before and after: `count_active_players == 1` was the first thing the
+/// old branch asked. It is here because `advance_game` now asks it instead.
+#[test]
+fn a_leaver_on_action_who_leaves_one_player_ends_the_hand_by_fold_out() {
+    let now = 1_000 * SEC;
+    let mut state = flop_three_handed(now);
+    let a = act_in_turn(&mut state, now, PlayerAction::Bet(40));
+    let b = act_in_turn(&mut state, now, PlayerAction::Fold);
+    assert_eq!(state.action_on, 1, "sanity: the action is on C");
+
+    let left_with = leave(&mut state, 1, now);
+    assert_eq!(left_with, 980);
+
+    assert_eq!(state.phase, GamePhase::HandComplete, "A is alone: the hand is over");
+    assert_eq!(state.last_hand_went_to_showdown, Some(false), "a fold-out, not a showdown");
+    assert!(state.action_timer.is_none(), "no clock between hands");
+    assert_eq!(state.pot, 0, "the pot has been paid");
+    assert_eq!(seat(&state, a).chips, 1_040, "A: 1,000 less 20 and 40 put in, plus the 100 pot");
+    assert_eq!(seat(&state, b).chips, 980, "B folded and keeps the stack behind");
+    assert_eq!(
+        seat(&state, a).chips + seat(&state, b).chips + left_with,
+        3_000,
+        "every chip is accounted for"
+    );
+}
+
+/// A bets 40 and the action is on B; C, who has NOT been asked yet, leaves.
+/// Nothing about what the hand is waiting for has changed: B still owes 40 and
+/// the clock stays exactly where it was.
+///
+/// Green before and after. It is here so the fix cannot be "always call
+/// `advance_game`": that would move the clock off B, who has not acted.
+#[test]
+fn a_leaver_who_was_not_on_action_leaves_the_clock_where_it_was() {
+    let now = 1_000 * SEC;
+    let mut state = flop_three_handed(now);
+    let a = act_in_turn(&mut state, now, PlayerAction::Bet(40));
+    assert_eq!(state.action_on, 0, "sanity: the action is on B");
+    let before = state.action_timer.clone().expect("B is on the clock");
+
+    let left_with = leave(&mut state, 1, now);
+    assert_eq!(left_with, 980);
+
+    assert_eq!(state.phase, GamePhase::Flop);
+    assert_eq!(state.action_on, 0, "B is still on action");
+    let after = state.action_timer.as_ref().expect("B is still on the clock");
+    assert_eq!((after.player_seat, after.started_at, after.expires_at), (before.player_seat, before.started_at, before.expires_at));
+    assert_eq!(state.current_bet, 40, "A's bet stands");
+    assert_eq!(seat(&state, a).current_bet, 40);
+    assert_eq!(state.pot, 100);
+    assert!(!is_betting_round_complete(&state), "B owes 40");
+
+    // B calls: two seats can still act, so the turn is dealt and opened.
+    act(&mut state, 0, now, PlayerAction::Call).expect("B may call");
+    assert_eq!(state.phase, GamePhase::Turn);
+    assert_eq!(state.pot, 140);
+}
+
+/// A table restored in a shape the engine no longer produces: the clock is on a
+/// seat that has already matched the bet while another seat still owes it (the
+/// E-106 kind of leftover -- a clock parked on a seat that should not be asked).
+/// When the seat that still owed leaves, the street is closed and nothing is
+/// waiting; the hand must move on rather than sit on a clock nobody should
+/// answer.
+///
+/// Built by hand, because the reachable engine never parks the clock on a
+/// matched seat. Before the fix a departure from anywhere but the clock's seat
+/// only asked whether one player was left.
+#[test]
+fn a_clock_left_on_a_matched_seat_moves_on_when_the_last_seat_owing_action_leaves() {
+    let now = 1_000 * SEC;
+    let mut state = flop_table(&[1_000, 1_000, 1_000], now);
+    state.pot = 60;
+    for s in [0u8, 1] {
+        let p = state.players[s as usize].as_mut().expect("seat occupied");
+        p.chips -= 20 + 40;
+        p.total_bet_this_hand = 60;
+        p.current_bet = 40;
+        p.has_acted_this_round = true;
+    }
+    {
+        let p = state.players[2].as_mut().expect("seat occupied");
+        p.chips -= 20;
+        p.total_bet_this_hand = 20;
+    }
+    state.pot += 80;
+    state.current_bet = 40;
+    state.last_aggressor = Some(0);
+    state.action_on = 0; // parked on a seat that has matched
+    state.action_timer = Some(ActionTimer {
+        player_seat: 0,
+        started_at: now,
+        expires_at: now + TIMEOUT_SECS * SEC,
+        using_time_bank: false,
+    });
+    assert!(!is_betting_round_complete(&state), "sanity: seat 2 owes 40");
+
+    let left_with = leave(&mut state, 2, now);
+    assert_eq!(left_with, 980);
+
+    assert_eq!(
+        state.phase,
+        GamePhase::Turn,
+        "seats 0 and 1 have both matched: the flop is closed and the turn is dealt. \
+         Instead the hand is at {:?} with the clock on {:?}",
+        state.phase,
+        state.action_timer.as_ref().map(|t| t.player_seat)
+    );
+    assert_eq!(state.pot, 140);
+    assert!(
+        !(is_betting_round_complete(&state) && state.action_timer.is_some()),
+        "the clock {:?} is armed on a street the engine itself says is closed",
+        state.action_timer
+    );
 }
