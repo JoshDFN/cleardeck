@@ -624,6 +624,14 @@ type TableState = record {
   // and still decode state written before the field existed. null and the
   // empty vector mean the same thing -- no seat has left this hand.
   departed_stakes : opt vec DepartedStake;
+  // How the last hand ended: true at a showdown, false when everybody folded
+  // to one seat or the stakes were refunded, null when no hand has ended since
+  // the field existed. get_table_view reveals the unfolded seats at
+  // HandComplete only when this is true: a pot won because everybody folded is
+  // taken without showing a hand, and the winner is exactly the seat left
+  // unfolded and still holding cards until the next deal. See docs/DEFECTS.md
+  // E-107. `opt` for the same reason as departed_stakes; null reads as false.
+  last_hand_went_to_showdown : opt bool;
 };
 // One seat's stake in a hand it is no longer sitting in. Tagged with the hand
 // it belongs to, so a stale entry can never join a later hand's pot.

@@ -341,6 +341,7 @@ export const idlFactory = ({ IDL }) => {
     'hand_number' : IDL.Nat64,
     'deck' : IDL.Vec(Card),
     'big_blind_seat' : IDL.Nat8,
+    'last_hand_went_to_showdown' : IDL.Opt(IDL.Bool),
     'auto_deal_at' : IDL.Opt(IDL.Nat64),
     'last_action' : IDL.Opt(LastActionInfo),
     'players' : IDL.Vec(IDL.Opt(Player)),

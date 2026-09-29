@@ -126,6 +126,7 @@ fn flop_table(stacks: &[u64], now: u64) -> TableState {
         auto_deal_at: None,
         last_action: None,
         departed_stakes: None,
+        last_hand_went_to_showdown: None,
     }
 }
 

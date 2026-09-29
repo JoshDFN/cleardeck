@@ -457,9 +457,38 @@ pub struct TableState {
     /// cleared when the hand settles.
     #[serde(default)]
     pub departed_stakes: Option<Vec<DepartedStake>>,
+    /// How the LAST hand ended: `Some(true)` at a showdown, `Some(false)` when
+    /// everybody folded to one seat or the stakes were refunded, `None` when no
+    /// hand has ended since this field existed.
+    ///
+    /// # Why it exists (docs/DEFECTS.md E-107)
+    ///
+    /// A hand won because everybody folded is settled "without showing a hand"
+    /// (`end_hand_single_winner`, and `push_winner` keeps the cards out of the
+    /// record), but the seats keep their hole cards until the next deal, and the
+    /// winner is the one seat left unfolded. `build_table_view` used to read
+    /// `HandComplete` as a showdown and turn every unfolded seat face up, so the
+    /// winner's hand was public for the whole between-hands pause. The view now
+    /// reveals at `HandComplete` only when this says the hand went to a showdown.
+    ///
+    /// # Why it is `opt` (docs/SECURITY-FINDINGS.md FINDING 14)
+    ///
+    /// Same reason as `departed_stakes` above: `TableState` is persisted inside
+    /// `opt TableState`, and a non-`opt` addition makes state written by the
+    /// previous release decode as `null`, which wipes the table on upgrade.
+    /// `None` reads as "not a showdown", the hiding direction, so a table
+    /// upgraded between hands shows nothing it should not.
+    #[serde(default)]
+    pub last_hand_went_to_showdown: Option<bool>,
 }
 
 impl TableState {
+    /// Did the last hand go to a showdown? `None` -- no record -- is `false`:
+    /// when in doubt, hide.
+    pub fn last_hand_went_to_showdown(&self) -> bool {
+        self.last_hand_went_to_showdown.unwrap_or(false)
+    }
+
     /// Every stake recorded for a seat that left mid-hand. Empty when the field
     /// is `None`, which is the same thing as an empty list.
     pub fn departed_stakes(&self) -> &[DepartedStake] {
@@ -7468,6 +7497,7 @@ fn init_table_state(config: TableConfig) {
             auto_deal_at: None,
             last_action: None,
             departed_stakes: None,
+            last_hand_went_to_showdown: None,
         });
     });
 
@@ -10091,13 +10121,20 @@ fn record_local_hand_result(
 }
 
 /// Close the hand out once the money has moved.
-fn finish_hand(state: &mut TableState, now: u64) {
+///
+/// `went_to_showdown` is the same bool the caller hands `record_hand_to_history`:
+/// it is written here, in the one place that writes `HandComplete`, because it
+/// is what `build_table_view` reads to decide whether `HandComplete` turns the
+/// unfolded seats face up (docs/DEFECTS.md E-107). A fold-out and a refund are
+/// both `false`: nobody showed a hand.
+fn finish_hand(state: &mut TableState, now: u64, went_to_showdown: bool) {
     // Every chip collected has been credited to a seat or an escrow balance -- that
     // is what `apply_payouts` refuses to proceed without -- so the pot is empty.
     state.pot = 0;
     state.side_pots.clear();
     state.clear_departed_stakes();
     state.phase = GamePhase::HandComplete;
+    state.last_hand_went_to_showdown = Some(went_to_showdown);
     state.action_timer = None;
 
     // Mark players with 0 chips as broke (start their reload timer)
@@ -10128,7 +10165,7 @@ pub fn end_hand_single_winner(state: &mut TableState, now: u64) {
     // Record to history canister (no showdown - single winner by fold)
     record_hand_to_history(state, &winners, false, HandEnding::FoldOut);
 
-    finish_hand(state, now);
+    finish_hand(state, now, false);
 }
 
 /// Refuse a settlement of a hand that is not in progress, and say so loudly.
@@ -10183,7 +10220,7 @@ pub fn determine_winners(state: &mut TableState, now: u64) {
     // Record to history canister (went to showdown)
     record_hand_to_history(state, &winners, true, HandEnding::Showdown);
 
-    finish_hand(state, now);
+    finish_hand(state, now, true);
 }
 
 // ============================================================================
@@ -11071,7 +11108,7 @@ fn settle_unmovable_hand(
     // back from `get_hand_history` as an empty record while the archive held every
     // credit; see [`record_local_hand_result`].
     record_local_hand_result(state, &winners, Vec::new());
-    finish_hand(state, now);
+    finish_hand(state, now, false);
     Some(refunded)
 }
 
@@ -12239,6 +12276,7 @@ mod clock_schedule_tests {
             auto_deal_at: None,
             last_action: None,
             departed_stakes: None,
+            last_hand_went_to_showdown: None,
         }
     }
 
@@ -12737,31 +12775,42 @@ fn show_cards() -> Result<(Card, Card), String> {
     TABLE.with(|t| {
         let table = t.borrow();
         let state = table.as_ref().ok_or("Table not initialized")?;
-
-        // Find the player
-        let player = state.players.iter().flatten()
-            .find(|p| p.principal == caller)
-            .ok_or("Not at table")?;
-
-        // Must have hole cards
-        let cards = player.hole_cards.ok_or("No cards to show")?;
-
-        // Can only show if folded or hand is complete
-        if !player.has_folded && state.phase != GamePhase::HandComplete && state.phase != GamePhase::Showdown {
-            return Err("Can only show cards after folding or at showdown".to_string());
-        }
-
-        // Record that this player showed
-        SHOWN_CARDS.with(|s| {
-            let mut shown = s.borrow_mut();
-            let seats = shown.entry(state.hand_number).or_insert_with(Vec::new);
-            if !seats.contains(&player.seat) {
-                seats.push(player.seat);
-            }
-        });
-
-        Ok(cards)
+        record_voluntary_show(state, caller)
     })
+}
+
+/// The voluntary show: `caller` turns their own two cards face up for the rest
+/// of this hand, and `build_table_view` then hands them to every viewer.
+///
+/// `show_cards` is `msg_caller()` + the `TABLE` borrow + this; a `pub fn` so
+/// the refusal can be tested on the host (`tests/betting_rules.rs`, section 7).
+pub fn record_voluntary_show(state: &TableState, caller: Principal) -> Result<(Card, Card), String> {
+    // Find the player
+    let player = state.players.iter().flatten()
+        .find(|p| p.principal == caller)
+        .ok_or("Not at table")?;
+
+    // Must have hole cards
+    let cards = player.hole_cards.ok_or("No cards to show")?;
+
+    // Only once the hand is over, folded or not. A folded seat used to be able to
+    // show mid-hand, which tells the seats still playing which cards are out of
+    // the deck -- the same table-talk every card room forbids -- and hands the
+    // seat a way to tell a confederate what it held (docs/DEFECTS.md E-107).
+    if state.phase != GamePhase::HandComplete && state.phase != GamePhase::Showdown {
+        return Err("Can only show cards once the hand is over".to_string());
+    }
+
+    // Record that this player showed
+    SHOWN_CARDS.with(|s| {
+        let mut shown = s.borrow_mut();
+        let seats = shown.entry(state.hand_number).or_insert_with(Vec::new);
+        if !seats.contains(&player.seat) {
+            seats.push(player.seat);
+        }
+    });
+
+    Ok(cards)
 }
 
 /// Check if a player voluntarily showed their cards this hand
@@ -12836,144 +12885,160 @@ fn get_table_view() -> Option<TableView> {
     TABLE.with(|t| {
         let table = t.borrow();
         let state = table.as_ref()?;
+        Some(build_table_view(state, caller, now))
+    })
+}
 
-        // Find caller's seat
-        let my_seat = state.players.iter()
-            .enumerate()
-            .find(|(_, p)| p.as_ref().map(|p| p.principal == caller).unwrap_or(false))
-            .map(|(i, _)| i as u8);
+/// The table as `caller` is entitled to see it at `now`.
+///
+/// `get_table_view` is `msg_caller()` + `time()` + the `TABLE` borrow + this.
+/// It is a `pub fn` so the visibility rule can be tested on the host from every
+/// seat's point of view (`tests/betting_rules.rs`, section 7), which is how
+/// docs/DEFECTS.md E-107 was shown red before it was fixed.
+pub fn build_table_view(state: &TableState, caller: Principal, now: u64) -> TableView {
+    // Find caller's seat
+    let my_seat = state.players.iter()
+        .enumerate()
+        .find(|(_, p)| p.as_ref().map(|p| p.principal == caller).unwrap_or(false))
+        .map(|(i, _)| i as u8);
 
-        // Determine if we're at showdown (cards should be revealed)
-        let is_showdown = state.phase == GamePhase::Showdown || state.phase == GamePhase::HandComplete;
+    // Are the unfolded hands face up? At the showdown itself, and between hands
+    // ONLY if the hand that just ended went to one. A hand won because everybody
+    // folded is settled without showing a hand (`end_hand_single_winner`), and
+    // the winner is exactly the seat left unfolded and still holding cards, so
+    // reading `HandComplete` alone as a showdown put the winner's hand on every
+    // viewer's screen until the next deal (docs/DEFECTS.md E-107).
+    let is_showdown = state.phase == GamePhase::Showdown
+        || (state.phase == GamePhase::HandComplete && state.last_hand_went_to_showdown());
 
-        // Build player views with proper card visibility
-        let player_views: Vec<Option<PlayerView>> = state.players.iter()
-            .enumerate()
-            .map(|(i, player_opt)| {
-                player_opt.as_ref().map(|player| {
-                    let is_self = my_seat == Some(i as u8);
+    // Build player views with proper card visibility
+    let player_views: Vec<Option<PlayerView>> = state.players.iter()
+        .enumerate()
+        .map(|(i, player_opt)| {
+            player_opt.as_ref().map(|player| {
+                let is_self = my_seat == Some(i as u8);
 
-                    // Check if this player voluntarily showed
-                    let voluntarily_showed = SHOWN_CARDS.with(|s| {
-                        s.borrow()
-                            .get(&state.hand_number)
-                            .map(|seats| seats.contains(&(i as u8)))
-                            .unwrap_or(false)
-                    });
+                // Check if this player voluntarily showed
+                let voluntarily_showed = SHOWN_CARDS.with(|s| {
+                    s.borrow()
+                        .get(&state.hand_number)
+                        .map(|seats| seats.contains(&(i as u8)))
+                        .unwrap_or(false)
+                });
 
-                    // Determine if we can see this player's hole cards:
-                    // 1. It's our own cards
-                    // 2. It's showdown AND they haven't folded (winners revealed)
-                    // 3. They voluntarily showed their cards
-                    let can_see_cards = is_self ||
-                        (is_showdown && !player.has_folded) ||
-                        voluntarily_showed;
+                // Determine if we can see this player's hole cards:
+                // 1. It's our own cards
+                // 2. The hand went to a showdown AND they haven't folded
+                // 3. They voluntarily showed their cards (`record_voluntary_show`,
+                //    which only a finished hand accepts)
+                let can_see_cards = is_self ||
+                    (is_showdown && !player.has_folded) ||
+                    voluntarily_showed;
 
-                    // Get display name if set
-                    let display_name = DISPLAY_NAMES.with(|names| {
-                        names.borrow().get(&player.principal).cloned()
-                    });
+                // Get display name if set
+                let display_name = DISPLAY_NAMES.with(|names| {
+                    names.borrow().get(&player.principal).cloned()
+                });
 
-                    PlayerView {
-                        principal: player.principal,
-                        seat: player.seat,
-                        chips: player.chips,
-                        hole_cards: if can_see_cards { player.hole_cards } else { None },
-                        current_bet: player.current_bet,
-                        has_folded: player.has_folded,
-                        is_all_in: player.is_all_in,
-                        status: player.status.clone(),
-                        is_self,
-                        display_name,
-                    }
-                })
+                PlayerView {
+                    principal: player.principal,
+                    seat: player.seat,
+                    chips: player.chips,
+                    hole_cards: if can_see_cards { player.hole_cards } else { None },
+                    current_bet: player.current_bet,
+                    has_folded: player.has_folded,
+                    is_all_in: player.is_all_in,
+                    status: player.status.clone(),
+                    is_self,
+                    display_name,
+                }
             })
-            .collect();
+        })
+        .collect();
 
-        // Calculate time remaining
-        let time_remaining = state.action_timer.as_ref().map(|timer| {
-            if now >= timer.expires_at {
+    // Calculate time remaining
+    let time_remaining = state.action_timer.as_ref().map(|timer| {
+        if now >= timer.expires_at {
+            0
+        } else {
+            (timer.expires_at - now) / 1_000_000_000
+        }
+    });
+
+    // Is it my turn?
+    let is_my_turn = my_seat.map(|seat| seat == state.action_on).unwrap_or(false);
+
+    // Get winners from the most recent completed hand
+    let last_hand_winners = LAST_HAND_WINNERS.with(|w| w.borrow().clone());
+
+    // Calculate call amount, can_check, can_raise for the caller
+    let (call_amount, can_check, can_raise, my_time_bank) = if let Some(seat) = my_seat {
+        if let Some(Some(player)) = state.players.get(seat as usize) {
+            let to_call = if state.current_bet > player.current_bet {
+                state.current_bet - player.current_bet
+            } else {
                 0
-            } else {
-                (timer.expires_at - now) / 1_000_000_000
-            }
-        });
+            };
 
-        // Is it my turn?
-        let is_my_turn = my_seat.map(|seat| seat == state.action_on).unwrap_or(false);
+            // BB can check preflop if no raise
+            let is_bb_with_option = state.phase == GamePhase::PreFlop
+                && state.bb_has_option
+                && seat == state.big_blind_seat
+                && state.current_bet == state.config.big_blind;
 
-        // Get winners from the most recent completed hand
-        let last_hand_winners = LAST_HAND_WINNERS.with(|w| w.borrow().clone());
+            let check_ok = to_call == 0 || is_bb_with_option;
+            let raise_ok = player.chips > to_call && !player.is_all_in;
 
-        // Calculate call amount, can_check, can_raise for the caller
-        let (call_amount, can_check, can_raise, my_time_bank) = if let Some(seat) = my_seat {
-            if let Some(Some(player)) = state.players.get(seat as usize) {
-                let to_call = if state.current_bet > player.current_bet {
-                    state.current_bet - player.current_bet
-                } else {
-                    0
-                };
-
-                // BB can check preflop if no raise
-                let is_bb_with_option = state.phase == GamePhase::PreFlop
-                    && state.bb_has_option
-                    && seat == state.big_blind_seat
-                    && state.current_bet == state.config.big_blind;
-
-                let check_ok = to_call == 0 || is_bb_with_option;
-                let raise_ok = player.chips > to_call && !player.is_all_in;
-
-                (to_call, check_ok, raise_ok, player.time_bank_remaining)
-            } else {
-                (0, false, false, 0)
-            }
+            (to_call, check_ok, raise_ok, player.time_bank_remaining)
         } else {
             (0, false, false, 0)
-        };
+        }
+    } else {
+        (0, false, false, 0)
+    };
 
-        // Check if current action timer is using time bank
-        let using_time_bank = state.action_timer.as_ref()
-            .map(|t| t.using_time_bank)
-            .unwrap_or(false);
+    // Check if current action timer is using time bank
+    let using_time_bank = state.action_timer.as_ref()
+        .map(|t| t.using_time_bank)
+        .unwrap_or(false);
 
-        Some(TableView {
-            id: state.id,
-            config: state.config.clone(),
-            players: player_views,
-            community_cards: state.community_cards.clone(),
-            pot: state.pot,
-            side_pots: state.side_pots.clone(),
-            current_bet: state.current_bet,
-            min_raise: state.min_raise,
-            phase: state.phase.clone(),
-            dealer_seat: state.dealer_seat,
-            small_blind_seat: state.small_blind_seat,
-            big_blind_seat: state.big_blind_seat,
-            action_on: state.action_on,
-            time_remaining_secs: time_remaining,
-            time_bank_remaining_secs: if my_seat.is_some() { Some(my_time_bank) } else { None },
-            using_time_bank,
-            is_my_turn,
-            my_seat,
-            hand_number: state.hand_number,
-            shuffle_proof: state.shuffle_proof.clone(),
-            last_hand_winners,
-            call_amount,
-            can_check,
-            can_raise,
-            min_bet: state.config.big_blind,
-            last_action: state.last_action.clone(),
-            // FINDING 18. Computed for the CALLER, not for `my_seat`: a player
-            // who has left still has a stake in the hand and no seat at all, and
-            // that is precisely the case every other field here goes blank for.
-            my_committed_in_pot: committed_stake_of(state, caller),
-            // THE ONE PREDICATE (docs/DEFECTS.md E-59). This flag is what a client
-            // paints "this hand is dead, recover your money" from, and it read the
-            // raw wall clock while the on-chain clock was about to play the hand
-            // out.
-            hand_is_unmovable: hand_is_stuck_now(state, now),
-        })
-    })
+    TableView {
+        id: state.id,
+        config: state.config.clone(),
+        players: player_views,
+        community_cards: state.community_cards.clone(),
+        pot: state.pot,
+        side_pots: state.side_pots.clone(),
+        current_bet: state.current_bet,
+        min_raise: state.min_raise,
+        phase: state.phase.clone(),
+        dealer_seat: state.dealer_seat,
+        small_blind_seat: state.small_blind_seat,
+        big_blind_seat: state.big_blind_seat,
+        action_on: state.action_on,
+        time_remaining_secs: time_remaining,
+        time_bank_remaining_secs: if my_seat.is_some() { Some(my_time_bank) } else { None },
+        using_time_bank,
+        is_my_turn,
+        my_seat,
+        hand_number: state.hand_number,
+        shuffle_proof: state.shuffle_proof.clone(),
+        last_hand_winners,
+        call_amount,
+        can_check,
+        can_raise,
+        min_bet: state.config.big_blind,
+        last_action: state.last_action.clone(),
+        // FINDING 18. Computed for the CALLER, not for `my_seat`: a player
+        // who has left still has a stake in the hand and no seat at all, and
+        // that is precisely the case every other field here goes blank for.
+        my_committed_in_pot: committed_stake_of(state, caller),
+        // THE ONE PREDICATE (docs/DEFECTS.md E-59). This flag is what a client
+        // paints "this hand is dead, recover your money" from, and it read the
+        // raw wall clock while the on-chain clock was about to play the hand
+        // out.
+        hand_is_unmovable: hand_is_stuck_now(state, now),
+    }
 }
 
 #[ic_cdk::query]
@@ -14320,6 +14385,7 @@ mod payout_tests {
             auto_deal_at: None,
             last_action: None,
             departed_stakes: None,
+            last_hand_went_to_showdown: None,
         }
     }
 
@@ -15479,6 +15545,7 @@ mod stuck_hand_tests {
             auto_deal_at: None,
             last_action: None,
             departed_stakes: None,
+            last_hand_went_to_showdown: None,
         }
     }
 

@@ -48,6 +48,7 @@
   import { BB_UNIT, canShowBB, formatBB } from '$lib/bb-display.js';
   import { bbDisplay } from '$lib/bb-display.svelte.js';
   import { streetActionsOf } from '$lib/street-actions.js';
+  import { handsAreFaceUp } from '$lib/showdown.js';
   // Importing this module installs the app-wide BigInt/JSON guard (see the
   // header of $lib/utils.js). This component is where the class of defect that
   // guard exists for was found (docs/DEFECTS.md T-10), so it names it.
@@ -214,7 +215,19 @@
 
   const lastWinners = $derived(tableState?.last_hand_winners || []);
   const isHandComplete = $derived(phaseKey === 'HandComplete');
-  const isShowdown = $derived(phaseKey === 'Showdown' || phaseKey === 'HandComplete');
+  /**
+   * ARE THE HANDS FACE UP -- docs/DEFECTS.md E-107.
+   *
+   * `HandComplete` used to be read as a showdown, here and in the canister. A
+   * pot won because everybody folded is taken WITHOUT showing a hand: the
+   * canister now nulls the winner's `hole_cards` for everyone else between
+   * hands, and the felt reads the phase the same way ($lib/showdown.js: the
+   * winner record carries cards only at a showdown). What `isShowdown` gates
+   * is the showdown DRAMA -- the lit seats, the equity badges, the "shows a
+   * pair" log line -- never whether your own cards are painted: those stay
+   * up through the whole `HandComplete` pause (`isHandComplete` below).
+   */
+  const isShowdown = $derived(handsAreFaceUp(phaseKey, lastWinners));
   const myWinInfo = $derived(mySeat !== null ? lastWinners.find(w => w.seat === mySeat) : null);
   const winnerSeats = $derived(new Set(lastWinners.map(w => Number(w.seat))));
 
@@ -279,16 +292,21 @@
    * reveals `hole_cards` for every non-folded player it dealt in, and leaves
    * them null for everyone it did not, so "has cards on the wire" IS "was dealt
    * in": a fact about this hand, not about what the seat intends to do next.
+   *
+   * AFTER A FOLD-OUT (docs/DEFECTS.md E-107) nobody's cards are on the wire
+   * but your own, and `status` has the hazard above, so the seat still in the
+   * hand is the one the canister paid: the winner record.
    */
-  function isInHand(p) {
+  function isInHand(p, i) {
     if (!p || p.has_folded) return false;
     if (isShowdown) return !!revealedHole(p);
+    if (isHandComplete) return winnerSeats.has(Number(p.seat ?? i));
     return variantKey(p.status) === 'Active';
   }
 
   const liveSeats = $derived(
-    (gameInProgress || isShowdown)
-      ? players.map((p, i) => (isInHand(p) ? i : -1)).filter(i => i >= 0)
+    (gameInProgress || isHandComplete)
+      ? players.map((p, i) => (isInHand(p, i) ? i : -1)).filter(i => i >= 0)
       : []
   );
 
@@ -1611,7 +1629,7 @@
           {@const acting = gameInProgress && i === actionOn}
           {@const win = isHandComplete ? winInfoFor(i) : null}
           {@const equityText = (allInMoment || isShowdown) ? equityFor(i) : null}
-          {@const live = isInHand(player)}
+          {@const live = isInHand(player, i)}
           <!-- THE READOUT SPOKE of a landscape top or bottom seat takes the
                plate end that is clear of the seated neighbours (spokeEndBySeat);
                every other seat keeps the ring's own spoke. -->
@@ -1662,9 +1680,9 @@
               winner={!!win}
               dealer={!!player && i === Number(dealerSeat)}
               puckFrom={puckFrom && puckFrom.seat === i ? puckFrom : null}
-              showCards={gameInProgress || isShowdown}
+              showCards={gameInProgress || isHandComplete}
               heroCards={myCards}
-              heroHandName={isHero && (gameInProgress || isShowdown) ? heroHandName : null}
+              heroHandName={isHero && (gameInProgress || isHandComplete) ? heroHandName : null}
               plateTag={isHero ? heroPlateTag : null}
               revealed={isHero ? null : revealedHole(player)}
               betAmount={Number(player?.current_bet ?? 0)}

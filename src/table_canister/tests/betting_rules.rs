@@ -19,17 +19,19 @@
 //! Each test is named for the poker SITUATION, and its body states who holds
 //! what, who has acted, and which actions are legal.
 //!
-//! Scope note: these stay inside one betting round on purpose. Showdown and the
-//! single-winner payout call `ic_cdk::api::time()` and the history canister, so
-//! they are not reachable from a host test; the pot-award path is covered by
-//! `tests/money_safety` on PocketIC.
+//! Scope note: sections 1 to 5 stay inside one betting round on purpose. Since
+//! E-106 the settlement runs on the host too (`deal_hand` + `open_the_action`
+//! is the deal, `apply_player_action` closes a hand through the real payout,
+//! and an unwired archive buffers the record), so sections 6 and 7 play hands
+//! to completion; the money side of the pot award is still `tests/money_safety`
+//! on PocketIC.
 
 use candid::Principal;
 use table_canister::{
-    apply_player_action, can_still_act, deal_hand, is_betting_round_complete, is_in_hand,
-    open_the_action, plan_payouts, resolve_expired_action_timer, ActionTimer, Card, Currency,
-    GamePhase, Player, PlayerAction, PlayerStatus, Rank, ShuffleProof, Suit, TableConfig,
-    TableState,
+    apply_player_action, build_table_view, can_still_act, deal_hand, is_betting_round_complete,
+    is_in_hand, open_the_action, plan_payouts, record_voluntary_show,
+    resolve_expired_action_timer, ActionTimer, Card, Currency, GamePhase, Player, PlayerAction,
+    PlayerStatus, Rank, ShuffleProof, Suit, TableConfig, TableState, TableView,
 };
 
 // =============================================================================
@@ -150,6 +152,7 @@ fn flop_table(stacks: &[u64], now: u64) -> TableState {
         auto_deal_at: None,
         last_action: None,
         departed_stakes: None,
+        last_hand_went_to_showdown: None,
     }
 }
 
@@ -1595,4 +1598,264 @@ fn a_clock_left_pointing_at_an_all_in_seat_runs_the_board_out_instead_of_folding
     assert_eq!(state.phase, GamePhase::HandComplete);
     assert_eq!(state.community_cards.len(), 5);
     assert!(state.action_timer.is_none());
+}
+
+// =============================================================================
+// 7. A POT WON BECAUSE EVERYBODY FOLDED DOES NOT SHOW THE WINNER'S CARDS
+//
+// docs/DEFECTS.md E-107 (docs/CODEBASE-REVIEW-2026-09-28.md gap 3). The engine's
+// own rule is in `end_hand_single_winner`: "they take the pot without showing a
+// hand", and the archive keeps it (`push_winner` withholds the cards on a
+// fold-out). The live view did not: `get_table_view` read `HandComplete` as a
+// showdown and turned every unfolded seat face up, and after a fold-out the
+// last player standing is exactly that -- unfolded, still holding cards until
+// the next deal. So every viewer, seated or not, saw the winner's hand for the
+// whole between-hands pause. At a real-money table that is a free read on every
+// hand that ends by folds.
+//
+// These drive `build_table_view`, which is `get_table_view` with the platform
+// pulled out, from every seat's point of view and from a stranger's, at every
+// phase of a hand played through the real engine.
+// =============================================================================
+
+/// Somebody who is not at the table: the lobby, a railbird, a scraper.
+fn stranger() -> Principal {
+    Principal::from_slice(&[0xBA, 0xD0, 0x00, 0x01])
+}
+
+/// What `viewer` sees in front of seat `s`.
+fn cards_seen_by(state: &TableState, viewer: Principal, s: u8, now: u64) -> Option<(Card, Card)> {
+    let view: TableView = build_table_view(state, viewer, now);
+    view.players[s as usize]
+        .as_ref()
+        .expect("seat occupied")
+        .hole_cards
+}
+
+/// Every occupied seat, and a stranger, looks at every occupied seat: a seat
+/// sees its own cards, and sees another seat's cards only if `revealed` says so.
+fn assert_visibility(state: &TableState, now: u64, revealed: &[u8], when: &str) {
+    let seats: Vec<u8> = state.players.iter().flatten().map(|p| p.seat).collect();
+    for &looking in &seats {
+        for &at in &seats {
+            let seen = cards_seen_by(state, seat_principal(looking), at, now);
+            let expected = if looking == at || revealed.contains(&at) {
+                seat(state, at).hole_cards
+            } else {
+                None
+            };
+            assert_eq!(
+                seen, expected,
+                "{when}: seat {looking} looking at seat {at} (phase {:?}, folded {}, revealed set {revealed:?})",
+                state.phase,
+                seat(state, at).has_folded
+            );
+        }
+    }
+    for &at in &seats {
+        let seen = cards_seen_by(state, stranger(), at, now);
+        let expected = if revealed.contains(&at) { seat(state, at).hole_cards } else { None };
+        assert_eq!(
+            seen, expected,
+            "{when}: a stranger looking at seat {at} (phase {:?}, folded {})",
+            state.phase,
+            seat(state, at).has_folded
+        );
+    }
+}
+
+/// Act as whoever the engine says is on action.
+fn act_in_turn(state: &mut TableState, now: u64, action: PlayerAction) -> u8 {
+    let s = state.action_on;
+    let what = format!("seat {s} {action:?}");
+    act(state, s, now, action).unwrap_or_else(|e| panic!("{what} at {:?}: {e}", state.phase));
+    s
+}
+
+/// Three seats of 1,000, first hand, dealt from a stacked deck: aces, kings,
+/// seven-deuce, in seat order, over the blank board.
+fn three_handed_deal(now: u64) -> TableState {
+    let mut state = waiting_table(&[1_000, 1_000, 1_000], 0);
+    let deck = cards(&[&ACES, &KINGS, &SEVEN_DEUCE], (Rank::Six, Suit::Clubs));
+    run_the_deal(&mut state, deck, now);
+    assert_eq!(state.phase, GamePhase::PreFlop);
+    for s in 0..3 {
+        assert!(seat(&state, s).hole_cards.is_some(), "seat {s} was dealt in");
+    }
+    state
+}
+
+/// Everybody calls or checks to the river, asserting at every street that a
+/// seat sees only its own cards. Returns with the river open and nobody acted.
+fn check_down_to_the_river(state: &mut TableState, now: u64) {
+    assert_visibility(state, now, &[], "pre-flop, before anybody acts");
+    // Pre-flop: two calls and the big blind's check close the street.
+    for _ in 0..2 {
+        act_in_turn(state, now, PlayerAction::Call);
+    }
+    act_in_turn(state, now, PlayerAction::Check);
+    assert_eq!(state.phase, GamePhase::Flop);
+    assert_visibility(state, now, &[], "on the flop");
+    for _ in 0..3 {
+        act_in_turn(state, now, PlayerAction::Check);
+    }
+    assert_eq!(state.phase, GamePhase::Turn);
+    assert_visibility(state, now, &[], "on the turn");
+    for _ in 0..3 {
+        act_in_turn(state, now, PlayerAction::Check);
+    }
+    assert_eq!(state.phase, GamePhase::River);
+    assert_visibility(state, now, &[], "on the river");
+}
+
+/// A hand played to the river, where the first seat to act bets and the other
+/// two fold: the bettor takes the pot without showing a hand. Every phase, from
+/// every seat's point of view and a stranger's: a seat sees its own cards and
+/// nobody else's, and that stays true after the fold-out, for the winner's
+/// cards above all.
+///
+/// Before the fix, `HandComplete` was read as a showdown and the winner -- the
+/// one unfolded seat, still holding cards -- was face up to the whole table.
+#[test]
+fn a_pot_won_because_everybody_folded_does_not_show_the_winners_cards() {
+    let now = 1_000 * SEC;
+    let mut state = three_handed_deal(now);
+    check_down_to_the_river(&mut state, now);
+
+    let bettor = act_in_turn(&mut state, now, PlayerAction::Bet(100));
+    let first_fold = act_in_turn(&mut state, now, PlayerAction::Fold);
+    let second_fold = act_in_turn(&mut state, now, PlayerAction::Fold);
+    assert_eq!(state.phase, GamePhase::HandComplete, "two folds end the hand");
+    assert!(!seat(&state, bettor).has_folded);
+    assert!(seat(&state, first_fold).has_folded && seat(&state, second_fold).has_folded);
+    assert!(
+        seat(&state, bettor).hole_cards.is_some(),
+        "the winner still holds cards until the next deal, which is the whole hazard"
+    );
+    assert_eq!(seat(&state, bettor).chips, 1_000 + 2 * BIG_BLIND, "sanity: the bettor took the pot");
+
+    assert_visibility(&state, now, &[], "after the fold-out, between hands");
+
+    // The winner record agrees: no hand and no cards, as the archive has always said.
+    let view = build_table_view(&state, stranger(), now);
+    let winner = view
+        .last_hand_winners
+        .iter()
+        .find(|w| w.seat == bettor)
+        .expect("the bettor is the recorded winner");
+    assert_eq!(winner.cards, None, "a fold-out winner's record carries no cards");
+    assert_eq!(winner.hand_rank, None, "and no hand");
+}
+
+/// The other ending. Checked down to a showdown, every seat that did not fold is
+/// face up to everyone, the stranger included, and the seat that folded on the
+/// flop stays hidden from everybody but itself. A guard that the fix hides only
+/// what a fold-out should hide.
+#[test]
+fn a_showdown_still_turns_every_unfolded_hand_face_up() {
+    let now = 1_000 * SEC;
+    let mut state = three_handed_deal(now);
+    assert_visibility(&state, now, &[], "pre-flop, before anybody acts");
+    for _ in 0..2 {
+        act_in_turn(&mut state, now, PlayerAction::Call);
+    }
+    act_in_turn(&mut state, now, PlayerAction::Check);
+    assert_eq!(state.phase, GamePhase::Flop);
+
+    // Three-handed on the first hand the button is seat 1, so the flop opens on
+    // seat 2 (the seven-deuce): it checks, the aces bet, the kings call, and the
+    // seven-deuce folds.
+    assert_eq!(state.action_on, 2, "sanity: the flop opens on the small blind");
+    let folder = act_in_turn(&mut state, now, PlayerAction::Check);
+    let bettor = act_in_turn(&mut state, now, PlayerAction::Bet(40));
+    let caller = act_in_turn(&mut state, now, PlayerAction::Call);
+    assert_eq!(act_in_turn(&mut state, now, PlayerAction::Fold), folder);
+    assert_eq!((bettor, caller, folder), (0, 1, 2));
+    assert_eq!(state.phase, GamePhase::Turn);
+    assert_visibility(&state, now, &[], "on the turn, a seat folded");
+    for _ in 0..2 {
+        act_in_turn(&mut state, now, PlayerAction::Check);
+    }
+    assert_eq!(state.phase, GamePhase::River);
+    assert_visibility(&state, now, &[], "on the river");
+    for _ in 0..2 {
+        act_in_turn(&mut state, now, PlayerAction::Check);
+    }
+    assert_eq!(state.phase, GamePhase::HandComplete, "the river checks through to a showdown");
+
+    assert_visibility(&state, now, &[bettor, caller], "after the showdown, between hands");
+    assert!(seat(&state, folder).has_folded);
+    assert_eq!(
+        cards_seen_by(&state, stranger(), folder, now),
+        None,
+        "the mucked hand stays mucked"
+    );
+    // The aces win, and a showdown winner's record carries the hand and the cards.
+    let view = build_table_view(&state, stranger(), now);
+    let winner = view.last_hand_winners.iter().find(|w| w.seat == bettor).expect("the aces win");
+    assert!(winner.cards.is_some() && winner.hand_rank.is_some(), "a showdown winner's record shows the hand");
+    assert_eq!(seat(&state, bettor).chips, 1_000 + 2 * BIG_BLIND + 40, "sanity: the aces took the pot");
+}
+
+/// The voluntary show. A seat that folded may not turn its cards up while the
+/// hand is still live -- that tells the seats still playing what is out of the
+/// deck -- but once the hand is over it may, and so may the fold-out winner, and
+/// only then does the table see them.
+#[test]
+fn show_cards_is_refused_while_the_hand_is_live_and_reveals_to_everyone_once_it_is_over() {
+    let now = 1_000 * SEC;
+    let mut state = three_handed_deal(now);
+    for _ in 0..2 {
+        act_in_turn(&mut state, now, PlayerAction::Call);
+    }
+    act_in_turn(&mut state, now, PlayerAction::Check);
+    assert_eq!(state.phase, GamePhase::Flop);
+    let bettor = act_in_turn(&mut state, now, PlayerAction::Bet(40));
+    let folder = act_in_turn(&mut state, now, PlayerAction::Fold);
+    let caller = act_in_turn(&mut state, now, PlayerAction::Call);
+    assert_eq!(state.phase, GamePhase::Turn);
+
+    // Two seats are still playing. The folded seat may not show.
+    let refused = record_voluntary_show(&state, seat_principal(folder));
+    assert!(
+        refused.is_err(),
+        "seat {folder} folded on the flop and the hand is live at {:?}: its show must be refused, got {refused:?}",
+        state.phase
+    );
+    assert_visibility(&state, now, &[], "on the turn, after the refused show");
+    // And neither may a seat that is still in the hand.
+    assert!(record_voluntary_show(&state, seat_principal(bettor)).is_err());
+
+    // Turn: the bettor bets again and the caller gives up. Fold-out.
+    let _ = act_in_turn(&mut state, now, PlayerAction::Bet(40));
+    let _ = act_in_turn(&mut state, now, PlayerAction::Fold);
+    assert_eq!(state.phase, GamePhase::HandComplete);
+    assert_visibility(&state, now, &[], "after the fold-out, nobody has shown");
+
+    // Now the folded seat may show ("I had it"), and so may the winner.
+    record_voluntary_show(&state, seat_principal(folder)).expect("a show after the hand is over");
+    assert_visibility(&state, now, &[folder], "after the folder's voluntary show");
+    record_voluntary_show(&state, seat_principal(bettor)).expect("the winner may show too");
+    assert_visibility(&state, now, &[folder, bettor], "after the winner's voluntary show");
+    let _ = caller;
+}
+
+/// A table restored from state written before the flag existed (docs/
+/// SECURITY-FINDINGS.md FINDING 14: the field is `opt`, and `None` is what the
+/// previous release's state decodes to) sits at `HandComplete` with no record of
+/// how the hand ended. The safe reading is "not a showdown": hidden until the
+/// next deal, which clears the cards anyway.
+#[test]
+fn a_table_restored_without_the_flag_at_hand_complete_hides_every_hand() {
+    let now = 1_000 * SEC;
+    let mut state = three_handed_deal(now);
+    check_down_to_the_river(&mut state, now);
+    for _ in 0..3 {
+        act_in_turn(&mut state, now, PlayerAction::Check);
+    }
+    assert_eq!(state.phase, GamePhase::HandComplete);
+    assert_visibility(&state, now, &[0, 1, 2], "after a showdown, with the flag");
+
+    state.last_hand_went_to_showdown = None;
+    assert_visibility(&state, now, &[], "after a showdown, restored from state without the flag");
 }
