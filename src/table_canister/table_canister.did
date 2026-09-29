@@ -224,6 +224,10 @@ type Result_1 = variant { Ok : nat64; Err : text };
 // that resolve_my_ledger_intents() drove, saying what the ledger said about it.
 type Result_IntentReport = variant { Ok : vec text; Err : text };
 type Result_IntentLine = variant { Ok : text; Err : text };
+// docs/DEFECTS.md E-109: what a controller may say became of a ledger operation
+// that is past its retry window and that the ledger can no longer be asked about
+// through reconcile_ledger_intent. See admin_close_stale_ledger_intent.
+type StaleIntentClose = variant { NotMoved; Moved };
 // Why a hand is not moving, and whether anybody can end it.
 // docs/SECURITY-FINDINGS.md FINDING 15.
 type StuckHandStatus = record {
@@ -816,6 +820,31 @@ service : (TableConfig) -> {
   resolve_my_ledger_intents : () -> (Result_IntentReport);
   // The same for one entry, by id. Owner or controller.
   resolve_ledger_intent : (nat64) -> (Result_IntentLine);
+  // CLOSE ONE LEDGER OPERATION AGAINST THE BLOCK THAT PROVES IT. Owner or
+  // controller. docs/DEFECTS.md E-109.
+  //
+  // For an entry past its retry window, which resolve_my_ledger_intents()
+  // refuses to re-issue (a re-issue outside the ledger's deduplication window
+  // would be a second, real movement). Name the ledger block you believe holds
+  // this movement; this canister reads it (following it into the ledger's
+  // archive if it has been archived) and settles the entry as moved only if
+  // the block is a transfer carrying this entry's memo and created_at_time,
+  // between the accounts its kind names, for its amount. Any other block is
+  // refused and nothing changes. This is the only door that can credit a pull
+  // or a sweep after its window, and it credits exactly what the block proves,
+  // once. Rate limited with notify_deposit: five ledger lookups a minute.
+  reconcile_ledger_intent : (nat64, nat64) -> (Result_IntentLine);
+  // Controller: close one ledger operation PAST ITS RETRY WINDOW to an outcome
+  // the controller names, for when the ledger cannot answer through
+  // reconcile_ledger_intent. The owner and the amount come from the entry,
+  // never from the call. NotMoved on a payout gives the up-front escrow debit
+  // back; NotMoved on anything else closes the record and credits nothing;
+  // Moved on a payout or a refund closes the record; Moved on a pull or a
+  // sweep is REFUSED, because that would be a credit on a controller's word
+  // and a credit rests on a block. Refuses an entry still inside its window
+  // (resolve_ledger_intent settles that one against the ledger's own answer).
+  // Not a setter: there is deliberately no method here that can edit a balance.
+  admin_close_stale_ledger_intent : (nat64, StaleIntentClose) -> (Result_IntentLine);
   // Every unfinished ledger operation of YOURS. Empty is the normal state.
   get_my_ledger_intents : () -> (vec LedgerIntentView) query;
   // The whole journal for a controller; your own entries for anybody else.

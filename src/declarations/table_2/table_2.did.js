@@ -17,6 +17,11 @@ export const idlFactory = ({ IDL }) => {
     'Ok' : IDL.Tuple(IDL.Nat64, IDL.Nat64, IDL.Nat64),
     'Err' : IDL.Text,
   });
+  const StaleIntentClose = IDL.Variant({
+    'NotMoved' : IDL.Null,
+    'Moved' : IDL.Null,
+  });
+  const Result_IntentLine = IDL.Variant({ 'Ok' : IDL.Text, 'Err' : IDL.Text });
   const Result_DepositCensus = IDL.Variant({
     'Ok' : IDL.Tuple(
       IDL.Nat64,
@@ -419,7 +424,6 @@ export const idlFactory = ({ IDL }) => {
     'Ok' : SolvencyReport,
     'Err' : IDL.Text,
   });
-  const Result_IntentLine = IDL.Variant({ 'Ok' : IDL.Text, 'Err' : IDL.Text });
   const Result_IntentReport = IDL.Variant({
     'Ok' : IDL.Vec(IDL.Text),
     'Err' : IDL.Text,
@@ -454,6 +458,11 @@ export const idlFactory = ({ IDL }) => {
     'admin_audit_deposit_custody' : IDL.Func(
         [IDL.Vec(IDL.Principal)],
         [Result_DepositAudit],
+        [],
+      ),
+    'admin_close_stale_ledger_intent' : IDL.Func(
+        [IDL.Nat64, StaleIntentClose],
+        [Result_IntentLine],
         [],
       ),
     'admin_get_all_balances' : IDL.Func(
@@ -555,6 +564,11 @@ export const idlFactory = ({ IDL }) => {
     'leave_table' : IDL.Func([], [Result_1], []),
     'notify_deposit' : IDL.Func([IDL.Nat64], [Result_1], []),
     'player_action' : IDL.Func([PlayerAction], [Result], []),
+    'reconcile_ledger_intent' : IDL.Func(
+        [IDL.Nat64, IDL.Nat64],
+        [Result_IntentLine],
+        [],
+      ),
     'refresh_deposit_custody' : IDL.Func([], [Result_DepositCustody], []),
     'refresh_main_account_custody' : IDL.Func([], [Result_MainCustody], []),
     'refresh_solvency' : IDL.Func([], [Result_Solvency], []),

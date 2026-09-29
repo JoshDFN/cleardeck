@@ -196,6 +196,10 @@ type HistoryStatus = record {
 };
 type Result = variant { Ok; Err : text };
 type Result_1 = variant { Ok : nat64; Err : text };
+type Result_IntentLine = variant { Ok : text; Err : text };
+// docs/DEFECTS.md E-109: what a controller may say became of a ledger operation
+// past its retry window. See admin_close_stale_ledger_intent.
+type StaleIntentClose = variant { NotMoved; Moved };
 // Why a hand is not moving, and whether anybody can end it.
 // docs/SECURITY-FINDINGS.md FINDING 15.
 type StuckHandStatus = record {
@@ -435,6 +439,12 @@ service : (TableConfig) -> {
   // stuck (see get_stuck_hand_status) it does not refuse: a withdrawal pays out
   // of escrow and cannot touch the pot.
   withdraw : (nat64) -> (Result_1);
+  // Close one ledger operation against the ledger block that proves it.
+  // Owner or controller. docs/DEFECTS.md E-109.
+  reconcile_ledger_intent : (nat64, nat64) -> (Result_IntentLine);
+  // Controller: close one ledger operation past its retry window to an
+  // outcome the controller names; cannot credit a pull or a sweep. E-109.
+  admin_close_stale_ledger_intent : (nat64, StaleIntentClose) -> (Result_IntentLine);
   // Is this table holding a hand that no message can move, and can it be ended?
   // A query, so it answers even when every update on the settlement path fails.
   get_stuck_hand_status : () -> (StuckHandStatus) query;

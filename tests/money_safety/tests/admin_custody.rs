@@ -49,6 +49,14 @@ use money_safety::world::*;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+/// Mirrors `StaleIntentClose` in `src/table_canister/src/lib.rs` (E-109), for
+/// the sweep's argument.
+#[derive(candid::CandidType, serde::Deserialize, Clone, Copy, Debug)]
+enum StaleIntentClose {
+    NotMoved,
+    Moved,
+}
+
 const ICP: u64 = 100_000_000;
 
 // ---------------------------------------------------------------------------
@@ -600,6 +608,19 @@ fn sweep_no_admin_call_reduces_what_is_owed() {
         // Not controller-gated, but it is the other update on the admin surface a
         // controller reaches for, and it must not move money either.
         ("flush_unrecorded_hands", Encode!().unwrap()),
+        // docs/DEFECTS.md E-109. Closes a ledger-intent entry past its retry
+        // window to an outcome the controller names. Driven here with both
+        // outcomes against an id the journal does not hold: it must refuse and
+        // move nothing. What it does to a REAL stale entry is gated by the e109_*
+        // tests in ledger_boundary.rs.
+        (
+            "admin_close_stale_ledger_intent",
+            Encode!(&u64::MAX, &StaleIntentClose::NotMoved).unwrap(),
+        ),
+        (
+            "admin_close_stale_ledger_intent",
+            Encode!(&u64::MAX, &StaleIntentClose::Moved).unwrap(),
+        ),
     ];
 
     for (method, arg) in calls {
@@ -684,6 +705,18 @@ fn census_every_controller_gated_method_is_classified_here() {
         (
             "admin_update_config",
             "FINDING 20: refuses a currency change while the canister owes anybody anything",
+        ),
+        (
+            "admin_close_stale_ledger_intent",
+            "E-109: closes ONE ledger-intent entry past its retry window (and not under a live \
+             lease) to an outcome the controller names. Owner and amount come from the entry, \
+             never from the call. NotMoved on a payout gives the up-front escrow debit back \
+             (liability only goes UP); NotMoved on any other kind and Moved on a payout or a \
+             refund close the record and credit nothing; Moved on a pull or a sweep is REFUSED, \
+             because that would be a credit on the controller's word. It cannot reduce what \
+             is owed: no branch debits escrow, chips or the pot. A false NotMoved on a pull \
+             that landed leaves the money at the main account unattributed, where \
+             get_solvency() shows it as surplus",
         ),
     ];
 
