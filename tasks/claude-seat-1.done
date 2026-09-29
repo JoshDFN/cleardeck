@@ -1,29 +1,24 @@
-# claude-seat-1: task 1790632438 ("A pot won because everybody folded must not show the winner's hole cards to the table")
+# claude-seat-1: task 1790632441 ("leave_table by the seat on action goes through advance_game, so a closed street is not handed back to a player who already matched")
 
-Closes: 1790632438 (done)
+Closes: 1790632441 (done)
 
-Executor handover: the first executor wrote and committed the fix (d6a6910) and started the
-full fast gate, then died (session spend limit) before writing this file. A second executor
-verified what was on disk, re-ran every cheap gate, reconstructed the red evidence for the
-view predicate, and integrated. Nothing was changed on the branch after d6a6910.
+## What landed (branch claude/seat-1, on top of main cc30cc4; `git merge main` was a no-op, main did not move)
 
-## What landed (branch claude/seat-1, on top of main 88a4f75; `git merge main` was a no-op)
-
-- d6a6910 fix: a pot won because everybody folded no longer shows the winner's cards to the table (E-107, review gap 3; task 1790632438)
-  - src/table_canister/src/lib.rs: `TableState.last_hand_went_to_showdown: Option<bool>`, `#[serde(default)]`, `opt bool` on the wire (FINDING 14's rule: `TableState` sits inside `opt TableState`, so a bare addition would wipe the table on upgrade); `None` reads as "not a showdown", the hiding direction. Written by `finish_hand(state, now, went_to_showdown)`, the one place that writes `HandComplete`: `true` from `determine_winners`, `false` from `end_hand_single_winner` and `settle_unmovable_hand` (the same bool those callers already hand `record_hand_to_history`).
-  - `get_table_view` body extracted to `pub fn build_table_view(state, caller, now)` (host-testable from any principal). Reveal predicate is now `phase == Showdown || (phase == HandComplete && last_hand_went_to_showdown())`; a fold-out winner's cards are `None` for every other caller, seated or stranger, until the next deal.
-  - `show_cards` body extracted to `pub fn record_voluntary_show(state, caller)`; a voluntary show is accepted only at `Showdown` or `HandComplete`, folded or not. Before, only an UNFOLDED seat was refused mid-hand, so a folded seat could turn its cards up while others were still playing.
-  - src/table_canister/table_canister.did: `TableState` gains `last_hand_went_to_showdown : opt bool` (the `get_table_state` reply). `TableView` is unchanged. src/declarations/table_{1,2,3}/ regenerated with `check-declarations-js.sh --write`.
-  - src/table_canister/tests/betting_rules.rs section 7: four tests over the real deal and `build_table_view` from every seat's point of view and a stranger's at every phase (fold-out hides the winner; showdown still reveals every unfolded hand and keeps the mucked one hidden; mid-hand show refused, post-hand show reveals; a table restored without the flag at `HandComplete` hides everything). One-line struct-literal touches in coherence_regressions.rs, hand_membership.rs, money_safety.rs and the in-crate test fixtures.
-  - src/cleardeck_frontend/src/lib/showdown.js (new) + showdown.test.js (new): `handsAreFaceUp(phaseKey, lastWinners)` is true at `Showdown`, and at `HandComplete` only if some winner record carries `cards`, which `push_winner` attaches only at a showdown. PokerTable.svelte's `isShowdown` reads it; own cards and the live seat's card backs stay up through the `HandComplete` pause via `isHandComplete`; after a fold-out the live seat is the winner record's seat. No new `TableView` field was needed.
-  - docs/DEFECTS.md: E-107 (medium, FIXED, task 1790632438) register row and write-up with the red output. docs/CODEBASE-REVIEW-2026-09-28.md gap 3 now points at E-107.
-  - No settlement arithmetic changed; no balance code touched; no check weakened.
+- 8a1cc81 fix: leaving from the seat on action goes through advance_game, so a closed street is not handed back to a player who already matched (E-108, review gap 5; task 1790632441)
+  - src/table_canister/src/lib.rs: the body of `leave_table` is now `pub fn vacate_seat(state, caller, now) -> Result<u64, String>` (host-testable, the `apply_player_action` / `build_table_view` / `record_voluntary_show` pattern); `leave_table` is `msg_caller()` + `time()` + the `TABLE` borrow + `vacate_seat` + `schedule_next_wake()` + the escrow credit, unchanged. Inside it, the branch that used to move the clock by hand (`find_next_active_seat` + a fresh `ActionTimer`, no `is_betting_round_complete`) is replaced: a departure from the seat on action drops the clock and calls `advance_game(state, now)`, which ends the hand on one claimant, deals the next street on a closed one, or moves the clock to the next seat that owes an action. A departure from any other seat leaves the clock alone unless it changed what the hand is waiting for (last other claimant gone, or the last seat owing action gone while the clock was parked on a matched seat). The shadowed `let now = ic_cdk::api::time()` inside the branch is gone; the wrapper's `now` is used.
+  - No settlement arithmetic changed; the uncalled-bet return, `record_departed_stake`, `refresh_side_pots` and the empty-table settle in the same function are untouched. `cash_out` has no equivalent branch (it refuses a seat in a live hand).
+  - src/table_canister/tests/betting_rules.rs section 8 (five tests over `vacate_seat` on a hand dealt and bet through the real engine, plus `flop_three_handed` and `leave` helpers; import of `vacate_seat`; the module doc's scope note now says sections 6 to 8).
+  - docs/DEFECTS.md: E-108 (medium, FIXED, task 1790632441) register row above E-107 and the write-up with the red output at the end of the file. docs/CODEBASE-REVIEW-2026-09-28.md gap 5's Register line now points at E-108.
+  - Candid: unchanged. `table_canister.did` is byte-identical (no diff), the `#[ic_cdk::update]`/`#[ic_cdk::query]` count is 75 on main and 75 here, and `vacate_seat` is a plain `pub fn`. `check-candid.sh --declarations` therefore not run; `make test` step 1 confirmed the committed declarations still match every `.did`.
+  - No new `TableState` field, so no struct-literal touches outside betting_rules.rs.
 
 ## Red, then green (`cargo test -p table_canister --test betting_rules`)
 
-- First executor (recorded in the E-107 write-up in docs/DEFECTS.md): three of the four section 7 tests red on the unfixed view: the 7-2 fold-out winner face up between hands (`left: Some((7c, 2d)) right: None`), a folded seat's mid-hand show accepted (`got Ok((As, Ah))`), a restored table without the flag revealing at `HandComplete`. The fourth (showdown guard) green by design. That run is not re-captured here.
-- Second executor, reconstructed on 2026-09-29 (UTC) by reverting the one predicate line in `build_table_view` to `phase == Showdown || phase == HandComplete` in the worktree and restoring the file with `git checkout` afterwards: `a_pot_won_because_everybody_folded_does_not_show_the_winners_cards` FAILED (`left: Some((Seven of Clubs, Two of Diamonds)) right: None`), `a_table_restored_without_the_flag_at_hand_complete_hides_every_hand` FAILED (`left: Some((King of Spades, King of Hearts)) right: None`), `a_showdown_still_turns_every_unfolded_hand_face_up` ok. The `show_cards` refusal red was not re-reconstructed (it needs the second revert). Tree restored: `git status` clean, content identical to d6a6910.
-- Green on d6a6910: betting_rules 41 passed, 0 failed.
+- RED, on the extracted-but-unfixed branch (the extraction commit state, before the `advance_game` change; run 2026-09-29 ~03:05Z in this worktree): 44 passed, 2 failed.
+  - `a_leaver_on_action_after_the_street_closed_does_not_hand_the_street_back` FAILED: "A bet, B called, C left on action: the flop betting is closed and the turn is dealt. Instead the hand is at Flop with the clock on Some(2), current bet 40" `left: Flop right: Turn`.
+  - `a_clock_left_on_a_matched_seat_moves_on_when_the_last_seat_owing_action_leaves` FAILED: "seats 0 and 1 have both matched: the flop is closed and the turn is dealt. Instead the hand is at Flop with the clock on Some(0)" `left: Flop right: Turn`.
+  - The three adjacent-case guards were green before the fix, as designed: `a_leaver_on_action_with_the_street_still_open_hands_the_clock_to_the_seat_that_owes_action` (clock moves to C, A's 40 stands, pot 100, C's call deals the turn), `a_leaver_on_action_who_leaves_one_player_ends_the_hand_by_fold_out` (HandComplete, `last_hand_went_to_showdown == Some(false)`, no clock, A 1,040 / B 980 / leaver 980 = 3,000), `a_leaver_who_was_not_on_action_leaves_the_clock_where_it_was` (same timer instance on B, B's call deals the turn).
+- GREEN on 8a1cc81: betting_rules 46 passed, 0 failed. `cargo test -p table_canister` (all targets): lib 57, betting_rules 46, coherence_regressions 7, hand_membership 6, integration_test 2, money_safety (in-crate) 6, unit_tests 7, all green. Compiler warnings on the crate: 11, none in the changed code (same set as before).
 
 ## Verified (this worktree, no replica started, no icp command run, machine default identity untouched)
 
@@ -32,29 +27,26 @@ view predicate, and integrated. Nothing was changed on the branch after d6a6910.
 - `make hygiene`: exit 0, repo hygiene clean.
 - `./scripts/check-declarations.sh`: exit 0, all 4 pinned versions agree.
 - `./scripts/check-suite-wiring.sh`: exit 0 (no new cargo target; the tests live in the existing `betting_rules` target, `workspace` tier).
-- `./scripts/register-stats.sh --check`: exit 0, register consistent.
-- `./scripts/check-candid.sh --declarations`: exit 0, committed interfaces match the built wasm; declaration drift matches the baseline exactly.
-- `./scripts/check-declarations-js.sh`: exit 0, all 5 binding sets regenerate to exactly what is committed (no `--write` needed, nothing to commit).
-- `npm --workspace src/cleardeck_frontend test`: exit 0, 43 files, 453 tests passed (showdown.test.js included).
-- `npm --workspace src/cleardeck_frontend run check`: exit 0, 0 errors, 4 warnings (pre-existing).
-- `npm --workspace src/cleardeck_frontend run build:mainnet`: exit 0, bundle built and checked; the deploy and curl lines it printed were not run.
-- `POCKET_IC_BIN=$HOME/.cache/dfinity/versions/0.31.0/pocket-ic ICP_LEDGER_WASM=/Users/josh/Desktop/cleardeck/target/money-safety/ledger-canister.wasm.gz make test`: CITED from the first executor's foreground run, not re-run. Evidence: its log (scratchpad make-test.log, last write 2026-09-28 17:16:00 PDT) is a complete nine-step run ending `==> result` / `all fast gates green`; step times sum to about 24 min, so it started at about 16:52 PDT, after the commit d6a6910 (16:51:35 PDT) and after the last source edit (16:47 PDT); step 2 shows betting_rules `41 passed` including all four section 7 tests by name, which exist only on the fixed tree. Steps: suite wiring 4 s, candid bindings 1 s, workspace 11 s, wasm build 0 s (warm), differential 3 s, money-safety fast subset 1224 s (the previous-release upgrade test included, which exercises the new `opt` field), settlement oracle 85 s + pinned reproducers 10 s, shots self-tests 5 s, archive self-tests 79 s, no-peeking harness 32 s. Nothing on the branch changed after that run (HEAD is still d6a6910; the temporary red-reconstruction edit was reverted with `git checkout`).
+- `./scripts/register-stats.sh --check`: exit 0, register consistent (E-108 row and anchor counted).
+- `POCKET_IC_BIN=$HOME/.cache/dfinity/versions/0.31.0/pocket-ic ICP_LEDGER_WASM=/Users/josh/Desktop/cleardeck/target/money-safety/ledger-canister.wasm.gz make test`: exit 0, wall 1862 s (31 min), foreground, run once on 8a1cc81 (nothing changed after it except this file). `all fast gates green`. Steps: suite wiring 7 s (declarations match every `.did`), candid bindings 0 s, workspace 13 s (betting_rules 46 passed by name), wasm build 9 s, differential 3 s, money-safety fast subset 1573 s (all 23 cargo targets green, the previous-release upgrade test and the fuzzer at its defaults included; the fuzzer exercises `leave_table` mid-hand), settlement oracle 89 s (10 passed) + pinned reproducers 11 s (8 passed), shots self-tests 5 s, archive self-tests 86 s, no-peeking harness 65 s. Log: scratchpad make-test.log.
 
 ## Skipped
 
-- `./scripts/verify-build.sh --two-paths`: no build input changed (no Cargo.toml/lock, recipe, toolchain or Dockerfile change).
+- `./scripts/check-candid.sh --declarations`: no `.did` changed (see above).
+- `./scripts/verify-build.sh --two-paths`: no build input changed.
 - `make diff-full`: no evaluator change.
-- `make known-defects`: not an engine-defect marker fix (E-107 is a view/visibility defect; no `fast_subset.rs` marker involved).
+- `make known-defects`: no `fast_subset.rs` marker involved (E-108 is a new row, not an ignored differential marker).
+- Frontend gates (steps 4 and 5): `src/cleardeck_frontend` untouched.
 - Live screenshots / `make local-up`: rule 3 paths not yet fixed on main; nothing started, nothing to recycle.
-- `make test` re-run: cited instead (above).
+- `lint-stable-compat --changed`: does not exist here (overlay); the upgrade test inside `make test` is the replacement and ran.
 
 ## DEFERRED
 
-- Mainnet upgrade of the four table canisters with this fix: operator lane. Covered by the already-queued 1790632499 ("The six mainnet backends run one reproducible build, and check-fleet-coherence exits 0", `lane: operator`), which redeploys the fleet from one build. No duplicate filed. Until it runs, a mainnet table still shows a fold-out winner's cards to every viewer between hands, and the deployed frontend still dramatises `HandComplete` as a showdown; the two halves are independent (the client predicate reads the winner record, which the old engine already withholds cards from, so a new frontend against an old table is safe, and an old frontend against a new table just shows nulls).
+- Mainnet upgrade of the four table canisters with this fix: operator lane. Covered by the already-queued 1790632499 ("The six mainnet backends run one reproducible build, and check-fleet-coherence exits 0", `lane: operator`), which redeploys the fleet from one build. No duplicate filed. Until it runs, a mainnet table still hands a closed street to the seat after a leaver on action.
 
-## Not in scope, left as it was
+## Not in scope, left as it was (already queued elsewhere)
 
-- The `SHOWN_CARDS` map is keyed by hand number and lives in runtime state (not persisted); unchanged.
-- The showdown-side `get_hand_history` / archive shapes: unchanged; `push_winner` already withheld cards off a showdown.
+- The leaver's uncalled bet being returned while another seat could still call it (`return_uncalled_bet` in the same function): queued task 1790632474 item 1. Not touched; none of the new tests has the leaver as top contributor.
+- `leave_table` rate limit / anonymous check (E-14): queued task 1790632445 item 3.
 
-help: no user-facing help library here (ClearDeck has none); the user-visible change is that a fold-out winner's cards are no longer painted for other viewers between hands.
+help: no user-facing help library here (ClearDeck has none); the user-visible change is that leaving from the seat on action no longer asks a player who already matched to act again on the same street.
