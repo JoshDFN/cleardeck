@@ -1637,13 +1637,16 @@ cmd_hygiene() {
   n="${#candidates[@]}"
   bytes=0
   local f sz
-  for f in "${candidates[@]}"; do
+  # `${a[@]+"${a[@]}"}`, not `"${a[@]}"`: macOS's /bin/bash is 3.2, where an
+  # EMPTY array under `set -u` is an unbound variable, so a clean tree crashed
+  # this step instead of passing it.
+  for f in ${candidates[@]+"${candidates[@]}"}; do
     [ -f "$f" ] || continue
     sz="$(wc -c <"$f" | tr -d ' ')"
     bytes=$((bytes + sz))
   done
   info "$n added/modified path(s), $((bytes/1024)) KiB total"
-  if printf '%s\n' "${candidates[@]}" \
+  if printf '%s\n' ${candidates[@]+"${candidates[@]}"} \
        | grep -Eiq '\.(png|jpg|jpeg|gif|webp|webm|mp4|wasm|gz|zip|bin|pdf|tiff|bmp)$'; then
     warn "binary/media files are staged for commit:"
     printf '%s\n' "${candidates[@]}" \
