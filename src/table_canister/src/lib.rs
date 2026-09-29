@@ -8289,134 +8289,7 @@ fn leave_table() -> Result<u64, String> {
     let result = TABLE.with(|t| {
         let mut table = t.borrow_mut();
         let state = table.as_mut().ok_or("Table not initialized")?;
-
-        // ---- REFUSALS FIRST. Nothing above this line has changed the table. ----
-
-        // Find the player's seat
-        let seat = state.players.iter()
-            .position(|p| p.as_ref().map(|p| p.principal == caller).unwrap_or(false))
-            .ok_or("Not at table")?;
-
-        // ---- FROM HERE ON NOTHING RETURNS `Err`, so nothing can commit one. ----
-
-        // The same first move as `cash_out`, for the same reason, off THE SAME ONE
-        // PREDICATE the on-chain clock uses: a hand no message can move is settled
-        // before the seat is vacated, so this caller's stake leaves with them
-        // instead of becoming an invisible claim on a table they are no longer at.
-        // docs/SECURITY-FINDINGS.md FINDING 18, FINDING 25.
-        if hand_is_stuck_now(state, now) {
-            settle_unmovable_hand(state, now, UnmovableReason::AnExitDoorFoundItUnmovable);
-        }
-
-        let Some(player) = state.players[seat].as_ref() else {
-            // Unreachable: `seat` came from a `position` over occupied seats in
-            // this same borrow, and the settle above cannot vacate a chair. Handled
-            // rather than unwrapped because an `Err` here would now be an Err after
-            // a mutation, which is the defect this ordering exists to remove.
-            return Ok(0);
-        };
-        let hand_is_live = state.phase != GamePhase::WaitingForPlayers
-            && state.phase != GamePhase::HandComplete;
-        // ASKED OF THE ONE PREDICATE. This used to be `!player.has_folded &&
-        // hand_is_live`, a third hand-rolled statement of "in the hand" that
-        // accepted a seat holding no cards -- so vacating such a seat marked it
-        // folded and re-ran the fold-out check on its behalf. Both are meaningless
-        // for a seat that was never dealt in, and a predicate nobody can enumerate
-        // is how FINDING 17 stayed invisible. See "WHO IS IN THE HAND".
-        let was_in_hand = hand_is_live && is_in_hand(player);
-        let was_action_on = state.action_on as usize == seat;
-
-        // If we're in a hand, mark as folded first (pot contributions stay in pot)
-        if was_in_hand {
-            if let Some(ref mut p) = state.players[seat] {
-                p.has_folded = true;
-            }
-        }
-
-        // Anything this player bet that nobody covered was never in play, and once
-        // they are gone nobody can ever cover it. Hand it back before they leave,
-        // rather than leaving it in a pot they are no longer eligible for.
-        if hand_is_live {
-            let contributions = hand_contributions(state);
-            if let Some((top, _excess)) = poker_core::uncalled_excess(&contributions) {
-                if top as usize == seat {
-                    return_uncalled_bet(state);
-                }
-            }
-        }
-
-        // Keep this seat's stake in the payout basis. Money in the pot belongs to
-        // the hand, not to the chair.
-        if hand_is_live {
-            record_departed_stake(state, seat);
-        }
-
-        let chips = state.players[seat]
-            .as_ref()
-            .map(|p| p.chips)
-            .unwrap_or(0);
-
-        // Remove player from table
-        state.players[seat] = None;
-
-        // Rebuild the displayed breakdown from the basis that now exists.
-        //
-        // PAIRED WITH `return_uncalled_bet` ABOVE, and it has to be: that call
-        // REDUCES `state.pot`, and `state.side_pots` was built against the larger
-        // figure. Every other `return_uncalled_bet` call site in this file is
-        // immediately followed by `refresh_side_pots`; this one was not, and the
-        // 9-seed money-safety fuzz found the drift on seed 5
-        // (`M1b_POT_BREAKDOWN:side_pots_sum_to_pot`, 2,000,000 e8s). No money moved
-        // wrongly -- `plan_payouts` rebuilds the layering from `hand_contributions`
-        // and never reads `state.side_pots` -- but the side pots a player is SHOWN
-        // no longer added up to the pot they were shown. See docs/DEFECTS.md E-39.
-        //
-        // Runs AFTER `record_departed_stake` so the departing seat's stake is in the
-        // basis the layering is built from; before it, the rebuild would itself
-        // orphan the stake, which is E-05 all over again.
-        if hand_is_live {
-            refresh_side_pots(state);
-        }
-
-        // Advance the game if this departure changed anything about it: the leaver
-        // held a live claim, or the clock was pointing at their chair.
-        //
-        // The second disjunct is new and it is a safety net rather than a live path.
-        // Narrowing `was_in_hand` to the one predicate means a cardless seat no
-        // longer takes this branch, and a cardless seat should never be `action_on`
-        // -- `find_next_active_seat` asks `can_still_act`, which now requires cards.
-        // If one ever is, leaving without advancing would point the clock at an
-        // empty chair, so the action is moved on anyway. Costs nothing when the
-        // condition never holds.
-        if was_in_hand || (hand_is_live && was_action_on) {
-            let now = ic_cdk::api::time();
-            // Check if only one player left - award pot
-            if count_active_players(state) == 1 {
-                end_hand_single_winner(state, now);
-            } else if was_action_on {
-                // If it was this player's turn, move to next player
-                state.action_on = find_next_active_seat(state, state.action_on);
-                let timeout_ns = state.config.action_timeout_secs * 1_000_000_000;
-                state.action_timer = Some(ActionTimer {
-                    player_seat: state.action_on,
-                    started_at: now,
-                    expires_at: now + timeout_ns,
-                    using_time_bank: false,
-                });
-            }
-        }
-
-        // THE LAST PLAYER OUT TURNS THE LIGHTS OFF. Same rule as `cash_out`, same
-        // reason: a hand with nobody in it has one lawful ending and the canister
-        // must not sit on it. Runs after the advance above, so a departure that
-        // leaves exactly one player still settles as a fold-out win and only a
-        // departure that leaves NOBODY reaches this.
-        // docs/SECURITY-FINDINGS.md FINDING 18.
-        if table_is_empty(state) {
-            settle_unmovable_hand(state, now, UnmovableReason::NobodyLeftToWinIt);
-        }
-
-        Ok::<u64, String>(chips)
+        vacate_seat(state, caller, now)
     });
 
     // RE-AIM THE ON-CHAIN CLOCK. See the same call in `cash_out`: this function
@@ -8432,6 +8305,160 @@ fn leave_table() -> Result<u64, String> {
         let current = balances.get(&caller).copied().unwrap_or(0);
         balances.insert(caller, current.saturating_add(chips));
     });
+
+    Ok(chips)
+}
+
+/// The seat-vacating rules of [`leave_table`], with the platform pulled out.
+///
+/// `leave_table` is `msg_caller()` + `time()` + the `TABLE` borrow + this +
+/// `schedule_next_wake()` + the escrow credit. Everything that decides what the
+/// departure does to the HAND -- the fold mark, the uncalled bet, the departed
+/// stake, and how the game moves on from an emptied chair -- is here, so
+/// `tests/betting_rules.rs` can drive it on the host the way it drives
+/// `apply_player_action` (docs/DEFECTS.md H-04: a seam nothing tests is a seam
+/// every mutation survives). Returns the chips the seat leaves with; the caller
+/// credits them.
+pub fn vacate_seat(state: &mut TableState, caller: Principal, now: u64) -> Result<u64, String> {
+    // ---- REFUSALS FIRST. Nothing above this line has changed the table. ----
+
+    // Find the player's seat
+    let seat = state.players.iter()
+        .position(|p| p.as_ref().map(|p| p.principal == caller).unwrap_or(false))
+        .ok_or("Not at table")?;
+
+    // ---- FROM HERE ON NOTHING RETURNS `Err`, so nothing can commit one. ----
+
+    // The same first move as `cash_out`, for the same reason, off THE SAME ONE
+    // PREDICATE the on-chain clock uses: a hand no message can move is settled
+    // before the seat is vacated, so this caller's stake leaves with them
+    // instead of becoming an invisible claim on a table they are no longer at.
+    // docs/SECURITY-FINDINGS.md FINDING 18, FINDING 25.
+    if hand_is_stuck_now(state, now) {
+        settle_unmovable_hand(state, now, UnmovableReason::AnExitDoorFoundItUnmovable);
+    }
+
+    let Some(player) = state.players[seat].as_ref() else {
+        // Unreachable: `seat` came from a `position` over occupied seats in
+        // this same borrow, and the settle above cannot vacate a chair. Handled
+        // rather than unwrapped because an `Err` here would now be an Err after
+        // a mutation, which is the defect this ordering exists to remove.
+        return Ok(0);
+    };
+    let hand_is_live = state.phase != GamePhase::WaitingForPlayers
+        && state.phase != GamePhase::HandComplete;
+    // ASKED OF THE ONE PREDICATE. This used to be `!player.has_folded &&
+    // hand_is_live`, a third hand-rolled statement of "in the hand" that
+    // accepted a seat holding no cards -- so vacating such a seat marked it
+    // folded and re-ran the fold-out check on its behalf. Both are meaningless
+    // for a seat that was never dealt in, and a predicate nobody can enumerate
+    // is how FINDING 17 stayed invisible. See "WHO IS IN THE HAND".
+    let was_in_hand = hand_is_live && is_in_hand(player);
+    let was_action_on = state.action_on as usize == seat;
+
+    // If we're in a hand, mark as folded first (pot contributions stay in pot)
+    if was_in_hand {
+        if let Some(ref mut p) = state.players[seat] {
+            p.has_folded = true;
+        }
+    }
+
+    // Anything this player bet that nobody covered was never in play, and once
+    // they are gone nobody can ever cover it. Hand it back before they leave,
+    // rather than leaving it in a pot they are no longer eligible for.
+    if hand_is_live {
+        let contributions = hand_contributions(state);
+        if let Some((top, _excess)) = poker_core::uncalled_excess(&contributions) {
+            if top as usize == seat {
+                return_uncalled_bet(state);
+            }
+        }
+    }
+
+    // Keep this seat's stake in the payout basis. Money in the pot belongs to
+    // the hand, not to the chair.
+    if hand_is_live {
+        record_departed_stake(state, seat);
+    }
+
+    let chips = state.players[seat]
+        .as_ref()
+        .map(|p| p.chips)
+        .unwrap_or(0);
+
+    // Remove player from table
+    state.players[seat] = None;
+
+    // Rebuild the displayed breakdown from the basis that now exists.
+    //
+    // PAIRED WITH `return_uncalled_bet` ABOVE, and it has to be: that call
+    // REDUCES `state.pot`, and `state.side_pots` was built against the larger
+    // figure. Every other `return_uncalled_bet` call site in this file is
+    // immediately followed by `refresh_side_pots`; this one was not, and the
+    // 9-seed money-safety fuzz found the drift on seed 5
+    // (`M1b_POT_BREAKDOWN:side_pots_sum_to_pot`, 2,000,000 e8s). No money moved
+    // wrongly -- `plan_payouts` rebuilds the layering from `hand_contributions`
+    // and never reads `state.side_pots` -- but the side pots a player is SHOWN
+    // no longer added up to the pot they were shown. See docs/DEFECTS.md E-39.
+    //
+    // Runs AFTER `record_departed_stake` so the departing seat's stake is in the
+    // basis the layering is built from; before it, the rebuild would itself
+    // orphan the stake, which is E-05 all over again.
+    if hand_is_live {
+        refresh_side_pots(state);
+    }
+
+    // Advance the game if this departure changed anything about it: the leaver
+    // held a live claim, or the clock was pointing at their chair.
+    //
+    // The second disjunct is a safety net rather than a live path. Narrowing
+    // `was_in_hand` to the one predicate means a cardless seat no longer takes
+    // this branch, and a cardless seat should never be `action_on` --
+    // `find_next_active_seat` asks `can_still_act`, which now requires cards. If
+    // one ever is, leaving without advancing would point the clock at an empty
+    // chair, so the action is moved on anyway. Costs nothing when the condition
+    // never holds.
+    //
+    // A DEPARTURE FROM THE SEAT ON ACTION IS AN ACTION, AND MOVES THE HAND ON THE
+    // SAME WAY (docs/DEFECTS.md E-108). This used to hand the clock to the next
+    // seat unconditionally -- `find_next_active_seat` and a fresh timer -- without
+    // asking `is_betting_round_complete`, which is the question every real action
+    // ends with in `advance_game`. A bets, B calls, C leaves on action: the street
+    // is closed, but the clock landed on A with A's own bet still standing, so A's
+    // only replies were Check or Fold on a bet nobody could raise, and if A was
+    // away the clock folded A out of a pot A had fully matched. Conservation held
+    // throughout, so the money-safety invariants were silent. Now the fold mark is
+    // followed by the same `advance_game` an action is: one claimant left ends the
+    // hand, a closed street deals the next one, and an open street moves the clock
+    // to the next seat that owes an action. The clock is dropped first, the way
+    // `resolve_expired_action_timer` drops it (E-106): `advance_game` always sets
+    // a new one or retires it, and a clock pointing at an empty chair must never
+    // outlive this message.
+    if was_in_hand || (hand_is_live && was_action_on) {
+        if was_action_on {
+            state.action_timer = None;
+            advance_game(state, now);
+        } else if count_active_players(state) == 1 || is_betting_round_complete(state) {
+            // The clock was on somebody else and stays there UNLESS the departure
+            // changed what the hand is waiting for: the leaver was the last other
+            // claimant (fold-out), or the last seat that still owed an action on
+            // this street (the clock was parked on a seat that had already
+            // matched, a shape the deal and the actions no longer produce but an
+            // upgraded table can carry). Otherwise the seat on the clock still
+            // owes its action, and moving the clock off it would skip its turn.
+            advance_game(state, now);
+        }
+    }
+
+    // THE LAST PLAYER OUT TURNS THE LIGHTS OFF. Same rule as `cash_out`, same
+    // reason: a hand with nobody in it has one lawful ending and the canister
+    // must not sit on it. Runs after the advance above, so a departure that
+    // leaves exactly one player still settles as a fold-out win and only a
+    // departure that leaves NOBODY reaches this.
+    // docs/SECURITY-FINDINGS.md FINDING 18.
+    if table_is_empty(state) {
+        settle_unmovable_hand(state, now, UnmovableReason::NobodyLeftToWinIt);
+    }
 
     Ok(chips)
 }

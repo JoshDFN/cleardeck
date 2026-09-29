@@ -151,7 +151,7 @@ Register: [E-106](DEFECTS.md#e-106), FIXED by task 1790632440 (security-high); t
 clock lands on A, whose only legal replies are Check or Fold; if A is away, `:11254` folds
 A out of a pot they fully matched.
 
-Register: not recorded. Task: 1790632441.
+Register: **[E-108](DEFECTS.md#e-108)** (FIXED, task 1790632441). Task: 1790632441.
 
 ### Gap 6. A payout intent past its window locks the owner out of every withdrawal, and no door closes it
 

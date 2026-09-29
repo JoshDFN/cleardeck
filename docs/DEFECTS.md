@@ -435,6 +435,7 @@ is true.
 
 | id | sev | status | wave | gate — what would catch it coming back | where | one line |
 |---|---|---|---|---|---|---|
+| [E-108](#e-108) | medium | FIXED | task 1790632441 | `cargo test -p table_canister --test betting_rules` (`make test` step 2, `cargo test --workspace`; the `workspace` tier of `scripts/test-suites.list`), section 8 — five tests over `vacate_seat` on a hand dealt and bet through the real engine, two verified RED on the unfixed branch: *"A bet, B called, C left on action: the flop betting is closed and the turn is dealt. Instead the hand is at Flop with the clock on Some(2), current bet 40 — left: Flop right: Turn"*, *"seats 0 and 1 have both matched: the flop is closed and the turn is dealt. Instead the hand is at Flop with the clock on Some(0)"*; the other three (street still open → clock to the seat that owes; one player left → fold-out; leaver not on action → clock untouched) guard the adjacent cases and were green before and after | `vacate_seat` (was inline in `leave_table`), `advance_game`, `is_betting_round_complete` | **leaving from the seat on action handed a closed street back to a player who had already matched.** `leave_table` marked the leaver folded and then moved the clock to the next seat unconditionally — `find_next_active_seat` and a fresh timer — without asking `is_betting_round_complete`, the question every real action ends with in `advance_game`. A bets, B calls, C leaves on action: the street was closed, but the clock landed on A with A's own bet still standing, so A's only replies were Check or Fold on a bet nobody could raise (`action_is_closed_to_raising`), and if A was away `resolve_expired_action_timer` folded A out of a pot A had fully matched. Conservation held throughout, so the money-safety invariants were silent: correct totals, wrong recipient. Now a departure from the seat on action drops the clock and goes through the same `advance_game` an action does: one claimant left ends the hand, a closed street deals the next one, an open street moves the clock to the next seat that owes. A departure from any other seat leaves the clock alone unless it changed what the hand is waiting for. `leave_table`'s body is `vacate_seat(state, caller, now)`, host-testable like `apply_player_action`. No Candid change. [Review 2026-09-28, gap 5](CODEBASE-REVIEW-2026-09-28.md) |
 | [E-107](#e-107) | medium | FIXED | task 1790632438 | `cargo test -p table_canister --test betting_rules` (`make test` step 2, `cargo test --workspace`; the `workspace` tier of `scripts/test-suites.list`), section 7 — four tests over `build_table_view` from every seat's point of view and a stranger's at every phase, three verified RED on the unfixed view: *"after the fold-out, between hands: seat 0 looking at seat 2 (phase HandComplete, folded false) left: Some((7♣, 2♦)) right: None"*, *"seat 0 folded on the flop and the hand is live at Turn: its show must be refused, got Ok((A♠, A♥))"*; the fourth (`a_showdown_still_turns_every_unfolded_hand_face_up`) guards the other ending. Client: `npm --workspace src/cleardeck_frontend test` → `showdown.test.js` | `build_table_view` (was inline in `get_table_view`), `finish_hand`, `record_voluntary_show` (was inline in `show_cards`), `TableState::last_hand_went_to_showdown`, `PokerTable.svelte` `isShowdown` via `$lib/showdown.js` | **a pot won because everybody folded showed the winner's hole cards to the whole table until the next deal.** `get_table_view` read `HandComplete` as a showdown and revealed every unfolded seat; after a fold-out the winner is exactly the one unfolded seat, still holding cards until `start_new_hand` clears them, so every viewer (seated or not) saw the hand the engine had just paid "without showing a hand" (`end_hand_single_winner`). The archive was right all along (`push_winner` withholds the cards off a showdown). `show_cards` also let a FOLDED seat turn its cards up mid-hand, telling the seats still playing what was out of the deck. Now `finish_hand` writes `last_hand_went_to_showdown` (`opt bool`, FINDING 14's rule; `None` reads as hidden) in the one place that writes `HandComplete`, the view reveals at `HandComplete` only when it is true, and a voluntary show is accepted only once the hand is over. The client reads the same fact off the winner record (`cards` present only at a showdown), so no `TableView` field was added; `TableState` gained the `opt` field on the `.did`. [Review 2026-09-28, gap 3](CODEBASE-REVIEW-2026-09-28.md) |
 | [E-106](#e-106) | high | FIXED | task 1790632440 | `cargo test -p table_canister --test betting_rules` (`make test` step 2, `cargo test --workspace`; the `workspace` tier of `scripts/test-suites.list`), section 6 — six tests, five verified RED on the unfixed engine: *"the deal armed Some(ActionTimer { player_seat: 0 … }), the clock folded Some(0)"*, `left: [5, 20] right: [25, 0]`; the sixth (`a_deal_that_leaves_one_seat_owing_a_call_still_asks_it`) guards the refinement | `open_the_action` (the deal's last step, split out of `start_new_hand` with `deal_hand`), `the_posts_closed_the_betting`, `resolve_expired_action_timer` | **the deal armed the clock on a seat that could not act, and the clock folded it.** A blind or ante posts `min(chips)`, so a short seat is dealt in and left all-in by its own post. When that left nobody owed an action, the deal still armed the timer on whatever `find_next_active_seat_with_chips` fell back to (the big blind, when no seat had chips) and `resolve_expired_action_timer` folded that seat with no `can_still_act` check, so `advance_game` saw one claimant and paid the small blind the whole pot. Heads-up, aces all-in for 15 in the big blind against 7-2 all-in for 10: the 7-2 ended with 20 and the aces with 5. On an ante table the same clock fold gave the side-pot seat the 90 main pot the short stack had the best hand for. Conservation held throughout, so the money-safety invariants were silent: correct totals, wrong recipient. Now the deal runs the board out when fewer than two seats can act and none of them owes a call (a seat that still owes a call is asked), and the clock never folds a seat that cannot act: it drops the timer and moves the hand on through `advance_game`, which is also what heals a table dealt on the old engine and upgraded mid-hand. The history push in `start_new_hand` now precedes the opening of the action, because `record_local_hand_result` writes the LAST history entry and a run-out at the deal settles inside the same message. [Review 2026-09-28, gap 4](CODEBASE-REVIEW-2026-09-28.md) |
 | [E-104](#e-104) | fund-theft | FIXED | task 1790632429 | `cd tests/money_safety && cargo test --test ckbtc_door -- --test-threads=2` (`dev.sh test` step 4; fast tier of `scripts/test-suites.list`), `cb01` + `cb04`, both verified RED on the tree without the refusal: *"alice's escrow: 99990 sats; ledger holds 49990"* | `verify_ckbtc_deposit` (`notify_deposit` on a BTC table) | **one ckBTC deposit credited twice.** The door checked `to.owner == canister` and never `to.subaccount`, so a transfer to a player's deposit address was credited by block index AND by `claim_external_deposit()`'s sweep, which is its own new block the anti-replay record has never seen. 50,000 sats in, 99,990 owed; a stranger paying into somebody else's address is credited too. The ICP door compares the full account identifier; this one compared the owner. Latent on mainnet only because [E-105](#e-105) had killed the door first; fixed together. [FINDING 46](SECURITY-FINDINGS.md#finding-46) |
@@ -11986,3 +11987,88 @@ Candid: `TableState` gained `last_hand_went_to_showdown : opt bool` on
 `TableView` is unchanged. Gate: `cargo test -p table_canister --test
 betting_rules`, section 7, and `showdown.test.js` under the frontend's vitest.
 The previous-release upgrade test (money_safety M7) exercises the `opt` field.
+
+<a id="e-108"></a>
+### E-108 — medium — leaving from the seat on action handed a closed street back to a player who had already matched — STATUS: FIXED (task 1790632441)
+
+docs/CODEBASE-REVIEW-2026-09-28.md gap 5, read there and reproduced here on the
+real engine. The branch and the question it never asked:
+
+```text
+leave_table        if was_in_hand { p.has_folded = true }
+                   ...
+                   if count_active_players(state) == 1 {
+                       end_hand_single_winner(state, now);
+                   } else if was_action_on {
+                       state.action_on = find_next_active_seat(state, state.action_on);
+                       state.action_timer = Some(ActionTimer { .. });   // unconditionally
+                   }
+
+advance_game       if count_active_players(state) == 1 { end_hand_single_winner }
+                   if is_betting_round_complete(state) { advance_to_next_street }   // the question
+                   state.action_on = find_next_active_seat(..); state.action_timer = Some(..)
+```
+
+Every action ends in `advance_game`, which asks whether the street is closed
+before it moves the clock. A departure from the seat on action is an action --
+the leaver is folded, exactly as a timeout folds them -- but it took its own
+branch, and that branch only asked whether one player was left. So when the
+leaver was the last seat that owed an action, the street was closed and the
+clock was handed to the next seat anyway. Measured on the real deal
+(`deal_hand` + `open_the_action`, three seats, pre-flop closed, a bet and a call
+on the flop) through `vacate_seat`, which is `leave_table` with the platform
+pulled out:
+
+```text
+a_leaver_on_action_after_the_street_closed_does_not_hand_the_street_back
+  A bet, B called, C left on action: the flop betting is closed and the turn is
+  dealt. Instead the hand is at Flop with the clock on Some(2), current bet 40
+  left: Flop   right: Turn
+
+a_clock_left_on_a_matched_seat_moves_on_when_the_last_seat_owing_action_leaves
+  seats 0 and 1 have both matched: the flop is closed and the turn is dealt.
+  Instead the hand is at Flop with the clock on Some(0)
+  left: Flop   right: Turn
+```
+
+The clock on seat 2 is on A, the bettor, with A's own 40 standing as the bet on
+a street where every seat still holding cards has matched it. `Raise` is refused
+there (`action_is_closed_to_raising`), so A's only replies were Check and Fold;
+and if A was away, `resolve_expired_action_timer` folded A -- a seat that could
+act, so E-106's guard does not apply -- out of a 140 pot A had fully matched, and
+`advance_game` paid it to B. Every chip is accounted for in both lines, which is
+why `tests/money_safety`'s conservation invariants never saw it, and why the new
+tests assert what the hand is WAITING FOR.
+
+**The fix, two parts, no settlement change.** (1) `leave_table`'s body is now
+`pub fn vacate_seat(state, caller, now)`, the seam `tests/betting_rules.rs`
+drives, on the pattern of `apply_player_action`, `build_table_view` and
+`record_voluntary_show` (H-04: a seam nothing tests is a seam every mutation
+survives). `leave_table` is `msg_caller()` + `time()` + the `TABLE` borrow +
+`vacate_seat` + `schedule_next_wake()` + the escrow credit, unchanged. (2) After
+the fold mark, a departure from the seat on action drops the clock and calls the
+same `advance_game` an action does, which is also the E-106 shape in
+`resolve_expired_action_timer`: one claimant left ends the hand by fold-out
+(`last_hand_went_to_showdown` false, E-107's flag written by `finish_hand`), a
+closed street deals the next one through `advance_to_next_street` (which runs
+the board out when fewer than two can act), an open street moves the clock to
+the next seat that owes an action. A departure from any OTHER seat leaves the
+clock where it is -- the seat it names still owes its action, and calling
+`advance_game` unconditionally would move the clock off it -- unless the
+departure changed what the hand is waiting for: the leaver was the last other
+claimant, or the last seat that still owed an action (the clock parked on a
+seat that had already matched; the deal and the actions no longer produce that
+shape, but an upgraded table can carry it, and the second red line above is that
+case built by hand).
+
+The uncalled-bet return in the same function is untouched: in every case above
+the leaver is never the top contributor, so nothing came back, and the pot the
+turn is dealt over is the 140 that was put in. Its own rule -- a leaver's
+uncalled bet handed back while another seat could still call it -- is queued
+task 1790632474 item 1, not this row.
+
+No Candid change: `vacate_seat` is a `pub fn` for the host tests, not a method;
+`table_canister.did` is byte-identical and the `#[ic_cdk::update]` /
+`#[ic_cdk::query]` count is unchanged. `cash_out` has no such branch: it refuses
+a seat that is in a live hand. Gate: `cargo test -p table_canister --test
+betting_rules`, section 8.
