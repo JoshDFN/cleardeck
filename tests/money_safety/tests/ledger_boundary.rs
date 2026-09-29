@@ -634,3 +634,398 @@ fn m14_the_journal_is_bounded_by_refusing_to_start_not_by_forgetting() {
     );
     assert_coherent(&w, "after draining the cap");
 }
+
+// ===========================================================================
+// E-109: the doors out of an intent that can no longer be re-issued
+// ===========================================================================
+//
+// docs/CODEBASE-REVIEW-2026-09-28.md gap 6, docs/DEFECTS.md E-109. The test
+// above proves the retry is refused past the deduplication window. These prove
+// what happens NEXT: that a payout past its window does not lock its owner out
+// of every later withdrawal, and that the two doors that close such an entry
+// close it only to an outcome the ledger proves (`reconcile_ledger_intent`) or
+// one the controller has to name and cannot use to credit anybody
+// (`admin_close_stale_ledger_intent`).
+
+/// Mirrors `StaleIntentClose` in `src/table_canister/src/lib.rs`. Separate on
+/// purpose, for the same reason `LedgerIntentView` is.
+#[derive(candid::CandidType, serde::Deserialize, Clone, Copy, Debug)]
+enum StaleIntentClose {
+    NotMoved,
+    Moved,
+}
+
+fn decode_line(bytes: Vec<u8>) -> Result<String, OpError> {
+    match candid::decode_one::<Result<String, String>>(&bytes) {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(m)) => Err(OpError::Err(m)),
+        Err(e) => Err(OpError::Trap(format!("reply decode: {e}"))),
+    }
+}
+
+/// `reconcile_ledger_intent(id, block)` as `who`.
+fn reconcile(w: &World, who: candid::Principal, id: u64, block: u64) -> Result<String, OpError> {
+    let bytes = w
+        .pic
+        .update_call(
+            w.table,
+            who,
+            "reconcile_ledger_intent",
+            Encode!(&id, &block).expect("encode"),
+        )
+        .map_err(|r| OpError::Trap(format!("{r:?}")))?;
+    decode_line(bytes)
+}
+
+/// `admin_close_stale_ledger_intent(id, outcome)` as `who`.
+fn admin_close(
+    w: &World,
+    who: candid::Principal,
+    id: u64,
+    outcome: StaleIntentClose,
+) -> Result<String, OpError> {
+    let bytes = w
+        .pic
+        .update_call(
+            w.table,
+            who,
+            "admin_close_stale_ledger_intent",
+            Encode!(&id, &outcome).expect("encode"),
+        )
+        .map_err(|r| OpError::Trap(format!("{r:?}")))?;
+    decode_line(bytes)
+}
+
+/// Move the clock past the one open entry's retry deadline without running a
+/// round: a canister nobody called for a day.
+fn past_the_deadline(w: &World) -> u64 {
+    let open = fault::ledger_intents(w);
+    assert_eq!(open.len(), 1, "exactly one open entry expected: {open:?}");
+    let deadline = open[0].retry_deadline_ns;
+    let now = w.now_nanos();
+    w.advance_time_only(Duration::from_nanos(
+        deadline.saturating_sub(now) + 60_000_000_000,
+    ));
+    open[0].id
+}
+
+/// Leave an intent open with the outcome UNKNOWN: the ledger is stopped, so the
+/// canister's call to it is rejected and the entry stays, lease released, with
+/// nothing having moved. This is the discarded-continuation state's twin --
+/// the record exists and the ledger did nothing -- and the state the controller
+/// door exists for.
+fn with_the_ledger_stopped<T>(w: &World, f: impl FnOnce(&World) -> T) -> T {
+    w.pic
+        .stop_canister(w.ledger, Some(w.controller))
+        .expect("stop the ledger");
+    let out = f(w);
+    w.pic
+        .start_canister(w.ledger, Some(w.controller))
+        .expect("start the ledger again");
+    out
+}
+
+/// **A payout past its retry window does not block the owner's other
+/// withdrawals.** Nothing can drive it any more, so there is no continuation to
+/// race; its escrow debit stands until the entry is reconciled; and `withdraw`
+/// refusing on it was the last door out of escrow closing on a record that will
+/// never move. Measured before the fix: "A withdrawal is already in progress",
+/// forever.
+#[test]
+fn e109_a_payout_past_its_window_no_longer_locks_the_owner_out_of_withdraw() {
+    let mut w = World::default_world();
+    let carol = w.actor("carol");
+    w.fund_escrow(carol, e8(5.0)).expect("fund escrow");
+    let inj = fault::trap_withdraw_tail(&mut w, carol, e8(2.0)).expect("inject");
+    eprintln!("\n=== a payout past its window, then another withdrawal ===");
+    show("after rollback", &inj.after);
+    assert_eq!(w.get_balance(carol), e8(3.0), "the debit is committed at the await point");
+
+    let stale_id = past_the_deadline(&w);
+    let wallet_before = w.ledger_balance(carol, None);
+
+    // The resume path still refuses the stale one.
+    let refused = fault::resolve_my_ledger_intents(&w, carol).expect("call");
+    let joined = refused.join(" ");
+    eprintln!("  resolve -> {joined}");
+    assert!(joined.contains("deduplication window"), "{joined}");
+
+    // THE FIX: an unrelated withdrawal goes through.
+    let out = w.withdraw(carol, e8(1.0));
+    eprintln!("  withdraw(1 ICP) beside the stale payout -> {out:?}");
+    assert!(
+        out.is_ok(),
+        "\nFUND LOCK: a payout past its retry window blocked a withdrawal. The stale entry \
+         cannot be re-driven, so there is nothing for this call to race; refusing it froze \
+         the owner's whole escrow behind a record nobody could close. {out:?}"
+    );
+    assert_eq!(w.get_balance(carol), e8(2.0));
+    assert_eq!(
+        w.ledger_balance(carol, None),
+        wallet_before + e8(1.0) - ledger::TRANSFER_FEE,
+        "the new payout reached her wallet"
+    );
+    let open = fault::ledger_intents(&w);
+    assert_eq!(open.len(), 1, "the stale entry stays on record: {open:?}");
+    assert_eq!(open[0].id, stale_id, "and it is the stale one, the new payout settled");
+    assert_coherent(&w, "a withdrawal beside a stale payout");
+
+    // And the refusal names the two doors out, so the record is not a dead end.
+    assert!(
+        joined.contains("reconcile_ledger_intent") && joined.contains("admin_close_stale_ledger_intent"),
+        "the refusal must name both doors out: {joined}"
+    );
+}
+
+/// **The ledger-proof door closes a stale payout only against the block that IS
+/// it.** A wrong block, a stranger, a block the ledger does not have: refused,
+/// nothing changes. The right block, named by the owner: closed, no balance
+/// change (the debit already happened), pending flag gone.
+#[test]
+fn e109_a_stale_payout_that_moved_is_closed_only_by_the_block_that_proves_it() {
+    let mut w = World::default_world();
+    let carol = w.actor("carol");
+    let bob = w.actor("bob");
+    w.fund_escrow(carol, e8(5.0)).expect("fund escrow");
+    let inj = fault::trap_withdraw_tail(&mut w, carol, e8(2.0)).expect("inject");
+    assert_eq!(
+        inj.blocks_written.end - inj.blocks_written.start,
+        1,
+        "one payout writes one block: {:?}",
+        inj.blocks_written
+    );
+    let payout_block = inj.blocks_written.start;
+    let id = past_the_deadline(&w);
+    let escrow = w.get_balance(carol);
+    eprintln!("\n=== closing a stale payout against its block ===");
+    eprintln!("  stale entry {id}, payout block {payout_block}, escrow {escrow}");
+
+    // A block that is a real transfer and not this one (the pull that funded her).
+    let wrong = reconcile(&w, carol, id, payout_block - 1);
+    eprintln!("  wrong block -> {wrong:?}");
+    match wrong {
+        Err(OpError::Err(ref m)) => {
+            assert!(m.contains("is not ledger operation"), "{m}");
+            assert!(m.contains("Nothing has changed"), "{m}");
+        }
+        other => panic!("a block that is not this movement must be refused: {other:?}"),
+    }
+    assert_eq!(fault::ledger_intents(&w).len(), 1, "refusal changes nothing");
+    assert_eq!(w.get_balance(carol), escrow);
+
+    // A block the ledger does not have yet.
+    let missing = reconcile(&w, carol, id, fault::chain_length(&w) + 5);
+    eprintln!("  future block -> {missing:?}");
+    assert!(matches!(missing, Err(OpError::Err(ref m)) if m.contains("has no block")), "{missing:?}");
+    assert_eq!(fault::ledger_intents(&w).len(), 1);
+
+    // The right block, named by somebody else.
+    let stranger = reconcile(&w, bob, id, payout_block);
+    eprintln!("  bob with the right block -> {stranger:?}");
+    assert!(
+        matches!(stranger, Err(OpError::Err(ref m)) if m.contains("belongs to somebody else")),
+        "{stranger:?}"
+    );
+    assert_eq!(fault::ledger_intents(&w).len(), 1);
+
+    // The right block, by the owner.
+    let closed = reconcile(&w, carol, id, payout_block).expect("the proving block closes it");
+    eprintln!("  carol with the right block -> {closed}");
+    assert!(closed.contains("is this movement"), "{closed}");
+    assert!(fault::ledger_intents(&w).is_empty(), "the entry is retired");
+    assert_eq!(
+        w.get_balance(carol),
+        escrow,
+        "a payout that moved is closed with NO balance change: the debit already happened"
+    );
+    assert_coherent(&w, "after closing a stale payout against its block");
+
+    // Once. The second call finds nothing to close and credits nothing.
+    let again = reconcile(&w, carol, id, payout_block);
+    eprintln!("  again -> {again:?}");
+    assert!(matches!(again, Err(OpError::Err(ref m)) if m.contains("no open ledger operation")));
+    assert_eq!(w.get_balance(carol), escrow);
+
+    // And she can withdraw (the settle started the cooldown; wait it out).
+    w.advance(Duration::from_secs(61));
+    let out = w.withdraw(carol, e8(1.0));
+    eprintln!("  withdraw after the close -> {out:?}");
+    assert!(out.is_ok(), "{out:?}");
+}
+
+/// **The ledger-proof door is the one thing that can credit a pull past its
+/// window, and it credits what the block proves, once.** FINDING 29's "Pull or
+/// Sweep strands money at the main account with a record but no remedy" -- the
+/// remedy.
+#[test]
+fn e109_a_stale_pull_that_landed_is_credited_once_by_its_block() {
+    let mut w = World::default_world();
+    let alice = w.actor("alice");
+    let amount = e8(1.0);
+    w.approve(alice, amount + ledger::TRANSFER_FEE).unwrap();
+    let inj = fault::trap_deposit_tail(&mut w, alice, amount).expect("inject");
+    assert_eq!(inj.blocks_written.end - inj.blocks_written.start, 1, "{:?}", inj.blocks_written);
+    let pull_block = inj.blocks_written.start;
+    let id = past_the_deadline(&w);
+    eprintln!("\n=== crediting a stale pull against its block ===");
+    show("after rollback", &inj.after);
+    assert_eq!(w.get_balance(alice), 0);
+
+    let refused = fault::resolve_my_ledger_intents(&w, alice).expect("call");
+    assert!(refused.join(" ").contains("deduplication window"));
+    assert_eq!(w.get_balance(alice), 0, "the resume path credits nothing past the window");
+
+    let closed = reconcile(&w, alice, id, pull_block).expect("the proving block credits it");
+    eprintln!("  alice with the pull's block -> {closed}");
+    assert_eq!(
+        w.get_balance(alice),
+        amount,
+        "\nthe block proves the pull landed; the owner is credited exactly the pull amount"
+    );
+    assert!(fault::ledger_intents(&w).is_empty());
+    assert_coherent(&w, "after crediting a stale pull against its block");
+
+    // Once, by construction: the entry is gone and the block is consumed.
+    let again = reconcile(&w, alice, id, pull_block);
+    eprintln!("  again -> {again:?}");
+    assert!(again.is_err());
+    let notify = w.notify_deposit(alice, pull_block);
+    eprintln!("  notify_deposit(the same block) -> {notify:?}");
+    assert!(notify.is_err(), "the block that credited the pull cannot credit again");
+    assert_eq!(w.get_balance(alice), amount, "no second credit by any door");
+}
+
+/// **A stale payout that NEVER moved is refunded when the controller names
+/// `NotMoved`** -- and only then, only by a controller, only past the window.
+/// The outcome-unknown state is real: the ledger was stopped while the payout
+/// was attempted, so the canister's call was rejected and the entry stayed open
+/// with nothing moved.
+#[test]
+fn e109_a_stale_payout_that_never_moved_is_refunded_when_the_controller_names_not_moved() {
+    let w = World::default_world();
+    let carol = w.actor("carol");
+    let controller = w.controller;
+    w.fund_escrow(carol, e8(5.0)).expect("fund escrow");
+    let wallet_before = w.ledger_balance(carol, None);
+
+    let attempt = with_the_ledger_stopped(&w, |w| w.withdraw(carol, e8(2.0)));
+    eprintln!("\n=== a payout the ledger never saw ===");
+    eprintln!("  withdraw with the ledger stopped -> {attempt:?}");
+    assert!(
+        matches!(attempt, Err(OpError::Err(ref m)) if m.contains("does NOT know whether the money moved")),
+        "{attempt:?}"
+    );
+    let open = fault::ledger_intents(&w);
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0].kind, "payout");
+    let id = open[0].id;
+    assert_eq!(w.get_balance(carol), e8(3.0), "the debit stands while the outcome is unknown");
+    assert_eq!(w.ledger_balance(carol, None), wallet_before, "and nothing reached her wallet");
+
+    // Inside the window: the controller door refuses, because the resume path
+    // can still ask the ledger itself.
+    let early = admin_close(&w, controller, id, StaleIntentClose::NotMoved);
+    eprintln!("  controller, inside the window -> {early:?}");
+    assert!(
+        matches!(early, Err(OpError::Err(ref m)) if m.contains("inside the ledger's deduplication window")),
+        "{early:?}"
+    );
+    assert_eq!(fault::ledger_intents(&w).len(), 1);
+
+    past_the_deadline(&w);
+
+    // Not a controller: refused.
+    let owner = admin_close(&w, carol, id, StaleIntentClose::NotMoved);
+    eprintln!("  the owner herself -> {owner:?}");
+    assert!(matches!(owner, Err(OpError::Err(ref m)) if m.contains("Unauthorized")), "{owner:?}");
+    assert_eq!(fault::ledger_intents(&w).len(), 1);
+    assert_eq!(w.get_balance(carol), e8(3.0));
+
+    // The controller names NotMoved: the up-front debit comes back.
+    let closed = admin_close(&w, controller, id, StaleIntentClose::NotMoved).expect("close");
+    eprintln!("  controller names NotMoved -> {closed}");
+    assert!(closed.contains("back in"), "{closed}");
+    assert_eq!(
+        w.get_balance(carol),
+        e8(5.0),
+        "\nthe escrow debited before a movement that never happened is back in escrow"
+    );
+    assert!(fault::ledger_intents(&w).is_empty());
+    assert_coherent(&w, "after the controller closed an unmoved payout as NotMoved");
+
+    // And she is whole, and free.
+    let out = w.withdraw(carol, e8(1.0));
+    eprintln!("  withdraw after the close -> {out:?}");
+    assert!(out.is_ok(), "{out:?}");
+}
+
+/// **The controller door cannot credit an arriving intent on its word.** A
+/// `Pull` whose outcome is unknown, past its window: `Moved` is refused and
+/// points at the block door; `NotMoved` closes the record and credits nothing.
+/// This is the line between "close to an outcome you name" and a setter.
+#[test]
+fn e109_the_controller_door_cannot_credit_an_arriving_intent_on_its_word() {
+    let w = World::default_world();
+    let alice = w.actor("alice");
+    let controller = w.controller;
+    let amount = e8(1.0);
+    w.approve(alice, amount + ledger::TRANSFER_FEE).unwrap();
+
+    let attempt = with_the_ledger_stopped(&w, |w| w.deposit(alice, amount));
+    eprintln!("\n=== a pull the ledger never saw ===");
+    eprintln!("  deposit with the ledger stopped -> {attempt:?}");
+    assert!(attempt.is_err());
+    let open = fault::ledger_intents(&w);
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0].kind, "pull");
+    let id = open[0].id;
+    assert_eq!(w.get_balance(alice), 0);
+    past_the_deadline(&w);
+
+    let moved = admin_close(&w, controller, id, StaleIntentClose::Moved);
+    eprintln!("  controller names Moved on a pull -> {moved:?}");
+    match moved {
+        Err(OpError::Err(ref m)) => {
+            assert!(m.contains("Refused"), "{m}");
+            assert!(
+                m.contains("reconcile_ledger_intent"),
+                "the refusal must name the door that CAN credit it, against a block: {m}"
+            );
+        }
+        other => panic!(
+            "\nA CONTROLLER CREDITED A BALANCE ON THEIR OWN WORD. Closing a pull as moved with \
+             no block is a credit with no evidence; it is the setter the no-setter gate exists \
+             to refuse, with a different name. {other:?}"
+        ),
+    }
+    assert_eq!(w.get_balance(alice), 0, "nothing credited");
+    assert_eq!(fault::ledger_intents(&w).len(), 1, "nothing closed");
+
+    let not_moved = admin_close(&w, controller, id, StaleIntentClose::NotMoved).expect("close");
+    eprintln!("  controller names NotMoved on a pull -> {not_moved}");
+    assert!(not_moved.contains("nothing was credited"), "{not_moved}");
+    assert_eq!(w.get_balance(alice), 0, "a pull that never happened credits nothing");
+    assert!(fault::ledger_intents(&w).is_empty());
+    assert_coherent(&w, "after the controller closed an unmoved pull as NotMoved");
+}
+
+/// **`Moved` on a stale payout closes the record and refunds nothing.** The
+/// money left before the entry was written; the controller's word retires the
+/// record and writes down the main-account debit, and cannot put escrow back.
+#[test]
+fn e109_the_controller_naming_moved_closes_a_stale_payout_without_a_refund() {
+    let mut w = World::default_world();
+    let carol = w.actor("carol");
+    let controller = w.controller;
+    w.fund_escrow(carol, e8(5.0)).expect("fund escrow");
+    fault::trap_withdraw_tail(&mut w, carol, e8(2.0)).expect("inject");
+    let id = past_the_deadline(&w);
+    assert_eq!(w.get_balance(carol), e8(3.0));
+
+    let closed = admin_close(&w, controller, id, StaleIntentClose::Moved).expect("close");
+    eprintln!("\n=== controller names Moved on a stale payout ===\n  -> {closed}");
+    assert!(closed.contains("nothing was credited"), "{closed}");
+    assert_eq!(w.get_balance(carol), e8(3.0), "a payout that moved refunds nothing");
+    assert!(fault::ledger_intents(&w).is_empty());
+    assert_coherent(&w, "after the controller closed a moved payout as Moved");
+}

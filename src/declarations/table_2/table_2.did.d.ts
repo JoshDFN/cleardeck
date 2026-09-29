@@ -312,6 +312,8 @@ export interface SolvencyReport {
 export type SolvencyVerdict = { 'CannotPayEveryone' : null } |
   { 'CanPayEveryone' : null } |
   { 'Unknown' : null };
+export type StaleIntentClose = { 'NotMoved' : null } |
+  { 'Moved' : null };
 export interface StuckHandStatus {
   'refundable_pot' : bigint,
   'is_stuck' : boolean,
@@ -426,6 +428,10 @@ export interface _SERVICE {
     [Array<Principal>],
     Result_DepositAudit
   >,
+  'admin_close_stale_ledger_intent' : ActorMethod<
+    [bigint, StaleIntentClose],
+    Result_IntentLine
+  >,
   'admin_get_all_balances' : ActorMethod<
     [],
     { 'Ok' : [bigint, Array<[Principal, bigint]>] } |
@@ -488,6 +494,7 @@ export interface _SERVICE {
   'leave_table' : ActorMethod<[], Result_1>,
   'notify_deposit' : ActorMethod<[bigint], Result_1>,
   'player_action' : ActorMethod<[PlayerAction], Result>,
+  'reconcile_ledger_intent' : ActorMethod<[bigint, bigint], Result_IntentLine>,
   'refresh_deposit_custody' : ActorMethod<[], Result_DepositCustody>,
   'refresh_main_account_custody' : ActorMethod<[], Result_MainCustody>,
   'refresh_solvency' : ActorMethod<[], Result_Solvency>,

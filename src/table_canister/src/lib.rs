@@ -2198,6 +2198,15 @@ fn get_deposit_replay_state() -> (u64, u64) {
 //   second time. The entry stays, visible, naming the owner and the amount. That
 //   is a worse outcome than automatic recovery and a much better one than the
 //   state before this change, in which there was no record at all.
+//
+//   Such an entry is closed through one of two doors (docs/DEFECTS.md E-109; the
+//   section "THE TWO DOORS OUT OF AN INTENT THAT CAN NO LONGER BE RE-ISSUED"
+//   below): `reconcile_ledger_intent(id, block)`, which reads the named block
+//   off the ledger and settles only against a block that IS this movement, and
+//   the controller's `admin_close_stale_ledger_intent(id, outcome)`, which
+//   closes to an outcome the controller names and can never credit an arriving
+//   movement. A `Payout` past its window no longer blocks the owner's other
+//   withdrawals: nothing can drive it, so there is nothing to race.
 
 /// A message may hold the right to drive one intent for this long. After that
 /// anybody entitled to the entry may take it over -- which is what makes a
@@ -2366,7 +2375,8 @@ fn open_ledger_intent(
             "You have {} unresolved ledger operations on this table and the limit is {}. \
              Call resolve_my_ledger_intents() to finish them -- it is safe to call at any \
              time and it will credit or refund whatever the ledger actually did. \
-             get_my_ledger_intents() lists them.",
+             get_my_ledger_intents() lists them. One past its retry window is closed with \
+             reconcile_ledger_intent(id, block) instead, against the block that proves it.",
             mine_open, MAX_OPEN_INTENTS_PER_PRINCIPAL
         ));
     }
@@ -2476,19 +2486,16 @@ fn settle_intent(id: u64, outcome: IntentOutcome, now: u64) -> Result<u64, Strin
             // moved whether or not this canister ends up crediting anybody for
             // it, and a written-down balance that ignores a confirmed movement is
             // the thing this record exists to stop being.
-            match intent.kind {
-                LedgerIntentKind::Pull | LedgerIntentKind::Sweep => {
-                    note_main_credit(intent.amount, intent.created_at_time)
-                }
-                LedgerIntentKind::Payout => note_main_debit(intent.amount),
-                // THE MAIN ACCOUNT DID NOT MOVE. A refund goes from the owner's
-                // deposit subaccount straight to the owner's wallet, so noting
-                // either a credit or a debit here would be this canister writing
-                // down a movement of an account that did not have one.
-                LedgerIntentKind::RefundDeposit => {}
+            //
+            // An OUTGOING kind (`Payout`, `RefundDeposit`) is booked by
+            // [`book_outgoing_moved`], which the controller's stale-intent door
+            // shares (docs/DEFECTS.md E-109), so the two cannot drift apart.
+            if !intent.kind.credits_on_success() {
+                return Ok(book_outgoing_moved(&intent, Some(block), now));
             }
+            note_main_credit(intent.amount, intent.created_at_time);
 
-            if intent.kind.credits_on_success() {
+            {
                 // The anti-replay record still governs, and it is still the only
                 // writer of "this block index has been consumed". A block that is
                 // refused here has already been credited to this same principal
@@ -2538,48 +2545,6 @@ fn settle_intent(id: u64, outcome: IntentOutcome, now: u64) -> Result<u64, Strin
                     new_balance
                 );
                 Ok(new_balance)
-            } else if intent.kind == LedgerIntentKind::RefundDeposit {
-                // A refund that really left. Nothing was ever debited from
-                // escrow, so there is nothing to reconcile there; what HAS
-                // changed is the deposit subaccount, which is now empty of the
-                // amount and its fee. Replace the observation for the same
-                // reason the `Sweep` branch above does: the reading was taken
-                // before the movement and the money is gone from that account
-                // whether this ran in the original continuation or in a later
-                // `resolve_my_ledger_intents()`.
-                record_deposit_observation(
-                    intent.who,
-                    get_table_currency().ledger_canister(),
-                    0,
-                    now,
-                );
-                ic_cdk::println!(
-                    "ledger intent {} SETTLED: refund of {} e8s from the deposit subaccount of \
-                     {} to their own wallet at block {}",
-                    id,
-                    intent.amount,
-                    intent.who,
-                    block
-                );
-                Ok(block)
-            } else {
-                // A payout that really left. The escrow debit already happened
-                // before the movement, so settling is: stop calling it pending,
-                // and start the cooldown.
-                PENDING_WITHDRAWALS.with(|p| {
-                    p.borrow_mut().remove(&intent.who);
-                });
-                LAST_WITHDRAWAL.with(|l| {
-                    l.borrow_mut().insert(intent.who, now);
-                });
-                ic_cdk::println!(
-                    "ledger intent {} SETTLED: payout of {} e8s to {} at block {}",
-                    id,
-                    intent.amount,
-                    intent.who,
-                    block
-                );
-                Ok(block)
             }
         }
         IntentOutcome::Refused(reason) => {
@@ -2595,9 +2560,7 @@ fn settle_intent(id: u64, outcome: IntentOutcome, now: u64) -> Result<u64, Strin
                 // The money never left, so give the escrow back. This is the
                 // refund that used to live only in a continuation that could be
                 // discarded; it is now reachable from the resume path as well.
-                PENDING_WITHDRAWALS.with(|p| {
-                    p.borrow_mut().remove(&intent.who);
-                });
+                clear_pending_withdrawal_unless_another_payout_is_open(intent.who);
                 BALANCES.with(|b| {
                     let mut balances = b.borrow_mut();
                     let current = balances.get(&intent.who).copied().unwrap_or(0);
@@ -2631,6 +2594,108 @@ fn settle_intent(id: u64, outcome: IntentOutcome, now: u64) -> Result<u64, Strin
                  reports as a duplicate, and settles your balance either way."
             ))
         }
+    }
+}
+
+/// Book an OUTGOING movement (`Payout` or `RefundDeposit`) that is known to have
+/// happened, for an entry ALREADY TAKEN out of the journal. Returns the block
+/// index, or 0 when nobody can name one.
+///
+/// `block` is `Some` when the ledger said so -- the original continuation, a
+/// `Duplicate` answer on resume, or a block read back by
+/// `reconcile_ledger_intent` -- and `None` when a controller closed a
+/// post-deadline entry as moved on their own word (`admin_close_stale_ledger_intent`,
+/// docs/DEFECTS.md E-109). Both paths book the same things, here, once.
+fn book_outgoing_moved(intent: &LedgerIntent, block: Option<u64>, now: u64) -> u64 {
+    match intent.kind {
+        LedgerIntentKind::Payout => {
+            // THE MAIN ACCOUNT MOVED (FINDING 35): a payout takes exactly
+            // `amount` out of it (the recipient gets `amount - fee`, the ledger
+            // burns the fee from the same account).
+            note_main_debit(intent.amount);
+            // The escrow debit already happened before the movement, so settling
+            // is: stop calling it pending, and start the cooldown.
+            clear_pending_withdrawal_unless_another_payout_is_open(intent.who);
+            LAST_WITHDRAWAL.with(|l| {
+                l.borrow_mut().insert(intent.who, now);
+            });
+            ic_cdk::println!(
+                "ledger intent {} SETTLED: payout of {} e8s to {} at block {}",
+                intent.id,
+                intent.amount,
+                intent.who,
+                block.map(|b| b.to_string()).unwrap_or_else(|| "(not named)".to_string())
+            );
+        }
+        LedgerIntentKind::RefundDeposit => {
+            // THE MAIN ACCOUNT DID NOT MOVE. A refund goes from the owner's
+            // deposit subaccount straight to the owner's wallet, so noting either
+            // a credit or a debit would be this canister writing down a movement
+            // of an account that did not have one. Nothing was ever debited from
+            // escrow either; what HAS changed is the deposit subaccount, which is
+            // now empty of the amount and its fee. Replace the observation, for
+            // the same reason the `Sweep` settle does: the reading was taken
+            // before the movement and the money is gone from that account.
+            record_deposit_observation(
+                intent.who,
+                get_table_currency().ledger_canister(),
+                0,
+                now,
+            );
+            ic_cdk::println!(
+                "ledger intent {} SETTLED: refund of {} e8s from the deposit subaccount of \
+                 {} to their own wallet at block {}",
+                intent.id,
+                intent.amount,
+                intent.who,
+                block.map(|b| b.to_string()).unwrap_or_else(|| "(not named)".to_string())
+            );
+        }
+        // Not outgoing. The callers match on `credits_on_success()` first, so
+        // this arm is unreachable; it books nothing rather than trapping inside
+        // a settle.
+        LedgerIntentKind::Pull | LedgerIntentKind::Sweep => {
+            ic_cdk::println!(
+                "book_outgoing_moved called for an arriving intent {}; nothing booked",
+                intent.id
+            );
+        }
+    }
+    block.unwrap_or(0)
+}
+
+/// Take an OUTGOING entry out of the journal and book it as moved. The
+/// controller's stale-intent door; see [`book_outgoing_moved`].
+fn settle_outgoing_moved(id: u64, block: Option<u64>, now: u64) -> Result<u64, String> {
+    let Some(intent) = take_ledger_intent(id) else {
+        return Err(format!("Ledger operation {id} was already settled."));
+    };
+    if intent.kind.credits_on_success() {
+        // Put it back: an arriving kind is never closed as moved without a
+        // block. The caller refuses this before reaching here; this is the belt.
+        LEDGER_INTENTS.with(|j| j.borrow_mut().insert(id, intent));
+        return Err(format!(
+            "Ledger operation {id} is an arriving movement and cannot be closed as moved \
+             without the block that proves it."
+        ));
+    }
+    Ok(book_outgoing_moved(&intent, block, now))
+}
+
+/// `PENDING_WITHDRAWALS` is a per-owner flag and the journal can hold more than
+/// one payout for an owner at once (a stale one past its window beside a live
+/// one, docs/DEFECTS.md E-109), so settling one payout must not clear the flag
+/// that another still relies on.
+fn clear_pending_withdrawal_unless_another_payout_is_open(who: Principal) {
+    let another_open = LEDGER_INTENTS.with(|j| {
+        j.borrow()
+            .values()
+            .any(|i| i.who == who && i.kind == LedgerIntentKind::Payout)
+    });
+    if !another_open {
+        PENDING_WITHDRAWALS.with(|p| {
+            p.borrow_mut().remove(&who);
+        });
     }
 }
 
@@ -2911,11 +2976,17 @@ fn lease_ledger_intent(id: u64, who: Principal, now: u64) -> Result<LedgerIntent
                 "Ledger operation {id} ({} of {} e8s for {}) is past the ledger's \
                  deduplication window, so this canister CANNOT safely re-issue it: a re-issue \
                  now would be a second, real movement. The record is kept and is visible from \
-                 get_my_ledger_intents(). Resolving it needs an operator to reconcile against \
-                 the ledger. Nothing has been forgotten.",
+                 get_my_ledger_intents(). Nothing has been forgotten. Two doors close it: if \
+                 the movement is on the ledger, reconcile_ledger_intent({id}, <block>) with the \
+                 block that carries memo {} and created_at_time {} -- this canister reads the \
+                 block and settles against it; if the ledger cannot answer, a controller can \
+                 close it with admin_close_stale_ledger_intent, naming the outcome. A payout \
+                 past its window no longer blocks your other withdrawals.",
                 entry.kind.as_str(),
                 entry.amount,
-                entry.who
+                entry.who,
+                entry.memo,
+                entry.created_at_time
             ));
         }
         entry.leased_until_ns = now.saturating_add(INTENT_LEASE_NS);
@@ -3033,6 +3104,808 @@ fn get_all_ledger_intents() -> Vec<LedgerIntentView> {
     }
 }
 
+// ===========================================================================
+// THE TWO DOORS OUT OF AN INTENT THAT CAN NO LONGER BE RE-ISSUED
+// ===========================================================================
+//
+// docs/CODEBASE-REVIEW-2026-09-28.md gap 6, docs/DEFECTS.md E-109.
+//
+// Past `retry_deadline_ns` the resume path above REFUSES, correctly: a re-issue
+// outside the ledger's deduplication window would be a second, real movement.
+// FINDING 29 wrote that the entry then "needs an operator to reconcile against
+// the ledger" and FINDING 38 that it is "kept forever, pending operator
+// reconciliation" -- and there was no method through which an operator, or the
+// owner, could do that. An entry past its window was a record with no remedy:
+// a `Payout` whose continuation was discarded (an upgrade mid-call, as on
+// 2026-08-06) kept the owner's escrow debited AND, through `withdraw`'s
+// in-progress check, refused every later withdrawal of theirs; a `Pull` or
+// `Sweep` that had landed left the money at the main account with a record
+// naming its owner and nothing that could credit it.
+//
+// Two doors, and the difference between them is what the ledger can prove.
+//
+// 1. `reconcile_ledger_intent(id, block)` -- owner or controller. The caller
+//    names the block they believe holds the movement; this canister READS that
+//    block from the ledger (following it into an archive if it has been
+//    archived) and settles the intent as `Moved` only if the block is a transfer
+//    carrying this intent's memo and created_at_time, between the accounts this
+//    intent's kind names, for this intent's amount. Any mismatch is a refusal
+//    that changes nothing: a block that is not this movement is not evidence
+//    that the movement did not happen. This is the only door that can CREDIT an
+//    arriving intent, and it credits exactly what a ledger block proves.
+//
+// 2. `admin_close_stale_ledger_intent(id, NotMoved | Moved)` -- controller only,
+//    only for an entry past its window, for when the ledger cannot answer (the
+//    operator has established off-chain, from the ledger or its index, what
+//    became of the movement). The controller must NAME the outcome, and the
+//    door can only close the entry to what its own record already fixes: the
+//    owner and the amount come from the intent, never from the call. `NotMoved`
+//    on a `Payout` gives the up-front escrow debit back; on any other kind it
+//    closes the record and credits nothing. `Moved` on an arriving kind is
+//    REFUSED, because closing a `Pull` or `Sweep` as moved is a credit, and a
+//    credit rests on a block or on nothing -- door 1 is the way. This is not a
+//    setter: it cannot name a balance, an owner or an amount, and
+//    `tests/money_safety/tests/solvency.rs::no_setter_was_added_to_fix_the_books`
+//    still holds. A controller who lies here is covered by the guardian's
+//    notice period once it is deployed, and by `get_solvency()` meanwhile.
+
+/// What the controller may say became of a movement the ledger can no longer
+/// be asked about. See `admin_close_stale_ledger_intent`.
+#[derive(Clone, Copy, Debug, CandidType, Deserialize, PartialEq, Eq)]
+pub enum StaleIntentClose {
+    /// The movement never happened. A `Payout`'s escrow debit is given back.
+    NotMoved,
+    /// The movement happened. Accepted for a `Payout` or a `RefundDeposit`
+    /// (nothing to credit; the record is closed), refused for a `Pull` or a
+    /// `Sweep` (a credit needs the block: `reconcile_ledger_intent`).
+    Moved,
+}
+
+/// Is `who` allowed to drive or close intent `entry`?
+fn may_reconcile(entry: &LedgerIntent, who: Principal) -> bool {
+    entry.who == who || is_controller()
+}
+
+/// One ledger transfer, read back off either ledger in the one shape the proof
+/// below compares against an intent.
+///
+/// Accounts are the 32-byte ICP account identifier on the ICP ledger and the
+/// ICRC-1 `(owner, subaccount)` pair on the ckBTC ledger; both are compared as
+/// bytes produced by [`LedgerAccountRef::of`] so that one comparison serves both.
+struct LedgerTransferRecord {
+    from: Vec<u8>,
+    to: Vec<u8>,
+    amount: u64,
+    memo: Option<Vec<u8>>,
+    created_at_time: Option<u64>,
+}
+
+/// The bytes an account is compared by, per ledger.
+enum LedgerAccountRef {
+    Icp,
+    Icrc,
+}
+
+impl LedgerAccountRef {
+    fn of(&self, owner: Principal, subaccount: Option<[u8; 32]>) -> Vec<u8> {
+        match self {
+            LedgerAccountRef::Icp => compute_account_identifier(&owner, subaccount).to_vec(),
+            LedgerAccountRef::Icrc => {
+                let mut v = owner.as_slice().to_vec();
+                // An absent subaccount IS the zero subaccount on an ICRC-1 ledger.
+                v.extend_from_slice(&subaccount.unwrap_or([0u8; 32]));
+                v
+            }
+        }
+    }
+
+    fn of_icrc_account(owner: Principal, subaccount: &Option<Vec<u8>>) -> Vec<u8> {
+        let mut v = owner.as_slice().to_vec();
+        let sub: [u8; 32] = subaccount
+            .as_ref()
+            .and_then(|s| <[u8; 32]>::try_from(s.as_slice()).ok())
+            .unwrap_or([0u8; 32]);
+        v.extend_from_slice(&sub);
+        v
+    }
+}
+
+/// Does `record` prove `intent`? `Ok(())` if every field the intent fixed on the
+/// wire is there and equal; otherwise the first mismatch, in words.
+fn transfer_proves_intent(
+    intent: &LedgerIntent,
+    record: &LedgerTransferRecord,
+    canister: Principal,
+    fee: u64,
+    refs: &LedgerAccountRef,
+) -> Result<(), String> {
+    let memo_bytes = intent.memo.to_be_bytes().to_vec();
+    if record.memo.as_deref() != Some(memo_bytes.as_slice()) {
+        return Err(format!(
+            "its memo is {:?}, and this intent's memo is {:?}",
+            record.memo, memo_bytes
+        ));
+    }
+    if record.created_at_time != Some(intent.created_at_time) {
+        return Err(format!(
+            "its created_at_time is {:?}, and this intent's is {}",
+            record.created_at_time, intent.created_at_time
+        ));
+    }
+    let main = refs.of(canister, None);
+    let owner_wallet = refs.of(intent.who, None);
+    let owner_deposit = refs.of(canister, Some(compute_deposit_subaccount(&intent.who)));
+    let (want_from, want_to, want_amount) = match intent.kind {
+        LedgerIntentKind::Pull => (owner_wallet, main, intent.amount),
+        LedgerIntentKind::Sweep => (owner_deposit, main, intent.amount),
+        LedgerIntentKind::Payout => (main, owner_wallet, intent.amount.saturating_sub(fee)),
+        LedgerIntentKind::RefundDeposit => (owner_deposit, owner_wallet, intent.amount),
+    };
+    if record.from != want_from {
+        return Err(format!(
+            "its source is not the account a {} for {} comes out of",
+            intent.kind.as_str(),
+            intent.who
+        ));
+    }
+    if record.to != want_to {
+        return Err(format!(
+            "its destination is not the account a {} for {} goes to",
+            intent.kind.as_str(),
+            intent.who
+        ));
+    }
+    if record.amount != want_amount {
+        return Err(format!(
+            "it moves {} e8s and this intent moves {}",
+            record.amount, want_amount
+        ));
+    }
+    Ok(())
+}
+
+/// The ICP ledger's `query_blocks` reply and the archive hop behind it, declared
+/// at module level so that the reconciliation door and nothing else reads them.
+/// The shapes follow the ledger's `.did` -- `AccountIdentifier` is a BARE blob
+/// (docs/DEFECTS.md E-04) -- and `archived_blocks` is decoded WITH its callback,
+/// because a block old enough to need this door is a block the ledger has
+/// usually already handed to an archive.
+mod icp_blocks {
+    use candid::{CandidType, Deserialize};
+
+    #[derive(CandidType, Deserialize, Debug)]
+    pub struct GetBlocksArgs {
+        pub start: u64,
+        pub length: u64,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Tokens {
+        pub e8s: u64,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct TimeStamp {
+        pub timestamp_nanos: u64,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Transfer {
+        pub from: Vec<u8>,
+        pub to: Vec<u8>,
+        pub amount: Tokens,
+        pub fee: Tokens,
+        pub spender: Option<Vec<u8>>,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Mint {
+        pub to: Vec<u8>,
+        pub amount: Tokens,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Burn {
+        pub from: Vec<u8>,
+        pub spender: Option<Vec<u8>>,
+        pub amount: Tokens,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Approve {
+        pub from: Vec<u8>,
+        pub spender: Vec<u8>,
+        pub allowance_e8s: candid::Int,
+        pub allowance: Tokens,
+        pub fee: Tokens,
+        pub expires_at: Option<TimeStamp>,
+        pub expected_allowance: Option<Tokens>,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub enum Operation {
+        Transfer(Transfer),
+        Mint(Mint),
+        Burn(Burn),
+        Approve(Approve),
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Transaction {
+        pub memo: u64,
+        pub icrc1_memo: Option<Vec<u8>>,
+        pub operation: Option<Operation>,
+        pub created_at_time: TimeStamp,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Block {
+        pub parent_hash: Option<Vec<u8>>,
+        pub transaction: Transaction,
+        pub timestamp: TimeStamp,
+    }
+
+    // A `func` field decodes only through candid's `define_function!` newtype;
+    // a bare `candid::Func` TRAPS at decode ("Cannot use Func directly"), and a
+    // trap is not the loud-but-narrow failure the fallback below is for. Found
+    // by the first test that ran the door against the real ledger.
+    candid::define_function!(pub QueryArchiveBlocksFn : (GetBlocksArgs) -> (GetBlocksResult) query);
+
+    #[derive(CandidType, Deserialize, Debug)]
+    pub struct ArchivedBlocksRange {
+        pub start: u64,
+        pub length: u64,
+        pub callback: QueryArchiveBlocksFn,
+    }
+
+    #[derive(CandidType, Deserialize, Debug)]
+    pub struct QueryBlocksResponse {
+        pub chain_length: u64,
+        pub certificate: Option<Vec<u8>>,
+        pub blocks: Vec<Block>,
+        pub first_block_index: u64,
+        pub archived_blocks: Vec<ArchivedBlocksRange>,
+    }
+
+    /// The same reply with the callbacks skipped: the fallback shape if the
+    /// `func` decode above ever fails, so the door still serves an unarchived
+    /// block and says clearly when it cannot follow an archived one.
+    #[derive(CandidType, Deserialize, Debug)]
+    pub struct QueryBlocksResponseNoArchive {
+        pub chain_length: u64,
+        pub certificate: Option<Vec<u8>>,
+        pub blocks: Vec<Block>,
+        pub first_block_index: u64,
+        pub archived_blocks: candid::Reserved,
+    }
+
+    #[derive(CandidType, Deserialize, Debug)]
+    pub struct BlockRange {
+        pub blocks: Vec<Block>,
+    }
+
+    #[derive(CandidType, Deserialize, Debug)]
+    pub enum GetBlocksError {
+        BadFirstBlockIndex {
+            requested_index: u64,
+            first_valid_index: u64,
+        },
+        Other {
+            error_code: u64,
+            error_message: String,
+        },
+    }
+
+    #[derive(CandidType, Deserialize, Debug)]
+    pub enum GetBlocksResult {
+        Ok(BlockRange),
+        Err(GetBlocksError),
+    }
+}
+
+/// The ICRC-1 ledger's `get_transactions` reply and the archive hop behind it.
+/// The LEDGER's shape, not the index canister's (docs/DEFECTS.md E-105).
+mod icrc_transactions {
+    use candid::{CandidType, Deserialize, Nat, Principal};
+
+    #[derive(CandidType, Deserialize, Debug)]
+    pub struct GetTransactionsRequest {
+        pub start: Nat,
+        pub length: Nat,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Account {
+        pub owner: Principal,
+        pub subaccount: Option<Vec<u8>>,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Burn {
+        pub from: Account,
+        pub memo: Option<Vec<u8>>,
+        pub created_at_time: Option<u64>,
+        pub amount: Nat,
+        pub spender: Option<Account>,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Mint {
+        pub to: Account,
+        pub memo: Option<Vec<u8>>,
+        pub created_at_time: Option<u64>,
+        pub amount: Nat,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Transfer {
+        pub from: Account,
+        pub to: Account,
+        pub memo: Option<Vec<u8>>,
+        pub created_at_time: Option<u64>,
+        pub amount: Nat,
+        pub fee: Option<Nat>,
+        pub spender: Option<Account>,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Approve {
+        pub from: Account,
+        pub spender: Account,
+        pub memo: Option<Vec<u8>>,
+        pub created_at_time: Option<u64>,
+        pub amount: Nat,
+        pub fee: Option<Nat>,
+        pub expected_allowance: Option<Nat>,
+        pub expires_at: Option<u64>,
+    }
+
+    #[derive(CandidType, Deserialize, Debug, Clone)]
+    pub struct Transaction {
+        pub burn: Option<Burn>,
+        pub mint: Option<Mint>,
+        pub transfer: Option<Transfer>,
+        pub approve: Option<Approve>,
+        pub timestamp: u64,
+    }
+
+    // See `icp_blocks::QueryArchiveBlocksFn`: a `func` field needs the newtype.
+    candid::define_function!(pub QueryArchiveTransactionsFn : (GetTransactionsRequest) -> (TransactionRange) query);
+
+    #[derive(CandidType, Deserialize, Debug)]
+    pub struct ArchivedRange {
+        pub start: Nat,
+        pub length: Nat,
+        pub callback: QueryArchiveTransactionsFn,
+    }
+
+    #[derive(CandidType, Deserialize, Debug)]
+    pub struct GetTransactionsResponse {
+        pub log_length: Nat,
+        pub first_index: Nat,
+        pub transactions: Vec<Transaction>,
+        pub archived_transactions: Vec<ArchivedRange>,
+    }
+
+    #[derive(CandidType, Deserialize, Debug)]
+    pub struct GetTransactionsResponseNoArchive {
+        pub log_length: Nat,
+        pub first_index: Nat,
+        pub transactions: Vec<Transaction>,
+        pub archived_transactions: candid::Reserved,
+    }
+
+    #[derive(CandidType, Deserialize, Debug)]
+    pub struct TransactionRange {
+        pub transactions: Vec<Transaction>,
+    }
+}
+
+fn icp_block_to_record(block: &icp_blocks::Block) -> Result<LedgerTransferRecord, String> {
+    match &block.transaction.operation {
+        Some(icp_blocks::Operation::Transfer(t)) => Ok(LedgerTransferRecord {
+            from: t.from.clone(),
+            to: t.to.clone(),
+            amount: t.amount.e8s,
+            memo: block.transaction.icrc1_memo.clone(),
+            created_at_time: Some(block.transaction.created_at_time.timestamp_nanos),
+        }),
+        Some(other) => Err(format!(
+            "it is not a transfer ({})",
+            match other {
+                icp_blocks::Operation::Mint(_) => "a mint",
+                icp_blocks::Operation::Burn(_) => "a burn",
+                icp_blocks::Operation::Approve(_) => "an approval",
+                icp_blocks::Operation::Transfer(_) => "a transfer",
+            }
+        )),
+        None => Err("its operation could not be decoded".to_string()),
+    }
+}
+
+fn icrc_transaction_to_record(
+    tx: &icrc_transactions::Transaction,
+) -> Result<LedgerTransferRecord, String> {
+    match &tx.transfer {
+        Some(t) => Ok(LedgerTransferRecord {
+            from: LedgerAccountRef::of_icrc_account(t.from.owner, &t.from.subaccount),
+            to: LedgerAccountRef::of_icrc_account(t.to.owner, &t.to.subaccount),
+            amount: nat_to_u64_saturating(&t.amount),
+            memo: t.memo.clone(),
+            created_at_time: t.created_at_time,
+        }),
+        None => Err(if tx.mint.is_some() {
+            "it is not a transfer (a mint)".to_string()
+        } else if tx.burn.is_some() {
+            "it is not a transfer (a burn)".to_string()
+        } else if tx.approve.is_some() {
+            "it is not a transfer (an approval)".to_string()
+        } else {
+            "it is not a transfer".to_string()
+        }),
+    }
+}
+
+/// Read block `block_index` off the ICP ledger, following it into the archive
+/// that holds it if the ledger has handed it on. `Ok(None)` means the ledger
+/// has no such block yet.
+async fn read_icp_block(
+    ledger_id: Principal,
+    block_index: u64,
+) -> Result<Option<icp_blocks::Block>, String> {
+    use icp_blocks::*;
+    let response = ic_cdk::call::Call::unbounded_wait(ledger_id, "query_blocks")
+        .with_arg(GetBlocksArgs {
+            start: block_index,
+            length: 1,
+        })
+        .await
+        .map_err(|e| format!("Failed to query ledger: {e:?}"))?;
+
+    // Decode WITH the archive callbacks first; fall back to skipping them so a
+    // decode surprise in the `func` shape can only cost the archive hop, never
+    // the unarchived case (docs/DEFECTS.md E-04's lesson: an untested decode
+    // shape has to fail loudly and narrowly).
+    let (blocks, first_block_index, chain_length, archived) =
+        match response.candid::<QueryBlocksResponse>() {
+            Ok(r) => (r.blocks, r.first_block_index, r.chain_length, Some(r.archived_blocks)),
+            Err(with_callbacks) => match response.candid::<QueryBlocksResponseNoArchive>() {
+                Ok(r) => {
+                    ic_cdk::println!(
+                        "reconcile: query_blocks archived_blocks callback decode failed ({with_callbacks:?}); \
+                         archived blocks cannot be followed in this reply"
+                    );
+                    (r.blocks, r.first_block_index, r.chain_length, None)
+                }
+                Err(e) => return Err(format!("Failed to decode ledger response: {e:?}")),
+            },
+        };
+
+    if block_index >= chain_length {
+        return Ok(None);
+    }
+    if let Some(block) = blocks.into_iter().next() {
+        if first_block_index == block_index {
+            return Ok(Some(block));
+        }
+    }
+    let Some(archived) = archived else {
+        return Err(format!(
+            "Block {block_index} has been archived by the ledger and this canister could not \
+             decode the archive reference in the ledger's reply. A controller can close the \
+             entry with admin_close_stale_ledger_intent once the outcome is established from \
+             the ledger directly."
+        ));
+    };
+    let Some(range) = archived
+        .into_iter()
+        .find(|r| r.start <= block_index && block_index < r.start.saturating_add(r.length))
+    else {
+        return Err(format!(
+            "The ledger answered without block {block_index}: it is neither in the ledger's own \
+             window nor in any archive range the ledger named."
+        ));
+    };
+    let archive_reply =
+        ic_cdk::call::Call::unbounded_wait(range.callback.0.principal, &range.callback.0.method)
+            .with_arg(GetBlocksArgs {
+                start: block_index,
+                length: 1,
+            })
+            .await
+            .map_err(|e| format!("Failed to query the ledger archive: {e:?}"))?;
+    match archive_reply.candid::<GetBlocksResult>() {
+        Ok(GetBlocksResult::Ok(r)) => Ok(r.blocks.into_iter().next()),
+        Ok(GetBlocksResult::Err(e)) => Err(format!("The ledger archive refused: {e:?}")),
+        Err(e) => Err(format!("Failed to decode the ledger archive's reply: {e:?}")),
+    }
+}
+
+/// Read transaction `block_index` off an ICRC-1 ledger, following it into its
+/// archive if the ledger has handed it on. `Ok(None)` means no such transaction
+/// yet.
+async fn read_icrc_transaction(
+    ledger_id: Principal,
+    block_index: u64,
+) -> Result<Option<icrc_transactions::Transaction>, String> {
+    use icrc_transactions::*;
+    let response = ic_cdk::call::Call::unbounded_wait(ledger_id, "get_transactions")
+        .with_arg(GetTransactionsRequest {
+            start: Nat::from(block_index),
+            length: Nat::from(1u64),
+        })
+        .await
+        .map_err(|e| format!("Failed to query ledger: {e:?}"))?;
+
+    let (transactions, first_index, log_length, archived) =
+        match response.candid::<GetTransactionsResponse>() {
+            Ok(r) => (
+                r.transactions,
+                nat_to_u64_saturating(&r.first_index),
+                nat_to_u64_saturating(&r.log_length),
+                Some(r.archived_transactions),
+            ),
+            Err(with_callbacks) => match response.candid::<GetTransactionsResponseNoArchive>() {
+                Ok(r) => {
+                    ic_cdk::println!(
+                        "reconcile: get_transactions archived_transactions callback decode failed \
+                         ({with_callbacks:?}); archived transactions cannot be followed in this reply"
+                    );
+                    (
+                        r.transactions,
+                        nat_to_u64_saturating(&r.first_index),
+                        nat_to_u64_saturating(&r.log_length),
+                        None,
+                    )
+                }
+                Err(e) => return Err(format!("Failed to decode ledger response: {e:?}")),
+            },
+        };
+
+    if block_index >= log_length {
+        return Ok(None);
+    }
+    if let Some(tx) = transactions.into_iter().next() {
+        if first_index == block_index {
+            return Ok(Some(tx));
+        }
+    }
+    let Some(archived) = archived else {
+        return Err(format!(
+            "Transaction {block_index} has been archived by the ledger and this canister could \
+             not decode the archive reference in the ledger's reply. A controller can close the \
+             entry with admin_close_stale_ledger_intent once the outcome is established from \
+             the ledger directly."
+        ));
+    };
+    let Some(range) = archived.into_iter().find(|r| {
+        let start = nat_to_u64_saturating(&r.start);
+        let length = nat_to_u64_saturating(&r.length);
+        start <= block_index && block_index < start.saturating_add(length)
+    }) else {
+        return Err(format!(
+            "The ledger answered without transaction {block_index}: it is neither in the \
+             ledger's own window nor in any archive range the ledger named."
+        ));
+    };
+    let archive_reply =
+        ic_cdk::call::Call::unbounded_wait(range.callback.0.principal, &range.callback.0.method)
+            .with_arg(GetTransactionsRequest {
+                start: Nat::from(block_index),
+                length: Nat::from(1u64),
+            })
+            .await
+            .map_err(|e| format!("Failed to query the ledger archive: {e:?}"))?;
+    match archive_reply.candid::<TransactionRange>() {
+        Ok(r) => Ok(r.transactions.into_iter().next()),
+        Err(e) => Err(format!("Failed to decode the ledger archive's reply: {e:?}")),
+    }
+}
+
+/// CLOSE ONE LEDGER OPERATION AGAINST THE BLOCK THAT PROVES IT. Owner or
+/// controller. docs/DEFECTS.md E-109.
+///
+/// The caller names the ledger block they believe holds this intent's movement.
+/// This canister reads that block and settles the intent as `Moved` if, and only
+/// if, the block is a transfer carrying this intent's memo and created_at_time,
+/// between the accounts its kind names, for its amount. A block that is anything
+/// else is refused and nothing changes: not being this movement is not evidence
+/// that the movement did not happen.
+///
+/// This is the one door that can credit an arriving (`pull`, `sweep`) intent
+/// after its retry window, and it credits exactly what a ledger block proves,
+/// once: settlement goes through [`settle_intent`], whose removal of the entry
+/// is atomic and whose credit is still behind the block anti-replay record.
+#[ic_cdk::update]
+async fn reconcile_ledger_intent(id: u64, block_index: u64) -> Result<String, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot reconcile ledger operations".to_string());
+    }
+    let now = ic_cdk::api::time();
+    // One ledger read per call, at the deposit-verification rate: the same
+    // shape as `notify_deposit`, which is the other method that reads a block
+    // on request.
+    if deposit_verification_rate_limited(caller, now) {
+        return Err("Too many ledger lookups. Please wait a minute.".to_string());
+    }
+    let intent = LEDGER_INTENTS.with(|j| j.borrow().get(&id).cloned());
+    let Some(intent) = intent else {
+        return Err(format!("There is no open ledger operation with id {id}."));
+    };
+    if !may_reconcile(&intent, caller) {
+        return Err("That ledger operation belongs to somebody else.".to_string());
+    }
+
+    let currency = get_table_currency();
+    let ledger_id = currency.ledger_canister();
+    let fee = currency.transfer_fee();
+    let canister = canister_id();
+
+    // -- await: the ledger read. Nothing of this canister's has changed yet. --
+    let (record, refs) = match currency {
+        Currency::BTC => {
+            let tx = read_icrc_transaction(ledger_id, block_index).await?;
+            let Some(tx) = tx else {
+                return Err(format!(
+                    "The {} ledger has no transaction {block_index} yet.",
+                    currency.symbol()
+                ));
+            };
+            (icrc_transaction_to_record(&tx), LedgerAccountRef::Icrc)
+        }
+        _ => {
+            let block = read_icp_block(ledger_id, block_index).await?;
+            let Some(block) = block else {
+                return Err(format!(
+                    "The {} ledger has no block {block_index} yet.",
+                    currency.symbol()
+                ));
+            };
+            (icp_block_to_record(&block), LedgerAccountRef::Icp)
+        }
+    };
+
+    let proof = record.and_then(|r| transfer_proves_intent(&intent, &r, canister, fee, &refs));
+    if let Err(why) = proof {
+        return Err(format!(
+            "Block {block_index} is not ledger operation {id} ({} of {} e8s for {}): {why}. \
+             Nothing has changed. This is not evidence that the movement did not happen -- \
+             only that this block is not it. Name the block that carries memo {} and \
+             created_at_time {}, or, if the movement is established not to have happened, \
+             a controller can close the entry with admin_close_stale_ledger_intent.",
+            intent.kind.as_str(),
+            intent.amount,
+            intent.who,
+            intent.memo,
+            intent.created_at_time
+        ));
+    }
+
+    // The block proves it. Settle exactly as the resume path would on a
+    // `Duplicate` answer: one-shot removal, then the books.
+    let now = ic_cdk::api::time();
+    match settle_intent(id, IntentOutcome::Moved(block_index), now) {
+        Ok(value) => Ok(format!(
+            "ledger operation {id} ({} of {} e8s for {}) closed: block {block_index} on the \
+             {} ledger is this movement. Balance/block {value}.",
+            intent.kind.as_str(),
+            intent.amount,
+            intent.who,
+            currency.symbol()
+        )),
+        Err(e) => Err(e),
+    }
+}
+
+/// CLOSE ONE LEDGER OPERATION PAST ITS RETRY WINDOW TO AN OUTCOME THE
+/// CONTROLLER NAMES. Controller only. docs/DEFECTS.md E-109.
+///
+/// For when the ledger cannot answer through [`reconcile_ledger_intent`]: the
+/// operator has established from the ledger or its index what became of the
+/// movement, and says so. The door closes the entry to what its own record
+/// already fixes -- owner and amount come from the intent, never from the
+/// call -- and can therefore:
+///
+/// * `NotMoved` on a `payout`: give the up-front escrow debit back (the
+///   `Refused` path of [`settle_intent`], the same refund the ledger's own
+///   refusal produces);
+/// * `NotMoved` on anything else: close the record; nothing was debited, so
+///   nothing is credited;
+/// * `Moved` on a `payout` or a `refund`: close the record; the money left
+///   before the entry was written, so there is nothing to book but the
+///   main-account debit;
+/// * `Moved` on a `pull` or a `sweep`: REFUSED. That would be a credit, and a
+///   credit rests on a block. `reconcile_ledger_intent` is the door.
+///
+/// It refuses an entry still inside its retry window: the resume path can
+/// still settle that one against the ledger's own answer, which is better
+/// evidence than anybody's word.
+#[ic_cdk::update]
+fn admin_close_stale_ledger_intent(id: u64, outcome: StaleIntentClose) -> Result<String, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot close ledger operations".to_string());
+    }
+    require_controller()?;
+    let now = ic_cdk::api::time();
+    let intent = LEDGER_INTENTS.with(|j| j.borrow().get(&id).cloned());
+    let Some(intent) = intent else {
+        return Err(format!("There is no open ledger operation with id {id}."));
+    };
+    if now <= intent.retry_deadline_ns {
+        return Err(format!(
+            "Ledger operation {id} is still inside the ledger's deduplication window (until \
+             {}). It does not need anybody's word: resolve_ledger_intent({id}) re-issues the \
+             identical transaction and the ledger itself says whether it happened.",
+            intent.retry_deadline_ns
+        ));
+    }
+    // A message that took the lease before the deadline may still be awaiting
+    // the ledger. Closing under it would let its answer land on a record that is
+    // gone: a `NotMoved` refund here followed by a movement that DID happen is
+    // the double payment this journal exists to prevent. Wait the lease out.
+    if intent.leased_until_ns > now {
+        return Err(format!(
+            "Ledger operation {id} is being driven by another call right now; try again in {} \
+             seconds.",
+            (intent.leased_until_ns - now) / 1_000_000_000 + 1
+        ));
+    }
+    let kind = intent.kind.as_str();
+    let described = format!("{kind} of {} e8s for {}", intent.amount, intent.who);
+
+    match outcome {
+        StaleIntentClose::Moved if intent.kind.credits_on_success() => Err(format!(
+            "Refused: closing ledger operation {id} ({described}) as moved would credit {} \
+             e8s of escrow on a controller's word. A credit rests on a ledger block: call \
+             reconcile_ledger_intent({id}, <block>) with the block that carries memo {} and \
+             created_at_time {}, and this canister will read it and credit exactly what it \
+             proves. There is deliberately no method here that can credit a balance without \
+             one.",
+            intent.amount, intent.memo, intent.created_at_time
+        )),
+        StaleIntentClose::Moved => {
+            let value = settle_outgoing_moved(id, None, now)?;
+            ic_cdk::println!(
+                "ledger intent {id} CLOSED by controller {caller} as MOVED ({described}); \
+                 no block named"
+            );
+            Ok(format!(
+                "ledger operation {id} ({described}) closed as MOVED on the controller's word: \
+                 the record is retired, nothing was credited, and the main-account debit is \
+                 written down. Balance/block {value}."
+            ))
+        }
+        StaleIntentClose::NotMoved => {
+            let reason = format!(
+                "closed by controller {caller} as NOT MOVED after the retry window ({described})"
+            );
+            // `Refused` gives a payout's escrow back and closes any other kind
+            // with no credit; it reports through `Err(reason)`, which for this
+            // door is the success it was asked for. The entry was read above
+            // with no await in between, so it is still there.
+            match settle_intent(id, IntentOutcome::Refused(reason), now) {
+                Err(_) | Ok(_) => {}
+            }
+            let refunded = intent.kind.debits_escrow_up_front();
+            Ok(format!(
+                "ledger operation {id} ({described}) closed as NOT MOVED on the controller's \
+                 word: {}",
+                if refunded {
+                    format!(
+                        "the {} e8s debited from {}'s escrow before the movement are back in \
+                         their escrow.",
+                        intent.amount, intent.who
+                    )
+                } else {
+                    "the record is retired and nothing was credited.".to_string()
+                }
+            ))
+        }
+    }
+}
+
 /// Money named by open ARRIVING intents: on the ledger, not yet in the books, and
 /// accounted for. Read by [`get_custody_status`] and by the money-safety harness's
 /// M10 invariant.
@@ -3101,17 +3974,12 @@ fn journalled_incoming_total() -> u64 {
 /// transfer was reported as "not a transfer" and the ICP was stranded. Both are
 /// fixed above and gated by `dr01_notify_deposit_credits_a_real_transfer_exactly_once`
 /// and by `deposit_surface::money_at_the_shared_main_account_is_recoverable_by_its_sender_and_by_nobody_else`.
-#[ic_cdk::update]
-async fn notify_deposit(block_index: u64) -> Result<u64, String> {
-    let caller = ic_cdk::api::msg_caller();
-    if caller == Principal::anonymous() {
-        return Err("Anonymous callers cannot deposit".to_string());
-    }
-    let canister = canister_id();
-    let now = ic_cdk::api::time();
-
-    // Rate limit deposit verifications (5 per minute per user)
-    let rate_limited = DEPOSIT_RATE_LIMITS.with(|r| {
+/// One ledger read on request, at most `MAX_DEPOSIT_VERIFICATIONS_PER_MINUTE`
+/// times a minute per caller. Shared by `notify_deposit` and
+/// `reconcile_ledger_intent`, the two methods that read a block the caller
+/// names; the window is per caller, not per method.
+fn deposit_verification_rate_limited(caller: Principal, now: u64) -> bool {
+    DEPOSIT_RATE_LIMITS.with(|r| {
         let mut limits = r.borrow_mut();
         let minute_ns: u64 = 60_000_000_000;
 
@@ -3131,9 +3999,20 @@ async fn notify_deposit(block_index: u64) -> Result<u64, String> {
             limits.insert(caller, (now, 1));
             false
         }
-    });
+    })
+}
 
-    if rate_limited {
+#[ic_cdk::update]
+async fn notify_deposit(block_index: u64) -> Result<u64, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("Anonymous callers cannot deposit".to_string());
+    }
+    let canister = canister_id();
+    let now = ic_cdk::api::time();
+
+    // Rate limit deposit verifications (5 per minute per user)
+    if deposit_verification_rate_limited(caller, now) {
         return Err("Too many deposit verification attempts. Please wait a minute.".to_string());
     }
 
@@ -4979,16 +5858,28 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
     // So: a pending flag with a matching open payout intent is a real
     // in-progress withdrawal and is refused, and one WITHOUT is stale and is
     // cleared here rather than being believed.
+    //
+    // AND A PAYOUT PAST ITS RETRY WINDOW IS NOT IN PROGRESS EITHER
+    // (docs/DEFECTS.md E-109, docs/CODEBASE-REVIEW-2026-09-28.md gap 6). Past
+    // `retry_deadline_ns` the resume path refuses to re-issue it, so nothing can
+    // drive it any more: there is no continuation left to race this call. Its
+    // escrow debit already happened and stands until the entry is closed through
+    // `reconcile_ledger_intent` or `admin_close_stale_ledger_intent`; the one
+    // thing it must not do is hold every later withdrawal of this owner's hostage
+    // -- measured, before this change: a discarded continuation plus one day
+    // without `resolve_my_ledger_intents()` froze the owner's whole escrow.
     let has_pending = PENDING_WITHDRAWALS.with(|p| p.borrow().contains_key(&caller));
     if has_pending {
         let open_payout = LEDGER_INTENTS.with(|j| {
             j.borrow()
                 .values()
-                .find(|i| i.who == caller && i.kind == LedgerIntentKind::Payout)
-                .map(|i| (i.id, i.amount))
+                .filter(|i| i.who == caller && i.kind == LedgerIntentKind::Payout)
+                // Prefer a LIVE one: that is the one that refuses.
+                .max_by_key(|i| now <= i.retry_deadline_ns)
+                .map(|i| (i.id, i.amount, i.retry_deadline_ns))
         });
         match open_payout {
-            Some((id, amount)) => {
+            Some((id, amount, deadline)) if now <= deadline => {
                 return Err(format!(
                     "A withdrawal is already in progress: ledger operation #{id} for {}. \
                      If it is stuck, call resolve_my_ledger_intents() -- it asks the ledger \
@@ -4996,6 +5887,21 @@ async fn withdraw(amount: u64) -> Result<u64, String> {
                      escrow. You are not locked out.",
                     currency.format_amount(amount)
                 ));
+            }
+            Some((id, amount, deadline)) => {
+                ic_cdk::println!(
+                    "withdraw(): payout intent {} ({} e8s) for {} is past its retry window \
+                     (deadline {}); it cannot be re-driven and does not block this withdrawal. \
+                     The pending flag is cleared; the entry stays until it is reconciled \
+                     (E-109).",
+                    id,
+                    amount,
+                    caller,
+                    deadline
+                );
+                PENDING_WITHDRAWALS.with(|p| {
+                    p.borrow_mut().remove(&caller);
+                });
             }
             None => {
                 ic_cdk::println!(

@@ -1,52 +1,64 @@
-# claude-seat-1: task 1790632441 ("leave_table by the seat on action goes through advance_game, so a closed street is not handed back to a player who already matched")
+# claude-seat-1: task 1790632442 ("A payout intent past its retry window no longer locks the owner out of every withdrawal, and a bounded reconciliation door exists")
 
-Closes: 1790632441 (done)
+Closes: 1790632442 (done)
 
-## What landed (branch claude/seat-1, on top of main cc30cc4; `git merge main` was a no-op, main did not move)
+## What landed (branch claude/seat-1, on top of main 83f2711; `git merge main` was a no-op, main did not move)
 
-- 8a1cc81 fix: leaving from the seat on action goes through advance_game, so a closed street is not handed back to a player who already matched (E-108, review gap 5; task 1790632441)
-  - src/table_canister/src/lib.rs: the body of `leave_table` is now `pub fn vacate_seat(state, caller, now) -> Result<u64, String>` (host-testable, the `apply_player_action` / `build_table_view` / `record_voluntary_show` pattern); `leave_table` is `msg_caller()` + `time()` + the `TABLE` borrow + `vacate_seat` + `schedule_next_wake()` + the escrow credit, unchanged. Inside it, the branch that used to move the clock by hand (`find_next_active_seat` + a fresh `ActionTimer`, no `is_betting_round_complete`) is replaced: a departure from the seat on action drops the clock and calls `advance_game(state, now)`, which ends the hand on one claimant, deals the next street on a closed one, or moves the clock to the next seat that owes an action. A departure from any other seat leaves the clock alone unless it changed what the hand is waiting for (last other claimant gone, or the last seat owing action gone while the clock was parked on a matched seat). The shadowed `let now = ic_cdk::api::time()` inside the branch is gone; the wrapper's `now` is used.
-  - No settlement arithmetic changed; the uncalled-bet return, `record_departed_stake`, `refresh_side_pots` and the empty-table settle in the same function are untouched. `cash_out` has no equivalent branch (it refuses a seat in a live hand).
-  - src/table_canister/tests/betting_rules.rs section 8 (five tests over `vacate_seat` on a hand dealt and bet through the real engine, plus `flop_three_handed` and `leave` helpers; import of `vacate_seat`; the module doc's scope note now says sections 6 to 8).
-  - docs/DEFECTS.md: E-108 (medium, FIXED, task 1790632441) register row above E-107 and the write-up with the red output at the end of the file. docs/CODEBASE-REVIEW-2026-09-28.md gap 5's Register line now points at E-108.
-  - Candid: unchanged. `table_canister.did` is byte-identical (no diff), the `#[ic_cdk::update]`/`#[ic_cdk::query]` count is 75 on main and 75 here, and `vacate_seat` is a plain `pub fn`. `check-candid.sh --declarations` therefore not run; `make test` step 1 confirmed the committed declarations still match every `.did`.
-  - No new `TableState` field, so no struct-literal touches outside betting_rules.rs.
+This task was resumed from an executor's uncommitted partial (~1400 lines, 2026-09-29 ~18:35Z). It was reviewed against the brief and CLAUDE.md, one hole was closed, and the rest was completed as below.
 
-## Red, then green (`cargo test -p table_canister --test betting_rules`)
+- 591517c fix: a payout intent past its retry window no longer locks its owner out of withdraw, and two bounded doors close a stale intent (E-109, review gap 6)
+  - (a) `withdraw`: a Payout intent past `retry_deadline_ns` cannot be re-driven, so it no longer counts as a withdrawal in progress. A live payout still refuses. The pending flag is cleared and the stale entry stays on record, with its escrow debit standing.
+  - (b) `reconcile_ledger_intent(id, block)`: owner or controller. The caller is captured first, anonymous callers are refused, and the rate limit is shared with `notify_deposit` (`deposit_verification_rate_limited`). It reads the named block through ICP `query_blocks` or ckBTC `get_transactions`, following the archive callback via `define_function!` with a no-archive fallback decode. It settles Moved only when `transfer_proves_intent` holds (memo, created_at_time, from/to per kind, amount; payout = amount - fee). It settles through `settle_intent`, so removal is one-shot and a credit is still behind `claim_deposit_block`.
+  - (b) `admin_close_stale_ledger_intent(id, NotMoved | Moved)`: controller only, past the window only. NEW IN THIS SESSION: it also refuses while a lease is live, because a message may still be awaiting the ledger, and a NotMoved refund followed by a real movement would pay twice. Owner and amount come from the entry. NotMoved on a payout refunds the up-front debit; on other kinds it credits nothing. Moved on a payout or refund goes through `book_outgoing_moved`, which is shared with `settle_intent`. Moved on a pull or sweep is refused. No balance setter.
+  - `clear_pending_withdrawal_unless_another_payout_is_open` keeps the per-owner flag while another payout is open.
+  - `.did` plus the three `src/declarations/table_*/table_*.did` copies gain `StaleIntentClose`, `Result_IntentLine` (declarations copies) and the two methods. The JS/TS bindings were regenerated with `./scripts/check-declarations-js.sh --write`. The declaration drift baseline is unchanged (88 items; the new methods are declared, not baselined).
+  - (c) `tests/money_safety/tests/ledger_boundary.rs`: six `e109_*` tests.
+    - An Unknown outcome is produced by stopping the ledger. A discarded continuation is produced by `trap_*_tail`.
+    - The block door is tested both ways: wrong block, future block, stranger, right block, and once-only.
+    - A stale pull is credited once, and `notify_deposit` of the same block is refused.
+    - Controller NotMoved refunds a payout; it is refused inside the window and refused for the owner.
+    - Controller Moved is refused on a pull; NotMoved on that pull credits nothing.
+    - Moved on a payout gives no refund.
+    - `withdraw` succeeds beside a stale payout.
+  - `tests/money_safety/tests/admin_custody.rs`: the census `AUDITED` gains `admin_close_stale_ledger_intent` with its verdict. The FINDING 07 sweep drives it with both outcomes, and the census would otherwise have gone red.
+- f52484d docs: DEFECTS.md E-109 (medium, FIXED) register row above E-108, with the entry at the end of the file. SECURITY-FINDINGS.md FINDING 29 ("needs an operator to reconcile") gains an update note, and FINDING 38 ("kept forever, pending operator reconciliation") gains a parenthesis. Both name the two doors. E-109 was free on main and on every seat branch.
+- fec1517 fix(hygiene): `make hygiene` crashed on a CLEAN tree on macOS `/bin/bash` 3.2 (`candidates[@]: unbound variable`: an empty array under `set -u`). This was pre-existing on main, and it hit here because everything was committed. It now uses `${a[@]+"${a[@]}"}`.
+- 8b46a5f test(seam): `invariants::seam::seam_honest_play_produces_no_self_reported_failure` went RED in the first `make test`.
+  - The error was "start_new_hand failed: Need at least 2 active players with chips".
+  - Root cause: the table wasm grew from 2.86 MB to 3.22 MB, past 3 MiB. pocket-ic 11 installs anything over 2 MB in 1 MiB chunks, so there is one more chunk upload, one more round, and every timestamp shifts by +1 ns. That gives a different shuffle, and seat 2 won hands 1 and 2, busting the other two 2-ICP stacks at ICP/2 per street.
+  - Main's lib.rs passes the same test, and mine failed 3/3, with no engine change on the path.
+  - The post-flop bet is now ICP/10, so all three deals happen on any shuffle.
 
-- RED, on the extracted-but-unfixed branch (the extraction commit state, before the `advance_game` change; run 2026-09-29 ~03:05Z in this worktree): 44 passed, 2 failed.
-  - `a_leaver_on_action_after_the_street_closed_does_not_hand_the_street_back` FAILED: "A bet, B called, C left on action: the flop betting is closed and the turn is dealt. Instead the hand is at Flop with the clock on Some(2), current bet 40" `left: Flop right: Turn`.
-  - `a_clock_left_on_a_matched_seat_moves_on_when_the_last_seat_owing_action_leaves` FAILED: "seats 0 and 1 have both matched: the flop is closed and the turn is dealt. Instead the hand is at Flop with the clock on Some(0)" `left: Flop right: Turn`.
-  - The three adjacent-case guards were green before the fix, as designed: `a_leaver_on_action_with_the_street_still_open_hands_the_clock_to_the_seat_that_owes_action` (clock moves to C, A's 40 stands, pot 100, C's call deals the turn), `a_leaver_on_action_who_leaves_one_player_ends_the_hand_by_fold_out` (HandComplete, `last_hand_went_to_showdown == Some(false)`, no clock, A 1,040 / B 980 / leaver 980 = 3,000), `a_leaver_who_was_not_on_action_leaves_the_clock_where_it_was` (same timer instance on B, B's call deals the turn).
-- GREEN on 8a1cc81: betting_rules 46 passed, 0 failed. `cargo test -p table_canister` (all targets): lib 57, betting_rules 46, coherence_regressions 7, hand_membership 6, integration_test 2, money_safety (in-crate) 6, unit_tests 7, all green. Compiler warnings on the crate: 11, none in the changed code (same set as before).
+## Red, then green
 
-## Verified (this worktree, no replica started, no icp command run, machine default identity untouched)
+- `e109_a_payout_past_its_window_no_longer_locks_the_owner_out_of_withdraw`: RED with the withdraw guard reverted (a temporary edit, restored from a copy). The failure: "FUND LOCK: a payout past its retry window blocked a withdrawal ... Err(\"A withdrawal is already in progress: ledger operation #2 for 2.0000 ICP ...\")". GREEN on the fix.
+- ledger_boundary: 14 passed (8 m14 + 6 e109). admin_custody: 14 passed. solvency: 12 passed, with `no_setter_was_added_to_fix_the_books` green.
 
-- `gh pr list --repo JoshDFN/cleardeck --state open`: one open PR (#6, docs/readme-refresh); it does not do this task.
-- `make selftest`: exit 0, guard selftest passed.
-- `make hygiene`: exit 0, repo hygiene clean.
-- `./scripts/check-declarations.sh`: exit 0, all 4 pinned versions agree.
-- `./scripts/check-suite-wiring.sh`: exit 0 (no new cargo target; the tests live in the existing `betting_rules` target, `workspace` tier).
-- `./scripts/register-stats.sh --check`: exit 0, register consistent (E-108 row and anchor counted).
-- `POCKET_IC_BIN=$HOME/.cache/dfinity/versions/0.31.0/pocket-ic ICP_LEDGER_WASM=/Users/josh/Desktop/cleardeck/target/money-safety/ledger-canister.wasm.gz make test`: exit 0, wall 1862 s (31 min), foreground, run once on 8a1cc81 (nothing changed after it except this file). `all fast gates green`. Steps: suite wiring 7 s (declarations match every `.did`), candid bindings 0 s, workspace 13 s (betting_rules 46 passed by name), wasm build 9 s, differential 3 s, money-safety fast subset 1573 s (all 23 cargo targets green, the previous-release upgrade test and the fuzzer at its defaults included; the fuzzer exercises `leave_table` mid-hand), settlement oracle 89 s (10 passed) + pinned reproducers 11 s (8 passed), shots self-tests 5 s, archive self-tests 86 s, no-peeking harness 65 s. Log: scratchpad make-test.log.
+## Gates run (this worktree; no replica started, no icp command run, machine default identity untouched)
+
+- `gh pr list --repo JoshDFN/cleardeck --state open`: one open PR (#6 docs/readme-refresh). It does not do this task.
+- `make selftest`: exit 0.
+- `make hygiene`: exit 0 after fec1517. It was exit 2 before, from the bash 3.2 crash described above.
+- `./scripts/check-declarations.sh`: exit 0.
+- `./scripts/check-declarations-js.sh --write`: all 5 binding sets regenerate to what is committed.
+- `./scripts/check-candid.sh --declarations`: exit 0. The four .did files match the built wasm, and declaration drift matches the baseline exactly (88 known items).
+- `./scripts/register-stats.sh --check`: exit 0, register consistent.
+- `cargo test --test ledger_boundary --test admin_custody --test solvency` (with the two variables): all green.
+- `make custody` (with the two variables): exit 0, controller custody gate passed.
+- `make test` (with the two variables, foreground):
+  - First run: exit 2 on the seam test above.
+  - Rerun on 8b46a5f: exit 0, wall 1625 s, "all fast gates green". Money-safety fast subset 1343 s, all targets green including the six e109 tests and the previous-release upgrade test. Settlement oracle 105 s plus pinned reproducers 14 s. Shots self-tests 5 s, archive 83 s, no-peeking 36 s.
 
 ## Skipped
 
-- `./scripts/check-candid.sh --declarations`: no `.did` changed (see above).
+- Frontend gates (overlay steps 4 and 5): `src/cleardeck_frontend` was untouched. Only the generated `src/declarations` changed, and `make test` step 1 checks it.
 - `./scripts/verify-build.sh --two-paths`: no build input changed.
-- `make diff-full`: no evaluator change.
-- `make known-defects`: no `fast_subset.rs` marker involved (E-108 is a new row, not an ignored differential marker).
-- Frontend gates (steps 4 and 5): `src/cleardeck_frontend` untouched.
-- Live screenshots / `make local-up`: rule 3 paths not yet fixed on main; nothing started, nothing to recycle.
-- `lint-stable-compat --changed`: does not exist here (overlay); the upgrade test inside `make test` is the replacement and ran.
+- `make diff-full`, `make known-defects`: no evaluator or differential marker was involved.
+- Live stack or screenshots: none were needed; overlay rule 3 paths are not yet fixed on main. Nothing was started, so there is nothing to recycle.
 
-## DEFERRED
+## DEFERRED / follow-ups
 
-- Mainnet upgrade of the four table canisters with this fix: operator lane. Covered by the already-queued 1790632499 ("The six mainnet backends run one reproducible build, and check-fleet-coherence exits 0", `lane: operator`), which redeploys the fleet from one build. No duplicate filed. Until it runs, a mainnet table still hands a closed street to the seat after a leaver on action.
+- 1790719084: a cashier UI for a stale ledger intent that calls `reconcile_ledger_intent`, with an optional index-canister prefill of the block by memo. The door is CLI-only today.
+- Mainnet: nothing deployed (operator lane). The E-109 module ships with the operator's next fleet deploy.
 
-## Not in scope, left as it was (already queued elsewhere)
-
-- The leaver's uncalled bet being returned while another seat could still call it (`return_uncalled_bet` in the same function): queued task 1790632474 item 1. Not touched; none of the new tests has the leaver as top contributor.
-- `leave_table` rate limit / anonymous check (E-14): queued task 1790632445 item 3.
-
-help: no user-facing help library here (ClearDeck has none); the user-visible change is that leaving from the seat on action no longer asks a player who already matched to act again on the same street.
+help: no user-facing change in src/cleardeck_frontend (new canister methods only; the UI door is follow-up 1790719084)

@@ -459,8 +459,18 @@ fn seam_honest_play_produces_no_self_reported_failure() {
     seat_players(&world, &["alice", "bob", "carol"], 8 * ICP);
 
     let mut all_logs: Vec<String> = Vec::new();
+    // ICP / 10 per post-flop street, not ICP / 2. `join_table` buys in for the
+    // table maximum (2 ICP here), and at ICP / 2 a seat that loses one hand to
+    // the river has 0.48 ICP left, so two wins by the same seat bust the other
+    // two and the third deal is refused ("Need at least 2 active players with
+    // chips"). Whether that happens is decided by the deck, and the deck by the
+    // clock at the deal: on 2026-09-29 (task 1790632442) a table module that grew
+    // past 3 MiB installed one round later, every timestamp moved by 1 ns, and
+    // this test went red on a different shuffle with no engine change on its
+    // path. At ICP / 10 three lost hands cost 0.92 ICP, so all three deals
+    // happen on any shuffle, and a red here is the canister's own testimony again.
     for _ in 0..3 {
-        let out = play_one_hand(&mut world, ICP / 2);
+        let out = play_one_hand(&mut world, ICP / 10);
         all_logs.extend(out.logs.clone());
         world.advance(Duration::from_secs(4));
     }
