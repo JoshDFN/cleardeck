@@ -435,6 +435,7 @@ is true.
 
 | id | sev | status | wave | gate — what would catch it coming back | where | one line |
 |---|---|---|---|---|---|---|
+| [E-109](#e-109) | medium | FIXED | task 1790632442 | `cd tests/money_safety && cargo test --test ledger_boundary -- --test-threads=2` (`dev.sh test` step 4; fast tier of `scripts/test-suites.list`), the six `e109_*` tests; `e109_a_payout_past_its_window_no_longer_locks_the_owner_out_of_withdraw` verified RED on the unfixed `withdraw`: *"FUND LOCK: a payout past its retry window blocked a withdrawal ... Err(\"A withdrawal is already in progress: ledger operation #2 for 2.0000 ICP ...\")"*. `admin_custody::census_every_controller_gated_method_is_classified_here` and the sweep carry the new controller method; `solvency::no_setter_was_added_to_fix_the_books` stays green | `withdraw`'s in-progress check, `lease_ledger_intent`, new `reconcile_ledger_intent`, `admin_close_stale_ledger_intent`, `transfer_proves_intent`, `book_outgoing_moved` | **a ledger intent past its retry window had no door out, and a payout one locked its owner out of every withdrawal.** Past `retry_deadline_ns` (20 h) the resume path correctly refuses to re-issue, and FINDING 29 / FINDING 38 said the entry then waits for "operator reconciliation" -- but no method could reconcile it. `withdraw` refused while ANY open payout intent existed for the caller, so one discarded continuation (an upgrade mid-call, as on 2026-08-06) plus a day without `resolve_my_ledger_intents()` froze that player's whole escrow; a pull or sweep that had landed stranded money at the main account with a record naming its owner and nothing that could credit it. Now a payout past its window does not block `withdraw` (nothing can drive it, so there is nothing to race); `reconcile_ledger_intent(id, block)` (owner or controller) reads the named block off the ledger, archive included, and settles only a transfer whose memo, created_at_time, accounts and amount ARE this intent, crediting an arriving intent once behind the anti-replay record; `admin_close_stale_ledger_intent(id, NotMoved \| Moved)` (controller, past the window, no live lease) closes to an outcome the controller names from what the entry fixes, and refuses `Moved` on a pull or sweep because that would be a credit on a word. No setter. [Review 2026-09-28, gap 6](CODEBASE-REVIEW-2026-09-28.md) |
 | [E-108](#e-108) | medium | FIXED | task 1790632441 | `cargo test -p table_canister --test betting_rules` (`make test` step 2, `cargo test --workspace`; the `workspace` tier of `scripts/test-suites.list`), section 8 — five tests over `vacate_seat` on a hand dealt and bet through the real engine, two verified RED on the unfixed branch: *"A bet, B called, C left on action: the flop betting is closed and the turn is dealt. Instead the hand is at Flop with the clock on Some(2), current bet 40 — left: Flop right: Turn"*, *"seats 0 and 1 have both matched: the flop is closed and the turn is dealt. Instead the hand is at Flop with the clock on Some(0)"*; the other three (street still open → clock to the seat that owes; one player left → fold-out; leaver not on action → clock untouched) guard the adjacent cases and were green before and after | `vacate_seat` (was inline in `leave_table`), `advance_game`, `is_betting_round_complete` | **leaving from the seat on action handed a closed street back to a player who had already matched.** `leave_table` marked the leaver folded and then moved the clock to the next seat unconditionally — `find_next_active_seat` and a fresh timer — without asking `is_betting_round_complete`, the question every real action ends with in `advance_game`. A bets, B calls, C leaves on action: the street was closed, but the clock landed on A with A's own bet still standing, so A's only replies were Check or Fold on a bet nobody could raise (`action_is_closed_to_raising`), and if A was away `resolve_expired_action_timer` folded A out of a pot A had fully matched. Conservation held throughout, so the money-safety invariants were silent: correct totals, wrong recipient. Now a departure from the seat on action drops the clock and goes through the same `advance_game` an action does: one claimant left ends the hand, a closed street deals the next one, an open street moves the clock to the next seat that owes. A departure from any other seat leaves the clock alone unless it changed what the hand is waiting for. `leave_table`'s body is `vacate_seat(state, caller, now)`, host-testable like `apply_player_action`. No Candid change. [Review 2026-09-28, gap 5](CODEBASE-REVIEW-2026-09-28.md) |
 | [E-107](#e-107) | medium | FIXED | task 1790632438 | `cargo test -p table_canister --test betting_rules` (`make test` step 2, `cargo test --workspace`; the `workspace` tier of `scripts/test-suites.list`), section 7 — four tests over `build_table_view` from every seat's point of view and a stranger's at every phase, three verified RED on the unfixed view: *"after the fold-out, between hands: seat 0 looking at seat 2 (phase HandComplete, folded false) left: Some((7♣, 2♦)) right: None"*, *"seat 0 folded on the flop and the hand is live at Turn: its show must be refused, got Ok((A♠, A♥))"*; the fourth (`a_showdown_still_turns_every_unfolded_hand_face_up`) guards the other ending. Client: `npm --workspace src/cleardeck_frontend test` → `showdown.test.js` | `build_table_view` (was inline in `get_table_view`), `finish_hand`, `record_voluntary_show` (was inline in `show_cards`), `TableState::last_hand_went_to_showdown`, `PokerTable.svelte` `isShowdown` via `$lib/showdown.js` | **a pot won because everybody folded showed the winner's hole cards to the whole table until the next deal.** `get_table_view` read `HandComplete` as a showdown and revealed every unfolded seat; after a fold-out the winner is exactly the one unfolded seat, still holding cards until `start_new_hand` clears them, so every viewer (seated or not) saw the hand the engine had just paid "without showing a hand" (`end_hand_single_winner`). The archive was right all along (`push_winner` withholds the cards off a showdown). `show_cards` also let a FOLDED seat turn its cards up mid-hand, telling the seats still playing what was out of the deck. Now `finish_hand` writes `last_hand_went_to_showdown` (`opt bool`, FINDING 14's rule; `None` reads as hidden) in the one place that writes `HandComplete`, the view reveals at `HandComplete` only when it is true, and a voluntary show is accepted only once the hand is over. The client reads the same fact off the winner record (`cards` present only at a showdown), so no `TableView` field was added; `TableState` gained the `opt` field on the `.did`. [Review 2026-09-28, gap 3](CODEBASE-REVIEW-2026-09-28.md) |
 | [E-106](#e-106) | high | FIXED | task 1790632440 | `cargo test -p table_canister --test betting_rules` (`make test` step 2, `cargo test --workspace`; the `workspace` tier of `scripts/test-suites.list`), section 6 — six tests, five verified RED on the unfixed engine: *"the deal armed Some(ActionTimer { player_seat: 0 … }), the clock folded Some(0)"*, `left: [5, 20] right: [25, 0]`; the sixth (`a_deal_that_leaves_one_seat_owing_a_call_still_asks_it`) guards the refinement | `open_the_action` (the deal's last step, split out of `start_new_hand` with `deal_hand`), `the_posts_closed_the_betting`, `resolve_expired_action_timer` | **the deal armed the clock on a seat that could not act, and the clock folded it.** A blind or ante posts `min(chips)`, so a short seat is dealt in and left all-in by its own post. When that left nobody owed an action, the deal still armed the timer on whatever `find_next_active_seat_with_chips` fell back to (the big blind, when no seat had chips) and `resolve_expired_action_timer` folded that seat with no `can_still_act` check, so `advance_game` saw one claimant and paid the small blind the whole pot. Heads-up, aces all-in for 15 in the big blind against 7-2 all-in for 10: the 7-2 ended with 20 and the aces with 5. On an ante table the same clock fold gave the side-pot seat the 90 main pot the short stack had the best hand for. Conservation held throughout, so the money-safety invariants were silent: correct totals, wrong recipient. Now the deal runs the board out when fewer than two seats can act and none of them owes a call (a seat that still owes a call is asked), and the clock never folds a seat that cannot act: it drops the timer and moves the hand on through `advance_game`, which is also what heals a table dealt on the old engine and upgraded mid-hand. The history push in `start_new_hand` now precedes the opening of the action, because `record_local_hand_result` writes the LAST history entry and a run-out at the deal settles inside the same message. [Review 2026-09-28, gap 4](CODEBASE-REVIEW-2026-09-28.md) |
@@ -12072,3 +12073,84 @@ No Candid change: `vacate_seat` is a `pub fn` for the host tests, not a method;
 `#[ic_cdk::query]` count is unchanged. `cash_out` has no such branch: it refuses
 a seat that is in a live hand. Gate: `cargo test -p table_canister --test
 betting_rules`, section 8.
+
+<a id="e-109"></a>
+### E-109 — medium — a ledger intent past its retry window had no door out, and a payout one locked its owner out of every withdrawal — STATUS: FIXED (task 1790632442)
+
+docs/CODEBASE-REVIEW-2026-09-28.md gap 6. The ledger-intent journal (FINDING 29)
+keeps an entry for `INTENT_RETRY_WINDOW_NS` (20 h) in which `resolve_my_ledger_intents()`
+can re-issue the identical transaction and let the ledger's deduplication say what
+happened. Past that, `lease_ledger_intent` refuses, correctly: a re-issue outside
+the ledger's window would be a second, real movement. FINDING 29 wrote that the
+entry then "needs an operator to reconcile against the ledger" and FINDING 38 that
+it is "kept forever, pending operator reconciliation". Nothing recorded that no
+method could do that reconciling. `settle_intent` was the only clearer, and every
+path to it went through the lease.
+
+Two consequences, both reachable from one discarded continuation (an upgrade
+mid-call is one of the events that discards one, and the fleet was upgraded on
+2026-08-06) plus one day in which nobody called `resolve_my_ledger_intents()`:
+
+- **a payout past its window froze its owner's escrow.** `withdraw` debits escrow
+  before the await, and it refused while ANY open `Payout` intent existed for the
+  caller. A payout that can no longer be driven is not in progress, but it was
+  read as one forever. Measured on the unfixed tree by the first `e109_*` test:
+
+  ```text
+  withdraw(1 ICP) beside the stale payout -> Err(Err("A withdrawal is already in
+  progress: ledger operation #2 for 2.0000 ICP. If it is stuck, call
+  resolve_my_ledger_intents() ... You are not locked out."))
+  ```
+
+  and `resolve_my_ledger_intents()` answers that the same entry is past the
+  deduplication window. Both sentences are true; together they are a lock.
+- **a pull or a sweep past its window stranded money with a record and no
+  remedy.** The money is at the main account, the entry names its owner and
+  amount, and nothing could credit it.
+
+**The fix, three parts.**
+
+1. `withdraw` prefers a LIVE payout when it looks for one in progress; a payout
+   past `retry_deadline_ns` does not refuse the call. Its escrow debit stands
+   until the entry is closed; the pending flag is cleared. Settling a payout now
+   clears the per-owner pending flag only when no other payout is open for that
+   owner (`clear_pending_withdrawal_unless_another_payout_is_open`), since a stale
+   one and a live one can now coexist.
+2. `reconcile_ledger_intent(id, block)` -- owner or controller, anonymous refused,
+   rate-limited with `notify_deposit` (five ledger lookups a minute per caller,
+   one shared window). The caller names the block; the canister reads it off the
+   ledger (`query_blocks` on ICP, `get_transactions` on ckBTC, following the
+   archive callback when the ledger has handed the block on) and settles as
+   `Moved` only when `transfer_proves_intent` holds: a transfer carrying this
+   entry's memo and created_at_time, from and to the accounts its kind names
+   (payout: main -> owner's wallet for `amount - fee`; pull: owner's wallet ->
+   main; sweep: owner's deposit subaccount -> main; refund: deposit subaccount ->
+   owner's wallet), for its amount. Any other block is refused with nothing
+   changed, because a block that is not this movement is not evidence that the
+   movement did not happen. Settlement is `settle_intent`: one-shot removal, and a
+   credit still behind `claim_deposit_block`, so the proving block cannot credit a
+   second time through `notify_deposit` either.
+3. `admin_close_stale_ledger_intent(id, NotMoved | Moved)` -- controller only, for
+   when the ledger cannot answer. It refuses an entry inside its window (the
+   resume path can still ask the ledger) and one under a live lease (a message
+   may still be awaiting the ledger for it). Owner and amount come from the
+   entry, never from the call. `NotMoved` on a payout gives the up-front debit
+   back; on any other kind it closes the record and credits nothing. `Moved` on a
+   payout or a refund closes the record and books the main-account movement
+   (`book_outgoing_moved`, shared with `settle_intent` so the two cannot drift).
+   `Moved` on a pull or a sweep is REFUSED: that would be a credit on a
+   controller's word, and a credit rests on a block. It cannot name a balance, so
+   `solvency::no_setter_was_added_to_fix_the_books` holds; a controller who names
+   a false outcome is what the guardian's notice period covers once deployed, and
+   `get_solvency()` shows the unattributed money meanwhile.
+
+Gate: `tests/money_safety/tests/ledger_boundary.rs`, the six `e109_*` tests: a
+withdrawal beside a stale payout; the block door on a stale payout (wrong block,
+future block, stranger, the right block, once); a stale pull credited exactly once
+by its block, with `notify_deposit` of the same block refused after; a payout left
+Unknown by a stopped ledger and closed `NotMoved` by the controller (refused inside
+the window and for the owner); `Moved` refused and `NotMoved` crediting nothing on a
+pull left Unknown; `Moved` on a stale payout refunding nothing. `admin_custody`'s
+census and sweep classify the new controller method. The `.did` and the three
+`src/declarations/table_*` copies gain `StaleIntentClose` and the two methods; the
+JS/TS bindings are regenerated.

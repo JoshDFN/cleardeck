@@ -4807,6 +4807,14 @@ second time. The entry stays, visible, naming the owner and the amount, and reso
 an operator to reconcile against the ledger. That is worse than automatic recovery and far better
 than the state before this change, in which there was no record at all.
 
+> **Update (task 1790632442, [E-109](DEFECTS.md#e-109)).** Until then no method could do that
+> reconciling, and `withdraw` read a payout past its window as a withdrawal in progress forever,
+> which froze its owner's escrow. Now a stale payout does not block `withdraw`, and two doors close
+> a stale entry: `reconcile_ledger_intent(id, block)` (owner or controller) settles against a
+> ledger block that carries the entry's memo, created_at_time, accounts and amount, and is the only
+> way to credit a stale pull or sweep; `admin_close_stale_ledger_intent(id, NotMoved | Moved)`
+> (controller, past the window) closes to a named outcome and refuses `Moved` on an arriving kind.
+
 ### The gate
 
 **M14 LEDGER/BOOKS COHERENCE**, `tests/money_safety/src/fault.rs`:
@@ -6207,6 +6215,10 @@ things that discards one, and the six backend canisters were upgraded on 2026-08
 until somebody calls `resolve_my_ledger_intents()`. Past `INTENT_RETRY_WINDOW_NS` (20h)
 `lease_ledger_intent` refuses to re-issue it at all and the entry is **kept forever**, pending
 operator reconciliation. For that entire time every fresh reading produces the inflated answer.
+(Since task 1790632442, [E-109](DEFECTS.md#e-109), that reconciliation has a door:
+`reconcile_ledger_intent(id, block)` against the proving ledger block, or the controller's
+`admin_close_stale_ledger_intent`. Until one of them is called the entry is still open, and this
+reading is still what it was.)
 
 ### The mirror, also demonstrated
 
